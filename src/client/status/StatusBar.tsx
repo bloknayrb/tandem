@@ -1,10 +1,13 @@
 import React from 'react';
+import { CLAUDE_PRESENCE_COLOR } from '../../shared/constants';
 
 interface StatusBarProps {
   connected: boolean;
+  claudeStatus: string | null;
+  claudeActive: boolean;
 }
 
-export function StatusBar({ connected }: StatusBarProps) {
+export function StatusBar({ connected, claudeStatus, claudeActive }: StatusBarProps) {
   return (
     <div style={{
       display: 'flex',
@@ -33,12 +36,25 @@ export function StatusBar({ connected }: StatusBarProps) {
           width: '8px',
           height: '8px',
           borderRadius: '50%',
-          background: '#6366f1',
-          opacity: 0.5,
+          background: CLAUDE_PRESENCE_COLOR,
+          opacity: claudeActive ? 1 : 0.4,
           display: 'inline-block',
+          transition: 'opacity 0.3s ease',
+          animation: claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none',
         }} />
-        <span>Claude -- idle</span>
+        <span style={{
+          transition: 'color 0.3s ease',
+          color: claudeActive ? '#4b5563' : '#9ca3af',
+        }}>
+          {claudeStatus ? `Claude -- ${claudeStatus}` : 'Claude -- idle'}
+        </span>
       </div>
+      <style>{`
+        @keyframes tandem-status-pulse {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

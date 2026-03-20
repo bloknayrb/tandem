@@ -15,6 +15,9 @@ const ROOM_NAME = 'default';
 // Current document state
 let currentDoc: { filePath: string; format: string } | null = null;
 
+// Track whether we've already opened the browser
+let browserOpened = false;
+
 export function getCurrentDoc() {
   return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
 }
@@ -109,6 +112,90 @@ export function extractText(doc: Y.Doc): string {
   return lines.join('\n');
 }
 
+/**
+ * Get the heading prefix length for a node ("## " = 3, "# " = 2, paragraph = 0).
+ */
+function getHeadingPrefixLength(node: Y.XmlElement): number {
+  if (node.nodeName === 'heading') {
+    const level = parseInt(node.getAttribute('level') || '1', 10);
+    return level + 1; // "# " = 2, "## " = 3, "### " = 4
+  }
+  return 0;
+}
+
+interface ResolvedOffset {
+  elementIndex: number;
+  textOffset: number;
+  /** True if the original offset fell inside a heading prefix (e.g., "## ") and was clamped to 0 */
+  clampedFromPrefix: boolean;
+}
+
+/**
+ * Resolve a flat character offset (from extractText) to a Y.Doc element position.
+ * Returns { elementIndex, textOffset, clampedFromPrefix } where textOffset is within
+ * the element's Y.XmlText (NOT including heading prefix).
+ */
+function resolveOffset(
+  fragment: Y.XmlFragment,
+  charOffset: number
+): ResolvedOffset | null {
+  let accumulated = 0;
+
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+
+    const prefixLen = getHeadingPrefixLength(node);
+    const text = getElementText(node);
+    const fullLen = prefixLen + text.length;
+
+    // Is the target offset within this element?
+    if (accumulated + fullLen > charOffset) {
+      const offsetInFull = charOffset - accumulated;
+      const clampedFromPrefix = offsetInFull < prefixLen && prefixLen > 0;
+      const textOffset = Math.max(0, offsetInFull - prefixLen);
+      return { elementIndex: i, textOffset, clampedFromPrefix };
+    }
+
+    accumulated += fullLen;
+
+    // Account for the \n separator between elements
+    if (i < fragment.length - 1) {
+      accumulated += 1;
+      if (accumulated > charOffset) {
+        return { elementIndex: i, textOffset: text.length, clampedFromPrefix: false };
+      }
+    }
+  }
+
+  // Offset at or past end of document — return end of last element
+  if (fragment.length > 0) {
+    const lastNode = fragment.get(fragment.length - 1);
+    if (lastNode instanceof Y.XmlElement) {
+      return { elementIndex: fragment.length - 1, textOffset: getElementText(lastNode).length, clampedFromPrefix: false };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find the first Y.XmlText child of a Y.XmlElement.
+ * Creates one if the element is empty.
+ */
+function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      return child;
+    }
+  }
+  // No text child — create one
+  const textNode = new Y.XmlText('');
+  element.insert(0, [textNode]);
+  return textNode;
+}
+
 export function registerDocumentTools(server: McpServer): void {
   server.tool(
     'tandem_open',
@@ -144,6 +231,18 @@ export function registerDocumentTools(server: McpServer): void {
         populateYDoc(doc, content);
         currentDoc = { filePath: resolved, format };
 
+        // Auto-open browser on first tandem_open call
+        if (!browserOpened) {
+          browserOpened = true;
+          import('open').then(({ default: openUrl }) => {
+            openUrl('http://localhost:5173').catch((err: unknown) => {
+              console.error('[Tandem] Failed to open browser:', err);
+            });
+          }).catch((err: unknown) => {
+            console.error('[Tandem] Failed to import open package:', err);
+          });
+        }
+
         const fileName = path.basename(resolved);
         return mcpSuccess({
           filePath: resolved,
@@ -178,10 +277,51 @@ export function registerDocumentTools(server: McpServer): void {
   server.tool(
     'tandem_getTextContent',
     'Read document as plain text. ~60% fewer tokens than getContent().',
-    { section: z.string().optional().describe('Optional section heading to read only that section') },
+    { section: z.string().optional().describe('Optional heading text to read only that section') },
     async ({ section }) => {
       const r = requireDocument();
       if (!r) return noDocumentError();
+
+      if (section) {
+        // Extract only the section matching the heading
+        const fragment = r.doc.getXmlFragment('default');
+        const lines: string[] = [];
+        let inSection = false;
+        let sectionLevel = 0;
+
+        for (let i = 0; i < fragment.length; i++) {
+          const node = fragment.get(i);
+          if (!(node instanceof Y.XmlElement)) continue;
+
+          const text = getElementText(node);
+
+          if (node.nodeName === 'heading') {
+            const level = parseInt(node.getAttribute('level') || '1', 10);
+            if (inSection && level <= sectionLevel) break; // Hit next section at same/higher level
+            if (text.trim().toLowerCase() === section.trim().toLowerCase()) {
+              inSection = true;
+              sectionLevel = level;
+              lines.push('#'.repeat(level) + ' ' + text);
+              continue;
+            }
+          }
+
+          if (inSection) {
+            if (node.nodeName === 'heading') {
+              const level = parseInt(node.getAttribute('level') || '1', 10);
+              lines.push('#'.repeat(level) + ' ' + text);
+            } else {
+              lines.push(text);
+            }
+          }
+        }
+
+        if (!inSection) {
+          return mcpError('INVALID_RANGE', `Section "${section}" not found in document.`);
+        }
+        return mcpSuccess({ text: lines.join('\n'), filePath: r.filePath, section });
+      }
+
       return mcpSuccess({ text: extractText(r.doc), filePath: r.filePath });
     }
   );
@@ -210,15 +350,82 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     'tandem_edit',
-    'Edit text in the document at a specific range',
+    'Edit text in the document at a specific range. For single-paragraph replacements only — newlines in newText are inserted as literal text.',
     {
       from: z.number().describe('Start position (character offset)'),
       to: z.number().describe('End position (character offset)'),
-      newText: z.string().describe('Replacement text'),
+      newText: z.string().describe('Replacement text (single paragraph — no newlines)'),
     },
     async ({ from, to, newText }) => {
-      if (!currentDoc) return noDocumentError();
-      // TODO: Implement proper ProseMirror-aware editing via Y.Doc
+      const r = requireDocument();
+      if (!r) return noDocumentError();
+
+      const fragment = r.doc.getXmlFragment('default');
+      const startPos = resolveOffset(fragment, from);
+      const endPos = resolveOffset(fragment, to);
+
+      if (!startPos || !endPos) {
+        return mcpError('INVALID_RANGE', `Cannot resolve offset range [${from}, ${to}] in document.`);
+      }
+
+      // Validate that offsets don't land inside heading prefixes (e.g., "## ").
+      // If they do, the clamped textOffset=0 would target the wrong content.
+      if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {
+        return mcpError('INVALID_RANGE',
+          'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
+          'Use tandem_resolveRange to find the text position.');
+      }
+
+      // For v1: handle same-element edits. Cross-element edits are more complex.
+      if (startPos.elementIndex !== endPos.elementIndex) {
+        // Cross-element edit: delete from start to end across elements, insert new text in start element
+        r.doc.transact(() => {
+          // Delete everything from startPos to end of start element
+          const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
+          const startText = getOrCreateXmlText(startNode);
+          const startLen = startText.toString().length;
+          if (startPos.textOffset < startLen) {
+            startText.delete(startPos.textOffset, startLen - startPos.textOffset);
+          }
+
+          // Delete all elements between start and end (exclusive)
+          const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
+          for (let i = 0; i < deleteCount; i++) {
+            fragment.delete(startPos.elementIndex + 1, 1);
+          }
+
+          // Now endPos.elementIndex shifted — the end element is at startPos.elementIndex + 1
+          const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
+          const endText = getOrCreateXmlText(endNode);
+          // Delete from start of end element up to endPos.textOffset
+          if (endPos.textOffset > 0) {
+            endText.delete(0, endPos.textOffset);
+          }
+          // Append remaining end text to start element, then delete end element
+          const remainingText = endText.toString();
+          if (remainingText.length > 0) {
+            startText.insert(startPos.textOffset, remainingText);
+          }
+          fragment.delete(startPos.elementIndex + 1, 1);
+
+          // Insert new text at the start position
+          startText.insert(startPos.textOffset, newText);
+        });
+      } else {
+        // Same-element edit
+        r.doc.transact(() => {
+          const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
+          const textNode = getOrCreateXmlText(node);
+          const deleteLen = endPos.textOffset - startPos.textOffset;
+          if (deleteLen > 0) {
+            textNode.delete(startPos.textOffset, deleteLen);
+          }
+          if (newText.length > 0) {
+            textNode.insert(startPos.textOffset, newText);
+          }
+        });
+      }
+
       return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
     }
   );

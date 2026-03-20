@@ -104,6 +104,14 @@ export interface AwarenessState {
   lastActivity?: number;
 }
 
+/** Claude's awareness state as stored in Y.Map('awareness') key 'claude' */
+export interface ClaudeAwareness {
+  status: string;
+  timestamp: number;
+  active: boolean;
+  focusParagraph: number | null;
+}
+
 export interface SessionData {
   filePath: string;
   annotations: Annotation[];

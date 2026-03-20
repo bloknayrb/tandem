@@ -11,6 +11,8 @@ import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
+import { AnnotationExtension } from './extensions/annotation';
+import { AwarenessExtension } from './extensions/awareness';
 
 interface EditorProps {
   ydoc: Y.Doc;
@@ -39,6 +41,8 @@ export function Editor({ ydoc, provider, onConnectionChange }: EditorProps) {
         provider: provider,
         user: { name: 'Bryan', color: '#f59e0b' },
       }),
+      AnnotationExtension.configure({ ydoc }),
+      AwarenessExtension.configure({ ydoc }),
     ],
     editorProps: {
       attributes: {
@@ -89,6 +93,33 @@ export function Editor({ ydoc, provider, onConnectionChange }: EditorProps) {
           pointer-events: none;
           float: left;
           height: 0;
+        }
+
+        /* Annotation decorations */
+        .tandem-highlight { cursor: pointer; }
+        .tandem-highlight:hover { filter: brightness(0.95); }
+        .tandem-comment { cursor: pointer; }
+        .tandem-comment:hover { border-bottom-style: solid; }
+        .tandem-suggestion { cursor: pointer; }
+
+        /* Claude focus paragraph */
+        .tandem-claude-focus {
+          position: relative;
+        }
+        .tandem-claude-focus::before {
+          content: '';
+          position: absolute;
+          left: -24px;
+          top: 0;
+          bottom: 0;
+          width: 3px;
+          background: rgba(99, 102, 241, 0.6);
+          border-radius: 2px;
+          animation: tandem-gutter-pulse 2s ease-in-out infinite;
+        }
+        @keyframes tandem-gutter-pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 1; }
         }
       `}</style>
     </div>

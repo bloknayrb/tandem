@@ -69,9 +69,23 @@ export function registerNavigationTools(server: McpServer): void {
   server.tool(
     'tandem_setStatus',
     'Update Claude status text shown to user (e.g., "Reviewing cost figures...")',
-    { text: z.string().describe('Status text') },
-    async ({ text }) => {
-      // TODO: Update Yjs awareness state so browser sees the status change
+    {
+      text: z.string().describe('Status text'),
+      focusParagraph: z.number().optional().describe('Index of paragraph Claude is focusing on'),
+    },
+    async ({ text, focusParagraph }) => {
+      const current = getCurrentDoc();
+      if (!current) {
+        return mcpSuccess({ status: text, warning: 'No document open — status not broadcast to editor.' });
+      }
+      const doc = getOrCreateDocument(current.docName);
+      const awarenessMap = doc.getMap('awareness');
+      awarenessMap.set('claude', {
+        status: text,
+        timestamp: Date.now(),
+        active: true,
+        focusParagraph: focusParagraph ?? null,
+      });
       return mcpSuccess({ status: text });
     }
   );

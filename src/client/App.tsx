@@ -11,6 +11,8 @@ import type { Annotation } from '../shared/types';
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
+  const [claudeActive, setClaudeActive] = useState(false);
   const [ready, setReady] = useState(false);
 
   // Stable refs for Y.Doc and provider — survive StrictMode double-mount
@@ -31,19 +33,44 @@ export default function App() {
 
     // Watch annotations Y.Map for changes
     const annotationsMap = ydoc.getMap('annotations');
-    const observer = () => {
+    const annotationObserver = () => {
       const anns: Annotation[] = [];
       annotationsMap.forEach((value) => {
         anns.push(value as Annotation);
       });
       setAnnotations(anns);
     };
-    annotationsMap.observe(observer);
+    annotationsMap.observe(annotationObserver);
+
+    // Watch awareness Y.Map for Claude's status (with change guard to avoid no-op re-renders)
+    const awarenessMap = ydoc.getMap('awareness');
+    let prevStatus: string | null = null;
+    let prevActive = false;
+    const awarenessObserver = () => {
+      const claude = awarenessMap.get('claude') as {
+        status: string;
+        timestamp: number;
+        active: boolean;
+      } | undefined;
+
+      const newStatus = claude?.status ?? null;
+      const newActive = claude?.active ?? false;
+      if (newStatus !== prevStatus) {
+        prevStatus = newStatus;
+        setClaudeStatus(newStatus);
+      }
+      if (newActive !== prevActive) {
+        prevActive = newActive;
+        setClaudeActive(newActive);
+      }
+    };
+    awarenessMap.observe(awarenessObserver);
 
     setReady(true);
 
     return () => {
-      annotationsMap.unobserve(observer);
+      annotationsMap.unobserve(annotationObserver);
+      awarenessMap.unobserve(awarenessObserver);
       provider.destroy();
       ydoc.destroy();
       ydocRef.current = null;
@@ -78,7 +105,11 @@ export default function App() {
         </div>
         <SidePanel annotations={annotations} />
       </div>
-      <StatusBar connected={connected} />
+      <StatusBar
+        connected={connected}
+        claudeStatus={claudeStatus}
+        claudeActive={claudeActive}
+      />
     </div>
   );
 }

@@ -21,6 +21,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Connects to Hocuspocus via WebSocket (y-websocket)
 - Y.Doc and provider created in App.tsx, passed down to Editor
 - Annotations observed from Y.Map('annotations') on the shared Y.Doc
+- AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
+- AwarenessExtension renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
 
 ### Shared (src/shared/)
 - `types.ts` -- TypeScript interfaces shared between server and client
@@ -30,8 +32,11 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - All document mutations go through the server's Y.Doc
 - Claude's MCP tools mutate Y.Doc directly -> changes sync to browser via Hocuspocus
 - Annotations stored in Y.Map('annotations'), not in the document content
+- Claude's status stored in Y.Map('awareness') key 'claude'; user's selection in Y.Map('userAwareness')
 - Server logs use console.error (stdout reserved for MCP protocol)
 - Ranges use `resolveRange()` for safe targeting (not raw offsets)
+- Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
+- tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
 
 ## Security
 - Server binds to 127.0.0.1 only

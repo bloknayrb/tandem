@@ -27,3 +27,7 @@
 ## ADR-007: Y.Map for Annotations
 **Decision:** Store annotations in a Y.Map on the Y.Doc rather than in the document content.
 **Rationale:** Annotations are metadata, not content. Storing them separately means they sync independently and don't pollute the document structure.
+
+## ADR-008: Shared MCP Response Helpers
+**Decision:** Extract `mcpSuccess`, `mcpError`, `noDocumentError` into `response.ts` instead of inlining the response envelope in every tool.
+**Rationale:** 16+ tools each needed the same 3-line wrapping pattern. Centralizing it eliminated 267 lines of boilerplate and ensures consistent error shape across all tools.
