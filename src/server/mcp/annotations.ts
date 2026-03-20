@@ -14,12 +14,12 @@ function getAnnotationsMap(): Y.Map<unknown> | null {
   return ydoc.getMap('annotations');
 }
 
-function generateId(): string {
+export function generateId(): string {
   return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** Create an annotation and store it in the Y.Map. Returns the annotation ID. */
-function createAnnotation(
+export function createAnnotation(
   map: Y.Map<unknown>,
   type: AnnotationType,
   from: number,
@@ -43,7 +43,7 @@ function createAnnotation(
 }
 
 /** Collect all annotations from the Y.Map as an array */
-function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
+export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
   const result: Annotation[] = [];
   map.forEach((value) => result.push(value as Annotation));
   return result;

@@ -40,7 +40,7 @@ function detectFormat(filePath: string): string {
 }
 
 /** Insert text content into a Y.Doc's XmlFragment as paragraphs */
-function populateYDoc(doc: Y.Doc, text: string): void {
+export function populateYDoc(doc: Y.Doc, text: string): void {
   const fragment = doc.getXmlFragment('default');
 
   // Clear existing content
@@ -78,7 +78,7 @@ function populateYDoc(doc: Y.Doc, text: string): void {
 /**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
  */
-function getElementText(element: Y.XmlElement): string {
+export function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
@@ -115,7 +115,7 @@ export function extractText(doc: Y.Doc): string {
 /**
  * Get the heading prefix length for a node ("## " = 3, "# " = 2, paragraph = 0).
  */
-function getHeadingPrefixLength(node: Y.XmlElement): number {
+export function getHeadingPrefixLength(node: Y.XmlElement): number {
   if (node.nodeName === 'heading') {
     const level = parseInt(node.getAttribute('level') || '1', 10);
     return level + 1; // "# " = 2, "## " = 3, "### " = 4
@@ -123,7 +123,7 @@ function getHeadingPrefixLength(node: Y.XmlElement): number {
   return 0;
 }
 
-interface ResolvedOffset {
+export interface ResolvedOffset {
   elementIndex: number;
   textOffset: number;
   /** True if the original offset fell inside a heading prefix (e.g., "## ") and was clamped to 0 */
@@ -135,7 +135,7 @@ interface ResolvedOffset {
  * Returns { elementIndex, textOffset, clampedFromPrefix } where textOffset is within
  * the element's Y.XmlText (NOT including heading prefix).
  */
-function resolveOffset(
+export function resolveOffset(
   fragment: Y.XmlFragment,
   charOffset: number
 ): ResolvedOffset | null {
@@ -183,7 +183,7 @@ function resolveOffset(
  * Find the first Y.XmlText child of a Y.XmlElement.
  * Creates one if the element is empty.
  */
-function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
@@ -359,6 +359,10 @@ export function registerDocumentTools(server: McpServer): void {
     async ({ from, to, newText }) => {
       const r = requireDocument();
       if (!r) return noDocumentError();
+
+      if (from > to) {
+        return mcpError('INVALID_RANGE', `Invalid range: from (${from}) must be <= to (${to}).`);
+      }
 
       const fragment = r.doc.getXmlFragment('default');
       const startPos = resolveOffset(fragment, from);
