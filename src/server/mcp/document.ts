@@ -1,15 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
-import { getOrCreateDocument, getHocuspocus } from '../yjs/provider.js';
+import { getOrCreateDocument } from '../yjs/provider.js';
 import * as Y from 'yjs';
 
+// Fixed room name — both MCP tools and browser client use this
+// so they share the same Y.Doc instance via Hocuspocus
+const ROOM_NAME = 'default';
+
 // Current document state
-let currentDoc: { filePath: string; docName: string; format: string } | null = null;
+let currentDoc: { filePath: string; format: string } | null = null;
 
 export function getCurrentDoc() {
-  return currentDoc;
+  return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
 }
 
 function detectFormat(filePath: string): string {
@@ -35,42 +40,65 @@ function populateYDoc(doc: Y.Doc, text: string): void {
   // Split by lines and create XML elements
   const lines = text.split('\n');
   for (const line of lines) {
-    const trimmed = line;
     let element: Y.XmlElement;
 
-    if (trimmed.startsWith('### ')) {
+    if (line.startsWith('### ')) {
       element = new Y.XmlElement('heading');
       element.setAttribute('level', '3');
-      element.insert(0, [new Y.XmlText(trimmed.slice(4))]);
-    } else if (trimmed.startsWith('## ')) {
+      element.insert(0, [new Y.XmlText(line.slice(4))]);
+    } else if (line.startsWith('## ')) {
       element = new Y.XmlElement('heading');
       element.setAttribute('level', '2');
-      element.insert(0, [new Y.XmlText(trimmed.slice(3))]);
-    } else if (trimmed.startsWith('# ')) {
+      element.insert(0, [new Y.XmlText(line.slice(3))]);
+    } else if (line.startsWith('# ')) {
       element = new Y.XmlElement('heading');
       element.setAttribute('level', '1');
-      element.insert(0, [new Y.XmlText(trimmed.slice(2))]);
-    } else if (trimmed === '') {
+      element.insert(0, [new Y.XmlText(line.slice(2))]);
+    } else if (line === '') {
       continue; // Skip empty lines
     } else {
       element = new Y.XmlElement('paragraph');
-      element.insert(0, [new Y.XmlText(trimmed)]);
+      element.insert(0, [new Y.XmlText(line)]);
     }
 
     fragment.insert(fragment.length, [element]);
   }
 }
 
+/**
+ * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
+ * Y.XmlElement.toJSON() returns XML structure, not plain text — we need to walk children.
+ */
+function getElementText(element: Y.XmlElement): string {
+  const parts: string[] = [];
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      parts.push(child.toString());
+    } else if (child instanceof Y.XmlElement) {
+      parts.push(getElementText(child));
+    }
+  }
+  return parts.join('');
+}
+
 /** Extract plain text from a Y.Doc's XmlFragment */
-function extractText(doc: Y.Doc): string {
+export function extractText(doc: Y.Doc): string {
   const fragment = doc.getXmlFragment('default');
   const lines: string[] = [];
 
   for (let i = 0; i < fragment.length; i++) {
     const node = fragment.get(i);
     if (node instanceof Y.XmlElement) {
-      const text = node.toJSON();
-      lines.push(typeof text === 'string' ? text : JSON.stringify(text));
+      const text = getElementText(node);
+      // Re-add heading prefixes for markdown round-trip
+      if (node.nodeName === 'heading') {
+        const level = parseInt(node.getAttribute('level') || '1', 10);
+        const prefix = '#'.repeat(level) + ' ';
+        lines.push(prefix + text);
+      } else {
+        lines.push(text);
+      }
     }
   }
 
@@ -86,10 +114,15 @@ export function registerDocumentTools(server: McpServer): void {
     },
     async ({ filePath }) => {
       try {
-        // Validate path
-        const resolved = path.resolve(filePath);
+        // Resolve symlinks/junctions BEFORE path validation (prevents symlink-to-UNC bypass)
+        let resolved: string;
+        try {
+          resolved = fsSync.realpathSync(path.resolve(filePath));
+        } catch {
+          resolved = path.resolve(filePath);
+        }
 
-        // Reject UNC paths
+        // Reject UNC paths (prevents NTLM credential hash leakage via SMB)
         if (resolved.startsWith('\\\\') || resolved.startsWith('//')) {
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({
@@ -112,10 +145,7 @@ export function registerDocumentTools(server: McpServer): void {
 
         const format = detectFormat(resolved);
         const fileName = path.basename(resolved);
-        const docName = resolved.replace(/[\\/:]/g, '_');
 
-        // Load file content
-        let content: string;
         if (format === 'docx') {
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({
@@ -125,15 +155,14 @@ export function registerDocumentTools(server: McpServer): void {
           };
         }
 
-        content = await fs.readFile(resolved, 'utf-8');
+        const content = await fs.readFile(resolved, 'utf-8');
 
-        // Create/get Y.Doc and populate it
-        const doc = getOrCreateDocument(docName);
+        // Get the shared Y.Doc (same instance the browser connects to via ROOM_NAME)
+        const doc = getOrCreateDocument(ROOM_NAME);
         populateYDoc(doc, content);
 
-        currentDoc = { filePath: resolved, docName, format };
+        currentDoc = { filePath: resolved, format };
 
-        // Estimate tokens (~4 chars per token)
         const tokenEstimate = Math.ceil(content.length / 4);
         const pageEstimate = Math.ceil(content.length / 3000);
 
@@ -144,7 +173,6 @@ export function registerDocumentTools(server: McpServer): void {
               filePath: resolved,
               fileName,
               format,
-              docName,
               tokenEstimate,
               pageEstimate,
               message: `Document opened: ${fileName}`,
@@ -178,7 +206,7 @@ export function registerDocumentTools(server: McpServer): void {
           }) }],
         };
       }
-      const doc = getOrCreateDocument(currentDoc.docName);
+      const doc = getOrCreateDocument(ROOM_NAME);
       const fragment = doc.getXmlFragment('default');
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
@@ -204,7 +232,7 @@ export function registerDocumentTools(server: McpServer): void {
           }) }],
         };
       }
-      const doc = getOrCreateDocument(currentDoc.docName);
+      const doc = getOrCreateDocument(ROOM_NAME);
       const text = extractText(doc);
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
@@ -228,7 +256,7 @@ export function registerDocumentTools(server: McpServer): void {
           }) }],
         };
       }
-      const doc = getOrCreateDocument(currentDoc.docName);
+      const doc = getOrCreateDocument(ROOM_NAME);
       const fragment = doc.getXmlFragment('default');
       const outline: Array<{ level: number; text: string; index: number }> = [];
 
@@ -236,7 +264,7 @@ export function registerDocumentTools(server: McpServer): void {
         const node = fragment.get(i);
         if (node instanceof Y.XmlElement && node.nodeName === 'heading') {
           const level = parseInt(node.getAttribute('level') || '1', 10);
-          const textContent = node.toString();
+          const textContent = getElementText(node);
           outline.push({ level, text: textContent, index: i });
         }
       }
@@ -267,7 +295,6 @@ export function registerDocumentTools(server: McpServer): void {
         };
       }
       // TODO: Implement proper ProseMirror-aware editing via Y.Doc
-      // For now, return a stub response
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({
           error: false,
@@ -290,7 +317,7 @@ export function registerDocumentTools(server: McpServer): void {
         };
       }
       try {
-        const doc = getOrCreateDocument(currentDoc.docName);
+        const doc = getOrCreateDocument(ROOM_NAME);
         const text = extractText(doc);
 
         // Atomic save: write to temp, then rename

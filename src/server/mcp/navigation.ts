@@ -1,23 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getOrCreateDocument } from '../yjs/provider.js';
-import { getCurrentDoc } from './document.js';
-import * as Y from 'yjs';
+import { getCurrentDoc, extractText } from './document.js';
 
-/** Extract all text from the Y.Doc for searching */
+/** Get full text from the current document's Y.Doc */
 function getFullText(docName: string): string {
   const doc = getOrCreateDocument(docName);
-  const fragment = doc.getXmlFragment('default');
-  const parts: string[] = [];
-
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (node instanceof Y.XmlElement) {
-      parts.push(node.toString());
-    }
-  }
-
-  return parts.join('\n');
+  return extractText(doc);
 }
 
 export function registerNavigationTools(server: McpServer): void {
