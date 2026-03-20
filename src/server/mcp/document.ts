@@ -7,6 +7,10 @@ import { getOrCreateDocument } from '../yjs/provider.js';
 import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
 import { MAX_FILE_SIZE } from '../../shared/constants.js';
 import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
+import {
+  saveSession, loadSession, restoreYDoc, sourceFileChanged,
+  startAutoSave, stopAutoSave,
+} from '../session/manager.js';
 import * as Y from 'yjs';
 
 // Fixed room name — both MCP tools and browser client use this
@@ -19,6 +23,13 @@ let currentDoc: { filePath: string; format: string } | null = null;
 
 export function getCurrentDoc() {
   return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
+}
+
+/** Save current session (for shutdown handler). No-op if no doc is open. */
+export async function saveCurrentSession(): Promise<void> {
+  if (!currentDoc) return;
+  const doc = getOrCreateDocument(ROOM_NAME);
+  await saveSession(currentDoc.filePath, currentDoc.format, doc);
 }
 
 /** Returns the shared Y.Doc or a noDocumentError if no doc is open */
@@ -242,23 +253,50 @@ export function registerDocumentTools(server: McpServer): void {
           return mcpError('FORMAT_ERROR', 'DOCX support not yet implemented. Use .md or .txt files for now.');
         }
 
-        const content = await fs.readFile(resolved, 'utf-8');
         const doc = getOrCreateDocument(ROOM_NAME);
-        if (format === 'md') {
-          loadMarkdown(doc, content);
-        } else {
-          populateYDoc(doc, content);
+        const fileName = path.basename(resolved);
+        const fileContent = await fs.readFile(resolved, 'utf-8');
+        let restoredFromSession = false;
+
+        // Check for existing session
+        const session = await loadSession(resolved);
+        if (session) {
+          const changed = await sourceFileChanged(session);
+          if (!changed) {
+            // Source file unchanged — restore Y.Doc from session (preserves annotations)
+            restoreYDoc(doc, session);
+            restoredFromSession = true;
+          }
+          // If source changed, fall through to fresh load (annotations may be stale)
         }
+
+        if (!restoredFromSession) {
+          if (format === 'md') {
+            loadMarkdown(doc, fileContent);
+          } else {
+            populateYDoc(doc, fileContent);
+          }
+        }
+
         currentDoc = { filePath: resolved, format };
 
-        const fileName = path.basename(resolved);
+        // Start auto-save timer
+        startAutoSave(async () => {
+          if (currentDoc) {
+            await saveSession(currentDoc.filePath, currentDoc.format, doc);
+          }
+        });
+
         return mcpSuccess({
           filePath: resolved,
           fileName,
           format,
-          tokenEstimate: Math.ceil(content.length / 4),
-          pageEstimate: Math.ceil(content.length / 3000),
-          message: `Document opened: ${fileName}`,
+          tokenEstimate: Math.ceil(fileContent.length / 4),
+          pageEstimate: Math.ceil(fileContent.length / 3000),
+          restoredFromSession,
+          message: restoredFromSession
+            ? `Session restored: ${fileName} (annotations preserved)`
+            : `Document opened: ${fileName}`,
         });
       } catch (err: unknown) {
         const message = getErrorMessage(err);
@@ -458,6 +496,8 @@ export function registerDocumentTools(server: McpServer): void {
         const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
         await fs.writeFile(tempPath, output, 'utf-8');
         await fs.rename(tempPath, r.filePath);
+        // Save session alongside file save (captures annotations + doc state)
+        await saveSession(r.filePath, format ?? 'txt', r.doc);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
         return mcpError('FILE_LOCKED', getErrorMessage(err));
@@ -483,6 +523,8 @@ export function registerDocumentTools(server: McpServer): void {
     'Close the current document',
     {},
     async () => {
+      stopAutoSave(); // Prevent auto-save firing during close
+      await saveCurrentSession(); // Save session before clearing state
       const was = currentDoc?.filePath ?? null;
       currentDoc = null;
       return mcpSuccess({ closed: true, was });

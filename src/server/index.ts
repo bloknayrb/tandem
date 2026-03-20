@@ -2,6 +2,8 @@ import { execSync } from 'child_process';
 import { startMcpServer } from './mcp/server.js';
 import { startHocuspocus } from './yjs/provider.js';
 import { DEFAULT_WS_PORT } from '../shared/constants.js';
+import { cleanupSessions, stopAutoSave } from './session/manager.js';
+import { saveCurrentSession } from './mcp/document.js';
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol.
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -36,8 +38,27 @@ process.on('unhandledRejection', (reason) => {
   console.error('[Tandem] unhandledRejection (swallowed):', reason);
 });
 
+// Graceful shutdown: save session + stop auto-save before exit
+async function shutdown(signal: string) {
+  console.error(`[Tandem] ${signal} received, saving session...`);
+  try {
+    await saveCurrentSession();
+    stopAutoSave();
+  } catch (err) {
+    console.error('[Tandem] Session save on shutdown failed:', err);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 async function main() {
   console.error('[Tandem] Starting server...');
+
+  // Clean up sessions older than 30 days
+  cleanupSessions().then(n => {
+    if (n > 0) console.error(`[Tandem] Cleaned up ${n} stale session(s)`);
+  }).catch(() => {});
 
   // Start Hocuspocus in the background so MCP can respond to initialize immediately.
   // Claude Code sends MCP initialize right after spawn — if we delay, the client times out.
