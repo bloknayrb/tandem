@@ -85,6 +85,7 @@ For development (with tsx):
 - [MCP Tool Reference](docs/mcp-tools.md) -- All 20 tools with parameters, returns, and examples
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns (DRPA reviews, invoice cross-references, RFP drafting)
+- [Roadmap](docs/roadmap.md) -- Full spec for remaining steps (file I/O, sessions, groups, polish)
 - [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-008
 - [Lessons Learned](docs/lessons-learned.md) -- Critical implementation lessons
 
