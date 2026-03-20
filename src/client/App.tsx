@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import type { Editor as TiptapEditor } from '@tiptap/react';
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { Editor } from './editor/Editor';
@@ -14,10 +15,17 @@ export default function App() {
   const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
   const [claudeActive, setClaudeActive] = useState(false);
   const [ready, setReady] = useState(false);
+  const [, setEditorVersion] = useState(0); // Triggers re-render when editor arrives
 
   // Stable refs for Y.Doc and provider — survive StrictMode double-mount
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<HocuspocusProvider | null>(null);
+  const editorRef = useRef<TiptapEditor | null>(null);
+
+  const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
+    editorRef.current = editor;
+    if (editor) setEditorVersion(v => v + 1); // Force re-render when editor arrives (skip null cleanup)
+  }, []);
 
   useEffect(() => {
     const ydoc = new Y.Doc();
@@ -98,16 +106,17 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <Toolbar />
+      <Toolbar editor={editorRef.current} ydoc={ydocRef.current} />
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <div style={{ flex: 1, overflow: 'auto', padding: '24px 48px' }}>
           <Editor
             ydoc={ydocRef.current}
             provider={providerRef.current}
             onConnectionChange={handleConnectionChange}
+            onEditorReady={handleEditorReady}
           />
         </div>
-        <SidePanel annotations={annotations} />
+        <SidePanel annotations={annotations} editor={editorRef.current} ydoc={ydocRef.current} />
       </div>
       <StatusBar
         connected={connected}

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
+import type { Editor as TiptapEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
@@ -19,9 +20,10 @@ interface EditorProps {
   ydoc: Y.Doc;
   provider: HocuspocusProvider;
   onConnectionChange: (connected: boolean) => void;
+  onEditorReady?: (editor: TiptapEditor | null) => void;
 }
 
-export function Editor({ ydoc, provider, onConnectionChange }: EditorProps) {
+export function Editor({ ydoc, provider, onConnectionChange, onEditorReady }: EditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -56,6 +58,11 @@ export function Editor({ ydoc, provider, onConnectionChange }: EditorProps) {
       },
     },
   }, [ydoc, provider]); // Re-create editor if ydoc or provider change
+
+  useEffect(() => {
+    onEditorReady?.(editor);
+    return () => onEditorReady?.(null);
+  }, [editor, onEditorReady]);
 
   return (
     <div>
