@@ -126,7 +126,7 @@ First-run experience, error handling, and UX refinements.
 
 - Server auto-starts when Claude Code calls any Tandem tool (check PID in `.tandem/.server-info`)
 - Server auto-stops after 30 min idle (`IDLE_TIMEOUT` in constants.ts)
-- Browser auto-open already works (implemented in Step 4)
+- Browser auto-open (removed — `open` package wrote to stdout, corrupting the MCP wire; user opens http://localhost:5173 manually)
 
 ### 8b: Onboarding
 

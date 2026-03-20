@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
+import { HocuspocusProvider } from '@hocuspocus/provider';
 import { Editor } from './editor/Editor';
 import { SidePanel } from './panels/SidePanel';
 import { StatusBar } from './status/StatusBar';
@@ -17,13 +17,17 @@ export default function App() {
 
   // Stable refs for Y.Doc and provider — survive StrictMode double-mount
   const ydocRef = useRef<Y.Doc | null>(null);
-  const providerRef = useRef<WebsocketProvider | null>(null);
+  const providerRef = useRef<HocuspocusProvider | null>(null);
 
   useEffect(() => {
     const ydoc = new Y.Doc();
     ydocRef.current = ydoc;
 
-    const provider = new WebsocketProvider(`ws://localhost:${DEFAULT_WS_PORT}`, 'default', ydoc);
+    const provider = new HocuspocusProvider({
+      url: `ws://localhost:${DEFAULT_WS_PORT}`,
+      name: 'default',
+      document: ydoc,
+    });
     providerRef.current = provider;
 
     // Connection status
