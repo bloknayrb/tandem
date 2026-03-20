@@ -38,6 +38,13 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
 
+## Documentation
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 20 tools with params, returns, examples
+- [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
+- [Workflows](docs/workflows.md) -- Real-world usage patterns
+- [Design Decisions](docs/decisions.md) -- ADRs
+- [Lessons Learned](docs/lessons-learned.md)
+
 ## Security
 - Server binds to 127.0.0.1 only
 - Rejects UNC paths (prevents NTLM hash leakage)
