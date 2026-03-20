@@ -21,10 +21,10 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
     port,
     address: '127.0.0.1',
-    onConnect({ documentName }) {
+    async onConnect({ documentName }) {
       console.error(`[Hocuspocus] Client connected to: ${documentName}`);
     },
-    onDisconnect({ documentName }) {
+    async onDisconnect({ documentName }) {
       console.error(`[Hocuspocus] Client disconnected from: ${documentName}`);
     },
     async onLoadDocument({ document, documentName }) {
