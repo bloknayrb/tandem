@@ -47,6 +47,12 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Step 3: Annotations — server-side Y.Map storage + client-side ProseMirror Decoration rendering
 - [x] Step 4: Awareness — Claude's focus paragraph, status text, user selection/typing broadcast
 
+**Infrastructure fixes (2026-03-20):**
+- [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
+- [x] MCP starts before Hocuspocus to beat Claude Code's initialize timeout
+- [x] `freePort()` evicts stale processes on startup; uncaughtException handler survives malformed WS frames
+- [x] `console.log = console.error` + `quiet: true` prevent stdout pollution of the MCP wire
+
 **Remaining (Steps 5-8) — see [docs/roadmap.md](docs/roadmap.md) for full spec:**
 - [x] Step 5a: Markdown round-trip — remark-based MDAST↔Y.Doc conversion, .md load/save, extractMarkdown for readable output
 - [ ] Step 5b: File I/O — .txt blank-line round-trip, .docx review-only with mammoth.js

@@ -4,9 +4,9 @@
 **Decision:** Use Tiptap (React wrapper) instead of raw ProseMirror.
 **Rationale:** Tiptap provides React bindings, extension system, and built-in collaboration support. Reduces boilerplate significantly.
 
-## ADR-002: Hocuspocus for Yjs WebSocket
-**Decision:** Use Hocuspocus (MIT) as the Yjs WebSocket server.
-**Rationale:** Same team as Tiptap. Built-in document management, persistence hooks. Alternative (y-websocket) is lower-level.
+## ADR-002: Hocuspocus for Yjs WebSocket, @hocuspocus/provider on the Client
+**Decision:** Use Hocuspocus (MIT) as the Yjs WebSocket server and `@hocuspocus/provider` as the browser WebSocket provider.
+**Rationale:** Same team as Tiptap. Built-in document management, persistence hooks. `@hocuspocus/provider` is required — `y-websocket` is protocol-incompatible with Hocuspocus v2, which prepends a `writeVarString(documentName)` to every message frame. `y-websocket` misreads that length byte as the outer message type, silently routing the browser to a phantom `""` document instead of `"default"`.
 
 ## ADR-003: MCP over REST for Claude Integration
 **Decision:** Expose tools via MCP (stdio) instead of REST API.

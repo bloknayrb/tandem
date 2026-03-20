@@ -42,7 +42,7 @@ graph LR
         Tools["MCP Tool Calls"]
     end
 
-    Tiptap <-->|y-websocket| HP
+    Tiptap <-->|@hocuspocus/provider| HP
     HP <--> YDoc
     MCP <--> YDoc
     Tools <-->|stdio| MCP
@@ -65,7 +65,7 @@ Claude calls tandem_edit(from, to, "new text")
     → Y.Doc.transact() mutates the XmlFragment
     → Yjs generates update
     → Hocuspocus broadcasts update via WebSocket
-    → Browser's y-websocket receives update
+    → Browser's @hocuspocus/provider receives update
     → Tiptap's Collaboration extension applies the change
     → User sees the edit appear live
 ```
