@@ -5,6 +5,7 @@ import { Editor } from './editor/Editor';
 import { SidePanel } from './panels/SidePanel';
 import { StatusBar } from './status/StatusBar';
 import { Toolbar } from './editor/toolbar/Toolbar';
+import { DEFAULT_WS_PORT } from '../shared/constants';
 import type { Annotation } from '../shared/types';
 
 export default function App() {
@@ -20,8 +21,7 @@ export default function App() {
     const ydoc = new Y.Doc();
     ydocRef.current = ydoc;
 
-    const wsPort = 3478;
-    const provider = new WebsocketProvider(`ws://localhost:${wsPort}`, 'default', ydoc);
+    const provider = new WebsocketProvider(`ws://localhost:${DEFAULT_WS_PORT}`, 'default', ydoc);
     providerRef.current = provider;
 
     // Connection status

@@ -2,10 +2,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { getCurrentDoc } from './document.js';
+import { mcpSuccess, mcpError, noDocumentError } from './response.js';
 import * as Y from 'yjs';
-import type { Annotation, HighlightColor } from '../../shared/types.js';
+import type { Annotation, AnnotationType, HighlightColor } from '../../shared/types.js';
 
-/** Get or create the annotations Y.Map on the current document */
+/** Get the annotations Y.Map on the current document, or null if no doc is open */
 function getAnnotationsMap(): Y.Map<unknown> | null {
   const doc = getCurrentDoc();
   if (!doc) return null;
@@ -15,6 +16,37 @@ function getAnnotationsMap(): Y.Map<unknown> | null {
 
 function generateId(): string {
   return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Create an annotation and store it in the Y.Map. Returns the annotation ID. */
+function createAnnotation(
+  map: Y.Map<unknown>,
+  type: AnnotationType,
+  from: number,
+  to: number,
+  content: string,
+  extras?: Partial<Annotation>,
+): string {
+  const id = generateId();
+  const annotation: Annotation = {
+    id,
+    author: 'claude',
+    type,
+    range: { from, to },
+    content,
+    status: 'pending',
+    timestamp: Date.now(),
+    ...extras,
+  };
+  map.set(id, annotation);
+  return id;
+}
+
+/** Collect all annotations from the Y.Map as an array */
+function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
+  const result: Annotation[] = [];
+  map.forEach((value) => result.push(value as Annotation));
+  return result;
 }
 
 export function registerAnnotationTools(server: McpServer): void {
@@ -29,32 +61,9 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     async ({ from, to, color, note }) => {
       const map = getAnnotationsMap();
-      if (!map) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
-
-      const id = generateId();
-      const annotation: Annotation = {
-        id,
-        author: 'claude',
-        type: 'highlight',
-        range: { from, to },
-        content: note || '',
-        status: 'pending',
-        timestamp: Date.now(),
-        color: color as HighlightColor,
-      };
-      map.set(id, annotation);
-
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { annotationId: id }
-        }) }],
-      };
+      if (!map) return noDocumentError();
+      const id = createAnnotation(map, 'highlight', from, to, note || '', { color: color as HighlightColor });
+      return mcpSuccess({ annotationId: id });
     }
   );
 
@@ -68,31 +77,9 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     async ({ from, to, text }) => {
       const map = getAnnotationsMap();
-      if (!map) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
-
-      const id = generateId();
-      const annotation: Annotation = {
-        id,
-        author: 'claude',
-        type: 'comment',
-        range: { from, to },
-        content: text,
-        status: 'pending',
-        timestamp: Date.now(),
-      };
-      map.set(id, annotation);
-
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { annotationId: id }
-        }) }],
-      };
+      if (!map) return noDocumentError();
+      const id = createAnnotation(map, 'comment', from, to, text);
+      return mcpSuccess({ annotationId: id });
     }
   );
 
@@ -107,31 +94,9 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     async ({ from, to, newText, reason }) => {
       const map = getAnnotationsMap();
-      if (!map) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
-
-      const id = generateId();
-      const annotation: Annotation = {
-        id,
-        author: 'claude',
-        type: 'suggestion',
-        range: { from, to },
-        content: JSON.stringify({ newText, reason: reason || '' }),
-        status: 'pending',
-        timestamp: Date.now(),
-      };
-      map.set(id, annotation);
-
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { annotationId: id }
-        }) }],
-      };
+      if (!map) return noDocumentError();
+      const id = createAnnotation(map, 'suggestion', from, to, JSON.stringify({ newText, reason: reason || '' }));
+      return mcpSuccess({ annotationId: id });
     }
   );
 
@@ -145,29 +110,14 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     async ({ author, type, status }) => {
       const map = getAnnotationsMap();
-      if (!map) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      if (!map) return noDocumentError();
 
-      let results: Annotation[] = [];
-      map.forEach((value) => {
-        const ann = value as Annotation;
-        results.push(ann);
-      });
-
+      let results = collectAnnotations(map);
       if (author) results = results.filter(a => a.author === author);
       if (type) results = results.filter(a => a.type === type);
       if (status) results = results.filter(a => a.status === status);
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { annotations: results, count: results.length }
-        }) }],
-      };
+      return mcpSuccess({ annotations: results, count: results.length });
     }
   );
 
@@ -180,64 +130,27 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     async ({ id, action }) => {
       const map = getAnnotationsMap();
-      if (!map) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      if (!map) return noDocumentError();
 
       const ann = map.get(id) as Annotation | undefined;
-      if (!ann) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'INVALID_RANGE', message: `Annotation ${id} not found`
-          }) }],
-        };
-      }
+      if (!ann) return mcpError('INVALID_RANGE', `Annotation ${id} not found`);
 
-      const updated = { ...ann, status: action === 'accept' ? 'accepted' : 'dismissed' };
+      const updated = { ...ann, status: action === 'accept' ? 'accepted' as const : 'dismissed' as const };
       map.set(id, updated);
-
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { id, status: updated.status }
-        }) }],
-      };
+      return mcpSuccess({ id, status: updated.status });
     }
   );
 
   server.tool(
     'tandem_removeAnnotation',
     'Remove an annotation entirely',
-    {
-      id: z.string().describe('Annotation ID'),
-    },
+    { id: z.string().describe('Annotation ID') },
     async ({ id }) => {
       const map = getAnnotationsMap();
-      if (!map) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
-
-      if (!map.has(id)) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'INVALID_RANGE', message: `Annotation ${id} not found`
-          }) }],
-        };
-      }
-
+      if (!map) return noDocumentError();
+      if (!map.has(id)) return mcpError('INVALID_RANGE', `Annotation ${id} not found`);
       map.delete(id);
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { removed: true, id }
-        }) }],
-      };
+      return mcpSuccess({ removed: true, id });
     }
   );
 }

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { getCurrentDoc, extractText } from './document.js';
+import { mcpSuccess, mcpError, noDocumentError, escapeRegex, getErrorMessage } from './response.js';
 
 /** Get full text from the current document's Y.Doc */
 function getFullText(docName: string): string {
@@ -19,41 +20,22 @@ export function registerNavigationTools(server: McpServer): void {
     },
     async ({ query, regex }) => {
       const current = getCurrentDoc();
-      if (!current) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
       const matches: Array<{ from: number; to: number; text: string }> = [];
 
       try {
-        const pattern = regex ? new RegExp(query, 'gi') : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        const pattern = regex ? new RegExp(query, 'gi') : new RegExp(escapeRegex(query), 'gi');
         let match;
         while ((match = pattern.exec(fullText)) !== null) {
-          matches.push({
-            from: match.index,
-            to: match.index + match[0].length,
-            text: match[0],
-          });
+          matches.push({ from: match.index, to: match.index + match[0].length, text: match[0] });
         }
       } catch (err) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'FORMAT_ERROR',
-            message: `Invalid regex: ${err instanceof Error ? err.message : String(err)}`
-          }) }],
-        };
+        return mcpError('FORMAT_ERROR', `Invalid regex: ${getErrorMessage(err)}`);
       }
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { matches, count: matches.length }
-        }) }],
-      };
+      return mcpSuccess({ matches, count: matches.length });
     }
   );
 
@@ -66,54 +48,31 @@ export function registerNavigationTools(server: McpServer): void {
     },
     async ({ pattern, occurrence = 1 }) => {
       const current = getCurrentDoc();
-      if (!current) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
-      const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(escaped, 'g');
+      const regex = new RegExp(escapeRegex(pattern), 'g');
 
       let match;
       let count = 0;
       while ((match = regex.exec(fullText)) !== null) {
         count++;
         if (count === occurrence) {
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({
-              error: false,
-              data: { from: match.index, to: match.index + match[0].length, text: match[0] }
-            }) }],
-          };
+          return mcpSuccess({ from: match.index, to: match.index + match[0].length, text: match[0] });
         }
       }
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: true, code: 'INVALID_RANGE',
-          message: `Text "${pattern}" not found (occurrence ${occurrence}, found ${count} total)`
-        }) }],
-      };
+      return mcpError('INVALID_RANGE', `Text "${pattern}" not found (occurrence ${occurrence}, found ${count} total)`);
     }
   );
 
   server.tool(
     'tandem_setStatus',
     'Update Claude status text shown to user (e.g., "Reviewing cost figures...")',
-    {
-      text: z.string().describe('Status text'),
-    },
+    { text: z.string().describe('Status text') },
     async ({ text }) => {
       // TODO: Update Yjs awareness state so browser sees the status change
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { status: text }
-        }) }],
-      };
+      return mcpSuccess({ status: text });
     }
   );
 
@@ -127,31 +86,18 @@ export function registerNavigationTools(server: McpServer): void {
     },
     async ({ from, to, windowSize = 500 }) => {
       const current = getCurrentDoc();
-      if (!current) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
       const contextStart = Math.max(0, from - windowSize);
       const contextEnd = Math.min(fullText.length, to + windowSize);
-      const context = fullText.slice(contextStart, contextEnd);
-      const selection = fullText.slice(from, to);
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false,
-          data: {
-            context,
-            selection,
-            contextRange: { from: contextStart, to: contextEnd },
-            selectionRange: { from, to },
-          }
-        }) }],
-      };
+      return mcpSuccess({
+        context: fullText.slice(contextStart, contextEnd),
+        selection: fullText.slice(from, to),
+        contextRange: { from: contextStart, to: contextEnd },
+        selectionRange: { from, to },
+      });
     }
   );
 }

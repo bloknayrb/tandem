@@ -4,6 +4,8 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import { getOrCreateDocument } from '../yjs/provider.js';
+import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
+import { MAX_FILE_SIZE } from '../../shared/constants.js';
 import * as Y from 'yjs';
 
 // Fixed room name — both MCP tools and browser client use this
@@ -15,6 +17,12 @@ let currentDoc: { filePath: string; format: string } | null = null;
 
 export function getCurrentDoc() {
   return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
+}
+
+/** Returns the shared Y.Doc or a noDocumentError if no doc is open */
+function requireDocument(): { doc: Y.Doc; filePath: string } | null {
+  if (!currentDoc) return null;
+  return { doc: getOrCreateDocument(ROOM_NAME), filePath: currentDoc.filePath };
 }
 
 function detectFormat(filePath: string): string {
@@ -37,9 +45,10 @@ function populateYDoc(doc: Y.Doc, text: string): void {
     fragment.delete(0, 1);
   }
 
-  // Split by lines and create XML elements
   const lines = text.split('\n');
   for (const line of lines) {
+    if (line === '') continue;
+
     let element: Y.XmlElement;
 
     if (line.startsWith('### ')) {
@@ -54,8 +63,6 @@ function populateYDoc(doc: Y.Doc, text: string): void {
       element = new Y.XmlElement('heading');
       element.setAttribute('level', '1');
       element.insert(0, [new Y.XmlText(line.slice(2))]);
-    } else if (line === '') {
-      continue; // Skip empty lines
     } else {
       element = new Y.XmlElement('paragraph');
       element.insert(0, [new Y.XmlText(line)]);
@@ -67,7 +74,6 @@ function populateYDoc(doc: Y.Doc, text: string): void {
 
 /**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
- * Y.XmlElement.toJSON() returns XML structure, not plain text — we need to walk children.
  */
 function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
@@ -91,11 +97,9 @@ export function extractText(doc: Y.Doc): string {
     const node = fragment.get(i);
     if (node instanceof Y.XmlElement) {
       const text = getElementText(node);
-      // Re-add heading prefixes for markdown round-trip
       if (node.nodeName === 'heading') {
         const level = parseInt(node.getAttribute('level') || '1', 10);
-        const prefix = '#'.repeat(level) + ' ';
-        lines.push(prefix + text);
+        lines.push('#'.repeat(level) + ' ' + text);
       } else {
         lines.push(text);
       }
@@ -109,9 +113,7 @@ export function registerDocumentTools(server: McpServer): void {
   server.tool(
     'tandem_open',
     'Open a file in the Tandem editor. Auto-opens browser.',
-    {
-      filePath: z.string().describe('Absolute path to the file to open'),
-    },
+    { filePath: z.string().describe('Absolute path to the file to open') },
     async ({ filePath }) => {
       try {
         // Resolve symlinks/junctions BEFORE path validation (prevents symlink-to-UNC bypass)
@@ -124,71 +126,39 @@ export function registerDocumentTools(server: McpServer): void {
 
         // Reject UNC paths (prevents NTLM credential hash leakage via SMB)
         if (resolved.startsWith('\\\\') || resolved.startsWith('//')) {
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({
-              error: true, code: 'FILE_NOT_FOUND',
-              message: 'UNC paths are not supported for security reasons.'
-            }) }],
-          };
+          return mcpError('FILE_NOT_FOUND', 'UNC paths are not supported for security reasons.');
         }
 
-        // Check file exists and size
         const stat = await fs.stat(resolved);
-        if (stat.size > 50 * 1024 * 1024) {
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({
-              error: true, code: 'FORMAT_ERROR',
-              message: 'File exceeds 50MB limit.'
-            }) }],
-          };
+        if (stat.size > MAX_FILE_SIZE) {
+          return mcpError('FORMAT_ERROR', 'File exceeds 50MB limit.');
         }
 
         const format = detectFormat(resolved);
-        const fileName = path.basename(resolved);
-
         if (format === 'docx') {
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({
-              error: true, code: 'FORMAT_ERROR',
-              message: 'DOCX support not yet implemented. Use .md or .txt files for now.'
-            }) }],
-          };
+          return mcpError('FORMAT_ERROR', 'DOCX support not yet implemented. Use .md or .txt files for now.');
         }
 
         const content = await fs.readFile(resolved, 'utf-8');
-
-        // Get the shared Y.Doc (same instance the browser connects to via ROOM_NAME)
         const doc = getOrCreateDocument(ROOM_NAME);
         populateYDoc(doc, content);
-
         currentDoc = { filePath: resolved, format };
 
-        const tokenEstimate = Math.ceil(content.length / 4);
-        const pageEstimate = Math.ceil(content.length / 3000);
-
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: false,
-            data: {
-              filePath: resolved,
-              fileName,
-              format,
-              tokenEstimate,
-              pageEstimate,
-              message: `Document opened: ${fileName}`,
-            }
-          }) }],
-        };
+        const fileName = path.basename(resolved);
+        return mcpSuccess({
+          filePath: resolved,
+          fileName,
+          format,
+          tokenEstimate: Math.ceil(content.length / 4),
+          pageEstimate: Math.ceil(content.length / 3000),
+          message: `Document opened: ${fileName}`,
+        });
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = getErrorMessage(err);
         const code = message.includes('ENOENT') ? 'FILE_NOT_FOUND'
           : message.includes('EBUSY') ? 'FILE_LOCKED'
           : 'FORMAT_ERROR';
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code, message
-          }) }],
-        };
+        return mcpError(code, message);
       }
     }
   );
@@ -198,48 +168,21 @@ export function registerDocumentTools(server: McpServer): void {
     'Read full document content. Warning: token-heavy for large docs. Use getOutline() or getTextContent() instead.',
     {},
     async () => {
-      if (!currentDoc) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT',
-            message: 'No document is open. Call tandem_open first.'
-          }) }],
-        };
-      }
-      const doc = getOrCreateDocument(ROOM_NAME);
-      const fragment = doc.getXmlFragment('default');
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false,
-          data: { content: fragment.toJSON(), filePath: currentDoc.filePath }
-        }) }],
-      };
+      const r = requireDocument();
+      if (!r) return noDocumentError();
+      const fragment = r.doc.getXmlFragment('default');
+      return mcpSuccess({ content: fragment.toJSON(), filePath: r.filePath });
     }
   );
 
   server.tool(
     'tandem_getTextContent',
     'Read document as plain text. ~60% fewer tokens than getContent().',
-    {
-      section: z.string().optional().describe('Optional section heading to read only that section'),
-    },
+    { section: z.string().optional().describe('Optional section heading to read only that section') },
     async ({ section }) => {
-      if (!currentDoc) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT',
-            message: 'No document is open. Call tandem_open first.'
-          }) }],
-        };
-      }
-      const doc = getOrCreateDocument(ROOM_NAME);
-      const text = extractText(doc);
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false,
-          data: { text, filePath: currentDoc.filePath }
-        }) }],
-      };
+      const r = requireDocument();
+      if (!r) return noDocumentError();
+      return mcpSuccess({ text: extractText(r.doc), filePath: r.filePath });
     }
   );
 
@@ -248,33 +191,20 @@ export function registerDocumentTools(server: McpServer): void {
     'Get document structure (headings, sections) without full content. Low token cost.',
     {},
     async () => {
-      if (!currentDoc) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT',
-            message: 'No document is open. Call tandem_open first.'
-          }) }],
-        };
-      }
-      const doc = getOrCreateDocument(ROOM_NAME);
-      const fragment = doc.getXmlFragment('default');
+      const r = requireDocument();
+      if (!r) return noDocumentError();
+      const fragment = r.doc.getXmlFragment('default');
       const outline: Array<{ level: number; text: string; index: number }> = [];
 
       for (let i = 0; i < fragment.length; i++) {
         const node = fragment.get(i);
         if (node instanceof Y.XmlElement && node.nodeName === 'heading') {
           const level = parseInt(node.getAttribute('level') || '1', 10);
-          const textContent = getElementText(node);
-          outline.push({ level, text: textContent, index: i });
+          outline.push({ level, text: getElementText(node), index: i });
         }
       }
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false,
-          data: { outline, totalNodes: fragment.length }
-        }) }],
-      };
+      return mcpSuccess({ outline, totalNodes: fragment.length });
     }
   );
 
@@ -287,20 +217,9 @@ export function registerDocumentTools(server: McpServer): void {
       newText: z.string().describe('Replacement text'),
     },
     async ({ from, to, newText }) => {
-      if (!currentDoc) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      if (!currentDoc) return noDocumentError();
       // TODO: Implement proper ProseMirror-aware editing via Y.Doc
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false,
-          data: { edited: true, from, to, newTextLength: newText.length }
-        }) }],
-      };
+      return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
     }
   );
 
@@ -309,38 +228,17 @@ export function registerDocumentTools(server: McpServer): void {
     'Save the current document back to disk',
     {},
     async () => {
-      if (!currentDoc) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'NO_DOCUMENT', message: 'No document is open.'
-          }) }],
-        };
-      }
+      const r = requireDocument();
+      if (!r) return noDocumentError();
       try {
-        const doc = getOrCreateDocument(ROOM_NAME);
-        const text = extractText(doc);
-
+        const text = extractText(r.doc);
         // Atomic save: write to temp, then rename
-        const tempPath = path.join(
-          path.dirname(currentDoc.filePath),
-          `.tandem-tmp-${Date.now()}`
-        );
+        const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
         await fs.writeFile(tempPath, text, 'utf-8');
-        await fs.rename(tempPath, currentDoc.filePath);
-
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: false,
-            data: { saved: true, filePath: currentDoc.filePath }
-          }) }],
-        };
+        await fs.rename(tempPath, r.filePath);
+        return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            error: true, code: 'FILE_LOCKED', message
-          }) }],
-        };
+        return mcpError('FILE_LOCKED', getErrorMessage(err));
       }
     }
   );
@@ -350,16 +248,11 @@ export function registerDocumentTools(server: McpServer): void {
     'Check editor status: running, open file, user activity',
     {},
     async () => {
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false,
-          data: {
-            running: true,
-            currentDocument: currentDoc?.filePath ?? null,
-            format: currentDoc?.format ?? null,
-          }
-        }) }],
-      };
+      return mcpSuccess({
+        running: true,
+        currentDocument: currentDoc?.filePath ?? null,
+        format: currentDoc?.format ?? null,
+      });
     }
   );
 
@@ -370,11 +263,7 @@ export function registerDocumentTools(server: McpServer): void {
     async () => {
       const was = currentDoc?.filePath ?? null;
       currentDoc = null;
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: false, data: { closed: true, was }
-        }) }],
-      };
+      return mcpSuccess({ closed: true, was });
     }
   );
 }
