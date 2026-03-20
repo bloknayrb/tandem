@@ -30,6 +30,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
     port,
     address: '127.0.0.1',
+    quiet: true, // stdout is the MCP wire — suppress the startup banner
 
     async onConnect({ request, documentName }) {
       // Origin validation: reject connections not from localhost (prevents DNS rebinding)

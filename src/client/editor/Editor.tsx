@@ -11,13 +11,13 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
+import { HocuspocusProvider } from '@hocuspocus/provider';
 import { AnnotationExtension } from './extensions/annotation';
 import { AwarenessExtension } from './extensions/awareness';
 
 interface EditorProps {
   ydoc: Y.Doc;
-  provider: WebsocketProvider;
+  provider: HocuspocusProvider;
   onConnectionChange: (connected: boolean) => void;
 }
 

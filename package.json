@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
+    "dev": "vite",
+    "dev:standalone": "concurrently \"vite\" \"tsx watch src/server/index.ts\"",
     "dev:client": "vite",
     "dev:server": "tsx watch src/server/index.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
@@ -13,6 +14,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hocuspocus/provider": "^3.4.4",
     "@hocuspocus/server": "^2.13.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@tiptap/core": "^2.11.0",

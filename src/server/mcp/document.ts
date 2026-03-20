@@ -16,8 +16,6 @@ const ROOM_NAME = 'default';
 // Current document state
 let currentDoc: { filePath: string; format: string } | null = null;
 
-// Track whether we've already opened the browser
-let browserOpened = false;
 
 export function getCurrentDoc() {
   return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
@@ -252,18 +250,6 @@ export function registerDocumentTools(server: McpServer): void {
           populateYDoc(doc, content);
         }
         currentDoc = { filePath: resolved, format };
-
-        // Auto-open browser on first tandem_open call
-        if (!browserOpened) {
-          browserOpened = true;
-          import('open').then(({ default: openUrl }) => {
-            openUrl('http://localhost:5173').catch((err: unknown) => {
-              console.error('[Tandem] Failed to open browser:', err);
-            });
-          }).catch((err: unknown) => {
-            console.error('[Tandem] Failed to import open package:', err);
-          });
-        }
 
         const fileName = path.basename(resolved);
         return mcpSuccess({
