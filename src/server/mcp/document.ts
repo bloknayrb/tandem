@@ -6,6 +6,7 @@ import path from 'path';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
 import { MAX_FILE_SIZE } from '../../shared/constants.js';
+import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
 import * as Y from 'yjs';
 
 // Fixed room name — both MCP tools and browser client use this
@@ -15,8 +16,6 @@ const ROOM_NAME = 'default';
 // Current document state
 let currentDoc: { filePath: string; format: string } | null = null;
 
-// Track whether we've already opened the browser
-let browserOpened = false;
 
 export function getCurrentDoc() {
   return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
@@ -40,31 +39,39 @@ function detectFormat(filePath: string): string {
 }
 
 /** Insert text content into a Y.Doc's XmlFragment as paragraphs */
-function populateYDoc(doc: Y.Doc, text: string): void {
+export function populateYDoc(doc: Y.Doc, text: string): void {
   const fragment = doc.getXmlFragment('default');
 
-  // Clear existing content
-  while (fragment.length > 0) {
-    fragment.delete(0, 1);
+  // Clear existing content in a single operation
+  if (fragment.length > 0) {
+    fragment.delete(0, fragment.length);
   }
+
+  // Truly empty input produces empty fragment
+  if (text === '') return;
 
   const lines = text.split('\n');
   for (const line of lines) {
-    if (line === '') continue;
+    if (line === '') {
+      const empty = new Y.XmlElement('paragraph');
+      empty.insert(0, [new Y.XmlText('')]);
+      fragment.insert(fragment.length, [empty]);
+      continue;
+    }
 
     let element: Y.XmlElement;
 
     if (line.startsWith('### ')) {
       element = new Y.XmlElement('heading');
-      element.setAttribute('level', '3');
+      element.setAttribute('level', 3 as any);
       element.insert(0, [new Y.XmlText(line.slice(4))]);
     } else if (line.startsWith('## ')) {
       element = new Y.XmlElement('heading');
-      element.setAttribute('level', '2');
+      element.setAttribute('level', 2 as any);
       element.insert(0, [new Y.XmlText(line.slice(3))]);
     } else if (line.startsWith('# ')) {
       element = new Y.XmlElement('heading');
-      element.setAttribute('level', '1');
+      element.setAttribute('level', 1 as any);
       element.insert(0, [new Y.XmlText(line.slice(2))]);
     } else {
       element = new Y.XmlElement('paragraph');
@@ -78,7 +85,7 @@ function populateYDoc(doc: Y.Doc, text: string): void {
 /**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
  */
-function getElementText(element: Y.XmlElement): string {
+export function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
@@ -101,7 +108,7 @@ export function extractText(doc: Y.Doc): string {
     if (node instanceof Y.XmlElement) {
       const text = getElementText(node);
       if (node.nodeName === 'heading') {
-        const level = parseInt(node.getAttribute('level') || '1', 10);
+        const level = Number(node.getAttribute('level') ?? 1);
         lines.push('#'.repeat(level) + ' ' + text);
       } else {
         lines.push(text);
@@ -113,17 +120,26 @@ export function extractText(doc: Y.Doc): string {
 }
 
 /**
+ * Extract readable markdown from a Y.Doc via remark serialization.
+ * Used for tandem_getTextContent on .md files so Claude can read document structure.
+ * NOT used by resolveOffset or tandem_edit (those use extractText).
+ */
+export function extractMarkdown(doc: Y.Doc): string {
+  return saveMarkdown(doc).trimEnd();
+}
+
+/**
  * Get the heading prefix length for a node ("## " = 3, "# " = 2, paragraph = 0).
  */
-function getHeadingPrefixLength(node: Y.XmlElement): number {
+export function getHeadingPrefixLength(node: Y.XmlElement): number {
   if (node.nodeName === 'heading') {
-    const level = parseInt(node.getAttribute('level') || '1', 10);
+    const level = Number(node.getAttribute('level') ?? 1);
     return level + 1; // "# " = 2, "## " = 3, "### " = 4
   }
   return 0;
 }
 
-interface ResolvedOffset {
+export interface ResolvedOffset {
   elementIndex: number;
   textOffset: number;
   /** True if the original offset fell inside a heading prefix (e.g., "## ") and was clamped to 0 */
@@ -135,7 +151,7 @@ interface ResolvedOffset {
  * Returns { elementIndex, textOffset, clampedFromPrefix } where textOffset is within
  * the element's Y.XmlText (NOT including heading prefix).
  */
-function resolveOffset(
+export function resolveOffset(
   fragment: Y.XmlFragment,
   charOffset: number
 ): ResolvedOffset | null {
@@ -183,7 +199,7 @@ function resolveOffset(
  * Find the first Y.XmlText child of a Y.XmlElement.
  * Creates one if the element is empty.
  */
-function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
@@ -228,20 +244,12 @@ export function registerDocumentTools(server: McpServer): void {
 
         const content = await fs.readFile(resolved, 'utf-8');
         const doc = getOrCreateDocument(ROOM_NAME);
-        populateYDoc(doc, content);
-        currentDoc = { filePath: resolved, format };
-
-        // Auto-open browser on first tandem_open call
-        if (!browserOpened) {
-          browserOpened = true;
-          import('open').then(({ default: openUrl }) => {
-            openUrl('http://localhost:5173').catch((err: unknown) => {
-              console.error('[Tandem] Failed to open browser:', err);
-            });
-          }).catch((err: unknown) => {
-            console.error('[Tandem] Failed to import open package:', err);
-          });
+        if (format === 'md') {
+          loadMarkdown(doc, content);
+        } else {
+          populateYDoc(doc, content);
         }
+        currentDoc = { filePath: resolved, format };
 
         const fileName = path.basename(resolved);
         return mcpSuccess({
@@ -296,7 +304,7 @@ export function registerDocumentTools(server: McpServer): void {
           const text = getElementText(node);
 
           if (node.nodeName === 'heading') {
-            const level = parseInt(node.getAttribute('level') || '1', 10);
+            const level = Number(node.getAttribute('level') ?? 1);
             if (inSection && level <= sectionLevel) break; // Hit next section at same/higher level
             if (text.trim().toLowerCase() === section.trim().toLowerCase()) {
               inSection = true;
@@ -308,7 +316,7 @@ export function registerDocumentTools(server: McpServer): void {
 
           if (inSection) {
             if (node.nodeName === 'heading') {
-              const level = parseInt(node.getAttribute('level') || '1', 10);
+              const level = Number(node.getAttribute('level') ?? 1);
               lines.push('#'.repeat(level) + ' ' + text);
             } else {
               lines.push(text);
@@ -322,7 +330,9 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpSuccess({ text: lines.join('\n'), filePath: r.filePath, section });
       }
 
-      return mcpSuccess({ text: extractText(r.doc), filePath: r.filePath });
+      const format = currentDoc?.format;
+      const text = format === 'md' ? extractMarkdown(r.doc) : extractText(r.doc);
+      return mcpSuccess({ text, filePath: r.filePath });
     }
   );
 
@@ -339,7 +349,7 @@ export function registerDocumentTools(server: McpServer): void {
       for (let i = 0; i < fragment.length; i++) {
         const node = fragment.get(i);
         if (node instanceof Y.XmlElement && node.nodeName === 'heading') {
-          const level = parseInt(node.getAttribute('level') || '1', 10);
+          const level = Number(node.getAttribute('level') ?? 1);
           outline.push({ level, text: getElementText(node), index: i });
         }
       }
@@ -359,6 +369,10 @@ export function registerDocumentTools(server: McpServer): void {
     async ({ from, to, newText }) => {
       const r = requireDocument();
       if (!r) return noDocumentError();
+
+      if (from > to) {
+        return mcpError('INVALID_RANGE', `Invalid range: from (${from}) must be <= to (${to}).`);
+      }
 
       const fragment = r.doc.getXmlFragment('default');
       const startPos = resolveOffset(fragment, from);
@@ -438,10 +452,11 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument();
       if (!r) return noDocumentError();
       try {
-        const text = extractText(r.doc);
+        const format = currentDoc?.format;
+        const output = format === 'md' ? saveMarkdown(r.doc) : extractText(r.doc);
         // Atomic save: write to temp, then rename
         const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
-        await fs.writeFile(tempPath, text, 'utf-8');
+        await fs.writeFile(tempPath, output, 'utf-8');
         await fs.rename(tempPath, r.filePath);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {

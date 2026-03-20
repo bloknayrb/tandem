@@ -4,19 +4,20 @@ import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import Highlight from '@tiptap/extension-highlight';
+import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
+import { HocuspocusProvider } from '@hocuspocus/provider';
 import { AnnotationExtension } from './extensions/annotation';
 import { AwarenessExtension } from './extensions/awareness';
 
 interface EditorProps {
   ydoc: Y.Doc;
-  provider: WebsocketProvider;
+  provider: HocuspocusProvider;
   onConnectionChange: (connected: boolean) => void;
 }
 
@@ -27,6 +28,10 @@ export function Editor({ ydoc, provider, onConnectionChange }: EditorProps) {
         history: false, // Yjs handles undo/redo
       }),
       Highlight.configure({ multicolor: true }),
+      Link.configure({
+        openOnClick: false,
+        HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
+      }),
       Placeholder.configure({
         placeholder: 'Open a document with Claude to get started...',
       }),
