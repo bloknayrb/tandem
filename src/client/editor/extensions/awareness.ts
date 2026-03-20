@@ -13,7 +13,7 @@ const awarenessPluginKey = new PluginKey('tandemAwareness');
  * This is the inverse of flatOffsetToPmPos in annotation.ts.
  * Flat text includes heading prefixes ("## ") and "\n" between elements.
  */
-function pmPosToFlatOffset(doc: PmNode, pmPos: number): number {
+export function pmPosToFlatOffset(doc: PmNode, pmPos: number): number {
   let flatOffset = 0;
   let pmOffset = 0;
 

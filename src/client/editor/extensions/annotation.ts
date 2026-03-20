@@ -16,7 +16,7 @@ const annotationPluginKey = new PluginKey('tandemAnnotations');
  * like "# ", "## ". ProseMirror doesn't have those prefixes in its content,
  * so we need to account for them when mapping.
  */
-function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
+export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
   let accumulated = 0;
   let pmOffset = 0; // Running ProseMirror position
 
