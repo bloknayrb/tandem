@@ -28,9 +28,9 @@ describe('populateYDoc', () => {
   });
 
   it.each([
-    ['# ', '1'],
-    ['## ', '2'],
-    ['### ', '3'],
+    ['# ', 1],
+    ['## ', 2],
+    ['### ', 3],
   ])('creates heading for %s prefix with correct level attribute', (prefix, level) => {
     doc = makeDoc(`${prefix}Title`);
     const frag = getFragment(doc);
@@ -41,16 +41,22 @@ describe('populateYDoc', () => {
     expect(getElementText(el)).toBe('Title');
   });
 
-  it('skips blank lines: "a\\n\\nb" produces two elements', () => {
+  it('preserves blank lines: "a\\n\\nb" produces three elements', () => {
     doc = makeDoc('a\n\nb');
     const frag = getFragment(doc);
-    expect(frag.length).toBe(2);
-    expect(extractText(doc)).toBe('a\nb');
+    expect(frag.length).toBe(3);
+    expect(getElementText(frag.get(1) as Y.XmlElement)).toBe('');
+    expect(extractText(doc)).toBe('a\n\nb');
   });
 
-  it('string of only blank lines produces empty fragment', () => {
+  it('string of only blank lines produces empty paragraph elements', () => {
     doc = makeDoc('\n\n\n');
-    expect(getFragment(doc).length).toBe(0);
+    const frag = getFragment(doc);
+    // '\n\n\n'.split('\n') = ['', '', '', ''] → 4 empty paragraphs
+    expect(frag.length).toBe(4);
+    for (let i = 0; i < frag.length; i++) {
+      expect(getElementText(frag.get(i) as Y.XmlElement)).toBe('');
+    }
   });
 
   it('treats "#" without space as a paragraph', () => {
@@ -168,7 +174,7 @@ describe('getHeadingPrefixLength', () => {
     const testDoc = new Y.Doc();
     const frag = testDoc.getXmlFragment('default');
     const el = new Y.XmlElement('heading');
-    el.setAttribute('level', String(level));
+    el.setAttribute('level', level);
     frag.insert(0, [el]);
     expect(getHeadingPrefixLength(el)).toBe(expected);
     testDoc.destroy();

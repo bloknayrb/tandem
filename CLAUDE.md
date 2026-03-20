@@ -48,7 +48,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Step 4: Awareness — Claude's focus paragraph, status text, user selection/typing broadcast
 
 **Remaining (Steps 5-8) — see [docs/roadmap.md](docs/roadmap.md) for full spec:**
-- [ ] Step 5: File I/O — .md/.txt lossless round-trip, .docx review-only with mammoth.js
+- [x] Step 5a: Markdown round-trip — remark-based MDAST↔Y.Doc conversion, .md load/save, extractMarkdown for readable output
+- [ ] Step 5b: File I/O — .txt blank-line round-trip, .docx review-only with mammoth.js
 - [ ] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts
 - [ ] Step 7: Document groups — multi-document tabs, cross-reference tools
 - [ ] Step 8: Polish — onboarding, auto-start, error handling, review mode UI

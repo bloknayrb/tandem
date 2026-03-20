@@ -6,6 +6,7 @@ import path from 'path';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
 import { MAX_FILE_SIZE } from '../../shared/constants.js';
+import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
 import * as Y from 'yjs';
 
 // Fixed room name — both MCP tools and browser client use this
@@ -43,28 +44,36 @@ function detectFormat(filePath: string): string {
 export function populateYDoc(doc: Y.Doc, text: string): void {
   const fragment = doc.getXmlFragment('default');
 
-  // Clear existing content
-  while (fragment.length > 0) {
-    fragment.delete(0, 1);
+  // Clear existing content in a single operation
+  if (fragment.length > 0) {
+    fragment.delete(0, fragment.length);
   }
+
+  // Truly empty input produces empty fragment
+  if (text === '') return;
 
   const lines = text.split('\n');
   for (const line of lines) {
-    if (line === '') continue;
+    if (line === '') {
+      const empty = new Y.XmlElement('paragraph');
+      empty.insert(0, [new Y.XmlText('')]);
+      fragment.insert(fragment.length, [empty]);
+      continue;
+    }
 
     let element: Y.XmlElement;
 
     if (line.startsWith('### ')) {
       element = new Y.XmlElement('heading');
-      element.setAttribute('level', '3');
+      element.setAttribute('level', 3 as any);
       element.insert(0, [new Y.XmlText(line.slice(4))]);
     } else if (line.startsWith('## ')) {
       element = new Y.XmlElement('heading');
-      element.setAttribute('level', '2');
+      element.setAttribute('level', 2 as any);
       element.insert(0, [new Y.XmlText(line.slice(3))]);
     } else if (line.startsWith('# ')) {
       element = new Y.XmlElement('heading');
-      element.setAttribute('level', '1');
+      element.setAttribute('level', 1 as any);
       element.insert(0, [new Y.XmlText(line.slice(2))]);
     } else {
       element = new Y.XmlElement('paragraph');
@@ -101,7 +110,7 @@ export function extractText(doc: Y.Doc): string {
     if (node instanceof Y.XmlElement) {
       const text = getElementText(node);
       if (node.nodeName === 'heading') {
-        const level = parseInt(node.getAttribute('level') || '1', 10);
+        const level = Number(node.getAttribute('level') ?? 1);
         lines.push('#'.repeat(level) + ' ' + text);
       } else {
         lines.push(text);
@@ -113,11 +122,20 @@ export function extractText(doc: Y.Doc): string {
 }
 
 /**
+ * Extract readable markdown from a Y.Doc via remark serialization.
+ * Used for tandem_getTextContent on .md files so Claude can read document structure.
+ * NOT used by resolveOffset or tandem_edit (those use extractText).
+ */
+export function extractMarkdown(doc: Y.Doc): string {
+  return saveMarkdown(doc).trimEnd();
+}
+
+/**
  * Get the heading prefix length for a node ("## " = 3, "# " = 2, paragraph = 0).
  */
 export function getHeadingPrefixLength(node: Y.XmlElement): number {
   if (node.nodeName === 'heading') {
-    const level = parseInt(node.getAttribute('level') || '1', 10);
+    const level = Number(node.getAttribute('level') ?? 1);
     return level + 1; // "# " = 2, "## " = 3, "### " = 4
   }
   return 0;
@@ -228,7 +246,11 @@ export function registerDocumentTools(server: McpServer): void {
 
         const content = await fs.readFile(resolved, 'utf-8');
         const doc = getOrCreateDocument(ROOM_NAME);
-        populateYDoc(doc, content);
+        if (format === 'md') {
+          loadMarkdown(doc, content);
+        } else {
+          populateYDoc(doc, content);
+        }
         currentDoc = { filePath: resolved, format };
 
         // Auto-open browser on first tandem_open call
@@ -296,7 +318,7 @@ export function registerDocumentTools(server: McpServer): void {
           const text = getElementText(node);
 
           if (node.nodeName === 'heading') {
-            const level = parseInt(node.getAttribute('level') || '1', 10);
+            const level = Number(node.getAttribute('level') ?? 1);
             if (inSection && level <= sectionLevel) break; // Hit next section at same/higher level
             if (text.trim().toLowerCase() === section.trim().toLowerCase()) {
               inSection = true;
@@ -308,7 +330,7 @@ export function registerDocumentTools(server: McpServer): void {
 
           if (inSection) {
             if (node.nodeName === 'heading') {
-              const level = parseInt(node.getAttribute('level') || '1', 10);
+              const level = Number(node.getAttribute('level') ?? 1);
               lines.push('#'.repeat(level) + ' ' + text);
             } else {
               lines.push(text);
@@ -322,7 +344,9 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpSuccess({ text: lines.join('\n'), filePath: r.filePath, section });
       }
 
-      return mcpSuccess({ text: extractText(r.doc), filePath: r.filePath });
+      const format = currentDoc?.format;
+      const text = format === 'md' ? extractMarkdown(r.doc) : extractText(r.doc);
+      return mcpSuccess({ text, filePath: r.filePath });
     }
   );
 
@@ -339,7 +363,7 @@ export function registerDocumentTools(server: McpServer): void {
       for (let i = 0; i < fragment.length; i++) {
         const node = fragment.get(i);
         if (node instanceof Y.XmlElement && node.nodeName === 'heading') {
-          const level = parseInt(node.getAttribute('level') || '1', 10);
+          const level = Number(node.getAttribute('level') ?? 1);
           outline.push({ level, text: getElementText(node), index: i });
         }
       }
@@ -442,10 +466,11 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument();
       if (!r) return noDocumentError();
       try {
-        const text = extractText(r.doc);
+        const format = currentDoc?.format;
+        const output = format === 'md' ? saveMarkdown(r.doc) : extractText(r.doc);
         // Atomic save: write to temp, then rename
         const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
-        await fs.writeFile(tempPath, text, 'utf-8');
+        await fs.writeFile(tempPath, output, 'utf-8');
         await fs.rename(tempPath, r.filePath);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
