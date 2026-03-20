@@ -5,6 +5,9 @@ import type { Root, RootContent, PhrasingContent } from 'mdast';
  * Convert an MDAST tree into Y.Doc XmlFragment elements.
  * Block nodes become Y.XmlElements with Tiptap-compatible nodeNames.
  * Inline content becomes formatted Y.XmlText within those elements.
+ *
+ * Elements are attached to the doc BEFORE text is populated — Yjs
+ * requires this for correct insert ordering on Y.XmlText.
  */
 export function mdastToYDoc(doc: Y.Doc, tree: Root): void {
   const fragment = doc.getXmlFragment('default');
@@ -14,24 +17,42 @@ export function mdastToYDoc(doc: Y.Doc, tree: Root): void {
     fragment.delete(0, fragment.length);
   }
 
+  // Two-pass: build structure first, then populate text.
+  // Pass 1 collects deferred text operations while building the element tree.
+  // Yjs requires Y.XmlText to be attached to a doc for correct insert ordering.
+  const deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }> = [];
   const allElements: Y.XmlElement[] = [];
   for (const node of tree.children) {
-    allElements.push(...blockToYxml(node));
+    allElements.push(...blockToYxml(node, deferred));
   }
+
+  // Attach all elements to the doc (pass 1 complete)
   if (allElements.length > 0) {
     fragment.insert(0, allElements);
+  }
+
+  // Pass 2: populate text now that elements are attached to the Y.Doc
+  for (const { xmlText, nodes, plainText } of deferred) {
+    if (nodes) {
+      processInline(xmlText, nodes, {});
+    } else if (plainText != null) {
+      xmlText.insert(0, plainText);
+    }
   }
 }
 
 /** Convert a block-level MDAST node to one or more Y.XmlElements */
-function blockToYxml(node: RootContent): Y.XmlElement[] {
+function blockToYxml(
+  node: RootContent,
+  deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
+): Y.XmlElement[] {
   switch (node.type) {
     case 'heading': {
       const el = new Y.XmlElement('heading');
       el.setAttribute('level', node.depth as any);
       const text = new Y.XmlText();
       el.insert(0, [text]);
-      processInline(text, node.children, {});
+      deferred.push({ xmlText: text, nodes: node.children });
       return [el];
     }
 
@@ -39,14 +60,14 @@ function blockToYxml(node: RootContent): Y.XmlElement[] {
       const el = new Y.XmlElement('paragraph');
       const text = new Y.XmlText();
       el.insert(0, [text]);
-      processInline(text, node.children, {});
+      deferred.push({ xmlText: text, nodes: node.children });
       return [el];
     }
 
     case 'blockquote': {
       const el = new Y.XmlElement('blockquote');
       for (const child of node.children) {
-        const childEls = blockToYxml(child);
+        const childEls = blockToYxml(child, deferred);
         for (const c of childEls) {
           el.insert(el.length, [c]);
         }
@@ -63,7 +84,7 @@ function blockToYxml(node: RootContent): Y.XmlElement[] {
       for (const item of node.children) {
         const listItem = new Y.XmlElement('listItem');
         for (const child of item.children) {
-          const childEls = blockToYxml(child);
+          const childEls = blockToYxml(child, deferred);
           for (const c of childEls) {
             listItem.insert(listItem.length, [c]);
           }
@@ -78,8 +99,9 @@ function blockToYxml(node: RootContent): Y.XmlElement[] {
       if (node.lang) {
         el.setAttribute('language', node.lang);
       }
-      const text = new Y.XmlText(node.value);
+      const text = new Y.XmlText();
       el.insert(0, [text]);
+      deferred.push({ xmlText: text, plainText: node.value });
       return [el];
     }
 
@@ -99,8 +121,9 @@ function blockToYxml(node: RootContent): Y.XmlElement[] {
     default: {
       if ('value' in node && typeof node.value === 'string') {
         const el = new Y.XmlElement('paragraph');
-        const text = new Y.XmlText(node.value);
+        const text = new Y.XmlText();
         el.insert(0, [text]);
+        deferred.push({ xmlText: text, plainText: node.value });
         return [el];
       }
       return [];
@@ -108,9 +131,26 @@ function blockToYxml(node: RootContent): Y.XmlElement[] {
   }
 }
 
+/** All mark names that can appear on inline text */
+const ALL_MARKS = ['bold', 'italic', 'strike', 'code', 'link'] as const;
+
+/**
+ * Build Yjs insert attributes from the current mark stack.
+ * Explicitly sets null for inactive marks to prevent Yjs from
+ * inheriting formatting from adjacent formatted segments.
+ */
+function buildAttrs(marks: Record<string, object>): Record<string, object | null> {
+  const attrs: Record<string, object | null> = {};
+  for (const name of ALL_MARKS) {
+    attrs[name] = name in marks ? marks[name] : null;
+  }
+  return attrs;
+}
+
 /**
  * Process inline/phrasing MDAST nodes into a single Y.XmlText with marks.
- * Tracks a mark stack during recursion so nested marks compose correctly.
+ * Uses insert-with-attributes (not insert + format) because Yjs requires
+ * the Y.XmlText to be attached to a doc for format() to preserve order.
  */
 function processInline(
   xmlText: Y.XmlText,
@@ -120,11 +160,7 @@ function processInline(
   for (const node of nodes) {
     switch (node.type) {
       case 'text': {
-        const offset = xmlText.length;
-        xmlText.insert(offset, node.value);
-        for (const [name, attrs] of Object.entries(marks)) {
-          xmlText.format(offset, node.value.length, { [name]: attrs });
-        }
+        xmlText.insert(xmlText.length, node.value, buildAttrs(marks));
         break;
       }
 
@@ -141,11 +177,7 @@ function processInline(
         break;
 
       case 'inlineCode': {
-        const offset = xmlText.length;
-        xmlText.insert(offset, node.value);
-        for (const [name, attrs] of Object.entries({ ...marks, code: {} })) {
-          xmlText.format(offset, node.value.length, { [name]: attrs });
-        }
+        xmlText.insert(xmlText.length, node.value, buildAttrs({ ...marks, code: {} }));
         break;
       }
 
@@ -163,21 +195,15 @@ function processInline(
       }
 
       case 'image': {
-        // Inline images: insert alt text with a mark (best-effort)
-        const offset = xmlText.length;
-        const alt = node.alt || node.url;
-        xmlText.insert(offset, alt);
+        // Inline images: insert alt text (best-effort)
+        xmlText.insert(xmlText.length, node.alt || node.url, buildAttrs(marks));
         break;
       }
 
       // html inline, footnoteReference, etc. — insert raw value if available
       default:
         if ('value' in node && typeof node.value === 'string') {
-          const offset = xmlText.length;
-          xmlText.insert(offset, node.value);
-          for (const [name, attrs] of Object.entries(marks)) {
-            xmlText.format(offset, node.value.length, { [name]: attrs });
-          }
+          xmlText.insert(xmlText.length, node.value, buildAttrs(marks));
         }
         break;
     }
@@ -242,12 +268,13 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
               if (m) itemChildren.push(m);
             }
           }
-          listItems.push({ type: 'listItem', children: itemChildren });
+          listItems.push({ type: 'listItem', spread: false, children: itemChildren });
         }
       }
       return {
         type: 'list',
         ordered,
+        spread: false,
         ...(ordered && start !== 1 ? { start } : {}),
         children: listItems,
       } as any;
