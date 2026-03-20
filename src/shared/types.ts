@@ -114,8 +114,8 @@ export interface ClaudeAwareness {
 
 export interface SessionData {
   filePath: string;
-  annotations: Annotation[];
-  overlays: OverlayDefinition[];
-  groupId?: string;
+  format: string;
+  ydocState: string; // Base64-encoded Y.encodeStateAsUpdate()
+  sourceFileMtime: number; // Source file mtime at save — detect external changes on resume
   lastAccessed: number;
 }
