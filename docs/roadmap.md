@@ -1,22 +1,22 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-4 are complete. This document contains the full design spec for Steps 5-8.
+Steps 0-4 are complete. Step 5a is complete. This document contains the full design spec for Steps 5-8.
 
 ## Step 5: File I/O
 
 ### Goal
 Load files into Y.Doc and save Y.Doc back to source files. Lossless for .md/.txt, review-only for .docx.
 
-### 5a: Markdown and Plain Text (lossless round-trip)
+### 5a: Markdown (lossless round-trip) — DONE
 
-**Files:** `src/server/file-io/markdown.ts`, `src/server/file-io/plaintext.ts`
+**Files:** `src/server/file-io/markdown.ts`, `src/server/file-io/mdast-ydoc.ts`
 
-Currently `populateYDoc()` in document.ts handles basic loading (headings + paragraphs). This needs to become a proper file-io module:
+Implemented via unified/remark with MDAST↔Y.Doc conversion:
 
-- **Markdown:** Parse with unified/remark. Support headings, bold/italic, lists, blockquotes, tables, code blocks, links, images. Round-trip must preserve formatting.
-- **Plain text:** Simpler — split on newlines, each line becomes a paragraph.
-- **Save:** `extractText()` already handles headings. Extend to support all node types Tiptap produces.
-- **Known issue:** `populateYDoc()` currently skips blank lines (`if (line === '') continue`) — this loses document structure. Fix by inserting empty paragraphs for blank lines.
+- **Load:** `loadMarkdown()` parses markdown via remark into an MDAST tree, then `mdastToYDoc()` converts it to Y.XmlFragment elements with Tiptap-compatible nodeNames and formatted Y.XmlText for inline marks.
+- **Save:** `saveMarkdown()` converts Y.Doc back to MDAST via `yDocToMdast()`, then serializes with remark-stringify. Round-trip preserves headings, bold/italic/strikethrough, links, inline code, lists (ordered/unordered/nested), blockquotes, code blocks, images, horizontal rules, and hard breaks.
+- **Read:** `extractMarkdown()` returns readable markdown for `tandem_getTextContent` on .md files.
+- **Key constraint:** Y.XmlText must be attached to the Y.Doc before populating text content — detached nodes reverse insert order (see ADR-009, Lesson 9).
 
 ### 5b: .docx (review-only mode)
 

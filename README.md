@@ -86,12 +86,12 @@ For development (with tsx):
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns (DRPA reviews, invoice cross-references, RFP drafting)
 - [Roadmap](docs/roadmap.md) -- Full spec for remaining steps (file I/O, sessions, groups, polish)
-- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-008
+- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-009
 - [Lessons Learned](docs/lessons-learned.md) -- Critical implementation lessons
 
 ## Tech Stack
 
 **Frontend:** React 18, Tiptap, Vite, TypeScript
 **Backend:** Node.js, Hocuspocus (Yjs WebSocket), MCP SDK
-**Collaboration:** Yjs (CRDT), y-websocket, y-prosemirror
+**Collaboration:** Yjs (CRDT), @hocuspocus/provider, y-prosemirror
 **File I/O:** mammoth.js (planned .docx), unified/remark (.md)

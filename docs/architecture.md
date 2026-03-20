@@ -35,7 +35,7 @@ graph LR
         HP["Hocuspocus<br/>WebSocket :3478"]
         MCP["MCP Server<br/>stdio transport"]
         YDoc["Y.Doc<br/>(authoritative)"]
-        FileIO["File I/O<br/>markdown, txt"]
+        FileIO["File I/O<br/>markdown, txt, docx"]
     end
 
     subgraph "Claude Code"
@@ -190,3 +190,4 @@ See [docs/decisions.md](decisions.md) for the full list of Architecture Decision
 - console.error for server logs
 - Y.Map for annotations
 - Shared MCP response helpers
+- Two-pass Y.Doc loading for correct inline mark ordering
