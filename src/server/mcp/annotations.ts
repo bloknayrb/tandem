@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getOrCreateDocument } from '../yjs/provider.js';
-import { getCurrentDoc, extractText } from './document.js';
+import { getCurrentDoc, extractText, verifyAndResolveRange } from './document.js';
 import { mcpSuccess, mcpError, noDocumentError } from './response.js';
 import { exportAnnotations } from '../file-io/docx.js';
 import * as Y from 'yjs';
@@ -13,6 +13,29 @@ function getAnnotationsMap(documentId?: string): Y.Map<unknown> | null {
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
   return ydoc.getMap('annotations');
+}
+
+/** Get the Y.Doc for a document ID, or null */
+function getYDoc(documentId?: string): Y.Doc | null {
+  const doc = getCurrentDoc(documentId);
+  if (!doc) return null;
+  return getOrCreateDocument(doc.docName);
+}
+
+/** Check textSnapshot against the document range. Returns an error response if stale, or null if valid. */
+function checkRangeStale(documentId: string | undefined, from: number, to: number, textSnapshot: string | undefined) {
+  if (!textSnapshot) return null;
+  const ydoc = getYDoc(documentId);
+  if (!ydoc) return null;
+  const result = verifyAndResolveRange(ydoc, from, to, textSnapshot);
+  if (result.valid) return null;
+  if (result.gone) {
+    return mcpError('RANGE_STALE', 'Target text no longer exists in the document.');
+  }
+  return mcpError('RANGE_STALE', 'Target text has moved. Use resolvedFrom/resolvedTo to retry.', {
+    resolvedFrom: result.resolvedFrom,
+    resolvedTo: result.resolvedTo,
+  });
 }
 
 import { generateAnnotationId as generateId } from '../../shared/utils.js';
@@ -59,8 +82,11 @@ export function registerAnnotationTools(server: McpServer): void {
       color: z.enum(['yellow', 'red', 'green', 'blue', 'purple']).describe('Highlight color'),
       note: z.string().optional().describe('Optional note for the highlight'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
-    async ({ from, to, color, note, documentId }) => {
+    async ({ from, to, color, note, documentId, textSnapshot }) => {
+      const staleError = checkRangeStale(documentId, from, to, textSnapshot);
+      if (staleError) return staleError;
       const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       const id = createAnnotation(map, 'highlight', from, to, note || '', { color: color as HighlightColor });
@@ -76,8 +102,11 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       text: z.string().describe('Comment text'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
-    async ({ from, to, text, documentId }) => {
+    async ({ from, to, text, documentId, textSnapshot }) => {
+      const staleError = checkRangeStale(documentId, from, to, textSnapshot);
+      if (staleError) return staleError;
       const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       const id = createAnnotation(map, 'comment', from, to, text);
@@ -94,8 +123,11 @@ export function registerAnnotationTools(server: McpServer): void {
       newText: z.string().describe('Suggested replacement text'),
       reason: z.string().optional().describe('Reason for the suggestion'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
-    async ({ from, to, newText, reason, documentId }) => {
+    async ({ from, to, newText, reason, documentId, textSnapshot }) => {
+      const staleError = checkRangeStale(documentId, from, to, textSnapshot);
+      if (staleError) return staleError;
       const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       const id = createAnnotation(map, 'suggestion', from, to, JSON.stringify({ newText, reason: reason || '' }));
