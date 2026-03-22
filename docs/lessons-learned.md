@@ -16,9 +16,11 @@
 
 ## 3. MCP stdio Transport Reserves stdout
 
+*[Historical — stdio replaced by HTTP transport in ADR-012, but console redirection kept as defense-in-depth.]*
+
 **Problem:** The MCP protocol uses stdin/stdout for message framing. Any `console.log()` output corrupts the protocol stream, causing parse errors and dropped messages.
 
-**Solution:** All server-side logging uses `console.error()`. This is enforced by convention (ADR-006).
+**Solution:** All server-side logging uses `console.error()`. This is enforced by convention (ADR-006). The `console.log/warn/info = console.error` redirect in `index.ts` remains active even in HTTP mode.
 
 ## 4. Hocuspocus Callbacks Must Be Async
 
@@ -41,6 +43,8 @@
 **Impact:** Critical — `y-websocket` appears to "work" (WebSocket connects, status shows "Connected") but document content never reaches the browser.
 
 ## 7. MCP Server Must Start Before Hocuspocus
+
+*[Historical — applies to stdio mode only. HTTP mode starts both concurrently since there's no init timeout race.]*
 
 **Problem:** Claude Code sends the MCP `initialize` request immediately after spawning the server process. If `startHocuspocus()` (which includes `freePort` + a 300ms delay + socket bind) runs first, the process doesn't respond to `initialize` in time. Claude Code's timeout fires, it kills the process, and the MCP tools never appear.
 

@@ -21,8 +21,8 @@
 **Rationale:** Character offsets break under concurrent editing. Node anchors survive edits to other paragraphs.
 
 ## ADR-006: Console.error for Server Logs
-**Decision:** Use console.error for all server-side logging.
-**Rationale:** MCP stdio transport uses stdin/stdout for protocol messages. Any console.log output would corrupt the MCP protocol stream.
+**Decision:** Use console.error for all server-side logging. `console.log`, `console.warn`, and `console.info` are redirected to `console.error` at startup.
+**Rationale:** Originally required because MCP stdio transport used stdin/stdout for protocol messages. Now defense-in-depth — HTTP transport doesn't use stdout, but the redirect prevents regressions if stdio fallback is used or a dependency logs unexpectedly.
 
 ## ADR-007: Y.Map for Annotations
 **Decision:** Store annotations in a Y.Map on the Y.Doc rather than in the document content.
