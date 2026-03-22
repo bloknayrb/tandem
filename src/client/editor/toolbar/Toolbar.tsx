@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import * as Y from 'yjs';
 import { pmPosToFlatOffset } from '../extensions/awareness';
-import type { Annotation, HighlightColor } from '../../../shared/types';
+import type { Annotation, AnnotationType, HighlightColor } from '../../../shared/types';
 
 interface ToolbarProps {
   editor: TiptapEditor | null;
@@ -17,8 +17,11 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
   const [hasSelection, setHasSelection] = useState(false);
   const [commentMode, setCommentMode] = useState(false);
   const [commentText, setCommentText] = useState('');
+  const [askClaudeMode, setAskClaudeMode] = useState(false);
+  const [askClaudeText, setAskClaudeText] = useState('');
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
+  const askClaudeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!editor) return;
@@ -33,14 +36,20 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     return () => { editor.off('selectionUpdate', onSelectionUpdate); };
   }, [editor]);
 
-  // Focus the comment input when entering comment mode
+  // Focus inputs when entering modes
   useEffect(() => {
     if (commentMode && commentInputRef.current) {
       commentInputRef.current.focus();
     }
   }, [commentMode]);
 
-  function createAnnotation(type: 'highlight' | 'comment', content: string, color?: HighlightColor) {
+  useEffect(() => {
+    if (askClaudeMode && askClaudeInputRef.current) {
+      askClaudeInputRef.current.focus();
+    }
+  }, [askClaudeMode]);
+
+  function createAnnotation(type: AnnotationType, content: string, color?: HighlightColor) {
     if (!editor || !ydoc) return;
 
     const range = capturedRangeRef.current ?? editor.state.selection;
@@ -66,15 +75,18 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     capturedRangeRef.current = null;
   }
 
+  const inInputMode = commentMode || askClaudeMode;
+
   function handleHighlight(e: React.MouseEvent) {
-    e.preventDefault(); // Prevent editor blur
+    e.preventDefault();
     createAnnotation('highlight', '', 'yellow');
   }
 
+  // -- Comment mode --
+
   function handleCommentStart(e: React.MouseEvent) {
-    e.preventDefault(); // Prevent editor blur
+    e.preventDefault();
     if (!editor) return;
-    // Capture current selection before it might change
     const { from, to } = editor.state.selection;
     capturedRangeRef.current = { from, to };
     setCommentMode(true);
@@ -108,6 +120,44 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     }
   }
 
+  // -- Ask Claude mode --
+
+  function handleAskClaudeStart(e: React.MouseEvent) {
+    e.preventDefault();
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    capturedRangeRef.current = { from, to };
+    setAskClaudeMode(true);
+    setAskClaudeText('');
+  }
+
+  function handleAskClaudeSubmit() {
+    if (!askClaudeText.trim()) {
+      handleAskClaudeCancel();
+      return;
+    }
+    createAnnotation('question', askClaudeText.trim());
+    setAskClaudeMode(false);
+    setAskClaudeText('');
+    editor?.chain().focus().run();
+  }
+
+  function handleAskClaudeCancel() {
+    setAskClaudeMode(false);
+    setAskClaudeText('');
+    capturedRangeRef.current = null;
+    editor?.chain().focus().run();
+  }
+
+  function handleAskClaudeKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAskClaudeSubmit();
+    } else if (e.key === 'Escape') {
+      handleAskClaudeCancel();
+    }
+  }
+
   const canAnnotate = editor && ydoc && hasSelection;
 
   return (
@@ -126,12 +176,12 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       <div style={{ width: '1px', height: '20px', background: '#e5e7eb', margin: '0 8px' }} />
       <ToolbarButton
         label="Highlight"
-        disabled={!canAnnotate || commentMode}
+        disabled={!canAnnotate || inInputMode}
         onMouseDown={handleHighlight}
       />
       <ToolbarButton
         label="Comment"
-        disabled={!canAnnotate || commentMode}
+        disabled={!canAnnotate || inInputMode}
         onMouseDown={handleCommentStart}
       />
       {commentMode && (
@@ -156,7 +206,34 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
           <ToolbarButton label="Cancel" disabled={false} onClick={handleCommentCancel} />
         </div>
       )}
-      <ToolbarButton label="Ask Claude" shortcut="Ctrl+Shift+A" disabled />
+      <ToolbarButton
+        label="Ask Claude"
+        shortcut="Ctrl+Shift+A"
+        disabled={!canAnnotate || inInputMode}
+        onMouseDown={handleAskClaudeStart}
+      />
+      {askClaudeMode && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <input
+            ref={askClaudeInputRef}
+            type="text"
+            value={askClaudeText}
+            onChange={e => setAskClaudeText(e.target.value)}
+            onKeyDown={handleAskClaudeKeyDown}
+            placeholder="Ask about this text..."
+            style={{
+              padding: '3px 8px',
+              fontSize: '13px',
+              border: '1px solid #6366f1',
+              borderRadius: '4px',
+              outline: 'none',
+              width: '200px',
+            }}
+          />
+          <ToolbarButton label="Ask" disabled={!askClaudeText.trim()} onClick={handleAskClaudeSubmit} />
+          <ToolbarButton label="Cancel" disabled={false} onClick={handleAskClaudeCancel} />
+        </div>
+      )}
       <div style={{ flex: 1 }} />
       <span style={{ fontSize: '12px', color: '#9ca3af' }}>Review Mode</span>
     </div>

@@ -37,6 +37,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Ranges use `resolveRange()` for safe targeting (not raw offsets)
 - Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
+- User→Claude communication via `tandem_checkInbox`: user actions (highlights, comments, questions) and responses (accepted/dismissed) are surfaced once per call. Call between tasks.
 
 ## Implementation Status (as of 2026-03-20)
 
@@ -56,12 +57,12 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 **Remaining (Steps 5-8) — see [docs/roadmap.md](docs/roadmap.md) for full spec:**
 - [x] Step 5a: Markdown round-trip — remark-based MDAST↔Y.Doc conversion, .md load/save, extractMarkdown for readable output
 - [x] Step 5b: .docx review-only mode — mammoth.js→HTML→Y.Doc, read-only guards, tandem_exportAnnotations
-- [ ] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts
+- [x] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts (PR #4)
 - [ ] Step 7: Document groups — multi-document tabs, cross-reference tools
 - [ ] Step 8: Polish — onboarding, auto-start, error handling, review mode UI
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 21 tools with params, returns, examples
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 22 tools with params, returns, examples
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Full spec for Steps 5-8 (file I/O, sessions, groups, polish)

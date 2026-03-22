@@ -68,7 +68,7 @@ export function registerNavigationTools(server: McpServer): void {
 
   server.tool(
     'tandem_setStatus',
-    'Update Claude status text shown to user (e.g., "Reviewing cost figures...")',
+    'Update Claude status text shown to user (e.g., "Reviewing cost figures..."). Tip: call tandem_checkInbox after completing work to see if the user has responded.',
     {
       text: z.string().describe('Status text'),
       focusParagraph: z.number().optional().describe('Index of paragraph Claude is focusing on'),

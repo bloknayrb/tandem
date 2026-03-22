@@ -103,10 +103,10 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     'tandem_getAnnotations',
-    'Read all annotations, optionally filtered by author/type/status',
+    'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox.',
     {
       author: z.enum(['user', 'claude']).optional().describe('Filter by author'),
-      type: z.enum(['highlight', 'comment', 'suggestion', 'overlay']).optional().describe('Filter by type'),
+      type: z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question']).optional().describe('Filter by type'),
       status: z.enum(['pending', 'accepted', 'dismissed']).optional().describe('Filter by status'),
     },
     async ({ author, type, status }) => {
