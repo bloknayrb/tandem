@@ -108,7 +108,7 @@ Deferred — only if demand appears:
 
 ### Known Issues from Phase 1
 
-- **MCP stdio disconnect (Issue #8):** Server's MCP transport disconnects after the first `tandem_open` call under Claude Code. Server code is correct (standalone test passes). Root cause is in Claude Code's transport layer. Blocks multi-doc browser testing.
+- **MCP stdio disconnect (Issue #8):** Resolved. Migrated from stdio to Streamable HTTP transport (ADR-012). MCP HTTP on :3479, Hocuspocus WS on :3478. Stdio fallback via `TANDEM_TRANSPORT=stdio`.
 - **Y.js "Invalid access" warnings:** Appear in stderr during session restore when the browser connects to a room before the MCP-populated Y.Doc is merged. Harmless (data still syncs correctly) but noisy. Could be silenced by deferring session restore until after `onLoadDocument` merge.
 - **Browser tab discovery requires `/mcp` restart:** After restarting the Tandem MCP server, the browser must reload to reconnect its bootstrap provider. No auto-reconnect logic yet.
 

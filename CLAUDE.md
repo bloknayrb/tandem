@@ -1,16 +1,17 @@
 # Tandem -- Collaborative AI-Human Document Editor
 
 ## Quick Reference
-- `npm run dev` -- Start both frontend (Vite on :5173) and backend (Hocuspocus on :3478 + MCP on stdio)
-- `npm run dev:server` -- Backend only
-- `npm run dev:client` -- Frontend only
+- `npm run dev:server` -- Backend: Hocuspocus on :3478 + MCP HTTP on :3479
+- `npm run dev:client` -- Frontend: Vite on :5173
+- `npm run dev:standalone` -- Both frontend + backend (via concurrently)
+- `npm run dev` -- Alias for `vite` (frontend only)
 - `npm test` -- Run vitest
 
 ## Architecture
 Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude Code
 
 ### Server (src/server/)
-- `index.ts` -- Entry point, starts both MCP (stdio) and Hocuspocus (WebSocket on port 3478)
+- `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- File format converters (markdown, plaintext, docx)
@@ -36,7 +37,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Claude's MCP tools mutate Y.Doc directly -> changes sync to browser via Hocuspocus
 - Annotations stored in Y.Map('annotations'), not in the document content
 - Claude's status stored in Y.Map('awareness') key 'claude'; user's selection in Y.Map('userAwareness')
-- Server logs use console.error (stdout reserved for MCP protocol)
+- Server logs use console.error (stdout reserved for MCP protocol in stdio mode; defense-in-depth in HTTP mode)
 - Ranges use `resolveRange()` for safe targeting (not raw offsets)
 - Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
@@ -59,11 +60,12 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Phase 1 - Polish: keyboard review mode (Tab/Y/N), annotation filtering, bulk accept/dismiss, review summary
 - [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument (24 total MCP tools)
 
-**Infrastructure fixes (2026-03-20):**
+**Infrastructure fixes (2026-03-20 — 2026-03-22):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
-- [x] MCP starts before Hocuspocus to beat Claude Code's initialize timeout
+- [x] MCP starts before Hocuspocus to beat Claude Code's initialize timeout (stdio mode only)
 - [x] `freePort()` evicts stale processes on startup; uncaughtException handler survives malformed WS frames
 - [x] `console.log = console.error` + `quiet: true` prevent stdout pollution of the MCP wire
+- [x] Migrate MCP from stdio to Streamable HTTP transport (fixes Issue #8 — stdio disconnect)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -72,26 +74,26 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [ ] Phase 5: Discovery sprint — CLI mode, VS Code extension, tracked changes, etc.
 
 ## Known Issues
-- **MCP stdio disconnect (Issue #8):** MCP transport drops after first `tandem_open` under Claude Code. Server code works correctly in standalone testing. Root cause is in Claude Code's transport, not Tandem.
+- **MCP stdio disconnect (Issue #8):** Resolved by migrating to Streamable HTTP transport. Stdio fallback (`TANDEM_TRANSPORT=stdio`) still has this issue — use HTTP mode (default).
 - **Y.js "Invalid access" warnings:** Harmless stderr noise during session restore. Data syncs correctly.
-- Never call Tandem MCP tools in parallel — stdio transport disconnects immediately.
+- **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:server` first.
 
 ## Documentation
 - [MCP Tool Reference](docs/mcp-tools.md) -- All 24 tools with params, returns, examples
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-011)
-- [Lessons Learned](docs/lessons-learned.md) -- 13 lessons including multi-doc gotchas
+- [Design Decisions](docs/decisions.md) -- ADRs (001-012)
+- [Lessons Learned](docs/lessons-learned.md) -- 14 lessons including multi-doc gotchas
 
 ## Gotchas (save yourself time)
-- **stdout is sacred.** The MCP stdio transport owns stdout. `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts. If you add a dependency that logs to stdout, it will corrupt the MCP wire and the server will silently disconnect. Always verify with `node -e "require('new-dep')"` and check stdout is clean.
+- **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
 - **Y.XmlText must be attached before populating.** Inserting formatted text into a detached Y.XmlText reverses segment order. Always attach to Y.Doc first, then insert text (two-pass pattern in mdast-ydoc.ts). See Lesson 9.
 - **Y.XmlElement.setAttribute needs `as any` for numbers.** TypeScript types say string-only but Tiptap stores numeric heading levels. Cast with `as any`.
-- **`npm run dev` only starts Vite (client).** The MCP server is a separate process managed by Claude Code. To test server changes, you must restart the MCP server (via `/mcp` in Claude Code). Vite hot-reloads client code automatically.
+- **Start the server before connecting Claude Code.** `npm run dev:server` starts both Hocuspocus (:3478) and MCP HTTP (:3479). Claude Code connects via the `url` in `.mcp.json`. To test server changes, restart `dev:server` then `/mcp` in Claude Code. Vite hot-reloads client code automatically.
 - **Hocuspocus rooms = document IDs.** The room name IS the document ID from `docIdFromPath()`. `__tandem_ctrl__` is reserved for the bootstrap coordination channel. Never use it as a document ID.
 - **Session files live at `%LOCALAPPDATA%\tandem\sessions\`.** Keyed by URL-encoded file path. Delete them to force a fresh load (useful when debugging session restore issues).
-- **The `freePort()` function kills stale processes on port 3478 at startup.** This is intentional — it clears zombie Hocuspocus instances from crashed servers. But it means you can't run two Tandem instances simultaneously.
+- **The `freePort()` function kills stale processes on ports 3478 and 3479 at startup.** This is intentional — it clears zombie instances from crashed servers. But it means you can't run two Tandem instances simultaneously.
 - **Coordinate system mismatch is the #1 source of annotation bugs.** Server uses flat text offsets (includes `## ` heading prefixes + `\n` separators). Client uses ProseMirror positions (structural, no prefixes). `flatOffsetToPmPos` and `pmPosToFlatOffset` convert between them. If annotations appear in the wrong place, check the conversion.
 
 ## Security

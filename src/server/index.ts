@@ -1,19 +1,24 @@
+import type { Server } from 'http';
 import { execSync } from 'child_process';
-import { startMcpServer } from './mcp/server.js';
+import { startMcpServerStdio, startMcpServerHttp } from './mcp/server.js';
 import { startHocuspocus } from './yjs/provider.js';
-import { DEFAULT_WS_PORT } from '../shared/constants.js';
+import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from '../shared/constants.js';
 import { cleanupSessions, stopAutoSave } from './session/manager.js';
 import { saveCurrentSession } from './mcp/document.js';
 
-// stdout is exclusively reserved for the MCP JSON-RPC wire protocol.
+// stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
+// In HTTP mode this is defense-in-depth; in stdio mode it's critical.
 // eslint-disable-next-line no-console
 console.log = console.error;
 console.warn = console.error;
 console.info = console.error;
 
+const transportMode = (process.env.TANDEM_TRANSPORT || 'http').toLowerCase();
+const wsPort = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
+const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT), 10);
 
-const port = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
+let httpServer: Server | null = null;
 
 /** Kill any process currently listening on the given TCP port (Windows). */
 function freePort(p: number): void {
@@ -43,9 +48,12 @@ process.on('unhandledRejection', (reason) => {
 process.on('exit', (code) => {
   console.error(`[Tandem] Process exiting with code ${code}`);
 });
-process.stdin.on('end', () => {
-  console.error('[Tandem] stdin ended (MCP transport closed)');
-});
+
+if (transportMode === 'stdio') {
+  process.stdin.on('end', () => {
+    console.error('[Tandem] stdin ended (MCP transport closed)');
+  });
+}
 
 // Graceful shutdown: save session + stop auto-save before exit
 async function shutdown(signal: string) {
@@ -56,34 +64,50 @@ async function shutdown(signal: string) {
   } catch (err) {
     console.error('[Tandem] Session save on shutdown failed:', err);
   }
+  if (httpServer) {
+    httpServer.close();
+  }
   process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function main() {
-  console.error('[Tandem] Starting server...');
+  console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
 
   // Clean up sessions older than 30 days
   cleanupSessions().then(n => {
     if (n > 0) console.error(`[Tandem] Cleaned up ${n} stale session(s)`);
   }).catch(() => {});
 
-  // Start Hocuspocus in the background so MCP can respond to initialize immediately.
-  // Claude Code sends MCP initialize right after spawn — if we delay, the client times out.
-  (async () => {
-    freePort(port);
-    // Give the OS a moment to release the port after killing a stale process
+  if (transportMode === 'http') {
+    // HTTP mode: no startup-order constraint — start both concurrently
+    freePort(wsPort);
+    freePort(mcpPort);
+    // Give the OS a moment to release the ports after killing stale processes
     await new Promise(r => setTimeout(r, 300));
-    await startHocuspocus(port);
-    console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${port}`);
-  })().catch((err) => {
-    console.error('[Tandem] Hocuspocus startup error:', err);
-  });
 
-  // Start MCP server on stdio immediately (blocks — stdin/stdout used for MCP protocol)
-  await startMcpServer();
-  console.error('[Tandem] MCP server running on stdio');
+    const [srv] = await Promise.all([
+      startMcpServerHttp(mcpPort),
+      startHocuspocus(wsPort).then(() => {
+        console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
+      }),
+    ]);
+    httpServer = srv;
+  } else {
+    // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
+    (async () => {
+      freePort(wsPort);
+      await new Promise(r => setTimeout(r, 300));
+      await startHocuspocus(wsPort);
+      console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
+    })().catch((err) => {
+      console.error('[Tandem] Hocuspocus startup error:', err);
+    });
+
+    await startMcpServerStdio();
+    console.error('[Tandem] MCP server running on stdio');
+  }
 }
 
 main().catch((err) => {
