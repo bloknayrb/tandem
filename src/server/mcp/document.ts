@@ -7,6 +7,7 @@ import { getOrCreateDocument } from '../yjs/provider.js';
 import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
 import { MAX_FILE_SIZE } from '../../shared/constants.js';
 import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
+import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
   startAutoSave, stopAutoSave,
@@ -18,7 +19,7 @@ import * as Y from 'yjs';
 const ROOM_NAME = 'default';
 
 // Current document state
-let currentDoc: { filePath: string; format: string } | null = null;
+let currentDoc: { filePath: string; format: string; readOnly: boolean } | null = null;
 
 
 export function getCurrentDoc() {
@@ -249,13 +250,11 @@ export function registerDocumentTools(server: McpServer): void {
         }
 
         const format = detectFormat(resolved);
-        if (format === 'docx') {
-          return mcpError('FORMAT_ERROR', 'DOCX support not yet implemented. Use .md or .txt files for now.');
-        }
+        const isDocx = format === 'docx';
+        const readOnly = isDocx;
 
         const doc = getOrCreateDocument(ROOM_NAME);
         const fileName = path.basename(resolved);
-        const fileContent = await fs.readFile(resolved, 'utf-8');
         let restoredFromSession = false;
 
         // Check for existing session
@@ -271,14 +270,25 @@ export function registerDocumentTools(server: McpServer): void {
         }
 
         if (!restoredFromSession) {
-          if (format === 'md') {
-            loadMarkdown(doc, fileContent);
+          if (isDocx) {
+            const html = await loadDocx(resolved);
+            htmlToYDoc(doc, html);
           } else {
-            populateYDoc(doc, fileContent);
+            const fileContent = await fs.readFile(resolved, 'utf-8');
+            if (format === 'md') {
+              loadMarkdown(doc, fileContent);
+            } else {
+              populateYDoc(doc, fileContent);
+            }
           }
         }
 
-        currentDoc = { filePath: resolved, format };
+        currentDoc = { filePath: resolved, format, readOnly };
+
+        // Write document metadata for client consumption (read-only state, format)
+        const meta = doc.getMap('documentMeta');
+        meta.set('readOnly', readOnly);
+        meta.set('format', format);
 
         // Start auto-save timer
         startAutoSave(async () => {
@@ -287,16 +297,21 @@ export function registerDocumentTools(server: McpServer): void {
           }
         });
 
+        const textContent = extractText(doc);
+        const textLen = textContent.length;
         return mcpSuccess({
           filePath: resolved,
           fileName,
           format,
-          tokenEstimate: Math.ceil(fileContent.length / 4),
-          pageEstimate: Math.ceil(fileContent.length / 3000),
+          readOnly,
+          tokenEstimate: Math.ceil(textLen / 4),
+          pageEstimate: Math.ceil(textLen / 3000),
           restoredFromSession,
           message: restoredFromSession
             ? `Session restored: ${fileName} (annotations preserved)`
-            : `Document opened: ${fileName}`,
+            : readOnly
+              ? `Document opened (review only): ${fileName}`
+              : `Document opened: ${fileName}`,
         });
       } catch (err: unknown) {
         const message = getErrorMessage(err);
@@ -408,6 +423,10 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument();
       if (!r) return noDocumentError();
 
+      if (currentDoc?.readOnly) {
+        return mcpError('FORMAT_ERROR', 'Document is read-only (.docx). Use annotations instead.');
+      }
+
       if (from > to) {
         return mcpError('INVALID_RANGE', `Invalid range: from (${from}) must be <= to (${to}).`);
       }
@@ -490,14 +509,27 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument();
       if (!r) return noDocumentError();
       try {
-        const format = currentDoc?.format;
+        const format = currentDoc?.format ?? 'txt';
+        const readOnly = currentDoc?.readOnly ?? false;
+
+        if (readOnly) {
+          // Read-only docs: save session only (annotations persist), don't touch the source file
+          await saveSession(r.filePath, format, r.doc);
+          return mcpSuccess({
+            saved: true,
+            sessionOnly: true,
+            filePath: r.filePath,
+            message: 'Session saved (annotations preserved). Source file unchanged — document is read-only.',
+          });
+        }
+
         const output = format === 'md' ? saveMarkdown(r.doc) : extractText(r.doc);
         // Atomic save: write to temp, then rename
         const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
         await fs.writeFile(tempPath, output, 'utf-8');
         await fs.rename(tempPath, r.filePath);
         // Save session alongside file save (captures annotations + doc state)
-        await saveSession(r.filePath, format ?? 'txt', r.doc);
+        await saveSession(r.filePath, format, r.doc);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
         return mcpError('FILE_LOCKED', getErrorMessage(err));

@@ -5,9 +5,10 @@ interface StatusBarProps {
   connected: boolean;
   claudeStatus: string | null;
   claudeActive: boolean;
+  readOnly?: boolean;
 }
 
-export function StatusBar({ connected, claudeStatus, claudeActive }: StatusBarProps) {
+export function StatusBar({ connected, claudeStatus, claudeActive, readOnly }: StatusBarProps) {
   return (
     <div style={{
       display: 'flex',
@@ -31,6 +32,19 @@ export function StatusBar({ connected, claudeStatus, claudeActive }: StatusBarPr
         }} />
         <span>{connected ? 'Connected' : 'Disconnected'}</span>
       </div>
+      {readOnly && (
+        <span style={{
+          padding: '1px 8px',
+          fontSize: '11px',
+          fontWeight: 600,
+          color: '#92400e',
+          background: '#fef3c7',
+          borderRadius: '9999px',
+          border: '1px solid #fde68a',
+        }}>
+          Review Only
+        </span>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span style={{
           width: '8px',
