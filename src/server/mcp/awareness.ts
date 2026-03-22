@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { getCurrentDoc, extractText } from './document.js';
 import { collectAnnotations } from './annotations.js';
@@ -17,9 +18,11 @@ export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     'tandem_getSelections',
     'Get text currently selected by the user in the editor',
-    {},
-    async () => {
-      const current = getCurrentDoc();
+    {
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
@@ -40,9 +43,11 @@ export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     'tandem_getActivity',
     'Check if the user is actively editing and where their cursor is',
-    {},
-    async () => {
-      const current = getCurrentDoc();
+    {
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
@@ -72,9 +77,11 @@ export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     'tandem_checkInbox',
     'Check for user actions you haven\'t seen yet — new highlights, comments, questions, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.',
-    {},
-    async () => {
-      const current = getCurrentDoc();
+    {
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);

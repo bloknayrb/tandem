@@ -17,9 +17,10 @@ export function registerNavigationTools(server: McpServer): void {
     {
       query: z.string().describe('Search query (supports regex)'),
       regex: z.boolean().optional().describe('Treat query as regex'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ query, regex }) => {
-      const current = getCurrentDoc();
+    async ({ query, regex, documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
@@ -45,9 +46,10 @@ export function registerNavigationTools(server: McpServer): void {
     {
       pattern: z.string().describe('Text to find'),
       occurrence: z.number().optional().describe('Which occurrence (1-based, default 1)'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ pattern, occurrence = 1 }) => {
-      const current = getCurrentDoc();
+    async ({ pattern, occurrence = 1, documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
@@ -72,9 +74,10 @@ export function registerNavigationTools(server: McpServer): void {
     {
       text: z.string().describe('Status text'),
       focusParagraph: z.number().optional().describe('Index of paragraph Claude is focusing on'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ text, focusParagraph }) => {
-      const current = getCurrentDoc();
+    async ({ text, focusParagraph, documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) {
         return mcpSuccess({ status: text, warning: 'No document open — status not broadcast to editor.' });
       }
@@ -97,9 +100,10 @@ export function registerNavigationTools(server: McpServer): void {
       from: z.number().describe('Start position'),
       to: z.number().describe('End position'),
       windowSize: z.number().optional().describe('Characters of context before/after (default 500)'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ from, to, windowSize = 500 }) => {
-      const current = getCurrentDoc();
+    async ({ from, to, windowSize = 500, documentId }) => {
+      const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);

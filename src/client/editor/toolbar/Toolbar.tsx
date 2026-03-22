@@ -2,15 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import * as Y from 'yjs';
 import { pmPosToFlatOffset } from '../extensions/awareness';
+import { generateAnnotationId } from '../../../shared/utils';
 import type { Annotation, AnnotationType, HighlightColor } from '../../../shared/types';
 
 interface ToolbarProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
-}
-
-function generateAnnotationId(): string {
-  return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function Toolbar({ editor, ydoc }: ToolbarProps) {

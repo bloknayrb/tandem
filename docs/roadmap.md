@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-4 are complete. Step 5a is complete. This document contains the full design spec for Steps 5-8.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -18,7 +18,7 @@ Implemented via unified/remark with MDAST↔Y.Doc conversion:
 - **Read:** `extractMarkdown()` returns readable markdown for `tandem_getTextContent` on .md files.
 - **Key constraint:** Y.XmlText must be attached to the Y.Doc before populating text content — detached nodes reverse insert order (see ADR-009, Lesson 9).
 
-### 5b: .docx (review-only mode)
+### 5b: .docx (review-only mode) — DONE
 
 **Files:** `src/server/file-io/docx.ts`, `src/server/file-io/docx.worker.ts`
 
@@ -46,7 +46,7 @@ Implemented via unified/remark with MDAST↔Y.Doc conversion:
 
 ---
 
-## Step 6: Session Persistence
+## Step 6: Session Persistence — DONE
 
 ### Goal
 Close the browser, restart the server, reopen — document and annotations are still there.
@@ -83,37 +83,34 @@ Close the browser, restart the server, reopen — document and annotations are s
 
 ---
 
-## Step 7: Document Groups
+## Step 7: Document Groups — Phase 1 DONE
 
-### Goal
-Work with multiple related documents simultaneously (e.g., progress report + invoice + timesheet).
+### 7a: Multi-Document Tabs (DONE)
 
-### Design
+Implemented in Phase 1:
 
-- **Group:** A named set of related documents. One group active at a time.
-- **Tabs:** Each document in a group is a tab in the editor. Tabs can be dragged for split-pane.
-- **Isolation:** Groups have separate annotation namespaces and session state.
+- **docIdFromPath**: Stable, readable document IDs from file paths (used as Map key + Hocuspocus room name)
+- **openDocs Map**: Server tracks all open documents; `activeDocId` determines tool defaults
+- **documentId parameter**: All 22 existing MCP tools accept optional `documentId` (backward compatible)
+- **New tools**: `tandem_listDocuments`, `tandem_switchDocument` (24 tools total)
+- **DocumentTabs**: Tab bar UI with format icons, active indicator, close buttons
+- **Per-tab Y.Doc**: Browser manages separate Y.Doc + HocuspocusProvider per open document
+- **broadcastOpenDocs**: Server writes open document list to Y.Map('documentMeta') on active doc
 
-### New MCP Tools
+### 7b: Document Groups (Future)
 
-- `tandem_createGroup(name)` — Create a group (e.g., "February DRPA Review"). Returns group ID.
-- `tandem_openInGroup(groupId, filePath)` — Open a file into an existing group.
-- `tandem_listGroups()` — List all active groups and their documents.
-- `tandem_listDocs(groupId?)` — List documents in a group.
-- `tandem_crossReference(docA, docB, query)` — Compare content between two documents in the same group.
-- `tandem_searchGroup(query)` — Search across all documents in the current group.
+Deferred — only if demand appears:
 
-### Client Changes
+- Named groups (e.g., "February DRPA Review") with `tandem_createGroup`
+- Cross-reference tools (`tandem_crossReference`, `tandem_searchGroup`)
+- Split-pane UI for side-by-side documents
+- Tab drag-to-split functionality
 
-- `src/client/tabs/DocumentTabs.tsx` — Tab bar with group selector, drag-to-split
-- Each tab connects to a different Y.Doc room (room name = group ID + doc ID)
-- One tab is "primary" (active editing), others are "reference"
+### Known Issues from Phase 1
 
-### Verification
-- Create a group, open 3 files, see tabs in browser
-- Search across all docs in the group
-- Cross-reference two docs for matching/mismatching content
-- Switch groups — completely different document set loads
+- **MCP stdio disconnect (Issue #8):** Server's MCP transport disconnects after the first `tandem_open` call under Claude Code. Server code is correct (standalone test passes). Root cause is in Claude Code's transport layer. Blocks multi-doc browser testing.
+- **Y.js "Invalid access" warnings:** Appear in stderr during session restore when the browser connects to a room before the MCP-populated Y.Doc is merged. Harmless (data still syncs correctly) but noisy. Could be silenced by deferring session restore until after `onLoadDocument` merge.
+- **Browser tab discovery requires `/mcp` restart:** After restarting the Tandem MCP server, the browser must reload to reconnect its bootstrap provider. No auto-reconnect logic yet.
 
 ---
 
@@ -135,12 +132,14 @@ First-run experience, error handling, and UX refinements.
 - Three interactions: (1) accept an annotation, (2) select text and Ask Claude, (3) make an edit
 - Target: 90 seconds
 
-### 8c: Review Mode
+### 8c: Review Mode — PARTIALLY DONE
 
-- When annotations exceed 7 (configurable), banner offers: "Claude has 14 suggestions. Review in sequence or filter by type."
-- Review mode dims the document, highlights one annotation at a time
-- Keyboard: Tab (next), Shift+Tab (prev), Y (accept), N (reject), E (edit)
-- Toggle with Cmd+Shift+R
+Keyboard review mode (Tab/Y/N) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, and review summary overlay are implemented.
+
+Remaining:
+- Configurable threshold banner ("Claude has 14 suggestions. Review in sequence or filter by type.")
+- Document dimming in review mode
+- E (edit) keyboard shortcut
 
 ### 8d: Interruption Model
 
@@ -156,15 +155,16 @@ First-run experience, error handling, and UX refinements.
 - WebSocket reconnection: automatic, no data loss (Yjs handles this)
 - Large file warnings: alert at 50+ pages about potential slowness
 
-### 8f: Toolbar Enhancements
+### 8f: Toolbar Enhancements — PARTIALLY DONE
 
-- Highlight color picker (5 colors)
-- Comment button
+- ~~Highlight button~~ — implemented (yellow default)
+- ~~Comment button~~ — implemented
 - Flag markers (red/yellow/green)
-- Ask Claude: select text → Cmd+Shift+A → floating input → response as annotation
+- ~~Ask Claude: select text → floating input → response as annotation~~ — implemented (Ctrl+Shift+A)
 - Suggest: propose a change for Claude to evaluate
-- Accept All button
-- Review Mode toggle
+- ~~Accept All / Dismiss All buttons~~ — implemented in SidePanel
+- ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
+- Highlight color picker (5 colors available server-side, UI picker not yet built)
 
 ### Verification
 - First launch shows sample document with annotations
@@ -186,10 +186,11 @@ These are intentional scope boundaries, not bugs:
 - Documents over ~50 pages may be slow to render
 - No plugin/extension architecture — custom extensions require code changes
 - No synchronized scrolling between split panes
-- No Windows installer — requires Node.js + Claude Code
+- No Windows installer — requires Node.js + Claude Code (PWA install planned for v2)
 
 ## Future Extensions (v2+)
 
+- **Progressive Web App (PWA)** — Add a web app manifest + service worker so users can "install" Tandem from the browser. Gives a real app window (no browser chrome), taskbar icon, and offline-capable shell. Vite has `vite-plugin-pwa` for zero-config setup. Pairs well with auto-start — user clicks the PWA icon, server starts, editor opens.
 - Spreadsheet component (Handsontable/AG Grid)
 - Claude Desktop support (MCP server already exists)
 - Drawing/freeform annotation layer

@@ -10,33 +10,112 @@ import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
 import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
-  startAutoSave, stopAutoSave,
+  startAutoSave, stopAutoSave, isAutoSaveRunning,
 } from '../session/manager.js';
 import * as Y from 'yjs';
 
-// Fixed room name — both MCP tools and browser client use this
-// so they share the same Y.Doc instance via Hocuspocus
-const ROOM_NAME = 'default';
+// --- Multi-document state ---
 
-// Current document state
-let currentDoc: { filePath: string; format: string; readOnly: boolean } | null = null;
-
-
-export function getCurrentDoc() {
-  return currentDoc ? { ...currentDoc, docName: ROOM_NAME } : null;
+export interface OpenDoc {
+  id: string;
+  filePath: string;
+  format: string;
+  readOnly: boolean;
 }
 
-/** Save current session (for shutdown handler). No-op if no doc is open. */
+/** All open documents, keyed by document ID (which is also the Hocuspocus room name) */
+const openDocs = new Map<string, OpenDoc>();
+
+/** The active document ID — tools default to this when no documentId is specified */
+let activeDocId: string | null = null;
+
+/**
+ * Generate a stable, readable document ID from a file path.
+ * Used as both the map key and the Hocuspocus room name.
+ */
+export function docIdFromPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) - hash + normalized.charCodeAt(i)) | 0;
+  }
+  const name = path.basename(filePath, path.extname(filePath))
+    .replace(/[^a-zA-Z0-9]/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 16);
+  return `${name}-${Math.abs(hash).toString(36).slice(0, 6)}`;
+}
+
+export function getOpenDocs(): Map<string, OpenDoc> {
+  return openDocs;
+}
+
+export function getActiveDocId(): string | null {
+  return activeDocId;
+}
+
+/**
+ * Resolve which document to operate on.
+ * If documentId is provided, use that. Otherwise use the active doc.
+ */
+export function getCurrentDoc(documentId?: string) {
+  const id = documentId ?? activeDocId;
+  if (!id) return null;
+  const doc = openDocs.get(id);
+  if (!doc) return null;
+  return { ...doc, docName: id };
+}
+
+/** Save all open sessions (for shutdown handler). */
 export async function saveCurrentSession(): Promise<void> {
-  if (!currentDoc) return;
-  const doc = getOrCreateDocument(ROOM_NAME);
-  await saveSession(currentDoc.filePath, currentDoc.format, doc);
+  for (const [id, state] of openDocs) {
+    const doc = getOrCreateDocument(id);
+    await saveSession(state.filePath, state.format, doc);
+  }
 }
 
-/** Returns the shared Y.Doc or a noDocumentError if no doc is open */
-function requireDocument(): { doc: Y.Doc; filePath: string } | null {
-  if (!currentDoc) return null;
-  return { doc: getOrCreateDocument(ROOM_NAME), filePath: currentDoc.filePath };
+/** Returns the shared Y.Doc or null if the target doc isn't open */
+function requireDocument(documentId?: string): { doc: Y.Doc; filePath: string; docId: string } | null {
+  const current = getCurrentDoc(documentId);
+  if (!current) return null;
+  return { doc: getOrCreateDocument(current.docName), filePath: current.filePath, docId: current.id };
+}
+
+/** Build the document list entry for a single OpenDoc */
+function toDocListEntry(d: OpenDoc) {
+  return {
+    id: d.id,
+    filePath: d.filePath,
+    fileName: path.basename(d.filePath),
+    format: d.format,
+    readOnly: d.readOnly,
+  };
+}
+
+/** Broadcast the open documents list to connected clients.
+ *  Writes to both the bootstrap room (__tandem_ctrl__) so new clients discover
+ *  docs, and to the active document's room so tab-switching clients stay in sync. */
+function broadcastOpenDocs(): void {
+  try {
+    const docList = Array.from(openDocs.values()).map(toDocListEntry);
+    const activeId = activeDocId;
+
+    // Always write to bootstrap room so the client can discover docs
+    const ctrl = getOrCreateDocument('__tandem_ctrl__');
+    const ctrlMeta = ctrl.getMap('documentMeta');
+    ctrlMeta.set('openDocuments', docList);
+    ctrlMeta.set('activeDocumentId', activeId);
+
+    // Also write to active doc's room (for per-tab observers)
+    if (activeId) {
+      const ydoc = getOrCreateDocument(activeId);
+      const meta = ydoc.getMap('documentMeta');
+      meta.set('openDocuments', docList);
+      meta.set('activeDocumentId', activeId);
+    }
+  } catch (err) {
+    console.error('[Tandem] broadcastOpenDocs error:', err);
+  }
 }
 
 function detectFormat(filePath: string): string {
@@ -227,7 +306,7 @@ export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
 export function registerDocumentTools(server: McpServer): void {
   server.tool(
     'tandem_open',
-    'Open a file in the Tandem editor. Auto-opens browser.',
+    'Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.',
     { filePath: z.string().describe('Absolute path to the file to open') },
     async ({ filePath }) => {
       try {
@@ -253,7 +332,30 @@ export function registerDocumentTools(server: McpServer): void {
         const isDocx = format === 'docx';
         const readOnly = isDocx;
 
-        const doc = getOrCreateDocument(ROOM_NAME);
+        // Check if this file is already open
+        const id = docIdFromPath(resolved);
+        const existing = openDocs.get(id);
+        if (existing) {
+          // Already open — just switch to it
+          activeDocId = id;
+          broadcastOpenDocs();
+          const doc = getOrCreateDocument(id);
+          const textContent = extractText(doc);
+          return mcpSuccess({
+            documentId: id,
+            filePath: resolved,
+            fileName: path.basename(resolved),
+            format,
+            readOnly,
+            tokenEstimate: Math.ceil(textContent.length / 4),
+            pageEstimate: Math.ceil(textContent.length / 3000),
+            restoredFromSession: false,
+            alreadyOpen: true,
+            message: `Switched to already-open document: ${path.basename(resolved)}`,
+          });
+        }
+
+        const doc = getOrCreateDocument(id);
         const fileName = path.basename(resolved);
         let restoredFromSession = false;
 
@@ -283,23 +385,33 @@ export function registerDocumentTools(server: McpServer): void {
           }
         }
 
-        currentDoc = { filePath: resolved, format, readOnly };
+        // Register in the open docs map
+        openDocs.set(id, { id, filePath: resolved, format, readOnly });
+        activeDocId = id;
 
-        // Write document metadata for client consumption (read-only state, format)
+        // Write document metadata for client consumption
         const meta = doc.getMap('documentMeta');
         meta.set('readOnly', readOnly);
         meta.set('format', format);
+        meta.set('documentId', id);
+        meta.set('fileName', fileName);
 
-        // Start auto-save timer
-        startAutoSave(async () => {
-          if (currentDoc) {
-            await saveSession(currentDoc.filePath, currentDoc.format, doc);
-          }
-        });
+        broadcastOpenDocs();
+
+        // Start auto-save timer if not already running (saves all open docs)
+        if (!isAutoSaveRunning()) {
+          startAutoSave(async () => {
+            for (const [docId, state] of openDocs) {
+              const d = getOrCreateDocument(docId);
+              await saveSession(state.filePath, state.format, d);
+            }
+          });
+        }
 
         const textContent = extractText(doc);
         const textLen = textContent.length;
         return mcpSuccess({
+          documentId: id,
           filePath: resolved,
           fileName,
           format,
@@ -326,21 +438,26 @@ export function registerDocumentTools(server: McpServer): void {
   server.tool(
     'tandem_getContent',
     'Read full document content. Warning: token-heavy for large docs. Use getOutline() or getTextContent() instead.',
-    {},
-    async () => {
-      const r = requireDocument();
+    {
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment('default');
-      return mcpSuccess({ content: fragment.toJSON(), filePath: r.filePath });
+      return mcpSuccess({ content: fragment.toJSON(), filePath: r.filePath, documentId: r.docId });
     }
   );
 
   server.tool(
     'tandem_getTextContent',
     'Read document as plain text. ~60% fewer tokens than getContent().',
-    { section: z.string().optional().describe('Optional heading text to read only that section') },
-    async ({ section }) => {
-      const r = requireDocument();
+    {
+      section: z.string().optional().describe('Optional heading text to read only that section'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ section, documentId }) => {
+      const r = requireDocument(documentId);
       if (!r) return noDocumentError();
 
       if (section) {
@@ -383,18 +500,21 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpSuccess({ text: lines.join('\n'), filePath: r.filePath, section });
       }
 
-      const format = currentDoc?.format;
+      const docState = getCurrentDoc(documentId);
+      const format = docState?.format;
       const text = format === 'md' ? extractMarkdown(r.doc) : extractText(r.doc);
-      return mcpSuccess({ text, filePath: r.filePath });
+      return mcpSuccess({ text, filePath: r.filePath, documentId: r.docId });
     }
   );
 
   server.tool(
     'tandem_getOutline',
     'Get document structure (headings, sections) without full content. Low token cost.',
-    {},
-    async () => {
-      const r = requireDocument();
+    {
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment('default');
       const outline: Array<{ level: number; text: string; index: number }> = [];
@@ -418,12 +538,14 @@ export function registerDocumentTools(server: McpServer): void {
       from: z.number().describe('Start position (character offset)'),
       to: z.number().describe('End position (character offset)'),
       newText: z.string().describe('Replacement text (single paragraph — no newlines)'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ from, to, newText }) => {
-      const r = requireDocument();
+    async ({ from, to, newText, documentId }) => {
+      const r = requireDocument(documentId);
       if (!r) return noDocumentError();
 
-      if (currentDoc?.readOnly) {
+      const docState = getCurrentDoc(documentId);
+      if (docState?.readOnly) {
         return mcpError('FORMAT_ERROR', 'Document is read-only (.docx). Use annotations instead.');
       }
 
@@ -504,13 +626,16 @@ export function registerDocumentTools(server: McpServer): void {
   server.tool(
     'tandem_save',
     'Save the current document back to disk',
-    {},
-    async () => {
-      const r = requireDocument();
+    {
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       try {
-        const format = currentDoc?.format ?? 'txt';
-        const readOnly = currentDoc?.readOnly ?? false;
+        const docState = getCurrentDoc(documentId);
+        const format = docState?.format ?? 'txt';
+        const readOnly = docState?.readOnly ?? false;
 
         if (readOnly) {
           // Read-only docs: save session only (annotations persist), don't touch the source file
@@ -539,27 +664,96 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     'tandem_status',
-    'Check editor status: running, open file, user activity',
+    'Check editor status: running, open documents, active document',
     {},
     async () => {
+      const active = activeDocId ? openDocs.get(activeDocId) : null;
       return mcpSuccess({
         running: true,
-        currentDocument: currentDoc?.filePath ?? null,
-        format: currentDoc?.format ?? null,
+        activeDocument: active ? { documentId: active.id, filePath: active.filePath, format: active.format } : null,
+        openDocuments: Array.from(openDocs.values()).map(d => ({
+          documentId: d.id,
+          filePath: d.filePath,
+          format: d.format,
+          readOnly: d.readOnly,
+        })),
+        documentCount: openDocs.size,
       });
     }
   );
 
   server.tool(
     'tandem_close',
-    'Close the current document',
+    'Close a document. Closes the active document if no documentId specified.',
+    {
+      documentId: z.string().optional().describe('Document ID to close (defaults to active document)'),
+    },
+    async ({ documentId }) => {
+      const id = documentId ?? activeDocId;
+      if (!id) return mcpError('NO_DOCUMENT', 'No document to close.');
+
+      const docState = openDocs.get(id);
+      if (!docState) return mcpError('NO_DOCUMENT', `Document ${id} not found.`);
+
+      // Save session before closing
+      const doc = getOrCreateDocument(id);
+      await saveSession(docState.filePath, docState.format, doc);
+
+      openDocs.delete(id);
+
+      // If we closed the active doc, switch to another or null
+      if (activeDocId === id) {
+        const remaining = Array.from(openDocs.keys());
+        activeDocId = remaining.length > 0 ? remaining[0] : null;
+      }
+
+      // Stop auto-save if no docs remain
+      if (openDocs.size === 0) {
+        stopAutoSave();
+      }
+
+      broadcastOpenDocs();
+
+      return mcpSuccess({
+        closed: true,
+        was: docState.filePath,
+        activeDocumentId: activeDocId,
+      });
+    }
+  );
+
+  server.tool(
+    'tandem_listDocuments',
+    'List all open documents with their IDs, file paths, and formats.',
     {},
     async () => {
-      stopAutoSave(); // Prevent auto-save firing during close
-      await saveCurrentSession(); // Save session before clearing state
-      const was = currentDoc?.filePath ?? null;
-      currentDoc = null;
-      return mcpSuccess({ closed: true, was });
+      return mcpSuccess({
+        documents: Array.from(openDocs.values()).map(d => ({
+          ...toDocListEntry(d),
+          isActive: d.id === activeDocId,
+        })),
+        activeDocumentId: activeDocId,
+        count: openDocs.size,
+      });
+    }
+  );
+
+  server.tool(
+    'tandem_switchDocument',
+    'Switch the active document. Tools will operate on this document by default.',
+    {
+      documentId: z.string().describe('Document ID to switch to'),
+    },
+    async ({ documentId }) => {
+      if (!openDocs.has(documentId)) {
+        return mcpError('NO_DOCUMENT', `Document ${documentId} is not open.`);
+      }
+      activeDocId = documentId;
+      broadcastOpenDocs();
+      return mcpSuccess({
+        activeDocumentId: documentId,
+        ...toDocListEntry(openDocs.get(documentId)!),
+      });
     }
   );
 }

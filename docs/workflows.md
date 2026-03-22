@@ -63,18 +63,32 @@ Claude: tandem_save()
 Claude: tandem_setStatus("Review complete")
 ```
 
-## Cross-Referencing an Invoice
+## Cross-Referencing an Invoice (Multi-Document)
 
-**Setup:** Bryan needs to verify that an invoice matches the work described in a progress report.
+**Setup:** Bryan needs to verify that an invoice matches the work described in a progress report. Both files are open simultaneously.
 
 ```
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
+→ { documentId: "progress-report-f-1a2b3c", fileName: "progress-report-feb.md", ... }
+
+Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.docx" })
+→ { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", readOnly: true, ... }
 ```
 
-Claude searches for dollar figures across the document:
+Bryan sees two tabs in the browser. Claude verifies both are open:
 
 ```
-Claude: tandem_search({ query: "\\$[\\d,.]+", regex: true })
+Claude: tandem_listDocuments()
+→ { documents: [
+    { id: "progress-report-f-1a2b3c", fileName: "progress-report-feb.md", isActive: false },
+    { id: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", isActive: true }
+  ], count: 2 }
+```
+
+Claude searches for dollar figures in the progress report using `documentId`:
+
+```
+Claude: tandem_search({ query: "\\$[\\d,.]+", regex: true, documentId: "progress-report-f-1a2b3c" })
 → { matches: [
     { from: 342, to: 355, text: "$13.1 million" },
     { from: 487, to: 498, text: "$2.4 million" },
@@ -82,25 +96,29 @@ Claude: tandem_search({ query: "\\$[\\d,.]+", regex: true })
   ]}
 ```
 
-Claude highlights each figure with status:
+Claude cross-references against the invoice and annotates the progress report:
 
 ```
 // Matches invoice
-Claude: tandem_highlight({ from: 342, to: 355, color: "green", note: "Matches invoice line 12" })
+Claude: tandem_highlight({ from: 342, to: 355, color: "green", note: "Matches invoice line 12",
+  documentId: "progress-report-f-1a2b3c" })
 
 // Discrepancy found
-Claude: tandem_highlight({ from: 487, to: 498, color: "red", note: "Invoice shows $2.6M -- $200K discrepancy" })
+Claude: tandem_highlight({ from: 487, to: 498, color: "red", note: "Invoice shows $2.6M -- $200K discrepancy",
+  documentId: "progress-report-f-1a2b3c" })
 
 // Not in invoice
-Claude: tandem_highlight({ from: 612, to: 621, color: "yellow", note: "Not found in invoice -- verify" })
+Claude: tandem_highlight({ from: 612, to: 621, color: "yellow", note: "Not found in invoice -- verify",
+  documentId: "progress-report-f-1a2b3c" })
 ```
 
-Bryan sees green/red/yellow highlights throughout the document. Claude adds a summary comment:
+Bryan switches to the progress report tab and sees green/red/yellow highlights. Claude adds a summary:
 
 ```
 Claude: tandem_comment({
   from: 0, to: 40,
-  text: "Invoice cross-reference: 1 match, 1 discrepancy ($200K on labor), 1 item not in invoice."
+  text: "Invoice cross-reference: 1 match, 1 discrepancy ($200K on labor), 1 item not in invoice.",
+  documentId: "progress-report-f-1a2b3c"
 })
 ```
 
@@ -173,31 +191,59 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 // Sees all annotations from all agents
 ```
 
+## Keyboard Review Mode
+
+**Setup:** Claude has finished reviewing and left 15+ annotations. Bryan wants to process them efficiently.
+
+The browser's side panel shows all pending annotations with filter controls:
+- Filter by type (highlights, comments, suggestions, questions)
+- Filter by author (Claude, You)
+- Filter by status (pending, accepted, dismissed)
+
+Bryan clicks the **Review** button (or presses `Ctrl+Shift+R`) to enter keyboard review mode:
+
+```
+Tab       → Jump to next pending annotation (editor scrolls to it)
+Shift+Tab → Previous annotation
+Y         → Accept the current annotation
+N         → Dismiss the current annotation
+Escape    → Exit review mode
+```
+
+The side panel shows progress: "Reviewing 3 / 15". Each accepted suggestion applies its text change automatically.
+
+When all annotations are resolved, a **Review Summary** overlay appears showing:
+- Total reviewed, accepted count, dismissed count, accept rate
+
+For bulk operations, use **Accept All** or **Dismiss All** buttons in the side panel header.
+
 ## Session Handoff
 
-**What persists** when the Tandem server is running:
-- Document content (in Y.Doc, synced via Hocuspocus)
-- All annotations (in Y.Map on the Y.Doc)
-- File path and format metadata
+**What persists** across server restarts (via session persistence):
+- Document content (Y.Doc state, restored on reopen)
+- All annotations (stored in session file alongside Y.Doc state)
+- File path, format, and metadata
+- Multiple documents can each have their own session
 
-**What doesn't persist** across server restarts:
+**What doesn't persist:**
 - Claude's awareness state (status text, focus paragraph)
 - User awareness state (selection, typing indicator)
-- Browser-open tracking (will reopen on next `tandem_open`)
+- Which documents were open (must reopen with `tandem_open`)
 
 **How a new Claude session picks up:**
 
 1. New Claude session starts, Tandem MCP server is already configured
-2. Call `tandem_status()` to check if a document is open
-3. If open, call `tandem_getOutline()` to orient
-4. Call `tandem_getAnnotations()` to see what was already reviewed
-5. Continue where the previous session left off
+2. Call `tandem_status()` to see open documents (`openDocuments` array)
+3. If documents are open, call `tandem_listDocuments()` for full details
+4. Call `tandem_getOutline()` on the active document to orient
+5. Call `tandem_getAnnotations()` to see what was already reviewed
+6. Continue where the previous session left off
 
 **If the server restarted:**
 
 1. Call `tandem_open()` with the same file path
-2. Document reloads from disk (any unsaved Tandem edits are lost)
-3. Annotations from the previous session are gone (session persistence planned for a future step)
-4. Start fresh review
+2. If the source file hasn't changed, the session is restored (annotations preserved)
+3. If the source file changed externally, a fresh load occurs (annotations may be stale)
+4. Open additional documents with more `tandem_open()` calls -- each gets its own tab
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.

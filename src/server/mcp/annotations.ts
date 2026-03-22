@@ -7,17 +7,16 @@ import { exportAnnotations } from '../file-io/docx.js';
 import * as Y from 'yjs';
 import type { Annotation, AnnotationType, HighlightColor } from '../../shared/types.js';
 
-/** Get the annotations Y.Map on the current document, or null if no doc is open */
-function getAnnotationsMap(): Y.Map<unknown> | null {
-  const doc = getCurrentDoc();
+/** Get the annotations Y.Map on the target document, or null if no doc is open */
+function getAnnotationsMap(documentId?: string): Y.Map<unknown> | null {
+  const doc = getCurrentDoc(documentId);
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
   return ydoc.getMap('annotations');
 }
 
-export function generateId(): string {
-  return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
+import { generateAnnotationId as generateId } from '../../shared/utils.js';
+export { generateId };
 
 /** Create an annotation and store it in the Y.Map. Returns the annotation ID. */
 export function createAnnotation(
@@ -59,9 +58,10 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       color: z.enum(['yellow', 'red', 'green', 'blue', 'purple']).describe('Highlight color'),
       note: z.string().optional().describe('Optional note for the highlight'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ from, to, color, note }) => {
-      const map = getAnnotationsMap();
+    async ({ from, to, color, note, documentId }) => {
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       const id = createAnnotation(map, 'highlight', from, to, note || '', { color: color as HighlightColor });
       return mcpSuccess({ annotationId: id });
@@ -75,9 +75,10 @@ export function registerAnnotationTools(server: McpServer): void {
       from: z.number().describe('Start position'),
       to: z.number().describe('End position'),
       text: z.string().describe('Comment text'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ from, to, text }) => {
-      const map = getAnnotationsMap();
+    async ({ from, to, text, documentId }) => {
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       const id = createAnnotation(map, 'comment', from, to, text);
       return mcpSuccess({ annotationId: id });
@@ -92,9 +93,10 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       newText: z.string().describe('Suggested replacement text'),
       reason: z.string().optional().describe('Reason for the suggestion'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ from, to, newText, reason }) => {
-      const map = getAnnotationsMap();
+    async ({ from, to, newText, reason, documentId }) => {
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       const id = createAnnotation(map, 'suggestion', from, to, JSON.stringify({ newText, reason: reason || '' }));
       return mcpSuccess({ annotationId: id });
@@ -108,9 +110,10 @@ export function registerAnnotationTools(server: McpServer): void {
       author: z.enum(['user', 'claude']).optional().describe('Filter by author'),
       type: z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question']).optional().describe('Filter by type'),
       status: z.enum(['pending', 'accepted', 'dismissed']).optional().describe('Filter by status'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ author, type, status }) => {
-      const map = getAnnotationsMap();
+    async ({ author, type, status, documentId }) => {
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
 
       let results = collectAnnotations(map);
@@ -128,9 +131,10 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       id: z.string().describe('Annotation ID'),
       action: z.enum(['accept', 'dismiss']).describe('Action to take'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ id, action }) => {
-      const map = getAnnotationsMap();
+    async ({ id, action, documentId }) => {
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
 
       const ann = map.get(id) as Annotation | undefined;
@@ -145,9 +149,12 @@ export function registerAnnotationTools(server: McpServer): void {
   server.tool(
     'tandem_removeAnnotation',
     'Remove an annotation entirely',
-    { id: z.string().describe('Annotation ID') },
-    async ({ id }) => {
-      const map = getAnnotationsMap();
+    {
+      id: z.string().describe('Annotation ID'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ id, documentId }) => {
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
       if (!map.has(id)) return mcpError('INVALID_RANGE', `Annotation ${id} not found`);
       map.delete(id);
@@ -160,19 +167,19 @@ export function registerAnnotationTools(server: McpServer): void {
     'Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.',
     {
       format: z.enum(['markdown', 'json']).optional().describe('Output format (default: markdown)'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
-    async ({ format }) => {
-      const docInfo = getCurrentDoc();
+    async ({ format, documentId }) => {
+      const docInfo = getCurrentDoc(documentId);
       if (!docInfo) return noDocumentError();
 
-      const map = getAnnotationsMap();
+      const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
 
       const annotations = collectAnnotations(map);
       const ydoc = getOrCreateDocument(docInfo.docName);
 
       if (format === 'json') {
-        // Add text snippets to each annotation
         const fullText = extractText(ydoc);
         const enriched = annotations.map((ann) => ({
           ...ann,
