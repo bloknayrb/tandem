@@ -96,21 +96,25 @@ function toDocListEntry(d: OpenDoc) {
  *  Writes to both the bootstrap room (__tandem_ctrl__) so new clients discover
  *  docs, and to the active document's room so tab-switching clients stay in sync. */
 function broadcastOpenDocs(): void {
-  const docList = Array.from(openDocs.values()).map(toDocListEntry);
-  const activeId = activeDocId;
+  try {
+    const docList = Array.from(openDocs.values()).map(toDocListEntry);
+    const activeId = activeDocId;
 
-  // Always write to bootstrap room so the client can discover docs
-  const ctrl = getOrCreateDocument('__tandem_ctrl__');
-  const ctrlMeta = ctrl.getMap('documentMeta');
-  ctrlMeta.set('openDocuments', docList);
-  ctrlMeta.set('activeDocumentId', activeId);
+    // Always write to bootstrap room so the client can discover docs
+    const ctrl = getOrCreateDocument('__tandem_ctrl__');
+    const ctrlMeta = ctrl.getMap('documentMeta');
+    ctrlMeta.set('openDocuments', docList);
+    ctrlMeta.set('activeDocumentId', activeId);
 
-  // Also write to active doc's room (for per-tab observers)
-  if (activeId) {
-    const ydoc = getOrCreateDocument(activeId);
-    const meta = ydoc.getMap('documentMeta');
-    meta.set('openDocuments', docList);
-    meta.set('activeDocumentId', activeId);
+    // Also write to active doc's room (for per-tab observers)
+    if (activeId) {
+      const ydoc = getOrCreateDocument(activeId);
+      const meta = ydoc.getMap('documentMeta');
+      meta.set('openDocuments', docList);
+      meta.set('activeDocumentId', activeId);
+    }
+  } catch (err) {
+    console.error('[Tandem] broadcastOpenDocs error:', err);
   }
 }
 

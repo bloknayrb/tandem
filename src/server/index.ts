@@ -32,10 +32,16 @@ function freePort(p: number): void {
 // Swallow all uncaught exceptions to keep the server alive during stale browser reconnects.
 // Hocuspocus throws on malformed WebSocket frames; we log but never exit.
 process.on('uncaughtException', (err: Error) => {
-  console.error('[Tandem] uncaughtException (swallowed):', err.name, err.message);
+  console.error('[Tandem] uncaughtException (swallowed):', err.name, err.message, err.stack);
 });
 process.on('unhandledRejection', (reason) => {
   console.error('[Tandem] unhandledRejection (swallowed):', reason);
+});
+process.on('exit', (code) => {
+  console.error(`[Tandem] Process exiting with code ${code}`);
+});
+process.stdin.on('end', () => {
+  console.error('[Tandem] stdin ended (MCP transport closed)');
 });
 
 // Graceful shutdown: save session + stop auto-save before exit
