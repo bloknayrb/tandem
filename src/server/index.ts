@@ -9,6 +9,9 @@ import { saveCurrentSession } from './mcp/document.js';
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
 // eslint-disable-next-line no-console
 console.log = console.error;
+console.warn = console.error;
+console.info = console.error;
+
 
 const port = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
 
