@@ -287,6 +287,7 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
             { value: 'comment', label: 'Comments' },
             { value: 'suggestion', label: 'Suggestions' },
             { value: 'question', label: 'Questions' },
+            { value: 'flag', label: 'Flags' },
           ]}
         />
         <FilterSelect
@@ -423,13 +424,22 @@ interface AnnotationCardProps {
   onClick?: () => void;
 }
 
+const ANNOTATION_BORDER_COLORS: Record<string, string> = {
+  comment: '#3b82f6',
+  suggestion: '#8b5cf6',
+  question: '#6366f1',
+  flag: '#ef4444',
+};
+
+function getBorderColor(annotation: Annotation): string {
+  if (annotation.color) {
+    return HIGHLIGHT_COLORS[annotation.color] || '#e5e7eb';
+  }
+  return ANNOTATION_BORDER_COLORS[annotation.type] || '#e5e7eb';
+}
+
 function AnnotationCard({ annotation, isReviewTarget, onAccept, onDismiss, onClick }: AnnotationCardProps) {
-  const borderColor = annotation.color
-    ? HIGHLIGHT_COLORS[annotation.color] || '#e5e7eb'
-    : annotation.type === 'comment' ? '#3b82f6'
-    : annotation.type === 'suggestion' ? '#8b5cf6'
-    : annotation.type === 'question' ? '#6366f1'
-    : '#e5e7eb';
+  const borderColor = getBorderColor(annotation);
 
   const isPending = annotation.status === 'pending';
 
