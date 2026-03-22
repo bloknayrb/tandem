@@ -61,3 +61,19 @@
 **Solution:** Never populate text content on detached Y.XmlText. Build the element tree with empty text nodes, attach the entire tree to the Y.Doc via `fragment.insert()`, then populate text in a second pass. Also use `insert(offset, text, attrs)` with explicit `{ bold: null, italic: null, ... }` for plain text — without explicit nulls, Yjs inherits formatting from adjacent formatted segments.
 
 **Impact:** Critical for any Yjs code that builds formatted documents programmatically. The corruption is invisible until round-trip: the document looks correct in memory but serializes with marks in the wrong position.
+
+## 10. StrictMode-Unsafe Allocation in React State Updaters
+
+**Problem:** Creating `new Y.Doc()` and `new HocuspocusProvider()` inside a `setTabs` updater function opens real WebSocket connections. React StrictMode calls updater functions twice, creating orphaned connections with no cleanup path.
+
+**Solution:** Allocate Y.Doc and HocuspocusProvider objects outside the state updater, then pass the finished array into `setTabs`. Use refs (`handleDocumentListRef`) for callbacks that need to be current without triggering re-renders.
+
+**Impact:** Without this, every document open in dev mode creates a duplicate WebSocket connection that leaks until page reload.
+
+## 11. broadcastOpenDocs Scope
+
+**Problem:** Writing the open documents list to every open document's Y.Map creates O(n) Hocuspocus sync operations per open/close/switch. With 10 docs, a single tab switch triggers 20 Y.Map mutations across 10 rooms.
+
+**Solution:** Only write to the active document's Y.Map('documentMeta'). The client's per-tab meta observer handles the broadcast. Non-active rooms don't receive unsolicited updates.
+
+**Impact:** Reduces broadcast cost from O(n) to O(1) per operation.

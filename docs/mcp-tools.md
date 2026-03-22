@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 20 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 24 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -20,7 +20,7 @@ All tools return responses in a standard envelope:
 
 | Code | Trigger |
 |------|---------|
-| `NO_DOCUMENT` | Tool called before `tandem_open`. |
+| `NO_DOCUMENT` | Tool called before `tandem_open`, or specified `documentId` not found. |
 | `FILE_NOT_FOUND` | File doesn't exist or is a UNC path. |
 | `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
 | `FORMAT_ERROR` | Unsupported format, file too large (>50MB), or invalid regex. |
@@ -42,11 +42,19 @@ Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The brow
 
 ---
 
+## Multi-Document Support
+
+All tools that operate on a document accept an optional `documentId` parameter. If omitted, the tool targets the **active document** (the most recently opened or switched-to document). Use `tandem_listDocuments` to see all open documents and their IDs, and `tandem_switchDocument` to change the default target.
+
+Document IDs are stable -- the same file path always produces the same ID across sessions.
+
+---
+
 ## Document Tools
 
 ### tandem_open
 
-Open a file in the Tandem editor. Auto-opens the browser on first call.
+Open a file in the Tandem editor. Returns a `documentId` for multi-document workflows. Auto-opens the browser on first call.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -55,16 +63,19 @@ Open a file in the Tandem editor. Auto-opens the browser on first call.
 **Returns:**
 ```json
 {
+  "documentId": "report-a1b2c3",
   "filePath": "C:\\Users\\bkolb\\docs\\report.md",
   "fileName": "report.md",
   "format": "md",
+  "readOnly": false,
   "tokenEstimate": 1250,
   "pageEstimate": 2,
+  "restoredFromSession": false,
   "message": "Document opened: report.md"
 }
 ```
 
-**Errors:** `FILE_NOT_FOUND` (doesn't exist, UNC path), `FILE_LOCKED` (open in Word), `FORMAT_ERROR` (>50MB, .docx not yet supported)
+**Errors:** `FILE_NOT_FOUND` (doesn't exist, UNC path), `FILE_LOCKED` (open in Word), `FORMAT_ERROR` (>50MB)
 
 **Example:**
 ```
@@ -72,9 +83,11 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 ```
 
 **Notes:**
-- Supported formats: `.md`, `.txt`, `.html`. `.docx` returns an error in v1.
+- Supported formats: `.md`, `.txt`, `.html`, `.docx` (review-only).
 - Browser opens automatically to `http://localhost:5173` on the first call.
-- Opening a new file replaces the current document.
+- Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
+- Multiple documents can be open simultaneously -- each gets its own tab.
+- If a session exists for this file (and the source hasn't changed), annotations are restored.
 
 ---
 
@@ -84,13 +97,14 @@ Read full document content as ProseMirror JSON structure.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | | | |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
 {
   "content": [ ... ProseMirror JSON nodes ... ],
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md"
+  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "documentId": "report-a1b2c3"
 }
 ```
 
@@ -105,12 +119,14 @@ Read document as plain text. ~60% fewer tokens than `getContent`.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `section` | string | no | Heading text to read only that section (case-insensitive) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns (full document):**
 ```json
 {
   "text": "# Title\nFirst paragraph...\n## Section\nMore text...",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md"
+  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "documentId": "report-a1b2c3"
 }
 ```
 
@@ -140,7 +156,7 @@ Get document structure (headings only) without full content. Low token cost.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | | | |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -168,13 +184,14 @@ Replace text at a specific range. Single-paragraph replacements only.
 | `from` | number | yes | Start position (flat text character offset) |
 | `to` | number | yes | End position (flat text character offset) |
 | `newText` | string | yes | Replacement text (no newlines -- inserted literally) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
 { "edited": true, "from": 42, "to": 67, "newTextLength": 31 }
 ```
 
-**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup)
+**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document)
 
 **Example:**
 ```
@@ -191,6 +208,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 - Newlines in `newText` are inserted as literal characters, not new paragraphs.
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
 - Edits appear instantly in the browser.
+- Read-only documents (.docx) reject edits -- use annotations instead.
 
 ---
 
@@ -200,12 +218,14 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | | | |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
 { "saved": true, "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
 ```
+
+**Notes:** Read-only documents (.docx) save their session only (annotations persist), not the source file.
 
 **Errors:** `FILE_LOCKED` (file open in another program)
 
@@ -213,7 +233,7 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 
 ### tandem_status
 
-Check if the editor is running and what file is open.
+Check editor status: running state, open documents, active document.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -223,8 +243,12 @@ Check if the editor is running and what file is open.
 ```json
 {
   "running": true,
-  "currentDocument": "C:\\Users\\bkolb\\docs\\report.md",
-  "format": "md"
+  "activeDocument": { "documentId": "report-a1b2c3", "filePath": "...", "format": "md" },
+  "openDocuments": [
+    { "documentId": "report-a1b2c3", "filePath": "...", "format": "md", "readOnly": false },
+    { "documentId": "invoice-d4e5f6", "filePath": "...", "format": "docx", "readOnly": true }
+  ],
+  "documentCount": 2
 }
 ```
 
@@ -232,7 +256,22 @@ Check if the editor is running and what file is open.
 
 ### tandem_close
 
-Close the current document.
+Close a document. Closes the active document if no `documentId` specified.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `documentId` | string | no | Document ID to close (defaults to active document) |
+
+**Returns:**
+```json
+{ "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" }
+```
+
+---
+
+### tandem_listDocuments
+
+List all open documents with their IDs, file paths, and formats.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -240,8 +279,32 @@ Close the current document.
 
 **Returns:**
 ```json
-{ "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md" }
+{
+  "documents": [
+    { "id": "report-a1b2c3", "filePath": "...", "fileName": "report.md", "format": "md", "readOnly": false, "isActive": true },
+    { "id": "invoice-d4e5f6", "filePath": "...", "fileName": "invoice.docx", "format": "docx", "readOnly": true, "isActive": false }
+  ],
+  "activeDocumentId": "report-a1b2c3",
+  "count": 2
+}
 ```
+
+---
+
+### tandem_switchDocument
+
+Switch the active document. Tools will operate on this document by default.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `documentId` | string | yes | Document ID to switch to |
+
+**Returns:**
+```json
+{ "activeDocumentId": "invoice-d4e5f6", "filePath": "...", "fileName": "invoice.docx" }
+```
+
+**Errors:** `NO_DOCUMENT` if document ID not found among open documents.
 
 ---
 
@@ -259,6 +322,7 @@ Highlight text with a color and optional note.
 | `to` | number | yes | End position |
 | `color` | enum | yes | `yellow`, `red`, `green`, `blue`, `purple` |
 | `note` | string | no | Optional note for the highlight |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -281,6 +345,7 @@ Add a comment attached to a text range. Appears in the side panel.
 | `from` | number | yes | Start position |
 | `to` | number | yes | End position |
 | `text` | string | yes | Comment text |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -299,6 +364,7 @@ Propose a text replacement (tracked-change style). User sees it as accept/reject
 | `to` | number | yes | End position |
 | `newText` | string | yes | Suggested replacement text |
 | `reason` | string | no | Reason for the suggestion |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -318,13 +384,14 @@ tandem_suggest({
 
 ### tandem_getAnnotations
 
-Read all annotations, optionally filtered.
+Read all annotations, optionally filtered. For checking new user actions, prefer `tandem_checkInbox`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user` or `claude` |
-| `type` | enum | no | `highlight`, `comment`, `suggestion`, `overlay` |
+| `type` | enum | no | `highlight`, `comment`, `suggestion`, `overlay`, `question` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -355,6 +422,7 @@ Accept or dismiss an annotation.
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
 | `action` | enum | yes | `accept` or `dismiss` |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -370,10 +438,32 @@ Delete an annotation permanently.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
 { "removed": true, "id": "ann_1710936000000_a1b2c3" }
+```
+
+---
+
+### tandem_exportAnnotations
+
+Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `format` | enum | no | `markdown` (default) or `json` |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns (markdown):**
+```json
+{ "markdown": "# Review Report\n\n## Highlights\n...", "count": 5 }
+```
+
+**Returns (json):**
+```json
+{ "annotations": [ { ...annotation, "textSnippet": "..." } ], "count": 5 }
 ```
 
 ---
@@ -388,6 +478,7 @@ Search for text in the document. Returns all matching positions.
 |-----------|------|----------|-------------|
 | `query` | string | yes | Search query |
 | `regex` | boolean | no | Treat query as regex (default: false) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -410,6 +501,7 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 |-----------|------|----------|-------------|
 | `pattern` | string | yes | Text to find (literal match) |
 | `occurrence` | number | no | Which occurrence, 1-based (default: 1) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -428,6 +520,7 @@ Update Claude's status text shown to the user in the editor status bar.
 |-----------|------|----------|-------------|
 | `text` | string | yes | Status text (e.g., "Reviewing cost figures...") |
 | `focusParagraph` | number | no | Index of paragraph Claude is focusing on (renders blue tint) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -450,6 +543,7 @@ Read content around a range without pulling the full document.
 | `from` | number | yes | Start position |
 | `to` | number | yes | End position |
 | `windowSize` | number | no | Characters of context before/after (default: 500) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -471,7 +565,7 @@ Get text the user currently has selected in the browser editor.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | | | |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns (text selected):**
 ```json
@@ -496,7 +590,7 @@ Check if the user is actively editing and where their cursor is.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | | | |
+| `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
@@ -512,3 +606,34 @@ Check if the user is actively editing and where their cursor is.
 - `active` is true if the user typed within the last 10 seconds.
 - `isTyping` is true during active keystroke bursts (debounced at 3 seconds).
 - Use this to avoid interrupting the user while they're typing.
+
+---
+
+### tandem_checkInbox
+
+Check for user actions you haven't seen yet -- new highlights, comments, questions, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{
+  "summary": "2 new: 1 comment, 1 question. 1 accepted.",
+  "hasNew": true,
+  "userActions": [ { ...annotation, "textSnippet": "..." } ],
+  "userResponses": [ { ...annotation, "textSnippet": "..." } ],
+  "activity": {
+    "isTyping": false,
+    "cursor": 142,
+    "lastEdit": 1710936000000,
+    "selectedText": null
+  }
+}
+```
+
+**Notes:**
+- Each annotation is surfaced only once -- subsequent calls return only new items.
+- `userActions`: annotations created by the user (highlights, comments, questions).
+- `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
