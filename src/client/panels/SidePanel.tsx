@@ -117,6 +117,7 @@ function AnnotationCard({ annotation, onAccept, onDismiss }: AnnotationCardProps
     ? HIGHLIGHT_COLORS[annotation.color] || '#e5e7eb'
     : annotation.type === 'comment' ? '#3b82f6'
     : annotation.type === 'suggestion' ? '#8b5cf6'
+    : annotation.type === 'question' ? '#6366f1'
     : '#e5e7eb';
 
   const isPending = annotation.status === 'pending';

@@ -106,6 +106,13 @@ function buildDecorations(doc: PmNode, annotationsMap: Y.Map<unknown>): Decorati
           'data-annotation-id': ann.id,
         };
         break;
+      case 'question':
+        attrs = {
+          class: 'tandem-question',
+          style: 'background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;',
+          'data-annotation-id': ann.id,
+        };
+        break;
       default:
         return; // Unknown type, skip
     }
