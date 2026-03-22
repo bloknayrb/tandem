@@ -76,4 +76,22 @@
 
 **Solution:** Only write to the active document's Y.Map('documentMeta'). The client's per-tab meta observer handles the broadcast. Non-active rooms don't receive unsolicited updates.
 
-**Impact:** Reduces broadcast cost from O(n) to O(1) per operation.
+**Impact:** Reduces broadcast cost from O(n) to O(1) per operation. However, the bootstrap room (`__tandem_ctrl__`) must ALSO receive the broadcast — otherwise new clients can't discover the first document (see Lesson 12).
+
+## 12. Bootstrap Room Must Receive Doc List Broadcast
+
+**Problem:** The client's bootstrap HocuspocusProvider connects to room `__tandem_ctrl__` to discover which documents are open. If `broadcastOpenDocs` only writes to the active document's room, the bootstrap observer never fires, and the browser shows "No document open" even after `tandem_open` succeeds.
+
+**Solution:** `broadcastOpenDocs` writes to both `__tandem_ctrl__` (so new/reconnecting clients discover docs) and the active document's room (so per-tab observers stay in sync). This is O(2) writes per broadcast, not O(n).
+
+**Impact:** Without this, the client can never render tabs for the first document. The server reports docs as open but the browser doesn't know about them.
+
+## 13. MCP Stdio Transport Disconnects Under Claude Code
+
+**Problem:** The Tandem MCP server's stdio transport disconnects after the first `tandem_open` tool call when running under Claude Code. The server process stays alive (Hocuspocus continues listening), but the MCP stdio channel dies. Subsequent tool calls fail with "Not connected."
+
+**Investigation:** Standalone testing via Node.js subprocess proves the server handles sequential tool calls correctly — both `tandem_open` calls return valid JSON-RPC responses. No stdout corruption detected (instrumented `process.stdout.write`). No uncaught exceptions. `console.log`, `console.warn`, and `console.info` are all redirected to stderr.
+
+**Status:** Unresolved. Filed as Issue #8. The root cause is in Claude Code's MCP transport layer, not in Tandem's server code. Workaround: use the standalone Node.js test harness for server-side verification.
+
+**Impact:** Multi-document tab testing in the browser is blocked. Single-document features work fine.
