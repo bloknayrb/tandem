@@ -14,6 +14,7 @@ export default function App() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
   const [claudeActive, setClaudeActive] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [ready, setReady] = useState(false);
   const [, setEditorVersion] = useState(0); // Triggers re-render when editor arrives
 
@@ -78,11 +79,24 @@ export default function App() {
     };
     awarenessMap.observe(awarenessObserver);
 
+    // Watch documentMeta Y.Map for read-only state changes (with change guard)
+    const documentMetaMap = ydoc.getMap('documentMeta');
+    let prevReadOnly = false;
+    const documentMetaObserver = () => {
+      const ro = (documentMetaMap.get('readOnly') as boolean | undefined) === true;
+      if (ro !== prevReadOnly) {
+        prevReadOnly = ro;
+        setReadOnly(ro);
+      }
+    };
+    documentMetaMap.observe(documentMetaObserver);
+
     setReady(true);
 
     return () => {
       annotationsMap.unobserve(annotationObserver);
       awarenessMap.unobserve(awarenessObserver);
+      documentMetaMap.unobserve(documentMetaObserver);
       provider.destroy();
       ydoc.destroy();
       ydocRef.current = null;
@@ -112,6 +126,7 @@ export default function App() {
           <Editor
             ydoc={ydocRef.current}
             provider={providerRef.current}
+            readOnly={readOnly}
             onConnectionChange={handleConnectionChange}
             onEditorReady={handleEditorReady}
           />
@@ -122,6 +137,7 @@ export default function App() {
         connected={connected}
         claudeStatus={claudeStatus}
         claudeActive={claudeActive}
+        readOnly={readOnly}
       />
     </div>
   );

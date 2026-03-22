@@ -55,13 +55,13 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 
 **Remaining (Steps 5-8) — see [docs/roadmap.md](docs/roadmap.md) for full spec:**
 - [x] Step 5a: Markdown round-trip — remark-based MDAST↔Y.Doc conversion, .md load/save, extractMarkdown for readable output
-- [ ] Step 5b: File I/O — .txt blank-line round-trip, .docx review-only with mammoth.js
+- [x] Step 5b: .docx review-only mode — mammoth.js→HTML→Y.Doc, read-only guards, tandem_exportAnnotations
 - [ ] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts
 - [ ] Step 7: Document groups — multi-document tabs, cross-reference tools
 - [ ] Step 8: Polish — onboarding, auto-start, error handling, review mode UI
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 20 tools with params, returns, examples
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 21 tools with params, returns, examples
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Full spec for Steps 5-8 (file I/O, sessions, groups, polish)

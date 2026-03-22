@@ -19,11 +19,12 @@ import { AwarenessExtension } from './extensions/awareness';
 interface EditorProps {
   ydoc: Y.Doc;
   provider: HocuspocusProvider;
+  readOnly: boolean;
   onConnectionChange: (connected: boolean) => void;
   onEditorReady?: (editor: TiptapEditor | null) => void;
 }
 
-export function Editor({ ydoc, provider, onConnectionChange, onEditorReady }: EditorProps) {
+export function Editor({ ydoc, provider, readOnly, onConnectionChange, onEditorReady }: EditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -58,6 +59,13 @@ export function Editor({ ydoc, provider, onConnectionChange, onEditorReady }: Ed
       },
     },
   }, [ydoc, provider]); // Re-create editor if ydoc or provider change
+
+  // Toggle editable mode without recreating the editor (preserves HocuspocusProvider)
+  useEffect(() => {
+    if (editor) {
+      editor.setEditable(!readOnly);
+    }
+  }, [editor, readOnly]);
 
   useEffect(() => {
     onEditorReady?.(editor);

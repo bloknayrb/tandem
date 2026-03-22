@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getOrCreateDocument } from '../yjs/provider.js';
-import { getCurrentDoc } from './document.js';
+import { getCurrentDoc, extractText } from './document.js';
 import { mcpSuccess, mcpError, noDocumentError } from './response.js';
+import { exportAnnotations } from '../file-io/docx.js';
 import * as Y from 'yjs';
 import type { Annotation, AnnotationType, HighlightColor } from '../../shared/types.js';
 
@@ -151,6 +152,40 @@ export function registerAnnotationTools(server: McpServer): void {
       if (!map.has(id)) return mcpError('INVALID_RANGE', `Annotation ${id} not found`);
       map.delete(id);
       return mcpSuccess({ removed: true, id });
+    }
+  );
+
+  server.tool(
+    'tandem_exportAnnotations',
+    'Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.',
+    {
+      format: z.enum(['markdown', 'json']).optional().describe('Output format (default: markdown)'),
+    },
+    async ({ format }) => {
+      const docInfo = getCurrentDoc();
+      if (!docInfo) return noDocumentError();
+
+      const map = getAnnotationsMap();
+      if (!map) return noDocumentError();
+
+      const annotations = collectAnnotations(map);
+      const ydoc = getOrCreateDocument(docInfo.docName);
+
+      if (format === 'json') {
+        // Add text snippets to each annotation
+        const fullText = extractText(ydoc);
+        const enriched = annotations.map((ann) => ({
+          ...ann,
+          textSnippet: fullText.slice(
+            Math.max(0, ann.range.from),
+            Math.min(fullText.length, ann.range.to),
+          ),
+        }));
+        return mcpSuccess({ annotations: enriched, count: enriched.length });
+      }
+
+      const markdown = exportAnnotations(ydoc, annotations);
+      return mcpSuccess({ markdown, count: annotations.length });
     }
   );
 }
