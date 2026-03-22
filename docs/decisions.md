@@ -9,8 +9,8 @@
 **Rationale:** Same team as Tiptap. Built-in document management, persistence hooks. `@hocuspocus/provider` is required — `y-websocket` is protocol-incompatible with Hocuspocus v2, which prepends a `writeVarString(documentName)` to every message frame. `y-websocket` misreads that length byte as the outer message type, silently routing the browser to a phantom `""` document instead of `"default"`.
 
 ## ADR-003: MCP over REST for Claude Integration
-**Decision:** Expose tools via MCP (stdio) instead of REST API.
-**Rationale:** Claude Code discovers MCP tools natively. No curl wrappers needed. Tools appear in Claude's tool list automatically.
+**Decision:** Expose tools via MCP (HTTP, formerly stdio) instead of a custom REST API.
+**Rationale:** Claude Code discovers MCP tools natively. No curl wrappers needed. Tools appear in Claude's tool list automatically. See ADR-012 for the stdio → HTTP migration.
 
 ## ADR-004: .docx Review-Only by Default
 **Decision:** .docx files open in review-only mode. Never overwrite the original.
@@ -21,8 +21,8 @@
 **Rationale:** Character offsets break under concurrent editing. Node anchors survive edits to other paragraphs.
 
 ## ADR-006: Console.error for Server Logs
-**Decision:** Use console.error for all server-side logging.
-**Rationale:** MCP stdio transport uses stdin/stdout for protocol messages. Any console.log output would corrupt the MCP protocol stream.
+**Decision:** Use console.error for all server-side logging. `console.log`, `console.warn`, and `console.info` are redirected to `console.error` at startup.
+**Rationale:** Originally required because MCP stdio transport used stdin/stdout for protocol messages. Now defense-in-depth — HTTP transport doesn't use stdout, but the redirect prevents regressions if stdio fallback is used or a dependency logs unexpectedly.
 
 ## ADR-007: Y.Map for Annotations
 **Decision:** Store annotations in a Y.Map on the Y.Doc rather than in the document content.
@@ -43,3 +43,7 @@
 ## ADR-011: Optional documentId on All MCP Tools
 **Decision:** All MCP tools that operate on a document accept an optional `documentId` parameter, defaulting to the active document.
 **Rationale:** Backward compatible — single-document scripts work unchanged. Multi-document workflows can target specific documents without switching the active context. Avoids a breaking API change while enabling document groups.
+
+## ADR-012: Streamable HTTP Transport (replacing stdio)
+**Decision:** Migrate MCP from `StdioServerTransport` to `StreamableHTTPServerTransport` on port 3479, with stdio preserved as a fallback via `TANDEM_TRANSPORT=stdio`.
+**Rationale:** The stdio transport disconnects after the first `tandem_open` under Claude Code (Issue #8). Extensive investigation confirmed the bug is in Claude Code's stdio pipe management, not Tandem's server. Rather than waiting for an upstream fix, HTTP transport sidesteps the problem entirely. Uses stateful mode (`sessionIdGenerator: () => randomUUID()`) because the SDK crashes in stateless mode after the first `server.connect()`. Express (bundled with the SDK) provides DNS rebinding protection via `createMcpExpressApp()`. This also prepares for Phase 2 (Cowork integration) which needs configurable URLs.

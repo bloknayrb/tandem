@@ -9,12 +9,12 @@ graph TB
     Tandem["Tandem Server"]
 
     User <-->|WebSocket<br/>Tiptap + Yjs| Tandem
-    Claude <-->|MCP stdio<br/>tool calls| Tandem
+    Claude <-->|MCP HTTP :3479<br/>tool calls| Tandem
     Tandem -->|fs read/write| Files["Local Files<br/>.md .txt .html"]
 ```
 
 Tandem is a single Node.js process that serves two roles simultaneously:
-1. **MCP server** (stdio) -- Claude Code connects here for tool discovery and execution
+1. **MCP server** (HTTP on port 3479) -- Claude Code connects here for tool discovery and execution via Streamable HTTP transport
 2. **Hocuspocus WebSocket server** (port 3478) -- Browser connects here for real-time Yjs sync
 
 Both sides share the same `Y.Doc` instance. Edits from either side propagate to the other in real-time.
@@ -34,7 +34,7 @@ graph LR
 
     subgraph "Tandem Server (Node.js)"
         HP["Hocuspocus<br/>WebSocket :3478"]
-        MCP["MCP Server<br/>stdio transport"]
+        MCP["MCP Server<br/>HTTP :3479"]
         YDoc["Y.Doc per room<br/>(one per open document)"]
         FileIO["File I/O<br/>markdown, txt, docx"]
     end
@@ -46,7 +46,7 @@ graph LR
     Tiptap <-->|@hocuspocus/provider| HP
     HP <--> YDoc
     MCP <--> YDoc
-    Tools <-->|stdio| MCP
+    Tools <-->|HTTP| MCP
     FileIO --> YDoc
     YDoc --> FileIO
     AnnExt -.->|observes| YDoc

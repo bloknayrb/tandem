@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "tandem": {
-      "command": "cmd",
-      "args": ["/c", "npx", "tsx", "src/server/index.ts"],
-      "cwd": "C:\\Users\\blokn\\GitHub\\tandem"
+      "type": "http",
+      "url": "http://localhost:3479/mcp"
     }
   }
 }

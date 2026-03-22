@@ -16,9 +16,11 @@
 
 ## 3. MCP stdio Transport Reserves stdout
 
+*[Historical — stdio replaced by HTTP transport in ADR-012, but console redirection kept as defense-in-depth.]*
+
 **Problem:** The MCP protocol uses stdin/stdout for message framing. Any `console.log()` output corrupts the protocol stream, causing parse errors and dropped messages.
 
-**Solution:** All server-side logging uses `console.error()`. This is enforced by convention (ADR-006).
+**Solution:** All server-side logging uses `console.error()`. This is enforced by convention (ADR-006). The `console.log/warn/info = console.error` redirect in `index.ts` remains active even in HTTP mode.
 
 ## 4. Hocuspocus Callbacks Must Be Async
 
@@ -41,6 +43,8 @@
 **Impact:** Critical — `y-websocket` appears to "work" (WebSocket connects, status shows "Connected") but document content never reaches the browser.
 
 ## 7. MCP Server Must Start Before Hocuspocus
+
+*[Historical — applies to stdio mode only. HTTP mode starts both concurrently since there's no init timeout race.]*
 
 **Problem:** Claude Code sends the MCP `initialize` request immediately after spawning the server process. If `startHocuspocus()` (which includes `freePort` + a 300ms delay + socket bind) runs first, the process doesn't respond to `initialize` in time. Claude Code's timeout fires, it kills the process, and the MCP tools never appear.
 
@@ -92,6 +96,14 @@
 
 **Investigation:** Standalone testing via Node.js subprocess proves the server handles sequential tool calls correctly — both `tandem_open` calls return valid JSON-RPC responses. No stdout corruption detected (instrumented `process.stdout.write`). No uncaught exceptions. `console.log`, `console.warn`, and `console.info` are all redirected to stderr.
 
-**Status:** Unresolved. Filed as Issue #8. The root cause is in Claude Code's MCP transport layer, not in Tandem's server code. Workaround: use the standalone Node.js test harness for server-side verification.
+**Resolution:** Migrated from stdio to Streamable HTTP transport (ADR-012). MCP now runs on HTTP port 3479 via Express + `StreamableHTTPServerTransport` in stateful mode. Claude Code connects via `type: "http"` in `.mcp.json`. Sequential tool calls (including `tandem_open` → follow-up calls) work reliably. Stdio preserved as fallback via `TANDEM_TRANSPORT=stdio`.
 
-**Impact:** Multi-document tab testing in the browser is blocked. Single-document features work fine.
+**Impact:** Issue #8 resolved. Multi-document browser testing unblocked.
+
+## 14. Streamable HTTP Transport Requires Stateful Mode
+
+**Problem:** The MCP SDK's `StreamableHTTPServerTransport` in stateless mode (`sessionIdGenerator: undefined`) creates a new transport per request that crashes on the second call, because `server.connect(transport)` binds internal state to the first transport instance.
+
+**Solution:** Use stateful mode with `sessionIdGenerator: () => randomUUID()`. Create one transport, connect once, route all HTTP requests through it. The transport manages session IDs via `Mcp-Session-Id` headers automatically.
+
+**Impact:** Choosing stateless mode would silently break after the first tool call — exactly mimicking Issue #8 but for a different reason.
