@@ -6,9 +6,10 @@ interface StatusBarProps {
   claudeStatus: string | null;
   claudeActive: boolean;
   readOnly?: boolean;
+  documentCount?: number;
 }
 
-export function StatusBar({ connected, claudeStatus, claudeActive, readOnly }: StatusBarProps) {
+export function StatusBar({ connected, claudeStatus, claudeActive, readOnly, documentCount = 0 }: StatusBarProps) {
   return (
     <div style={{
       display: 'flex',
@@ -31,6 +32,11 @@ export function StatusBar({ connected, claudeStatus, claudeActive, readOnly }: S
           display: 'inline-block',
         }} />
         <span>{connected ? 'Connected' : 'Disconnected'}</span>
+        {documentCount > 0 && (
+          <span style={{ color: '#9ca3af' }}>
+            {documentCount} doc{documentCount !== 1 ? 's' : ''} open
+          </span>
+        )}
       </div>
       {readOnly && (
         <span style={{

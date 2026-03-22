@@ -117,6 +117,11 @@ export async function cleanupSessions(): Promise<number> {
 let autoSaveTimer: ReturnType<typeof setInterval> | null = null;
 let autoSaveCallback: (() => Promise<void>) | null = null;
 
+/** Check if auto-save is currently running */
+export function isAutoSaveRunning(): boolean {
+  return autoSaveTimer !== null;
+}
+
 /** Start auto-saving every 60 seconds. Pass a callback that saves the current session. */
 export function startAutoSave(callback: () => Promise<void>): void {
   stopAutoSave();

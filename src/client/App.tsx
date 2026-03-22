@@ -6,45 +6,52 @@ import { Editor } from './editor/Editor';
 import { SidePanel } from './panels/SidePanel';
 import { StatusBar } from './status/StatusBar';
 import { Toolbar } from './editor/toolbar/Toolbar';
+import { DocumentTabs } from './tabs/DocumentTabs';
+import { ReviewSummary } from './panels/ReviewSummary';
 import { DEFAULT_WS_PORT } from '../shared/constants';
 import type { Annotation } from '../shared/types';
 
+export interface DocListEntry {
+  id: string;
+  filePath: string;
+  fileName: string;
+  format: string;
+  readOnly: boolean;
+}
+
+export interface OpenTab extends DocListEntry {
+  ydoc: Y.Doc;
+  provider: HocuspocusProvider;
+}
+
 export default function App() {
+  const [tabs, setTabs] = useState<OpenTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
   const [claudeActive, setClaudeActive] = useState(false);
   const [readOnly, setReadOnly] = useState(false);
   const [ready, setReady] = useState(false);
-  const [, setEditorVersion] = useState(0); // Triggers re-render when editor arrives
+  const [showReviewSummary, setShowReviewSummary] = useState(false);
+  const [reviewSummaryData, setReviewSummaryData] = useState<{ accepted: number; dismissed: number; total: number } | null>(null);
+  const [, setEditorVersion] = useState(0);
 
-  // Stable refs for Y.Doc and provider — survive StrictMode double-mount
-  const ydocRef = useRef<Y.Doc | null>(null);
-  const providerRef = useRef<HocuspocusProvider | null>(null);
   const editorRef = useRef<TiptapEditor | null>(null);
+  const prevPendingRef = useRef<number>(0);
+  const observersRef = useRef<Map<string, { cleanup: () => void }>>(new Map());
+  const tabsRef = useRef<OpenTab[]>([]);
+  tabsRef.current = tabs;
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
-    if (editor) setEditorVersion(v => v + 1); // Force re-render when editor arrives (skip null cleanup)
+    if (editor) setEditorVersion(v => v + 1);
   }, []);
 
-  useEffect(() => {
-    const ydoc = new Y.Doc();
-    ydocRef.current = ydoc;
+  /** Set up observers for a tab's Y.Doc. Returns cleanup function. */
+  const setupTabObservers = useCallback((tab: OpenTab) => {
+    const { ydoc } = tab;
 
-    const provider = new HocuspocusProvider({
-      url: `ws://localhost:${DEFAULT_WS_PORT}`,
-      name: 'default',
-      document: ydoc,
-    });
-    providerRef.current = provider;
-
-    // Connection status
-    provider.on('status', ({ status }: { status: string }) => {
-      setConnected(status === 'connected');
-    });
-
-    // Watch annotations Y.Map for changes
     const annotationsMap = ydoc.getMap('annotations');
     const annotationObserver = () => {
       const anns: Annotation[] = [];
@@ -54,63 +61,187 @@ export default function App() {
       setAnnotations(anns);
     };
     annotationsMap.observe(annotationObserver);
+    annotationObserver();
 
-    // Watch awareness Y.Map for Claude's status (with change guard to avoid no-op re-renders)
     const awarenessMap = ydoc.getMap('awareness');
     let prevStatus: string | null = null;
     let prevActive = false;
     const awarenessObserver = () => {
       const claude = awarenessMap.get('claude') as {
-        status: string;
-        timestamp: number;
-        active: boolean;
+        status: string; timestamp: number; active: boolean;
       } | undefined;
-
       const newStatus = claude?.status ?? null;
       const newActive = claude?.active ?? false;
-      if (newStatus !== prevStatus) {
-        prevStatus = newStatus;
-        setClaudeStatus(newStatus);
-      }
-      if (newActive !== prevActive) {
-        prevActive = newActive;
-        setClaudeActive(newActive);
-      }
+      if (newStatus !== prevStatus) { prevStatus = newStatus; setClaudeStatus(newStatus); }
+      if (newActive !== prevActive) { prevActive = newActive; setClaudeActive(newActive); }
     };
     awarenessMap.observe(awarenessObserver);
+    awarenessObserver();
 
-    // Watch documentMeta Y.Map for read-only state changes (with change guard)
     const documentMetaMap = ydoc.getMap('documentMeta');
     let prevReadOnly = false;
     const documentMetaObserver = () => {
       const ro = (documentMetaMap.get('readOnly') as boolean | undefined) === true;
-      if (ro !== prevReadOnly) {
-        prevReadOnly = ro;
-        setReadOnly(ro);
-      }
+      if (ro !== prevReadOnly) { prevReadOnly = ro; setReadOnly(ro); }
     };
     documentMetaMap.observe(documentMetaObserver);
-
-    setReady(true);
+    documentMetaObserver();
 
     return () => {
       annotationsMap.unobserve(annotationObserver);
       awarenessMap.unobserve(awarenessObserver);
       documentMetaMap.unobserve(documentMetaObserver);
-      provider.destroy();
-      ydoc.destroy();
-      ydocRef.current = null;
-      providerRef.current = null;
-      setReady(false);
     };
   }, []);
 
-  const handleConnectionChange = useCallback((status: boolean) => {
-    setConnected(status);
+  /**
+   * Bootstrap connection to coordinate document list.
+   * Uses '__tandem_ctrl__' room to avoid collision with document IDs.
+   */
+  const bootstrapRef = useRef<{ ydoc: Y.Doc; provider: HocuspocusProvider } | null>(null);
+
+  useEffect(() => {
+    const ydoc = new Y.Doc();
+    const provider = new HocuspocusProvider({
+      url: `ws://localhost:${DEFAULT_WS_PORT}`,
+      name: '__tandem_ctrl__',
+      document: ydoc,
+    });
+    bootstrapRef.current = { ydoc, provider };
+
+    provider.on('status', ({ status }: { status: string }) => {
+      setConnected(status === 'connected');
+    });
+
+    setReady(true);
+
+    return () => {
+      provider.destroy();
+      ydoc.destroy();
+      bootstrapRef.current = null;
+    };
   }, []);
 
-  // Don't render editor until Y.Doc and provider are ready
-  if (!ready || !ydocRef.current || !providerRef.current) {
+  /**
+   * Sync tabs from server-broadcast 'openDocuments' list.
+   * Allocations happen outside the setTabs updater to be StrictMode-safe.
+   */
+  const handleDocumentListRef = useRef<(docList: DocListEntry[], newActiveId: string | null) => void>();
+  handleDocumentListRef.current = (docList: DocListEntry[], newActiveId: string | null) => {
+    const currentTabs = tabsRef.current;
+    const existingIds = new Set(currentTabs.map(t => t.id));
+    const serverIds = new Set(docList.map(d => d.id));
+
+    // Allocate new tabs outside the updater (StrictMode-safe)
+    const newTabs: OpenTab[] = [];
+    for (const doc of docList) {
+      if (!existingIds.has(doc.id)) {
+        const ydoc = new Y.Doc();
+        const provider = new HocuspocusProvider({
+          url: `ws://localhost:${DEFAULT_WS_PORT}`,
+          name: doc.id,
+          document: ydoc,
+        });
+
+        // Listen for openDocuments broadcasts on this doc's meta
+        const meta = ydoc.getMap('documentMeta');
+        meta.observe(() => {
+          const docs = meta.get('openDocuments') as DocListEntry[] | undefined;
+          const active = meta.get('activeDocumentId') as string | null | undefined;
+          if (docs) {
+            handleDocumentListRef.current?.(docs, active ?? null);
+          }
+        });
+
+        newTabs.push({ ...doc, ydoc, provider });
+      }
+    }
+
+    // Remove closed tabs (cleanup outside updater)
+    const toRemove = currentTabs.filter(t => !serverIds.has(t.id));
+    for (const t of toRemove) {
+      const obs = observersRef.current.get(t.id);
+      if (obs) { obs.cleanup(); observersRef.current.delete(t.id); }
+      t.provider.destroy();
+      t.ydoc.destroy();
+    }
+
+    setTabs(prevTabs => {
+      const kept = prevTabs.filter(t => serverIds.has(t.id));
+      return [...kept, ...newTabs];
+    });
+
+    if (newActiveId !== null) {
+      setActiveTabId(newActiveId);
+    }
+  };
+
+  // Listen on the bootstrap doc for document list broadcasts
+  useEffect(() => {
+    if (!bootstrapRef.current) return;
+    const meta = bootstrapRef.current.ydoc.getMap('documentMeta');
+    const observer = () => {
+      const docs = meta.get('openDocuments') as DocListEntry[] | undefined;
+      const active = meta.get('activeDocumentId') as string | null | undefined;
+      if (docs) {
+        handleDocumentListRef.current?.(docs, active ?? null);
+      }
+    };
+    meta.observe(observer);
+    return () => meta.unobserve(observer);
+  }, []);
+
+  // When active tab changes, rewire observers (use tabsRef to avoid tabs dep)
+  useEffect(() => {
+    for (const obs of observersRef.current.values()) {
+      obs.cleanup();
+    }
+    observersRef.current.clear();
+
+    const activeTab = tabsRef.current.find(t => t.id === activeTabId);
+    if (activeTab) {
+      const cleanup = setupTabObservers(activeTab);
+      observersRef.current.set(activeTab.id, { cleanup });
+    } else {
+      setAnnotations([]);
+      setClaudeStatus(null);
+      setClaudeActive(false);
+      setReadOnly(false);
+    }
+  }, [activeTabId, setupTabObservers]);
+
+  // Detect review completion: all pending → 0 while resolved > 0 (single pass)
+  useEffect(() => {
+    let pending = 0, accepted = 0, dismissed = 0;
+    for (const a of annotations) {
+      if (a.status === 'pending') pending++;
+      else if (a.status === 'accepted') accepted++;
+      else dismissed++;
+    }
+    const total = accepted + dismissed;
+
+    if (prevPendingRef.current > 0 && pending === 0 && total > 0) {
+      setReviewSummaryData({ accepted, dismissed, total });
+      setShowReviewSummary(true);
+    }
+    prevPendingRef.current = pending;
+  }, [annotations]);
+
+  const handleTabSwitch = useCallback((tabId: string) => {
+    setActiveTabId(tabId);
+  }, []);
+
+  const handleTabClose = useCallback((tabId: string) => {
+    setActiveTabId(prev => {
+      if (prev !== tabId) return prev;
+      const remaining = tabsRef.current.filter(t => t.id !== tabId);
+      return remaining.length > 0 ? remaining[0].id : null;
+    });
+  }, []);
+
+  const activeTab = tabs.find(t => t.id === activeTabId);
+
+  if (!ready) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#9ca3af' }}>
         Connecting...
@@ -120,25 +251,53 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <Toolbar editor={editorRef.current} ydoc={ydocRef.current} />
+      <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
+      {tabs.length > 0 && (
+        <DocumentTabs
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onTabSwitch={handleTabSwitch}
+          onTabClose={handleTabClose}
+        />
+      )}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <div style={{ flex: 1, overflow: 'auto', padding: '24px 48px' }}>
-          <Editor
-            ydoc={ydocRef.current}
-            provider={providerRef.current}
-            readOnly={readOnly}
-            onConnectionChange={handleConnectionChange}
-            onEditorReady={handleEditorReady}
-          />
+          {activeTab ? (
+            <Editor
+              key={activeTab.id}
+              ydoc={activeTab.ydoc}
+              provider={activeTab.provider}
+              readOnly={readOnly}
+              onConnectionChange={setConnected}
+              onEditorReady={handleEditorReady}
+            />
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af' }}>
+              No document open. Use Claude to open a file with tandem_open.
+            </div>
+          )}
         </div>
-        <SidePanel annotations={annotations} editor={editorRef.current} ydoc={ydocRef.current} />
+        <SidePanel
+          annotations={annotations}
+          editor={editorRef.current}
+          ydoc={activeTab?.ydoc ?? null}
+        />
       </div>
       <StatusBar
         connected={connected}
         claudeStatus={claudeStatus}
         claudeActive={claudeActive}
         readOnly={readOnly}
+        documentCount={tabs.length}
       />
+      {showReviewSummary && reviewSummaryData && (
+        <ReviewSummary
+          accepted={reviewSummaryData.accepted}
+          dismissed={reviewSummaryData.dismissed}
+          total={reviewSummaryData.total}
+          onDismiss={() => setShowReviewSummary(false)}
+        />
+      )}
     </div>
   );
 }
