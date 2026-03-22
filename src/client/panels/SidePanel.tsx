@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import * as Y from 'yjs';
-import type { Annotation, AnnotationType } from '../../shared/types';
+import type { Annotation, AnnotationType, InterruptionMode } from '../../shared/types';
 import { HIGHLIGHT_COLORS } from '../../shared/constants';
 import { flatOffsetToPmPos } from '../editor/extensions/annotation';
 
@@ -10,8 +10,8 @@ interface SidePanelProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
   heldCount?: number;
-  interruptionMode?: string;
-  onModeChange?: (mode: string) => void;
+  interruptionMode?: InterruptionMode;
+  onModeChange?: (mode: InterruptionMode) => void;
 }
 
 type FilterType = AnnotationType | 'all';

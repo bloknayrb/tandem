@@ -13,13 +13,16 @@ export function shouldShow(ann: Annotation, mode: InterruptionMode): boolean {
 }
 
 export function useAnnotationGate(annotations: Annotation[], mode: InterruptionMode) {
-  const visible = useMemo(
-    () => annotations.filter(a => shouldShow(a, mode)),
-    [annotations, mode],
-  );
-  const heldCount = useMemo(
-    () => annotations.filter(a => a.status === 'pending' && !shouldShow(a, mode)).length,
-    [annotations, mode],
-  );
-  return { visibleAnnotations: visible, heldCount };
+  return useMemo(() => {
+    const visibleAnnotations: Annotation[] = [];
+    let heldCount = 0;
+    for (const a of annotations) {
+      if (shouldShow(a, mode)) {
+        visibleAnnotations.push(a);
+      } else if (a.status === 'pending') {
+        heldCount++;
+      }
+    }
+    return { visibleAnnotations, heldCount };
+  }, [annotations, mode]);
 }
