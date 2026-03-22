@@ -8,8 +8,9 @@ import { StatusBar } from './status/StatusBar';
 import { Toolbar } from './editor/toolbar/Toolbar';
 import { DocumentTabs } from './tabs/DocumentTabs';
 import { ReviewSummary } from './panels/ReviewSummary';
-import { DEFAULT_WS_PORT } from '../shared/constants';
-import type { Annotation } from '../shared/types';
+import { DEFAULT_WS_PORT, INTERRUPTION_MODE_DEFAULT, INTERRUPTION_MODE_KEY } from '../shared/constants';
+import type { Annotation, InterruptionMode } from '../shared/types';
+import { useAnnotationGate } from './hooks/useAnnotationGate';
 
 export interface DocListEntry {
   id: string;
@@ -29,6 +30,15 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+
+  // Interruption mode — persisted to localStorage
+  const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
+    const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
+    return (saved as InterruptionMode) ?? INTERRUPTION_MODE_DEFAULT;
+  });
+  useEffect(() => { localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode); }, [interruptionMode]);
+
+  const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
   const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
   const [claudeActive, setClaudeActive] = useState(false);
   const [readOnly, setReadOnly] = useState(false);
@@ -278,9 +288,12 @@ export default function App() {
           )}
         </div>
         <SidePanel
-          annotations={annotations}
+          annotations={visibleAnnotations}
           editor={editorRef.current}
           ydoc={activeTab?.ydoc ?? null}
+          heldCount={heldCount}
+          interruptionMode={interruptionMode}
+          onModeChange={setInterruptionMode}
         />
       </div>
       <StatusBar
@@ -289,6 +302,9 @@ export default function App() {
         claudeActive={claudeActive}
         readOnly={readOnly}
         documentCount={tabs.length}
+        interruptionMode={interruptionMode}
+        onModeChange={setInterruptionMode}
+        heldCount={heldCount}
       />
       {showReviewSummary && reviewSummaryData && (
         <ReviewSummary

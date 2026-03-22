@@ -1,6 +1,8 @@
 // Annotation types
 export type AnnotationType = 'highlight' | 'comment' | 'suggestion' | 'overlay' | 'question';
 export type AnnotationStatus = 'pending' | 'accepted' | 'dismissed';
+export type AnnotationPriority = 'normal' | 'urgent';
+export type InterruptionMode = 'all' | 'urgent-only' | 'paused';
 export type HighlightColor = 'yellow' | 'red' | 'green' | 'blue' | 'purple';
 export type Severity = 'info' | 'warning' | 'error' | 'success';
 
@@ -13,6 +15,7 @@ export interface Annotation {
   status: AnnotationStatus;
   timestamp: number;
   color?: HighlightColor;
+  priority?: AnnotationPriority;
 }
 
 export interface DocumentRange {
