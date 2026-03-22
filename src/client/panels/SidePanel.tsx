@@ -9,6 +9,10 @@ interface SidePanelProps {
   annotations: Annotation[];
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
+  reviewMode: boolean;
+  onToggleReviewMode: () => void;
+  activeAnnotationId: string | null;
+  onActiveAnnotationChange: (id: string | null) => void;
 }
 
 type FilterType = AnnotationType | 'all';
@@ -30,11 +34,10 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor) {
   }
 }
 
-export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
+export function SidePanel({ annotations, editor, ydoc, reviewMode, onToggleReviewMode, activeAnnotationId, onActiveAnnotationChange }: SidePanelProps) {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>('all');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
-  const [reviewMode, setReviewMode] = useState(false);
   const [reviewIndex, setReviewIndex] = useState(0);
   const reviewIndexRef = useRef(0);
 
@@ -135,19 +138,32 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
     if (ann) resolveAnnotation(ann.id, 'dismissed');
   }, []);
 
+  // Reset review index and scroll to first annotation when entering review mode
+  const prevReviewModeRef = useRef(false);
+  useEffect(() => {
+    if (reviewMode && !prevReviewModeRef.current && reviewTargets.length > 0) {
+      reviewIndexRef.current = 0;
+      setReviewIndex(0);
+      scrollToAnnotation(reviewTargets[0]);
+    }
+    prevReviewModeRef.current = reviewMode;
+  }, [reviewMode, reviewTargets, scrollToAnnotation]);
+
+  // Sync activeAnnotationId when review index changes
+  useEffect(() => {
+    if (reviewMode && reviewTargets.length > 0) {
+      onActiveAnnotationChange(reviewTargets[reviewIndex]?.id ?? null);
+    } else {
+      onActiveAnnotationChange(null);
+    }
+  }, [reviewMode, reviewIndex, reviewTargets, onActiveAnnotationChange]);
+
   // Keyboard shortcuts — stable deps via refs
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && e.shiftKey && e.key === 'R') {
         e.preventDefault();
-        setReviewMode(prev => {
-          if (!prev && reviewTargetsRef.current.length > 0) {
-            reviewIndexRef.current = 0;
-            setReviewIndex(0);
-            scrollToAnnotation(reviewTargetsRef.current[0]);
-          }
-          return !prev;
-        });
+        onToggleReviewMode();
         return;
       }
 
@@ -164,14 +180,22 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         e.preventDefault();
         dismissCurrent();
+      } else if (e.key === 'e' || e.key === 'E') {
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+        e.preventDefault();
+        // Scroll to current annotation and exit review mode without resolving
+        const targets = reviewTargetsRef.current;
+        const ann = targets[reviewIndexRef.current];
+        if (ann) scrollToAnnotation(ann);
+        onToggleReviewMode();
       } else if (e.key === 'Escape') {
-        setReviewMode(false);
+        onToggleReviewMode();
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [reviewMode, navigateReview, acceptCurrent, dismissCurrent, scrollToAnnotation]);
+  }, [reviewMode, navigateReview, acceptCurrent, dismissCurrent, scrollToAnnotation, onToggleReviewMode]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
@@ -185,23 +209,12 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
   // Auto-exit review mode when no pending left
   useEffect(() => {
     if (reviewMode && reviewTargets.length === 0) {
-      setReviewMode(false);
+      onToggleReviewMode();
     }
-  }, [reviewMode, reviewTargets.length]);
+  }, [reviewMode, reviewTargets.length, onToggleReviewMode]);
 
   const hasFilters = filterType !== 'all' || filterAuthor !== 'all' || filterStatus !== 'all';
   const activeReviewAnn = reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
-
-  const toggleReviewMode = useCallback(() => {
-    setReviewMode(prev => {
-      if (!prev && reviewTargetsRef.current.length > 0) {
-        reviewIndexRef.current = 0;
-        setReviewIndex(0);
-        scrollToAnnotation(reviewTargetsRef.current[0]);
-      }
-      return !prev;
-    });
-  }, [scrollToAnnotation]);
 
   return (
     <div style={{
@@ -232,7 +245,7 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
           </h3>
           {allPending.length > 0 && (
             <button
-              onClick={toggleReviewMode}
+              onClick={onToggleReviewMode}
               title="Keyboard review mode (Ctrl+Shift+R)"
               style={{
                 padding: '2px 8px',
@@ -264,7 +277,7 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
             Reviewing {reviewIndex + 1} / {reviewTargets.length}
           </div>
           <div style={{ color: '#6366f1' }}>
-            Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · Esc: exit
+            Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · E: examine · Esc: exit
           </div>
         </div>
       )}
