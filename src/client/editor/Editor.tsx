@@ -20,11 +20,13 @@ interface EditorProps {
   ydoc: Y.Doc;
   provider: HocuspocusProvider;
   readOnly: boolean;
+  reviewMode?: boolean;
+  activeAnnotationId?: string | null;
   onConnectionChange: (connected: boolean) => void;
   onEditorReady?: (editor: TiptapEditor | null) => void;
 }
 
-export function Editor({ ydoc, provider, readOnly, onConnectionChange, onEditorReady }: EditorProps) {
+export function Editor({ ydoc, provider, readOnly, reviewMode, activeAnnotationId, onConnectionChange, onEditorReady }: EditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -72,8 +74,26 @@ export function Editor({ ydoc, provider, readOnly, onConnectionChange, onEditorR
     return () => onEditorReady?.(null);
   }, [editor, onEditorReady]);
 
+  // Apply active annotation highlight class based on activeAnnotationId
+  useEffect(() => {
+    if (!editor) return;
+    const container = editor.view.dom;
+
+    container.querySelectorAll('.tandem-annotation-active').forEach(el => {
+      el.classList.remove('tandem-annotation-active');
+    });
+
+    if (activeAnnotationId && reviewMode) {
+      container.querySelectorAll(`[data-annotation-id="${activeAnnotationId}"]`).forEach(el => {
+        el.classList.add('tandem-annotation-active');
+      });
+    }
+  }, [editor, activeAnnotationId, reviewMode]);
+
+  const containerClass = reviewMode ? 'tandem-review-dimmed' : '';
+
   return (
-    <div>
+    <div className={containerClass}>
       <EditorContent editor={editor} />
       <style>{`
         .tandem-editor h1 { font-size: 2em; font-weight: 700; margin: 0.67em 0; }
@@ -121,6 +141,22 @@ export function Editor({ ydoc, provider, readOnly, onConnectionChange, onEditorR
         .tandem-comment { cursor: pointer; }
         .tandem-comment:hover { border-bottom-style: solid; }
         .tandem-suggestion { cursor: pointer; }
+
+        /* Review mode dimming — grays out text, keeps annotated spans readable */
+        .tandem-review-dimmed .ProseMirror {
+          color: #9ca3af;
+          transition: color 0.2s;
+        }
+        .tandem-review-dimmed .tandem-highlight,
+        .tandem-review-dimmed .tandem-comment,
+        .tandem-review-dimmed .tandem-suggestion {
+          color: #1f2937;
+        }
+        .tandem-review-dimmed .tandem-annotation-active {
+          outline: 2px solid #6366f1;
+          outline-offset: 1px;
+          border-radius: 2px;
+        }
 
         /* Claude focus paragraph */
         .tandem-claude-focus {

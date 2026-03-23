@@ -8,7 +8,7 @@ import { StatusBar } from './status/StatusBar';
 import { Toolbar } from './editor/toolbar/Toolbar';
 import { DocumentTabs } from './tabs/DocumentTabs';
 import { ReviewSummary } from './panels/ReviewSummary';
-import { DEFAULT_WS_PORT, INTERRUPTION_MODE_DEFAULT, INTERRUPTION_MODE_KEY } from '../shared/constants';
+import { DEFAULT_WS_PORT, INTERRUPTION_MODE_DEFAULT, INTERRUPTION_MODE_KEY, REVIEW_BANNER_THRESHOLD } from '../shared/constants';
 import type { Annotation, InterruptionMode } from '../shared/types';
 import { useAnnotationGate } from './hooks/useAnnotationGate';
 
@@ -46,6 +46,9 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [showReviewSummary, setShowReviewSummary] = useState(false);
   const [reviewSummaryData, setReviewSummaryData] = useState<{ accepted: number; dismissed: number; total: number } | null>(null);
+  const [reviewMode, setReviewMode] = useState(false);
+  const [showBanner, setShowBanner] = useState(false);
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [, setEditorVersion] = useState(0);
 
   const editorRef = useRef<TiptapEditor | null>(null);
@@ -221,7 +224,7 @@ export default function App() {
     }
   }, [activeTabId, setupTabObservers]);
 
-  // Detect review completion: all pending → 0 while resolved > 0 (single pass)
+  // Detect review completion: all pending -> 0 while resolved > 0 (single pass)
   useEffect(() => {
     let pending = 0, accepted = 0, dismissed = 0;
     for (const a of annotations) {
@@ -237,6 +240,22 @@ export default function App() {
     }
     prevPendingRef.current = pending;
   }, [annotations]);
+
+  // Show banner when pending annotations exceed threshold
+  useEffect(() => {
+    const pendingCount = annotations.filter(a => a.status === 'pending').length;
+    if (pendingCount >= REVIEW_BANNER_THRESHOLD && !reviewMode) {
+      setShowBanner(true);
+    }
+    if (pendingCount === 0) {
+      setShowBanner(false);
+    }
+  }, [annotations, reviewMode]);
+
+  const toggleReviewMode = useCallback(() => {
+    setReviewMode(prev => !prev);
+    setShowBanner(false);
+  }, []);
 
   const handleTabSwitch = useCallback((tabId: string) => {
     setActiveTabId(tabId);
@@ -271,6 +290,53 @@ export default function App() {
           onTabClose={handleTabClose}
         />
       )}
+      {showBanner && !reviewMode && (
+        <div style={{
+          padding: '8px 16px',
+          background: '#eef2ff',
+          borderBottom: '1px solid #c7d2fe',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '13px',
+          color: '#4338ca',
+        }}>
+          <span>
+            {annotations.filter(a => a.status === 'pending').length} annotations pending review.
+          </span>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={toggleReviewMode}
+              style={{
+                padding: '3px 10px',
+                fontSize: '12px',
+                border: '1px solid #6366f1',
+                borderRadius: '4px',
+                background: '#6366f1',
+                color: 'white',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              Review in sequence
+            </button>
+            <button
+              onClick={() => setShowBanner(false)}
+              style={{
+                padding: '3px 10px',
+                fontSize: '12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '4px',
+                background: 'white',
+                color: '#6b7280',
+                cursor: 'pointer',
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <div style={{ flex: 1, overflow: 'auto', padding: '24px 48px' }}>
           {activeTab ? (
@@ -279,6 +345,8 @@ export default function App() {
               ydoc={activeTab.ydoc}
               provider={activeTab.provider}
               readOnly={readOnly}
+              reviewMode={reviewMode}
+              activeAnnotationId={activeAnnotationId}
               onConnectionChange={setConnected}
               onEditorReady={handleEditorReady}
             />
@@ -295,6 +363,10 @@ export default function App() {
           heldCount={heldCount}
           interruptionMode={interruptionMode}
           onModeChange={setInterruptionMode}
+          reviewMode={reviewMode}
+          onToggleReviewMode={toggleReviewMode}
+          activeAnnotationId={activeAnnotationId}
+          onActiveAnnotationChange={setActiveAnnotationId}
         />
       </div>
       <StatusBar
