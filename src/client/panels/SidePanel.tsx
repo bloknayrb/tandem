@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import * as Y from 'yjs';
-import type { Annotation, AnnotationType } from '../../shared/types';
+import type { Annotation, AnnotationType, InterruptionMode } from '../../shared/types';
 import { HIGHLIGHT_COLORS } from '../../shared/constants';
 import { flatOffsetToPmPos } from '../editor/extensions/annotation';
 
@@ -9,6 +9,9 @@ interface SidePanelProps {
   annotations: Annotation[];
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
+  heldCount?: number;
+  interruptionMode?: InterruptionMode;
+  onModeChange?: (mode: InterruptionMode) => void;
 }
 
 type FilterType = AnnotationType | 'all';
@@ -30,7 +33,7 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor) {
   }
 }
 
-export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
+export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interruptionMode, onModeChange }: SidePanelProps) {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>('all');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -212,6 +215,31 @@ export function SidePanel({ annotations, editor, ydoc }: SidePanelProps) {
       flexDirection: 'column',
       overflowY: 'auto',
     }}>
+      {/* Held-annotation banner */}
+      {heldCount > 0 && (
+        <div style={{
+          padding: '6px 16px',
+          background: '#fef3c7',
+          borderBottom: '1px solid #fde68a',
+          fontSize: '12px',
+          color: '#92400e',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <span>{heldCount} annotation{heldCount !== 1 ? 's' : ''} held</span>
+          <button
+            onClick={() => onModeChange?.('all')}
+            style={{
+              fontSize: '11px', padding: '1px 8px', border: '1px solid #fbbf24',
+              borderRadius: '4px', background: '#fff', color: '#92400e',
+              cursor: 'pointer', fontWeight: 500,
+            }}
+          >
+            Show all
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

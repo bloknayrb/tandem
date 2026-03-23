@@ -16,6 +16,9 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
   purple: 'rgba(156, 39, 176, 0.3)',
 };
 
+export const INTERRUPTION_MODE_DEFAULT = 'all' as const;
+export const INTERRUPTION_MODE_KEY = 'tandem:interruptionMode';
+
 export const CLAUDE_PRESENCE_COLOR = '#6366f1';
 export const CLAUDE_FOCUS_OPACITY = 0.1;
 

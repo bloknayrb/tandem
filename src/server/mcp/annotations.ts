@@ -59,11 +59,12 @@ export function registerAnnotationTools(server: McpServer): void {
       color: z.enum(['yellow', 'red', 'green', 'blue', 'purple']).describe('Highlight color'),
       note: z.string().optional().describe('Optional note for the highlight'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
     },
-    async ({ from, to, color, note, documentId }) => {
+    async ({ from, to, color, note, documentId, priority }) => {
       const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
-      const id = createAnnotation(map, 'highlight', from, to, note || '', { color: color as HighlightColor });
+      const id = createAnnotation(map, 'highlight', from, to, note || '', { color: color as HighlightColor, ...(priority ? { priority } : {}) });
       return mcpSuccess({ annotationId: id });
     }
   );
@@ -76,11 +77,12 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       text: z.string().describe('Comment text'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
     },
-    async ({ from, to, text, documentId }) => {
+    async ({ from, to, text, documentId, priority }) => {
       const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
-      const id = createAnnotation(map, 'comment', from, to, text);
+      const id = createAnnotation(map, 'comment', from, to, text, priority ? { priority } : {});
       return mcpSuccess({ annotationId: id });
     }
   );
@@ -94,11 +96,12 @@ export function registerAnnotationTools(server: McpServer): void {
       newText: z.string().describe('Suggested replacement text'),
       reason: z.string().optional().describe('Reason for the suggestion'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
     },
-    async ({ from, to, newText, reason, documentId }) => {
+    async ({ from, to, newText, reason, documentId, priority }) => {
       const map = getAnnotationsMap(documentId);
       if (!map) return noDocumentError();
-      const id = createAnnotation(map, 'suggestion', from, to, JSON.stringify({ newText, reason: reason || '' }));
+      const id = createAnnotation(map, 'suggestion', from, to, JSON.stringify({ newText, reason: reason || '' }), priority ? { priority } : {});
       return mcpSuccess({ annotationId: id });
     }
   );
