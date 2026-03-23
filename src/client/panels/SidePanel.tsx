@@ -14,6 +14,7 @@ interface SidePanelProps {
   onModeChange?: (mode: InterruptionMode) => void;
   reviewMode: boolean;
   onToggleReviewMode: () => void;
+  onExitReviewMode: () => void;
   activeAnnotationId: string | null;
   onActiveAnnotationChange: (id: string | null) => void;
 }
@@ -37,7 +38,7 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor) {
   }
 }
 
-export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interruptionMode, onModeChange, reviewMode, onToggleReviewMode, activeAnnotationId, onActiveAnnotationChange }: SidePanelProps) {
+export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interruptionMode, onModeChange, reviewMode, onToggleReviewMode, onExitReviewMode, activeAnnotationId, onActiveAnnotationChange }: SidePanelProps) {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>('all');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -190,15 +191,15 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
         const targets = reviewTargetsRef.current;
         const ann = targets[reviewIndexRef.current];
         if (ann) scrollToAnnotation(ann);
-        onToggleReviewMode();
+        onExitReviewMode();
       } else if (e.key === 'Escape') {
-        onToggleReviewMode();
+        onExitReviewMode();
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [reviewMode, navigateReview, acceptCurrent, dismissCurrent, scrollToAnnotation, onToggleReviewMode]);
+  }, [reviewMode, navigateReview, acceptCurrent, dismissCurrent, scrollToAnnotation, onToggleReviewMode, onExitReviewMode]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
@@ -212,9 +213,9 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
   // Auto-exit review mode when no pending left
   useEffect(() => {
     if (reviewMode && reviewTargets.length === 0) {
-      onToggleReviewMode();
+      onExitReviewMode();
     }
-  }, [reviewMode, reviewTargets.length, onToggleReviewMode]);
+  }, [reviewMode, reviewTargets.length, onExitReviewMode]);
 
   const hasFilters = filterType !== 'all' || filterAuthor !== 'all' || filterStatus !== 'all';
   const activeReviewAnn = reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;

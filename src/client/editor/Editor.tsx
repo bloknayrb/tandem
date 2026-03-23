@@ -84,7 +84,7 @@ export function Editor({ ydoc, provider, readOnly, reviewMode, activeAnnotationI
     });
 
     if (activeAnnotationId && reviewMode) {
-      container.querySelectorAll(`[data-annotation-id="${activeAnnotationId}"]`).forEach(el => {
+      container.querySelectorAll(`[data-annotation-id="${CSS.escape(activeAnnotationId)}"]`).forEach(el => {
         el.classList.add('tandem-annotation-active');
       });
     }

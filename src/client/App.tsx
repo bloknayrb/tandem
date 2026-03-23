@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
@@ -241,19 +241,25 @@ export default function App() {
     prevPendingRef.current = pending;
   }, [annotations]);
 
+  const pendingCount = useMemo(() => annotations.filter(a => a.status === 'pending').length, [annotations]);
+
   // Show banner when pending annotations exceed threshold
   useEffect(() => {
-    const pendingCount = annotations.filter(a => a.status === 'pending').length;
     if (pendingCount >= REVIEW_BANNER_THRESHOLD && !reviewMode) {
       setShowBanner(true);
     }
     if (pendingCount === 0) {
       setShowBanner(false);
     }
-  }, [annotations, reviewMode]);
+  }, [pendingCount, reviewMode]);
 
   const toggleReviewMode = useCallback(() => {
     setReviewMode(prev => !prev);
+    setShowBanner(false);
+  }, []);
+
+  const exitReviewMode = useCallback(() => {
+    setReviewMode(false);
     setShowBanner(false);
   }, []);
 
@@ -302,7 +308,7 @@ export default function App() {
           color: '#4338ca',
         }}>
           <span>
-            {annotations.filter(a => a.status === 'pending').length} annotations pending review.
+            {pendingCount} annotations pending review.
           </span>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
@@ -365,6 +371,7 @@ export default function App() {
           onModeChange={setInterruptionMode}
           reviewMode={reviewMode}
           onToggleReviewMode={toggleReviewMode}
+          onExitReviewMode={exitReviewMode}
           activeAnnotationId={activeAnnotationId}
           onActiveAnnotationChange={setActiveAnnotationId}
         />
