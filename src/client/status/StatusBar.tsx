@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CLAUDE_PRESENCE_COLOR, INTERRUPTION_MODE_KEY, INTERRUPTION_MODE_DEFAULT } from '../../shared/constants';
+import { CLAUDE_PRESENCE_COLOR } from '../../shared/constants';
 import type { InterruptionMode } from '../../shared/types';
 
 interface StatusBarProps {

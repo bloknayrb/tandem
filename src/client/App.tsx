@@ -34,7 +34,8 @@ export default function App() {
   // Interruption mode — persisted to localStorage
   const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
     const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
-    return (saved as InterruptionMode) ?? INTERRUPTION_MODE_DEFAULT;
+    const validModes: InterruptionMode[] = ['all', 'urgent-only', 'paused'];
+    return validModes.includes(saved as InterruptionMode) ? (saved as InterruptionMode) : INTERRUPTION_MODE_DEFAULT;
   });
   useEffect(() => { localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode); }, [interruptionMode]);
 
