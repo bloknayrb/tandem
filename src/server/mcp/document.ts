@@ -256,9 +256,18 @@ export function verifyAndResolveRange(
   if (!textSnapshot) return { valid: true };
   const fullText = extractText(doc);
   if (fullText.slice(from, to) === textSnapshot) return { valid: true };
-  const idx = fullText.indexOf(textSnapshot);
-  if (idx === -1) return { valid: false, gone: true };
-  return { valid: false, gone: false, resolvedFrom: idx, resolvedTo: idx + textSnapshot.length };
+  // Find all occurrences and pick the one closest to the original position
+  const candidates: number[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const idx = fullText.indexOf(textSnapshot, searchFrom);
+    if (idx === -1) break;
+    candidates.push(idx);
+    searchFrom = idx + 1;
+  }
+  if (candidates.length === 0) return { valid: false, gone: true };
+  const best = candidates.reduce((a, b) => Math.abs(a - from) <= Math.abs(b - from) ? a : b);
+  return { valid: false, gone: false, resolvedFrom: best, resolvedTo: best + textSnapshot.length };
 }
 
 export interface ResolvedOffset {
@@ -471,8 +480,11 @@ export function registerDocumentTools(server: McpServer): void {
         if (e.code === 'ENOENT') {
           return mcpError('FILE_NOT_FOUND', `File not found: ${resolved}`);
         }
-        if (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES') {
+        if (e.code === 'EBUSY' || e.code === 'EPERM') {
           return mcpError('FILE_LOCKED', `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`);
+        }
+        if (e.code === 'EACCES') {
+          return mcpError('PERMISSION_DENIED', `Permission denied — check file permissions for: ${resolved}`);
         }
         return mcpError('FORMAT_ERROR', getErrorMessage(err));
       }
@@ -583,10 +595,25 @@ export function registerDocumentTools(server: McpServer): void {
       to: z.number().describe('End position (character offset)'),
       newText: z.string().describe('Replacement text (single paragraph — no newlines)'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
-    async ({ from, to, newText, documentId }) => {
+    async ({ from, to, newText, documentId, textSnapshot }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
+
+      // Verify range hasn't gone stale before mutating
+      if (textSnapshot) {
+        const result = verifyAndResolveRange(r.doc, from, to, textSnapshot);
+        if (!result.valid) {
+          if (result.gone) {
+            return mcpError('RANGE_STALE', 'Target text no longer exists in the document.');
+          }
+          return mcpError('RANGE_STALE', 'Target text has moved. Use resolvedFrom/resolvedTo to retry.', {
+            resolvedFrom: result.resolvedFrom,
+            resolvedTo: result.resolvedTo,
+          });
+        }
+      }
 
       const docState = getCurrentDoc(documentId);
       if (docState?.readOnly) {
