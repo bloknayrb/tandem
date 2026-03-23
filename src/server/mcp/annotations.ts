@@ -130,11 +130,28 @@ export function registerAnnotationTools(server: McpServer): void {
   );
 
   server.tool(
+    'tandem_flag',
+    'Flag a text range for attention (e.g., issues, concerns, or items needing review)',
+    {
+      from: z.number().describe('Start position'),
+      to: z.number().describe('End position'),
+      note: z.string().optional().describe('Reason for flagging'),
+      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+    },
+    async ({ from, to, note, documentId }) => {
+      const map = getAnnotationsMap(documentId);
+      if (!map) return noDocumentError();
+      const id = createAnnotation(map, 'flag', from, to, note || '');
+      return mcpSuccess({ annotationId: id });
+    }
+  );
+
+  server.tool(
     'tandem_getAnnotations',
     'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox.',
     {
       author: z.enum(['user', 'claude']).optional().describe('Filter by author'),
-      type: z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question']).optional().describe('Filter by type'),
+      type: z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question', 'flag']).optional().describe('Filter by type'),
       status: z.enum(['pending', 'accepted', 'dismissed']).optional().describe('Filter by status'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },

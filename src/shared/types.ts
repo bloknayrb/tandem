@@ -1,5 +1,5 @@
 // Annotation types
-export type AnnotationType = 'highlight' | 'comment' | 'suggestion' | 'overlay' | 'question';
+export type AnnotationType = 'highlight' | 'comment' | 'suggestion' | 'overlay' | 'question' | 'flag';
 export type AnnotationStatus = 'pending' | 'accepted' | 'dismissed';
 export type AnnotationPriority = 'normal' | 'urgent';
 export type InterruptionMode = 'all' | 'urgent-only' | 'paused';
