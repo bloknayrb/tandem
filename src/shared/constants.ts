@@ -20,6 +20,11 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
 export const INTERRUPTION_MODE_DEFAULT = 'all' as const;
 export const INTERRUPTION_MODE_KEY = 'tandem:interruptionMode';
 
+// Large file thresholds
+export const CHARS_PER_PAGE = 3_000;
+export const LARGE_FILE_PAGE_THRESHOLD = 50;
+export const VERY_LARGE_FILE_PAGE_THRESHOLD = 100;
+
 export const CLAUDE_PRESENCE_COLOR = '#6366f1';
 export const CLAUDE_FOCUS_OPACITY = 0.1;
 

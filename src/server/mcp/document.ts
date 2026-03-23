@@ -5,7 +5,12 @@ import fsSync from 'fs';
 import path from 'path';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
-import { MAX_FILE_SIZE } from '../../shared/constants.js';
+import {
+  MAX_FILE_SIZE,
+  CHARS_PER_PAGE,
+  LARGE_FILE_PAGE_THRESHOLD,
+  VERY_LARGE_FILE_PAGE_THRESHOLD,
+} from '../../shared/constants.js';
 import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
 import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
 import {
@@ -230,6 +235,32 @@ export function getHeadingPrefixLength(node: Y.XmlElement): number {
   return 0;
 }
 
+// -- RANGE_STALE detection ---------------------------------------------------
+
+export type RangeVerifyResult =
+  | { valid: true }
+  | { valid: false; gone: true }
+  | { valid: false; gone: false; resolvedFrom: number; resolvedTo: number };
+
+/**
+ * Check whether [from, to] still contains textSnapshot. If not, search the
+ * full document and return the relocated range or { gone: true }.
+ * When textSnapshot is omitted the check is a no-op (always valid).
+ */
+export function verifyAndResolveRange(
+  doc: Y.Doc,
+  from: number,
+  to: number,
+  textSnapshot: string | undefined,
+): RangeVerifyResult {
+  if (!textSnapshot) return { valid: true };
+  const fullText = extractText(doc);
+  if (fullText.slice(from, to) === textSnapshot) return { valid: true };
+  const idx = fullText.indexOf(textSnapshot);
+  if (idx === -1) return { valid: false, gone: true };
+  return { valid: false, gone: false, resolvedFrom: idx, resolvedTo: idx + textSnapshot.length };
+}
+
 export interface ResolvedOffset {
   elementIndex: number;
   textOffset: number;
@@ -410,6 +441,15 @@ export function registerDocumentTools(server: McpServer): void {
 
         const textContent = extractText(doc);
         const textLen = textContent.length;
+        const pageEstimate = Math.ceil(textLen / CHARS_PER_PAGE);
+
+        const warnings: string[] = [];
+        if (pageEstimate >= VERY_LARGE_FILE_PAGE_THRESHOLD) {
+          warnings.push(`Very large document (~${pageEstimate} pages). Consider splitting into smaller files.`);
+        } else if (pageEstimate >= LARGE_FILE_PAGE_THRESHOLD) {
+          warnings.push(`Large document (~${pageEstimate} pages). Operations may be slower than usual.`);
+        }
+
         return mcpSuccess({
           documentId: id,
           filePath: resolved,
@@ -417,8 +457,9 @@ export function registerDocumentTools(server: McpServer): void {
           format,
           readOnly,
           tokenEstimate: Math.ceil(textLen / 4),
-          pageEstimate: Math.ceil(textLen / 3000),
+          pageEstimate,
           restoredFromSession,
+          ...(warnings.length > 0 ? { warnings } : {}),
           message: restoredFromSession
             ? `Session restored: ${fileName} (annotations preserved)`
             : readOnly
@@ -426,11 +467,14 @@ export function registerDocumentTools(server: McpServer): void {
               : `Document opened: ${fileName}`,
         });
       } catch (err: unknown) {
-        const message = getErrorMessage(err);
-        const code = message.includes('ENOENT') ? 'FILE_NOT_FOUND'
-          : message.includes('EBUSY') ? 'FILE_LOCKED'
-          : 'FORMAT_ERROR';
-        return mcpError(code, message);
+        const e = err as NodeJS.ErrnoException;
+        if (e.code === 'ENOENT') {
+          return mcpError('FILE_NOT_FOUND', `File not found: ${resolved}`);
+        }
+        if (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES') {
+          return mcpError('FILE_LOCKED', `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`);
+        }
+        return mcpError('FORMAT_ERROR', getErrorMessage(err));
       }
     }
   );
