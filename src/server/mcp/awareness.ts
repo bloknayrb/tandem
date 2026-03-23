@@ -76,7 +76,7 @@ export function registerAwarenessTools(server: McpServer): void {
 
   server.tool(
     'tandem_checkInbox',
-    'Check for user actions you haven\'t seen yet — new highlights, comments, questions, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.',
+    'Check for user actions you haven\'t seen yet — new highlights, comments, questions, flags, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.',
     {
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },

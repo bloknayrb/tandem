@@ -58,7 +58,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts
 - [x] Phase 1 - Document Groups: multi-document tabs, per-doc rooms, documentId on all tools, tab bar UI
 - [x] Phase 1 - Polish: keyboard review mode (Tab/Y/N), annotation filtering, bulk accept/dismiss, review summary
-- [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument (24 total MCP tools)
+- [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument, tandem_flag (25 total MCP tools)
 
 **Infrastructure fixes (2026-03-20 — 2026-03-22):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)

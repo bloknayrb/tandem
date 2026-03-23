@@ -427,6 +427,8 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     comment: 'Comments',
     suggestion: 'Suggestions',
     overlay: 'Overlays',
+    question: 'Questions',
+    flag: 'Flags',
   };
 
   for (const [type, anns] of Object.entries(groups)) {

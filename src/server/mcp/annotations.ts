@@ -137,11 +137,15 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       note: z.string().optional().describe('Reason for flagging'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
+      textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
-    async ({ from, to, note, documentId }) => {
-      const map = getAnnotationsMap(documentId);
-      if (!map) return noDocumentError();
-      const id = createAnnotation(map, 'flag', from, to, note || '');
+    async ({ from, to, note, documentId, priority, textSnapshot }) => {
+      const da = getDocAndAnnotations(documentId);
+      if (!da) return noDocumentError();
+      const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
+      if (staleError) return staleError;
+      const id = createAnnotation(da.map, 'flag', from, to, note || '', priority ? { priority } : {});
       return mcpSuccess({ annotationId: id });
     }
   );

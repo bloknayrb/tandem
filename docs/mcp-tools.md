@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 24 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 25 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -378,6 +378,27 @@ tandem_suggest({
   newText: "$13.1 million",
   reason: "Q3 revenue was updated in the latest financial report"
 })
+```
+
+---
+
+### tandem_flag
+
+Flag a text range for attention (e.g., issues, concerns, or items needing review). Renders as a red underline decoration.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from` | number | Yes | Start position (character offset) |
+| `to` | number | Yes | End position (character offset) |
+| `note` | string | No | Reason for flagging |
+| `documentId` | string | No | Target document ID (defaults to active document) |
+| `priority` | `'normal'` \| `'urgent'` | No | Annotation priority — urgent bypasses Hold mode |
+| `textSnapshot` | string | No | Expected text at range — returns RANGE_STALE if moved |
+
+**Returns:** `{ annotationId: string }`
+
+```js
+tandem_flag({ from: 100, to: 120, note: "This claim needs a citation" })
 ```
 
 ---

@@ -38,9 +38,10 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
 
   useEffect(() => {
     if (!editor) return;
+    const ed = editor;
 
     function onSelectionUpdate() {
-      const { from, to } = editor!.state.selection;
+      const { from, to } = ed.state.selection;
       const next = from !== to;
       setHasSelection(prev => prev === next ? prev : next);
     }
@@ -366,41 +367,35 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
         onMouseDown={handleSuggestStart}
       />
       {suggestMode && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <input
-            ref={suggestInputRef}
-            type="text"
-            value={suggestText}
-            onChange={e => setSuggestText(e.target.value)}
-            onKeyDown={handleSuggestKeyDown}
-            placeholder="Replacement text..."
-            style={{
-              padding: '3px 8px',
-              fontSize: '13px',
-              border: '1px solid #8b5cf6',
-              borderRadius: '4px',
-              outline: 'none',
-              width: '160px',
-            }}
-          />
-          <input
-            type="text"
-            value={suggestReason}
-            onChange={e => setSuggestReason(e.target.value)}
-            onKeyDown={handleSuggestKeyDown}
-            placeholder="Reason (optional)"
-            style={{
-              padding: '3px 8px',
-              fontSize: '13px',
-              border: '1px solid #d1d5db',
-              borderRadius: '4px',
-              outline: 'none',
-              width: '140px',
-            }}
-          />
-          <ToolbarButton label="Suggest" disabled={!suggestText.trim()} onClick={handleSuggestSubmit} />
-          <ToolbarButton label="Cancel" disabled={false} onClick={handleSuggestCancel} />
-        </div>
+        <InputGroup
+          inputRef={suggestInputRef}
+          value={suggestText}
+          onChange={setSuggestText}
+          onKeyDown={handleSuggestKeyDown}
+          onSubmit={handleSuggestSubmit}
+          onCancel={handleSuggestCancel}
+          placeholder="Replacement text..."
+          submitLabel="Suggest"
+          borderColor="#8b5cf6"
+          canSubmit={!!suggestText.trim()}
+          secondaryInput={
+            <input
+              type="text"
+              value={suggestReason}
+              onChange={e => setSuggestReason(e.target.value)}
+              onKeyDown={handleSuggestKeyDown}
+              placeholder="Reason (optional)"
+              style={{
+                padding: '3px 8px',
+                fontSize: '13px',
+                border: '1px solid #d1d5db',
+                borderRadius: '4px',
+                outline: 'none',
+                width: '140px',
+              }}
+            />
+          }
+        />
       )}
 
       <ToolbarButton
@@ -436,8 +431,8 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
   );
 }
 
-/** Reusable inline input group for comment/question modes */
-function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, placeholder, submitLabel, borderColor, canSubmit }: {
+/** Reusable inline input group for comment/question/suggest modes */
+function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, placeholder, submitLabel, borderColor, canSubmit, secondaryInput }: {
   inputRef: React.RefObject<HTMLInputElement | null>;
   value: string;
   onChange: (v: string) => void;
@@ -448,6 +443,7 @@ function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, 
   submitLabel: string;
   borderColor: string;
   canSubmit: boolean;
+  secondaryInput?: React.ReactNode;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -467,6 +463,7 @@ function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, 
           width: '200px',
         }}
       />
+      {secondaryInput}
       <ToolbarButton label={submitLabel} disabled={!canSubmit} onClick={onSubmit} />
       <ToolbarButton label="Cancel" disabled={false} onClick={onCancel} />
     </div>
