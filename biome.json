@@ -18,6 +18,7 @@
   "files": {
     "includes": [
       "src/**/*.{ts,tsx,json}",
+      "tests/**/*.{ts,tsx}",
       "*.json",
       "!dist/**",
       "!node_modules/**",
