@@ -16,6 +16,7 @@ import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
   startAutoSave, stopAutoSave, isAutoSaveRunning,
+  saveCtrlSession, loadCtrlSession, restoreCtrlDoc,
 } from '../session/manager.js';
 import * as Y from 'yjs';
 
@@ -76,6 +77,19 @@ export async function saveCurrentSession(): Promise<void> {
   for (const [id, state] of openDocs) {
     const doc = getOrCreateDocument(id);
     await saveSession(state.filePath, state.format, doc);
+  }
+  // Also save the ctrl doc (chat history)
+  const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+  await saveCtrlSession(ctrlDoc);
+}
+
+/** Restore __tandem_ctrl__ chat history from session file if available. */
+export async function restoreCtrlSession(): Promise<void> {
+  const saved = await loadCtrlSession();
+  if (saved) {
+    const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+    restoreCtrlDoc(ctrlDoc, saved);
+    console.error('[Tandem] Restored chat history from session');
   }
 }
 

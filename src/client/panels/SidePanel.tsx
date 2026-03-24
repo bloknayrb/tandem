@@ -222,8 +222,7 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
 
   return (
     <div style={{
-      width: '300px',
-      borderLeft: '1px solid #e5e7eb',
+      width: '100%',
       background: '#fafafa',
       display: 'flex',
       flexDirection: 'column',

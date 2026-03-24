@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { Editor } from './editor/Editor';
 import { SidePanel } from './panels/SidePanel';
+import { ChatPanel } from './panels/ChatPanel';
 import { StatusBar } from './status/StatusBar';
 import { Toolbar } from './editor/toolbar/Toolbar';
 import { DocumentTabs } from './tabs/DocumentTabs';
@@ -48,6 +49,7 @@ export default function App() {
   const [reviewSummaryData, setReviewSummaryData] = useState<{ accepted: number; dismissed: number; total: number } | null>(null);
   const [reviewMode, setReviewMode] = useState(false);
   const [showBanner, setShowBanner] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [, setEditorVersion] = useState(0);
 
@@ -362,19 +364,70 @@ export default function App() {
             </div>
           )}
         </div>
-        <SidePanel
-          annotations={visibleAnnotations}
-          editor={editorRef.current}
-          ydoc={activeTab?.ydoc ?? null}
-          heldCount={heldCount}
-          interruptionMode={interruptionMode}
-          onModeChange={setInterruptionMode}
-          reviewMode={reviewMode}
-          onToggleReviewMode={toggleReviewMode}
-          onExitReviewMode={exitReviewMode}
-          activeAnnotationId={activeAnnotationId}
-          onActiveAnnotationChange={setActiveAnnotationId}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', width: '300px', borderLeft: '1px solid #e5e7eb' }}>
+          {/* Panel toggle tabs */}
+          <div style={{
+            display: 'flex',
+            borderBottom: '1px solid #e5e7eb',
+            background: '#f9fafb',
+          }}>
+            <button
+              onClick={() => setShowChat(false)}
+              style={{
+                flex: 1,
+                padding: '8px',
+                fontSize: '12px',
+                fontWeight: showChat ? 400 : 600,
+                border: 'none',
+                borderBottom: showChat ? 'none' : '2px solid #6366f1',
+                background: 'transparent',
+                cursor: 'pointer',
+                color: showChat ? '#6b7280' : '#6366f1',
+              }}
+            >
+              Annotations
+            </button>
+            <button
+              onClick={() => setShowChat(true)}
+              style={{
+                flex: 1,
+                padding: '8px',
+                fontSize: '12px',
+                fontWeight: showChat ? 600 : 400,
+                border: 'none',
+                borderBottom: showChat ? '2px solid #6366f1' : 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                color: showChat ? '#6366f1' : '#6b7280',
+              }}
+            >
+              Chat
+            </button>
+          </div>
+          {/* Panel content */}
+          {showChat ? (
+            <ChatPanel
+              ctrlYdoc={bootstrapRef.current?.ydoc ?? null}
+              editor={editorRef.current}
+              activeDocId={activeTabId}
+              openDocs={tabs.map(t => ({ id: t.id, fileName: t.fileName }))}
+            />
+          ) : (
+            <SidePanel
+              annotations={visibleAnnotations}
+              editor={editorRef.current}
+              ydoc={activeTab?.ydoc ?? null}
+              heldCount={heldCount}
+              interruptionMode={interruptionMode}
+              onModeChange={setInterruptionMode}
+              reviewMode={reviewMode}
+              onToggleReviewMode={toggleReviewMode}
+              onExitReviewMode={exitReviewMode}
+              activeAnnotationId={activeAnnotationId}
+              onActiveAnnotationChange={setActiveAnnotationId}
+            />
+          )}
+        </div>
       </div>
       <StatusBar
         connected={connected}

@@ -91,6 +91,58 @@ export async function deleteSession(filePath: string): Promise<void> {
   }
 }
 
+// --- __tandem_ctrl__ persistence (chat history) ---
+
+const CTRL_SESSION_KEY = '__tandem_ctrl__';
+
+/** Save the __tandem_ctrl__ Y.Doc (chat history) */
+export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
+  if (!sessionDirReady) {
+    await fs.mkdir(SESSION_DIR, { recursive: true });
+    sessionDirReady = true;
+  }
+
+  // Prune chat to newest 200 messages before saving
+  const chatMap = doc.getMap('chat');
+  const entries: Array<{ id: string; timestamp: number }> = [];
+  chatMap.forEach((value, key) => {
+    const msg = value as { timestamp: number };
+    entries.push({ id: key, timestamp: msg.timestamp });
+  });
+  if (entries.length > 200) {
+    entries.sort((a, b) => a.timestamp - b.timestamp);
+    const toDelete = entries.slice(0, entries.length - 200);
+    for (const entry of toDelete) {
+      chatMap.delete(entry.id);
+    }
+  }
+
+  const state = Y.encodeStateAsUpdate(doc);
+  const ydocState = Buffer.from(state).toString('base64');
+
+  const data = { ydocState, lastAccessed: Date.now() };
+  const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
+  await fs.writeFile(sessionPath, JSON.stringify(data), 'utf-8');
+}
+
+/** Load the __tandem_ctrl__ session if it exists */
+export async function loadCtrlSession(): Promise<string | null> {
+  const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
+  try {
+    const content = await fs.readFile(sessionPath, 'utf-8');
+    const data = JSON.parse(content);
+    return data.ydocState ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Restore a __tandem_ctrl__ Y.Doc from base64 state */
+export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
+  const state = Buffer.from(base64State, 'base64');
+  Y.applyUpdate(doc, new Uint8Array(state));
+}
+
 /** Delete sessions older than 30 days */
 export async function cleanupSessions(): Promise<number> {
   let cleaned = 0;

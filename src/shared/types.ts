@@ -122,3 +122,19 @@ export interface SessionData {
   sourceFileMtime: number; // Source file mtime at save — detect external changes on resume
   lastAccessed: number;
 }
+
+/** Chat message between user and Claude, stored in Y.Map('chat') on __tandem_ctrl__ */
+export interface ChatMessage {
+  id: string;
+  author: 'user' | 'claude';
+  text: string;
+  timestamp: number;
+  documentId?: string;
+  anchor?: {
+    from: number;
+    to: number;
+    textSnapshot: string;
+  };
+  replyTo?: string;
+  read: boolean;
+}
