@@ -49,7 +49,14 @@ export async function saveSession(
     sessionDirReady = true;
   }
   const sessionPath = path.join(SESSION_DIR, `${key}.json`);
-  await fs.writeFile(sessionPath, JSON.stringify(data), 'utf-8');
+  const tmpPath = `${sessionPath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(data), 'utf-8');
+  try {
+    await fs.rename(tmpPath, sessionPath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 }
 
 /** Load a session file if it exists */
@@ -122,7 +129,14 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
 
   const data = { ydocState, lastAccessed: Date.now() };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
-  await fs.writeFile(sessionPath, JSON.stringify(data), 'utf-8');
+  const tmpPath = `${sessionPath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(data), 'utf-8');
+  try {
+    await fs.rename(tmpPath, sessionPath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 }
 
 /** Load the __tandem_ctrl__ session if it exists */
