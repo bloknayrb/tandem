@@ -20,7 +20,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ### Client (src/client/)
 - Tiptap editor with collaboration extensions
 - Connects to Hocuspocus via WebSocket (@hocuspocus/provider)
-- App.tsx manages multiple OpenTab objects (one per open document), each with its own Y.Doc + provider
+- App.tsx is layout + UI state only; `useYjsSync` hook (src/client/hooks/) manages OpenTab objects (one per open document), each with its own Y.Doc + provider
+- `DocListEntry` and `OpenTab` types live in `src/client/types.ts`
 - DocumentTabs shows tab bar; tab switching passes different ydoc/provider to Editor (key-based remount)
 - Annotations observed from Y.Map('annotations') on the active tab's Y.Doc
 - AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
