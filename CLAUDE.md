@@ -41,6 +41,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Server logs use console.error (stdout reserved for MCP protocol in stdio mode; defense-in-depth in HTTP mode)
 - Ranges use `resolveRange()` for safe targeting (not raw offsets)
 - Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
+- Annotation ranges use Yjs RelativePosition (`relRange` field) for CRDT-anchored positions that survive concurrent edits. Flat offsets in `range` are the fallback. `refreshRange()` resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it.
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
 - User→Claude communication via `tandem_checkInbox` (annotation actions, responses, and chat messages) and `tandem_reply` (Claude's chat responses). Chat sidebar provides freeform conversation alongside annotation-based review. Call `tandem_checkInbox` between tasks.
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
@@ -73,6 +74,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] fix(ci): add `@types/node` and split client/server tsconfigs to resolve typecheck failures
 - [x] fix(ci): update OIDC permissions in claude-review workflow
 - [x] fix(server): per-session MCP transport rotation so `/mcp` restart works without server restart (Issue #18)
+- [x] feat(annotations): migrate ranges to Yjs RelativePosition for CRDT-anchored positions (Issue #37)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration

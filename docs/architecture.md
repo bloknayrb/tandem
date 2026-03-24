@@ -228,6 +228,29 @@ Some text here
 
 The `flatOffsetToPmPos` function (in `annotation.ts`) and `pmPosToFlatOffset` function (in `awareness.ts`) handle this conversion. MCP tool users never need to think about PM positions.
 
+### Yjs RelativePosition (CRDT-anchored ranges)
+
+Flat offsets go stale when the document is edited — an annotation at offset 10 stays at offset 10 even if text was inserted before it. **Yjs RelativePosition** solves this by encoding positions as references to CRDT Item IDs, which automatically track through concurrent edits.
+
+Annotations store an optional `relRange` field alongside the flat `range`:
+
+```typescript
+interface Annotation {
+  range: { from: number; to: number };      // flat offsets (fallback)
+  relRange?: { fromRel: unknown; toRel: unknown }; // CRDT-anchored (preferred)
+}
+```
+
+**Creation:** Server computes `relRange` via `flatOffsetToRelPos()` when creating annotations. The `assoc` parameter controls boundary behavior: `0` for range start (stick right — annotation grows on insert at boundary), `-1` for range end (stick left — annotation doesn't grow).
+
+**Reading:** `refreshRange()` resolves `relRange` back to flat offsets, correcting any drift. It also lazily attaches `relRange` to annotations that lack it (user-created or legacy). All server-side read paths (`tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox`) call `refreshRange` before returning data.
+
+**Client rendering:** `buildDecorations()` prefers `relRange` resolution via `relRangeToPmPositions()`, bypassing the flat-offset-to-PM conversion and its heading-prefix math. Falls back to `flatOffsetToPmPos()` when `relRange` is absent or can't resolve.
+
+**Conversion utilities** (in `document-model.ts`):
+- `flatOffsetToRelPos(doc, offset, assoc)` — flat offset → serialized RelativePosition JSON
+- `relPosToFlatOffset(doc, relPosJson)` — serialized RelativePosition → flat offset (or null if deleted)
+
 ## Security
 
 - Server binds to `127.0.0.1` only -- not accessible from network
