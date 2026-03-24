@@ -72,6 +72,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] fix(server): normalize path in `docIdFromPath` for cross-platform basename extraction (Windows backslash vs Linux)
 - [x] fix(ci): add `@types/node` and split client/server tsconfigs to resolve typecheck failures
 - [x] fix(ci): update OIDC permissions in claude-review workflow
+- [x] fix(server): per-session MCP transport rotation so `/mcp` restart works without server restart (Issue #18)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -81,6 +82,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 
 ## Known Issues
 - **MCP stdio disconnect (Issue #8):** Resolved by migrating to Streamable HTTP transport. Stdio fallback (`TANDEM_TRANSPORT=stdio`) still has this issue — use HTTP mode (default).
+- **MCP session re-initialization (Issue #18):** Resolved. Transport is now rotated per session — Claude Code's `/mcp` restart works without restarting the Tandem server.
 - **Y.js "Invalid access" warnings:** Harmless stderr noise during session restore. Data syncs correctly.
 - **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:server` first.
 

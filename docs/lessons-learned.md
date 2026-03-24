@@ -120,10 +120,10 @@ t.ydoc.destroy();
 
 **Impact:** Without explicit unobserve, the Y.Map retains a reference to the observer closure, preventing GC of the closure's captured variables. `ydoc.destroy()` stops further event delivery but doesn't always free the observer reference depending on Y.js internals.
 
-## 14. Streamable HTTP Transport Requires Stateful Mode
+## 14. Streamable HTTP Transport: Per-Session Lifecycle
 
-**Problem:** The MCP SDK's `StreamableHTTPServerTransport` in stateless mode (`sessionIdGenerator: undefined`) creates a new transport per request that crashes on the second call, because `server.connect(transport)` binds internal state to the first transport instance.
+**Problem:** The MCP SDK's `StreamableHTTPServerTransport` rejects re-initialization on an already-initialized transport (400 "Server already initialized"). A single long-lived transport means Claude Code's `/mcp` restart fails silently — the only workaround was restarting the entire Tandem server.
 
-**Solution:** Use stateful mode with `sessionIdGenerator: () => randomUUID()`. Create one transport, connect once, route all HTTP requests through it. The transport manages session IDs via `Mcp-Session-Id` headers automatically.
+**Solution:** Rotate the transport on each `initialize` request while reusing the long-lived `McpServer` (tool registrations in `_registeredTools` survive `close()`/`connect()` cycles). The POST handler uses the SDK's `isInitializeRequest()` to detect initialize messages and calls `connectFreshTransport()`, which tears down the old transport via `mcpServer.close()` and creates a fresh one. A promise-chain lock serializes concurrent rotations. Stateless mode (`sessionIdGenerator: undefined`) still doesn't work — each transport needs `sessionIdGenerator` for session tracking.
 
-**Impact:** Choosing stateless mode would silently break after the first tool call — exactly mimicking Issue #8 but for a different reason.
+**Impact:** Without per-session rotation, every `/mcp` restart in Claude Code requires a full server restart. The SDK's `Protocol.connect()` explicitly supports reconnection ("Call close() before connecting to a new transport").
