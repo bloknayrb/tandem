@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 25 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 26 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -658,3 +658,31 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 - Each annotation is surfaced only once -- subsequent calls return only new items.
 - `userActions`: annotations created by the user (highlights, comments, questions).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
+- `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
+
+---
+
+### tandem_reply
+
+Send a chat message to the user via the ChatPanel sidebar. Session-scoped (lives on `__tandem_ctrl__`, not per-document).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `text` | string | yes | Message text to send |
+| `replyTo` | string | no | ID of the user message being replied to |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "sent": true, "messageId": "msg_1710936000000_a1b2c3" }
+```
+
+**Example:**
+```
+tandem_reply({ text: "I've finished reviewing the cost section. Two figures need updating.", replyTo: "msg_1710935000000_x9y8z7" })
+```
+
+**Notes:**
+- Chat messages are stored in `Y.Map('chat')` on the `__tandem_ctrl__` Y.Doc, so they persist across the session but are not tied to a specific document.
+- The `documentId` field captures which document was active for context, but the message itself lives on the control channel.
+- New user messages appear in `tandem_checkInbox` via the `chatMessages` array.

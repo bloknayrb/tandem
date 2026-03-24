@@ -41,7 +41,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Ranges use `resolveRange()` for safe targeting (not raw offsets)
 - Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
-- User→Claude communication via `tandem_checkInbox`: user actions (highlights, comments, questions) and responses (accepted/dismissed) are surfaced once per call. Call between tasks.
+- User→Claude communication via `tandem_checkInbox` (annotation actions, responses, and chat messages) and `tandem_reply` (Claude's chat responses). Chat sidebar provides freeform conversation alongside annotation-based review. Call `tandem_checkInbox` between tasks.
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
 - Server broadcasts `openDocuments` list via Y.Map('documentMeta') on each doc's Y.Doc. Client listens and syncs tabs.
 
@@ -58,7 +58,9 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts
 - [x] Phase 1 - Document Groups: multi-document tabs, per-doc rooms, documentId on all tools, tab bar UI
 - [x] Phase 1 - Polish: keyboard review mode (Tab/Y/N), annotation filtering, bulk accept/dismiss, review summary
-- [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument, tandem_flag (25 total MCP tools)
+- [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument, tandem_flag (26 total MCP tools)
+- [x] Phase 1.5 - Chat Sidebar: session-scoped chat via Y.Map('chat'), tandem_reply tool, ChatPanel UI
+- [x] Phase 1.5 - Edit sync fix: afterUnloadDocument hook cleans up stale Y.Doc references
 
 **Infrastructure fixes (2026-03-20 — 2026-03-22):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
@@ -79,7 +81,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:server` first.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 24 tools with params, returns, examples
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 26 tools with params, returns, examples
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions

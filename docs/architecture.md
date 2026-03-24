@@ -126,6 +126,41 @@ Claude calls tandem_highlight({ from: 10, to: 20, color: "red", documentId: "rep
     → Targets report.md even though invoice.docx is the active document
 ```
 
+## Chat Data Flow
+
+Chat is **session-scoped**, stored on the `__tandem_ctrl__` Y.Doc (not per-document). The `documentId` field on each message captures which document was active when the message was sent, providing context without fragmenting the conversation.
+
+### Storage
+
+`Y.Map('chat')` on the `__tandem_ctrl__` Y.Doc holds all chat messages keyed by message ID. Each message has `id`, `author` (user/claude), `text`, `timestamp`, and optionally `documentId` and `replyTo`.
+
+### User → Claude
+
+```
+User types message in ChatPanel
+    → ChatPanel writes message to Y.Map('chat') on __tandem_ctrl__ Y.Doc
+    → Yjs syncs update via Hocuspocus WebSocket
+    → Server receives update on __tandem_ctrl__ room
+    → Claude calls tandem_checkInbox
+    → New chat messages returned in chatMessages array
+```
+
+### Claude → User
+
+```
+Claude calls tandem_reply({ text: "...", replyTo: "msg_..." })
+    → MCP server writes message to Y.Map('chat') on __tandem_ctrl__ Y.Doc
+    → Yjs syncs update via Hocuspocus WebSocket
+    → Browser's @hocuspocus/provider on __tandem_ctrl__ receives update
+    → ChatPanel observes Y.Map change and renders the new message
+```
+
+### Session Persistence
+
+Chat state persists across server restarts via the same `saveCtrlSession` / `restoreCtrlSession` lifecycle used for the control channel. The `__tandem_ctrl__` Y.Doc (including `Y.Map('chat')`) is saved to `%LOCALAPPDATA%\tandem\sessions\` and restored on next startup.
+
+---
+
 ## Shared State: Y.Doc
 
 Each open document has its own Y.Doc (one per Hocuspocus room). Each Y.Doc contains:
