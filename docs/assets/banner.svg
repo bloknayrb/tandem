@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 280" width="900" height="280">
+  <rect width="900" height="280" fill="white"/>
+
+  <!-- "Tandem" as single text element -->
+  <text x="60" y="168" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="120" font-weight="500" fill="#1a1a1a" letter-spacing="-3">Tandem</text>
+
+  <!-- Black text cursor (I-beam) between "a" and "n" -->
+  <!-- Aligned to text: top at ascender line (~y=65), bottom at descender (~y=175) -->
+  <g transform="translate(205, 65)">
+    <line x1="-5" y1="0" x2="5" y2="0" stroke="#1a1a1a" stroke-width="2" stroke-linecap="round"/>
+    <line x1="0" y1="0" x2="0" y2="110" stroke="#1a1a1a" stroke-width="2" stroke-linecap="round"/>
+    <line x1="-5" y1="110" x2="5" y2="110" stroke="#1a1a1a" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- Orange text cursor (I-beam) between "e" and "m" -->
+  <g transform="translate(448, 65)">
+    <line x1="-5" y1="0" x2="5" y2="0" stroke="#E07D38" stroke-width="2" stroke-linecap="round"/>
+    <line x1="0" y1="0" x2="0" y2="110" stroke="#E07D38" stroke-width="2" stroke-linecap="round"/>
+    <line x1="-5" y1="110" x2="5" y2="110" stroke="#E07D38" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- Overlapping mouse cursors to the right of "Tandem" -->
+  <!-- White/gray cursor (behind, slightly left and up) -->
+  <g transform="translate(545, 95) scale(0.75)">
+    <path d="M0,0 L0,145 L30,115 L52,160 L68,152 L46,107 L82,107 Z"
+          fill="#d0d0d0" stroke="#333" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+
+  <!-- Orange cursor (in front, offset right and down) -->
+  <g transform="translate(563, 110) scale(0.75)">
+    <path d="M0,0 L0,145 L30,115 L52,160 L68,152 L46,107 L82,107 Z"
+          fill="#E07D38" stroke="#B8652D" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+
+  <!-- Subtitle -->
+  <text x="60" y="222" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="22" font-weight="400" fill="#999" font-style="italic">Collaborative AI-Human Document Editor</text>
+</svg>

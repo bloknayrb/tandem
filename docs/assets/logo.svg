@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="white"/>
+
+  <!-- Left cursor: standard Windows pointer, light gray fill, dark outline -->
+  <!-- Based on the actual Windows aero_arrow cursor geometry -->
+  <g transform="translate(100, 130)">
+    <path d="M0,0 L0,145 L30,115 L52,160 L68,152 L46,107 L82,107 Z"
+          fill="#d0d0d0" stroke="#333" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+
+  <!-- I-beam text cursor in center -->
+  <g transform="translate(256, 155)">
+    <line x1="-14" y1="0" x2="14" y2="0" stroke="#888" stroke-width="5" stroke-linecap="round"/>
+    <line x1="0" y1="0" x2="0" y2="135" stroke="#888" stroke-width="5" stroke-linecap="round"/>
+    <line x1="-14" y1="135" x2="14" y2="135" stroke="#888" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Right cursor: mirrored Windows pointer, orange fill -->
+  <g transform="translate(412, 130) scale(-1,1)">
+    <path d="M0,0 L0,145 L30,115 L52,160 L68,152 L46,107 L82,107 Z"
+          fill="#E07D38" stroke="#B8652D" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+</svg>

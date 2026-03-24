@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tandem Logo Preview</title>
+  <style>
+    body { font-family: system-ui; background: #f0f0f0; padding: 40px; }
+    .preview { margin: 30px 0; }
+    .preview h2 { margin-bottom: 10px; color: #333; }
+    .logo-bg { display: inline-block; background: white; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+    .banner-bg { display: inline-block; background: white; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+    .dark-preview { background: #1e1e2e; padding: 20px; border-radius: 8px; display: inline-block; }
+    .sizes { display: flex; gap: 30px; align-items: end; }
+    .sizes > div { text-align: center; }
+    .sizes label { display: block; margin-top: 8px; color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Tandem Branding Preview</h1>
+
+  <div class="preview">
+    <h2>Logo (original size)</h2>
+    <div class="logo-bg">
+      <img src="logo.svg" width="200" height="200">
+    </div>
+  </div>
+
+  <div class="preview">
+    <h2>Logo at different sizes</h2>
+    <div class="sizes">
+      <div>
+        <div class="logo-bg"><img src="logo.svg" width="128" height="128"></div>
+        <label>128px</label>
+      </div>
+      <div>
+        <div class="logo-bg"><img src="logo.svg" width="64" height="64"></div>
+        <label>64px</label>
+      </div>
+      <div>
+        <div class="logo-bg"><img src="logo.svg" width="32" height="32"></div>
+        <label>32px</label>
+      </div>
+      <div>
+        <div class="logo-bg"><img src="logo.svg" width="16" height="16"></div>
+        <label>16px (favicon)</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="preview">
+    <h2>Logo on dark background</h2>
+    <div class="dark-preview">
+      <img src="logo.svg" width="128" height="128">
+    </div>
+  </div>
+
+  <div class="preview">
+    <h2>Banner</h2>
+    <div class="banner-bg">
+      <img src="banner.svg" width="900" height="300">
+    </div>
+  </div>
+
+  <div class="preview">
+    <h2>Banner (GitHub README scale ~800px wide)</h2>
+    <div class="banner-bg">
+      <img src="banner.svg" width="800" height="267">
+    </div>
+  </div>
+</body>
+</html>
