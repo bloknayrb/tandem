@@ -363,9 +363,8 @@ export function registerDocumentTools(server: McpServer): void {
     'Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.',
     { filePath: z.string().describe('Absolute path to the file to open') },
     async ({ filePath }) => {
+      let resolved = path.resolve(filePath);
       try {
-        // Resolve symlinks/junctions BEFORE path validation (prevents symlink-to-UNC bypass)
-        let resolved: string;
         try {
           resolved = fsSync.realpathSync(path.resolve(filePath));
         } catch {

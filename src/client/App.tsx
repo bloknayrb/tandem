@@ -204,6 +204,7 @@ export default function App() {
       }
     };
     meta.observe(observer);
+    observer(); // Handle data already present from initial sync
     return () => meta.unobserve(observer);
   }, []);
 
