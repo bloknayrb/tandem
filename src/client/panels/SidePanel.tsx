@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { Editor as TiptapEditor } from '@tiptap/react';
-import * as Y from 'yjs';
-import type { Annotation, AnnotationType, InterruptionMode } from '../../shared/types';
-import { HIGHLIGHT_COLORS } from '../../shared/constants';
-import { flatOffsetToPmPos } from '../editor/extensions/annotation';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import type { Editor as TiptapEditor } from "@tiptap/react";
+import * as Y from "yjs";
+import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/types";
+import { HIGHLIGHT_COLORS } from "../../shared/constants";
+import { resolveAnnotationPmRange } from "../editor/extensions/annotation";
 
 interface SidePanelProps {
   annotations: Annotation[];
@@ -19,29 +19,46 @@ interface SidePanelProps {
   onActiveAnnotationChange: (id: string | null) => void;
 }
 
-type FilterType = AnnotationType | 'all';
-type FilterAuthor = 'all' | 'claude' | 'user';
-type FilterStatus = 'all' | 'pending' | 'accepted' | 'dismissed';
+type FilterType = AnnotationType | "all";
+type FilterAuthor = "all" | "claude" | "user";
+type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
 
 /** Apply a suggestion annotation's text replacement in the editor */
-function applySuggestion(ann: Annotation, editor: TiptapEditor) {
-  if (ann.type !== 'suggestion') return;
+function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null) {
+  if (ann.type !== "suggestion") return;
   try {
     const { newText } = JSON.parse(ann.content);
-    if (typeof newText === 'string') {
-      const pmFrom = flatOffsetToPmPos(editor.state.doc, ann.range.from);
-      const pmTo = flatOffsetToPmPos(editor.state.doc, ann.range.to);
-      editor.chain().focus().deleteRange({ from: pmFrom, to: pmTo }).insertContentAt(pmFrom, newText).run();
+    if (typeof newText === "string") {
+      const resolved = resolveAnnotationPmRange(ann, editor.state.doc, ydoc);
+      if (!resolved) return;
+      editor
+        .chain()
+        .focus()
+        .deleteRange({ from: resolved.from, to: resolved.to })
+        .insertContentAt(resolved.from, newText)
+        .run();
     }
   } catch {
     // Malformed suggestion content
   }
 }
 
-export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interruptionMode: _interruptionMode, onModeChange, reviewMode, onToggleReviewMode, onExitReviewMode, activeAnnotationId: _activeAnnotationId, onActiveAnnotationChange }: SidePanelProps) {
-  const [filterType, setFilterType] = useState<FilterType>('all');
-  const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>('all');
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
+export function SidePanel({
+  annotations,
+  editor,
+  ydoc,
+  heldCount = 0,
+  interruptionMode: _interruptionMode,
+  onModeChange,
+  reviewMode,
+  onToggleReviewMode,
+  onExitReviewMode,
+  activeAnnotationId: _activeAnnotationId,
+  onActiveAnnotationChange,
+}: SidePanelProps) {
+  const [filterType, setFilterType] = useState<FilterType>("all");
+  const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>("all");
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [reviewIndex, setReviewIndex] = useState(0);
   const reviewIndexRef = useRef(0);
 
@@ -57,15 +74,15 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
     const allPending: Annotation[] = [];
 
     for (const a of annotations) {
-      if (a.status === 'pending') allPending.push(a);
-      const matchType = filterType === 'all' || a.type === filterType;
-      const matchAuthor = filterAuthor === 'all' || a.author === filterAuthor;
-      const matchStatus = filterStatus === 'all' || a.status === filterStatus;
+      if (a.status === "pending") allPending.push(a);
+      const matchType = filterType === "all" || a.type === filterType;
+      const matchAuthor = filterAuthor === "all" || a.author === filterAuthor;
+      const matchStatus = filterStatus === "all" || a.status === filterStatus;
       if (matchType && matchAuthor && matchStatus) filtered.push(a);
     }
 
-    const pending = filtered.filter(a => a.status === 'pending');
-    const resolved = filtered.filter(a => a.status !== 'pending');
+    const pending = filtered.filter((a) => a.status === "pending");
+    const resolved = filtered.filter((a) => a.status !== "pending");
 
     return { filtered, pending, resolved, allPending };
   }, [annotations, filterType, filterAuthor, filterStatus]);
@@ -75,71 +92,75 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
   const reviewTargetsRef = useRef(reviewTargets);
   reviewTargetsRef.current = reviewTargets;
 
-  function resolveAnnotation(id: string, status: 'accepted' | 'dismissed') {
+  function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
     const y = ydocRef.current;
     if (!y) return;
-    const map = y.getMap('annotations');
+    const map = y.getMap("annotations");
     const ann = map.get(id) as Annotation | undefined;
     if (!ann) return;
     map.set(id, { ...ann, status });
-    if (status === 'accepted' && editorRef.current) {
-      applySuggestion(ann, editorRef.current);
+    if (status === "accepted" && editorRef.current) {
+      applySuggestion(ann, editorRef.current, ydocRef.current);
     }
   }
 
   function handleAccept(id: string) {
-    resolveAnnotation(id, 'accepted');
+    resolveAnnotation(id, "accepted");
   }
 
   function handleDismiss(id: string) {
-    resolveAnnotation(id, 'dismissed');
+    resolveAnnotation(id, "dismissed");
   }
 
   function handleBulkAccept() {
-    for (const ann of allPending) resolveAnnotation(ann.id, 'accepted');
+    for (const ann of allPending) resolveAnnotation(ann.id, "accepted");
   }
 
   function handleBulkDismiss() {
-    for (const ann of allPending) resolveAnnotation(ann.id, 'dismissed');
+    for (const ann of allPending) resolveAnnotation(ann.id, "dismissed");
   }
 
   // Scroll editor to an annotation's range
   const scrollToAnnotation = useCallback((ann: Annotation) => {
     const ed = editorRef.current;
     if (!ed) return;
-    const pmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
-    const pmTo = flatOffsetToPmPos(ed.state.doc, ann.range.to);
-    ed.chain().focus().setTextSelection({ from: pmFrom, to: pmTo }).run();
-    const domAtPos = ed.view.domAtPos(pmFrom);
+    const resolved = resolveAnnotationPmRange(ann, ed.state.doc, ydocRef.current);
+    if (!resolved) return;
+    ed.chain().focus().setTextSelection({ from: resolved.from, to: resolved.to }).run();
+    const domAtPos = ed.view.domAtPos(resolved.from);
     const el = domAtPos.node instanceof HTMLElement ? domAtPos.node : domAtPos.node.parentElement;
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
   // Stable keyboard review callbacks (use refs to avoid dep cascade)
-  const navigateReview = useCallback((direction: 'next' | 'prev') => {
-    const targets = reviewTargetsRef.current;
-    if (targets.length === 0) return;
-    let idx = reviewIndexRef.current;
-    idx = direction === 'next'
-      ? (idx + 1) % targets.length
-      : (idx - 1 + targets.length) % targets.length;
-    reviewIndexRef.current = idx;
-    setReviewIndex(idx);
-    scrollToAnnotation(targets[idx]);
-  }, [scrollToAnnotation]);
+  const navigateReview = useCallback(
+    (direction: "next" | "prev") => {
+      const targets = reviewTargetsRef.current;
+      if (targets.length === 0) return;
+      let idx = reviewIndexRef.current;
+      idx =
+        direction === "next"
+          ? (idx + 1) % targets.length
+          : (idx - 1 + targets.length) % targets.length;
+      reviewIndexRef.current = idx;
+      setReviewIndex(idx);
+      scrollToAnnotation(targets[idx]);
+    },
+    [scrollToAnnotation],
+  );
 
   const acceptCurrent = useCallback(() => {
     const targets = reviewTargetsRef.current;
     if (targets.length === 0) return;
     const ann = targets[reviewIndexRef.current];
-    if (ann) resolveAnnotation(ann.id, 'accepted');
+    if (ann) resolveAnnotation(ann.id, "accepted");
   }, []);
 
   const dismissCurrent = useCallback(() => {
     const targets = reviewTargetsRef.current;
     if (targets.length === 0) return;
     const ann = targets[reviewIndexRef.current];
-    if (ann) resolveAnnotation(ann.id, 'dismissed');
+    if (ann) resolveAnnotation(ann.id, "dismissed");
   }, []);
 
   // Reset review index and scroll to first annotation when entering review mode
@@ -165,7 +186,7 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
   // Keyboard shortcuts — stable deps via refs
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && e.shiftKey && e.key === 'R') {
+      if (e.ctrlKey && e.shiftKey && e.key === "R") {
         e.preventDefault();
         onToggleReviewMode();
         return;
@@ -173,18 +194,18 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
 
       if (!reviewMode) return;
 
-      if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) {
+      if (e.key === "Tab" && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
-        navigateReview(e.shiftKey ? 'prev' : 'next');
-      } else if (e.key === 'y' || e.key === 'Y') {
+        navigateReview(e.shiftKey ? "prev" : "next");
+      } else if (e.key === "y" || e.key === "Y") {
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         e.preventDefault();
         acceptCurrent();
-      } else if (e.key === 'n' || e.key === 'N') {
+      } else if (e.key === "n" || e.key === "N") {
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         e.preventDefault();
         dismissCurrent();
-      } else if (e.key === 'e' || e.key === 'E') {
+      } else if (e.key === "e" || e.key === "E") {
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         e.preventDefault();
         // Scroll to current annotation and exit review mode without resolving
@@ -192,14 +213,22 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
         const ann = targets[reviewIndexRef.current];
         if (ann) scrollToAnnotation(ann);
         onExitReviewMode();
-      } else if (e.key === 'Escape') {
+      } else if (e.key === "Escape") {
         onExitReviewMode();
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [reviewMode, navigateReview, acceptCurrent, dismissCurrent, scrollToAnnotation, onToggleReviewMode, onExitReviewMode]);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    reviewMode,
+    navigateReview,
+    acceptCurrent,
+    dismissCurrent,
+    scrollToAnnotation,
+    onToggleReviewMode,
+    onExitReviewMode,
+  ]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
@@ -217,36 +246,48 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
     }
   }, [reviewMode, reviewTargets.length, onExitReviewMode]);
 
-  const hasFilters = filterType !== 'all' || filterAuthor !== 'all' || filterStatus !== 'all';
-  const activeReviewAnn = reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
+  const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
+  const activeReviewAnn =
+    reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
 
   return (
-    <div style={{
-      width: '100%',
-      background: '#fafafa',
-      display: 'flex',
-      flexDirection: 'column',
-      overflowY: 'auto',
-    }}>
+    <div
+      style={{
+        width: "100%",
+        background: "#fafafa",
+        display: "flex",
+        flexDirection: "column",
+        overflowY: "auto",
+      }}
+    >
       {/* Held-annotation banner */}
       {heldCount > 0 && (
-        <div style={{
-          padding: '6px 16px',
-          background: '#fef3c7',
-          borderBottom: '1px solid #fde68a',
-          fontSize: '12px',
-          color: '#92400e',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
-          <span>{heldCount} annotation{heldCount !== 1 ? 's' : ''} held</span>
+        <div
+          style={{
+            padding: "6px 16px",
+            background: "#fef3c7",
+            borderBottom: "1px solid #fde68a",
+            fontSize: "12px",
+            color: "#92400e",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span>
+            {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
+          </span>
           <button
-            onClick={() => onModeChange?.('all')}
+            onClick={() => onModeChange?.("all")}
             style={{
-              fontSize: '11px', padding: '1px 8px', border: '1px solid #fbbf24',
-              borderRadius: '4px', background: '#fff', color: '#92400e',
-              cursor: 'pointer', fontWeight: 500,
+              fontSize: "11px",
+              padding: "1px 8px",
+              border: "1px solid #fbbf24",
+              borderRadius: "4px",
+              background: "#fff",
+              color: "#92400e",
+              cursor: "pointer",
+              fontWeight: 500,
             }}
           >
             Show all
@@ -254,19 +295,21 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
         </div>
       )}
       {/* Header */}
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h3 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>
             Annotations
             {allPending.length > 0 && (
-              <span style={{
-                marginLeft: '8px',
-                padding: '1px 6px',
-                fontSize: '11px',
-                background: '#6366f1',
-                color: 'white',
-                borderRadius: '10px',
-              }}>
+              <span
+                style={{
+                  marginLeft: "8px",
+                  padding: "1px 6px",
+                  fontSize: "11px",
+                  background: "#6366f1",
+                  color: "white",
+                  borderRadius: "10px",
+                }}
+              >
                 {allPending.length}
               </span>
             )}
@@ -276,17 +319,17 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
               onClick={onToggleReviewMode}
               title="Keyboard review mode (Ctrl+Shift+R)"
               style={{
-                padding: '2px 8px',
-                fontSize: '11px',
-                border: `1px solid ${reviewMode ? '#6366f1' : '#d1d5db'}`,
-                borderRadius: '3px',
-                background: reviewMode ? '#eef2ff' : '#fff',
-                color: reviewMode ? '#6366f1' : '#6b7280',
-                cursor: 'pointer',
+                padding: "2px 8px",
+                fontSize: "11px",
+                border: `1px solid ${reviewMode ? "#6366f1" : "#d1d5db"}`,
+                borderRadius: "3px",
+                background: reviewMode ? "#eef2ff" : "#fff",
+                color: reviewMode ? "#6366f1" : "#6b7280",
+                cursor: "pointer",
                 fontWeight: reviewMode ? 600 : 400,
               }}
             >
-              {reviewMode ? 'Exit Review' : 'Review'}
+              {reviewMode ? "Exit Review" : "Review"}
             </button>
           )}
         </div>
@@ -294,68 +337,80 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
 
       {/* Review mode indicator */}
       {reviewMode && reviewTargets.length > 0 && (
-        <div style={{
-          padding: '8px 16px',
-          background: '#eef2ff',
-          borderBottom: '1px solid #e5e7eb',
-          fontSize: '12px',
-          color: '#4338ca',
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: '2px' }}>
+        <div
+          style={{
+            padding: "8px 16px",
+            background: "#eef2ff",
+            borderBottom: "1px solid #e5e7eb",
+            fontSize: "12px",
+            color: "#4338ca",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: "2px" }}>
             Reviewing {reviewIndex + 1} / {reviewTargets.length}
           </div>
-          <div style={{ color: '#6366f1' }}>
+          <div style={{ color: "#6366f1" }}>
             Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · E: examine · Esc: exit
           </div>
         </div>
       )}
 
       {/* Filters */}
-      <div style={{
-        padding: '8px 16px',
-        borderBottom: '1px solid #e5e7eb',
-        display: 'flex',
-        gap: '4px',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-      }}>
+      <div
+        style={{
+          padding: "8px 16px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex",
+          gap: "4px",
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
         <FilterSelect
           value={filterType}
-          onChange={v => setFilterType(v as FilterType)}
+          onChange={(v) => setFilterType(v as FilterType)}
           options={[
-            { value: 'all', label: 'All types' },
-            { value: 'highlight', label: 'Highlights' },
-            { value: 'comment', label: 'Comments' },
-            { value: 'suggestion', label: 'Suggestions' },
-            { value: 'question', label: 'Questions' },
-            { value: 'flag', label: 'Flags' },
+            { value: "all", label: "All types" },
+            { value: "highlight", label: "Highlights" },
+            { value: "comment", label: "Comments" },
+            { value: "suggestion", label: "Suggestions" },
+            { value: "question", label: "Questions" },
+            { value: "flag", label: "Flags" },
           ]}
         />
         <FilterSelect
           value={filterAuthor}
-          onChange={v => setFilterAuthor(v as FilterAuthor)}
+          onChange={(v) => setFilterAuthor(v as FilterAuthor)}
           options={[
-            { value: 'all', label: 'Anyone' },
-            { value: 'claude', label: 'Claude' },
-            { value: 'user', label: 'You' },
+            { value: "all", label: "Anyone" },
+            { value: "claude", label: "Claude" },
+            { value: "user", label: "You" },
           ]}
         />
         <FilterSelect
           value={filterStatus}
-          onChange={v => setFilterStatus(v as FilterStatus)}
+          onChange={(v) => setFilterStatus(v as FilterStatus)}
           options={[
-            { value: 'all', label: 'Any status' },
-            { value: 'pending', label: 'Pending' },
-            { value: 'accepted', label: 'Accepted' },
-            { value: 'dismissed', label: 'Dismissed' },
+            { value: "all", label: "Any status" },
+            { value: "pending", label: "Pending" },
+            { value: "accepted", label: "Accepted" },
+            { value: "dismissed", label: "Dismissed" },
           ]}
         />
         {hasFilters && (
           <button
-            onClick={() => { setFilterType('all'); setFilterAuthor('all'); setFilterStatus('all'); }}
+            onClick={() => {
+              setFilterType("all");
+              setFilterAuthor("all");
+              setFilterStatus("all");
+            }}
             style={{
-              background: 'none', border: 'none', color: '#6366f1',
-              fontSize: '11px', cursor: 'pointer', padding: '2px 4px',
+              background: "none",
+              border: "none",
+              color: "#6366f1",
+              fontSize: "11px",
+              cursor: "pointer",
+              padding: "2px 4px",
             }}
           >
             Clear
@@ -365,17 +420,24 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
 
       {/* Bulk actions */}
       {allPending.length > 1 && (
-        <div style={{
-          padding: '6px 16px',
-          borderBottom: '1px solid #e5e7eb',
-          display: 'flex',
-          gap: '6px',
-        }}>
+        <div
+          style={{
+            padding: "6px 16px",
+            borderBottom: "1px solid #e5e7eb",
+            display: "flex",
+            gap: "6px",
+          }}
+        >
           <button
             onClick={handleBulkAccept}
             style={{
-              padding: '2px 8px', fontSize: '11px', border: '1px solid #d1d5db',
-              borderRadius: '3px', background: '#f0fdf4', color: '#166534', cursor: 'pointer',
+              padding: "2px 8px",
+              fontSize: "11px",
+              border: "1px solid #d1d5db",
+              borderRadius: "3px",
+              background: "#f0fdf4",
+              color: "#166534",
+              cursor: "pointer",
             }}
           >
             Accept All ({allPending.length})
@@ -383,8 +445,13 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
           <button
             onClick={handleBulkDismiss}
             style={{
-              padding: '2px 8px', fontSize: '11px', border: '1px solid #d1d5db',
-              borderRadius: '3px', background: '#fef2f2', color: '#991b1b', cursor: 'pointer',
+              padding: "2px 8px",
+              fontSize: "11px",
+              border: "1px solid #d1d5db",
+              borderRadius: "3px",
+              background: "#fef2f2",
+              color: "#991b1b",
+              cursor: "pointer",
             }}
           >
             Dismiss All
@@ -393,14 +460,16 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
       )}
 
       {/* Annotation list */}
-      <div style={{ padding: '8px 16px', flex: 1 }}>
+      <div style={{ padding: "8px 16px", flex: 1 }}>
         {filtered.length === 0 ? (
-          <p style={{ fontSize: '13px', color: '#9ca3af', marginTop: '8px' }}>
-            {hasFilters ? 'No annotations match filters.' : 'No annotations yet. Open a document to get started.'}
+          <p style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
+            {hasFilters
+              ? "No annotations match filters."
+              : "No annotations yet. Open a document to get started."}
           </p>
         ) : (
           <>
-            {pending.map(ann => (
+            {pending.map((ann) => (
               <AnnotationCard
                 key={ann.id}
                 annotation={ann}
@@ -411,11 +480,11 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
               />
             ))}
             {resolved.length > 0 && (
-              <details style={{ marginTop: '12px' }}>
-                <summary style={{ fontSize: '12px', color: '#9ca3af', cursor: 'pointer' }}>
+              <details style={{ marginTop: "12px" }}>
+                <summary style={{ fontSize: "12px", color: "#9ca3af", cursor: "pointer" }}>
                   {resolved.length} resolved
                 </summary>
-                {resolved.map(ann => (
+                {resolved.map((ann) => (
                   <AnnotationCard
                     key={ann.id}
                     annotation={ann}
@@ -431,7 +500,11 @@ export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interrupti
   );
 }
 
-function FilterSelect({ value, onChange, options }: {
+function FilterSelect({
+  value,
+  onChange,
+  options,
+}: {
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
@@ -439,19 +512,21 @@ function FilterSelect({ value, onChange, options }: {
   return (
     <select
       value={value}
-      onChange={e => onChange(e.target.value)}
+      onChange={(e) => onChange(e.target.value)}
       style={{
-        padding: '2px 4px',
-        fontSize: '11px',
-        border: '1px solid #e5e7eb',
-        borderRadius: '3px',
-        background: '#fff',
-        color: '#374151',
-        cursor: 'pointer',
+        padding: "2px 4px",
+        fontSize: "11px",
+        border: "1px solid #e5e7eb",
+        borderRadius: "3px",
+        background: "#fff",
+        color: "#374151",
+        cursor: "pointer",
       }}
     >
-      {options.map(o => (
-        <option key={o.value} value={o.value}>{o.label}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
       ))}
     </select>
   );
@@ -466,60 +541,68 @@ interface AnnotationCardProps {
 }
 
 const ANNOTATION_BORDER_COLORS: Record<string, string> = {
-  comment: '#3b82f6',
-  suggestion: '#8b5cf6',
-  question: '#6366f1',
-  flag: '#ef4444',
+  comment: "#3b82f6",
+  suggestion: "#8b5cf6",
+  question: "#6366f1",
+  flag: "#ef4444",
 };
 
 function getBorderColor(annotation: Annotation): string {
   if (annotation.color) {
-    return HIGHLIGHT_COLORS[annotation.color] || '#e5e7eb';
+    return HIGHLIGHT_COLORS[annotation.color] || "#e5e7eb";
   }
-  return ANNOTATION_BORDER_COLORS[annotation.type] || '#e5e7eb';
+  return ANNOTATION_BORDER_COLORS[annotation.type] || "#e5e7eb";
 }
 
-function AnnotationCard({ annotation, isReviewTarget, onAccept, onDismiss, onClick }: AnnotationCardProps) {
+function AnnotationCard({
+  annotation,
+  isReviewTarget,
+  onAccept,
+  onDismiss,
+  onClick,
+}: AnnotationCardProps) {
   const borderColor = getBorderColor(annotation);
 
-  const isPending = annotation.status === 'pending';
+  const isPending = annotation.status === "pending";
 
   return (
     <div
       onClick={onClick}
       style={{
-        padding: '8px 10px',
-        marginBottom: '6px',
+        padding: "8px 10px",
+        marginBottom: "6px",
         borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget ? '#eef2ff' : 'white',
-        borderRadius: '0 4px 4px 0',
-        fontSize: '13px',
+        background: isReviewTarget ? "#eef2ff" : "white",
+        borderRadius: "0 4px 4px 0",
+        fontSize: "13px",
         opacity: isPending ? 1 : 0.6,
-        cursor: onClick ? 'pointer' : 'default',
-        outline: isReviewTarget ? '2px solid #6366f1' : 'none',
-        transition: 'background 0.15s, outline 0.15s',
+        cursor: onClick ? "pointer" : "default",
+        outline: isReviewTarget ? "2px solid #6366f1" : "none",
+        transition: "background 0.15s, outline 0.15s",
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <span style={{ fontWeight: 500, textTransform: 'capitalize' }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+        <span style={{ fontWeight: 500, textTransform: "capitalize" }}>
           {annotation.type}
           {!isPending && (
-            <span style={{
-              marginLeft: '6px',
-              fontSize: '10px',
-              color: annotation.status === 'accepted' ? '#16a34a' : '#dc2626',
-              fontWeight: 600,
-            }}>
+            <span
+              style={{
+                marginLeft: "6px",
+                fontSize: "10px",
+                color: annotation.status === "accepted" ? "#16a34a" : "#dc2626",
+                fontWeight: 600,
+              }}
+            >
               {annotation.status}
             </span>
           )}
         </span>
-        <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-          {annotation.author === 'claude' ? 'Claude' : 'You'}
+        <span style={{ fontSize: "11px", color: "#9ca3af" }}>
+          {annotation.author === "claude" ? "Claude" : "You"}
         </span>
       </div>
-      <p style={{ margin: 0, color: '#4b5563', lineHeight: '1.4' }}>
-        {annotation.type === 'suggestion'
+      <p style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
+        {annotation.type === "suggestion"
           ? (() => {
               try {
                 const parsed = JSON.parse(annotation.content);
@@ -528,16 +611,24 @@ function AnnotationCard({ annotation, isReviewTarget, onAccept, onDismiss, onCli
                 return annotation.content;
               }
             })()
-          : annotation.content || '(no note)'}
+          : annotation.content || "(no note)"}
       </p>
       {isPending && (onAccept || onDismiss) && (
-        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+        <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
           {onAccept && (
             <button
-              onClick={(e) => { e.stopPropagation(); onAccept(annotation.id); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAccept(annotation.id);
+              }}
               style={{
-                padding: '2px 8px', fontSize: '11px', border: '1px solid #d1d5db',
-                borderRadius: '3px', background: '#f0fdf4', color: '#166534', cursor: 'pointer',
+                padding: "2px 8px",
+                fontSize: "11px",
+                border: "1px solid #d1d5db",
+                borderRadius: "3px",
+                background: "#f0fdf4",
+                color: "#166534",
+                cursor: "pointer",
               }}
             >
               Accept
@@ -545,10 +636,18 @@ function AnnotationCard({ annotation, isReviewTarget, onAccept, onDismiss, onCli
           )}
           {onDismiss && (
             <button
-              onClick={(e) => { e.stopPropagation(); onDismiss(annotation.id); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss(annotation.id);
+              }}
               style={{
-                padding: '2px 8px', fontSize: '11px', border: '1px solid #d1d5db',
-                borderRadius: '3px', background: '#fef2f2', color: '#991b1b', cursor: 'pointer',
+                padding: "2px 8px",
+                fontSize: "11px",
+                border: "1px solid #d1d5db",
+                borderRadius: "3px",
+                background: "#fef2f2",
+                color: "#991b1b",
+                cursor: "pointer",
               }}
             >
               Dismiss

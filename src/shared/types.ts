@@ -1,20 +1,32 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // --- Zod schemas (source of truth) ---
 
-export const AnnotationTypeSchema = z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question', 'flag']);
-export const AnnotationStatusSchema = z.enum(['pending', 'accepted', 'dismissed']);
-export const AnnotationPrioritySchema = z.enum(['normal', 'urgent']);
-export const InterruptionModeSchema = z.enum(['all', 'urgent-only', 'paused']);
-export const HighlightColorSchema = z.enum(['yellow', 'red', 'green', 'blue', 'purple']);
-export const SeveritySchema = z.enum(['info', 'warning', 'error', 'success']);
-export const AuthorSchema = z.enum(['user', 'claude']);
-export const AnnotationActionSchema = z.enum(['accept', 'dismiss']);
-export const ExportFormatSchema = z.enum(['markdown', 'json']);
-export const DocumentFormatSchema = z.enum(['md', 'txt', 'html', 'docx']);
+export const AnnotationTypeSchema = z.enum([
+  "highlight",
+  "comment",
+  "suggestion",
+  "overlay",
+  "question",
+  "flag",
+]);
+export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
+export const AnnotationPrioritySchema = z.enum(["normal", "urgent"]);
+export const InterruptionModeSchema = z.enum(["all", "urgent-only", "paused"]);
+export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
+export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
+export const AuthorSchema = z.enum(["user", "claude"]);
+export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
+export const ExportFormatSchema = z.enum(["markdown", "json"]);
+export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
 export const ToolErrorCodeSchema = z.enum([
-  'RANGE_STALE', 'FILE_LOCKED', 'FILE_NOT_FOUND', 'NO_DOCUMENT',
-  'INVALID_RANGE', 'FORMAT_ERROR', 'PERMISSION_DENIED',
+  "RANGE_STALE",
+  "FILE_LOCKED",
+  "FILE_NOT_FOUND",
+  "NO_DOCUMENT",
+  "INVALID_RANGE",
+  "FORMAT_ERROR",
+  "PERMISSION_DENIED",
 ]);
 
 // --- Derived TypeScript types ---
@@ -30,9 +42,11 @@ export type Severity = z.infer<typeof SeveritySchema>;
 
 export interface Annotation {
   id: string;
-  author: 'user' | 'claude';
+  author: "user" | "claude";
   type: AnnotationType;
   range: DocumentRange;
+  /** CRDT-anchored range that survives edits. Falls back to `range` if absent. */
+  relRange?: RelativeRange;
   content: string;
   status: AnnotationStatus;
   timestamp: number;
@@ -43,6 +57,12 @@ export interface Annotation {
 export interface DocumentRange {
   from: number;
   to: number;
+}
+
+/** CRDT-anchored range that survives concurrent edits. Serialized via Y.relativePositionToJSON(). */
+export interface RelativeRange {
+  fromRel: unknown;
+  toRel: unknown;
 }
 
 export interface AnchoredRange {
@@ -75,7 +95,7 @@ export interface OverlayDefinition {
   label: string;
   type: string;
   visible: boolean;
-  mode: 'snapshot' | 'live';
+  mode: "snapshot" | "live";
   entries: OverlayEntry[];
   createdAt: number;
   updatedAt: number;
@@ -148,7 +168,7 @@ export interface SessionData {
 /** Chat message between user and Claude, stored in Y.Map('chat') on __tandem_ctrl__ */
 export interface ChatMessage {
   id: string;
-  author: 'user' | 'claude';
+  author: "user" | "claude";
   text: string;
   timestamp: number;
   documentId?: string;

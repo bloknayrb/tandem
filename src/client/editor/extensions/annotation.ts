@@ -1,13 +1,13 @@
-import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
-import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import type { Node as PmNode } from '@tiptap/pm/model';
-import * as Y from 'yjs';
-import { HIGHLIGHT_COLORS } from '../../../shared/constants';
-import type { Annotation } from '../../../shared/types';
-import { headingPrefixLength } from '../../../shared/offsets';
+import { Extension } from "@tiptap/core";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import type { Node as PmNode } from "@tiptap/pm/model";
+import * as Y from "yjs";
+import { HIGHLIGHT_COLORS } from "../../../shared/constants";
+import type { Annotation, RelativeRange } from "../../../shared/types";
+import { headingPrefixLength } from "../../../shared/offsets";
 
-const annotationPluginKey = new PluginKey('tandemAnnotations');
+const annotationPluginKey = new PluginKey("tandemAnnotations");
 
 /**
  * Convert a flat character offset (from the server's extractText format) to a
@@ -28,9 +28,8 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
     const childStart = pmOffset + 1;
 
     // Heading prefix chars exist in flat text but not in PM
-    const prefixLen = child.type.name === 'heading'
-      ? headingPrefixLength((child.attrs.level as number) || 1)
-      : 0;
+    const prefixLen =
+      child.type.name === "heading" ? headingPrefixLength((child.attrs.level as number) || 1) : 0;
 
     const textLen = child.textContent.length;
     const fullFlatLen = prefixLen + textLen;
@@ -61,19 +60,106 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
 }
 
 /**
+ * Resolve a Y.AbsolutePosition (from a RelativePosition) to a ProseMirror position.
+ * Walks the Y.XmlFragment and PM doc in parallel, matching by XmlText identity.
+ */
+function xmlTextIndexToPmPos(
+  pmDoc: PmNode,
+  fragment: Y.XmlFragment,
+  absPos: { type: Y.AbstractType<unknown>; index: number },
+): number | null {
+  let pmOffset = 0;
+
+  const nodeCount = Math.min(pmDoc.childCount, fragment.length);
+  for (let i = 0; i < nodeCount; i++) {
+    const yNode = fragment.get(i);
+    const pmChild = pmDoc.child(i);
+    const childStart = pmOffset + 1; // +1 for PM block open tag
+
+    if (yNode instanceof Y.XmlElement) {
+      // Walk XmlText siblings, accumulating char offsets for multi-span (formatted) text
+      let charAccum = 0;
+      for (let j = 0; j < yNode.length; j++) {
+        const child = yNode.get(j);
+        if (child instanceof Y.XmlText) {
+          if (child === absPos.type) {
+            return childStart + Math.min(charAccum + absPos.index, pmChild.textContent.length);
+          }
+          charAccum += child.length;
+        }
+      }
+    }
+
+    pmOffset += pmChild.nodeSize;
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a RelativeRange to ProseMirror positions.
+ * Returns null if either position can't be resolved (e.g., deleted content).
+ */
+export function relRangeToPmPositions(
+  ydoc: Y.Doc,
+  pmDoc: PmNode,
+  relRange: RelativeRange,
+): { from: number; to: number } | null {
+  const fromRpos = Y.createRelativePositionFromJSON(relRange.fromRel);
+  const toRpos = Y.createRelativePositionFromJSON(relRange.toRel);
+
+  const fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
+  const toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
+  if (!fromAbs || !toAbs) return null;
+
+  const fragment = ydoc.getXmlFragment("default");
+  const fromPm = xmlTextIndexToPmPos(pmDoc, fragment, fromAbs);
+  const toPm = xmlTextIndexToPmPos(pmDoc, fragment, toAbs);
+  if (fromPm === null || toPm === null) return null;
+
+  return { from: fromPm, to: toPm };
+}
+
+/**
+ * Resolve an annotation's range to PM positions, preferring relRange.
+ */
+export function resolveAnnotationPmRange(
+  ann: Annotation,
+  pmDoc: PmNode,
+  ydoc: Y.Doc | null,
+): { from: number; to: number } | null {
+  // Try relRange first
+  if (ann.relRange && ydoc) {
+    const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange);
+    if (resolved) return resolved;
+  }
+  // Fall back to flat offsets
+  if (!ann.range) return null;
+  return {
+    from: flatOffsetToPmPos(pmDoc, ann.range.from),
+    to: flatOffsetToPmPos(pmDoc, ann.range.to),
+  };
+}
+
+/**
  * Build a DecorationSet from all pending annotations in the Y.Map.
  */
-function buildDecorations(doc: PmNode, annotationsMap: Y.Map<unknown>): DecorationSet {
+function buildDecorations(
+  doc: PmNode,
+  annotationsMap: Y.Map<unknown>,
+  ydoc: Y.Doc | null,
+): DecorationSet {
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
 
   annotationsMap.forEach((value) => {
     const ann = value as Annotation;
-    if (ann.status !== 'pending') return;
-    if (!ann.range) return;
+    if (ann.status !== "pending") return;
+    if (!ann.range && !ann.relRange) return;
 
-    const from = flatOffsetToPmPos(doc, ann.range.from);
-    const to = flatOffsetToPmPos(doc, ann.range.to);
+    const resolved = resolveAnnotationPmRange(ann, doc, ydoc);
+    if (!resolved) return;
+    const { from, to } = resolved;
 
     // Skip invalid ranges
     if (from >= to || from < 0 || to > maxPos) return;
@@ -81,42 +167,45 @@ function buildDecorations(doc: PmNode, annotationsMap: Y.Map<unknown>): Decorati
     let attrs: Record<string, string> = {};
 
     switch (ann.type) {
-      case 'highlight': {
-        const color = ann.color || 'yellow';
+      case "highlight": {
+        const color = ann.color || "yellow";
         const bg = HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.yellow;
         attrs = {
           class: `tandem-highlight tandem-highlight--${color}`,
           style: `background: ${bg}; border-radius: 2px; padding: 1px 0;`,
-          'data-annotation-id': ann.id,
+          "data-annotation-id": ann.id,
         };
         break;
       }
-      case 'comment':
+      case "comment":
         attrs = {
-          class: 'tandem-comment',
-          style: 'border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;',
-          'data-annotation-id': ann.id,
+          class: "tandem-comment",
+          style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
+          "data-annotation-id": ann.id,
         };
         break;
-      case 'suggestion':
+      case "suggestion":
         attrs = {
-          class: 'tandem-suggestion',
-          style: 'background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;',
-          'data-annotation-id': ann.id,
+          class: "tandem-suggestion",
+          style:
+            "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
+          "data-annotation-id": ann.id,
         };
         break;
-      case 'question':
+      case "question":
         attrs = {
-          class: 'tandem-question',
-          style: 'background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;',
-          'data-annotation-id': ann.id,
+          class: "tandem-question",
+          style:
+            "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
+          "data-annotation-id": ann.id,
         };
         break;
-      case 'flag':
+      case "flag":
         attrs = {
-          class: 'tandem-flag',
-          style: 'background: rgba(239, 68, 68, 0.12); border-bottom: 2px solid #ef4444; padding-bottom: 1px;',
-          'data-annotation-id': ann.id,
+          class: "tandem-flag",
+          style:
+            "background: rgba(239, 68, 68, 0.12); border-bottom: 2px solid #ef4444; padding-bottom: 1px;",
+          "data-annotation-id": ann.id,
         };
         break;
       default:
@@ -138,7 +227,7 @@ function buildDecorations(doc: PmNode, annotationsMap: Y.Map<unknown>): Decorati
  * as ProseMirror inline decorations in the editor.
  */
 export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
-  name: 'tandemAnnotations',
+  name: "tandemAnnotations",
 
   addOptions() {
     return { ydoc: null };
@@ -148,7 +237,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     const ydoc = this.options.ydoc;
     if (!ydoc) return [];
 
-    const annotationsMap = ydoc.getMap('annotations');
+    const annotationsMap = ydoc.getMap("annotations");
 
     return [
       new Plugin({
@@ -156,12 +245,12 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
 
         state: {
           init(_, state) {
-            return buildDecorations(state.doc, annotationsMap);
+            return buildDecorations(state.doc, annotationsMap, ydoc);
           },
           apply(tr, decorationSet, _oldState, newState) {
             // If annotations were explicitly updated, full rebuild
             if (tr.getMeta(annotationPluginKey)) {
-              return buildDecorations(newState.doc, annotationsMap);
+              return buildDecorations(newState.doc, annotationsMap, ydoc);
             }
             // If doc changed, map existing decorations forward
             if (tr.docChanged) {

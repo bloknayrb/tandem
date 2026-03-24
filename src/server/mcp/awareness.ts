@@ -1,11 +1,11 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
-import { getOrCreateDocument } from '../yjs/provider.js';
-import { getCurrentDoc, extractText } from './document.js';
-import { collectAnnotations } from './annotations.js';
-import { mcpSuccess, noDocumentError } from './response.js';
-import type { Annotation, ChatMessage } from '../../shared/types.js';
-import { generateMessageId } from '../../shared/utils.js';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { getOrCreateDocument } from "../yjs/provider.js";
+import { getCurrentDoc, extractText } from "./document.js";
+import { collectAnnotations, refreshRange } from "./annotations.js";
+import { mcpSuccess, noDocumentError } from "./response.js";
+import type { Annotation, ChatMessage } from "../../shared/types.js";
+import { generateMessageId } from "../../shared/utils.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox
 const surfacedIds = new Set<string>();
@@ -17,54 +17,69 @@ export function resetInbox(): void {
 
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
-    'tandem_getSelections',
-    'Get text currently selected by the user in the editor',
+    "tandem_getSelections",
+    "Get text currently selected by the user in the editor",
     {
-      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
     },
     async ({ documentId }) => {
       const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap('userAwareness');
-      const selection = userAwareness.get('selection') as { from: number; to: number; timestamp: number } | undefined;
+      const userAwareness = doc.getMap("userAwareness");
+      const selection = userAwareness.get("selection") as
+        | { from: number; to: number; timestamp: number }
+        | undefined;
 
       if (!selection || selection.from === selection.to) {
-        return mcpSuccess({ selections: [], message: 'No text selected' });
+        return mcpSuccess({ selections: [], message: "No text selected" });
       }
 
       return mcpSuccess({
         selections: [{ from: selection.from, to: selection.to }],
         timestamp: selection.timestamp,
       });
-    }
+    },
   );
 
   server.tool(
-    'tandem_getActivity',
-    'Check if the user is actively editing and where their cursor is',
+    "tandem_getActivity",
+    "Check if the user is actively editing and where their cursor is",
     {
-      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
     },
     async ({ documentId }) => {
       const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap('userAwareness');
-      const activity = userAwareness.get('activity') as {
-        isTyping: boolean;
-        cursor: number;
-        lastEdit: number;
-      } | undefined;
+      const userAwareness = doc.getMap("userAwareness");
+      const activity = userAwareness.get("activity") as
+        | {
+            isTyping: boolean;
+            cursor: number;
+            lastEdit: number;
+          }
+        | undefined;
 
       if (!activity) {
-        return mcpSuccess({ active: false, cursor: null, lastEdit: null, message: 'No activity detected' });
+        return mcpSuccess({
+          active: false,
+          cursor: null,
+          lastEdit: null,
+          message: "No activity detected",
+        });
       }
 
       // Consider user active if last edit was within 10 seconds
-      const isActive = activity.isTyping || (Date.now() - activity.lastEdit < 10000);
+      const isActive = activity.isTyping || Date.now() - activity.lastEdit < 10000;
 
       return mcpSuccess({
         active: isActive,
@@ -72,21 +87,24 @@ export function registerAwarenessTools(server: McpServer): void {
         cursor: activity.cursor,
         lastEdit: activity.lastEdit,
       });
-    }
+    },
   );
 
   server.tool(
-    'tandem_checkInbox',
-    'Check for user actions you haven\'t seen yet — new highlights, comments, questions, flags, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.',
+    "tandem_checkInbox",
+    "Check for user actions you haven't seen yet — new highlights, comments, questions, flags, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.",
     {
-      documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
     },
     async ({ documentId }) => {
       const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
-      const annotationsMap = doc.getMap('annotations');
+      const annotationsMap = doc.getMap("annotations");
       const allAnnotations = collectAnnotations(annotationsMap);
       const fullText = extractText(doc);
 
@@ -95,28 +113,35 @@ export function registerAwarenessTools(server: McpServer): void {
       // Bucket 2: user responses to Claude's annotations (accepted/dismissed)
       const userResponses: Array<Annotation & { textSnippet: string }> = [];
 
-      for (const ann of allAnnotations) {
-        if (surfacedIds.has(ann.id)) continue;
+      // Refresh only unsurfaced annotations; batch Y.Map writes
+      const unsurfaced: Annotation[] = [];
+      doc.transact(() => {
+        for (const raw of allAnnotations) {
+          if (surfacedIds.has(raw.id)) continue;
+          unsurfaced.push(refreshRange(raw, doc, annotationsMap));
+        }
+      });
 
+      for (const ann of unsurfaced) {
         const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
 
-        if (ann.author === 'user') {
+        if (ann.author === "user") {
           userActions.push({ ...ann, textSnippet: snippet });
           surfacedIds.add(ann.id);
-        } else if (ann.author === 'claude' && ann.status !== 'pending') {
+        } else if (ann.author === "claude" && ann.status !== "pending") {
           userResponses.push({ ...ann, textSnippet: snippet });
           surfacedIds.add(ann.id);
         }
       }
 
       // Bucket 3: unread chat messages from __tandem_ctrl__
-      const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
-      const chatMap = ctrlDoc.getMap('chat');
-      const chatMessages: Array<Omit<ChatMessage, 'read' | 'author'>> = [];
+      const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
+      const chatMap = ctrlDoc.getMap("chat");
+      const chatMessages: Array<Omit<ChatMessage, "read" | "author">> = [];
 
       chatMap.forEach((value) => {
         const msg = value as ChatMessage;
-        if (msg.author === 'user' && !msg.read) {
+        if (msg.author === "user" && !msg.read) {
           chatMessages.push({
             id: msg.id,
             text: msg.text,
@@ -131,13 +156,17 @@ export function registerAwarenessTools(server: McpServer): void {
       });
 
       // Current user activity
-      const userAwareness = doc.getMap('userAwareness');
-      const selection = userAwareness.get('selection') as { from: number; to: number; timestamp: number } | undefined;
-      const activity = userAwareness.get('activity') as {
-        isTyping: boolean;
-        cursor: number;
-        lastEdit: number;
-      } | undefined;
+      const userAwareness = doc.getMap("userAwareness");
+      const selection = userAwareness.get("selection") as
+        | { from: number; to: number; timestamp: number }
+        | undefined;
+      const activity = userAwareness.get("activity") as
+        | {
+            isTyping: boolean;
+            cursor: number;
+            lastEdit: number;
+          }
+        | undefined;
 
       const hasSelection = selection && selection.from !== selection.to;
       const selectedText = hasSelection
@@ -152,8 +181,8 @@ export function registerAwarenessTools(server: McpServer): void {
           typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
         }
         const typeList = Object.entries(typeCounts)
-          .map(([t, n]) => `${n} ${t}${n > 1 ? 's' : ''}`)
-          .join(', ');
+          .map(([t, n]) => `${n} ${t}${n > 1 ? "s" : ""}`)
+          .join(", ");
         parts.push(`${userActions.length} new: ${typeList}`);
       }
       if (userResponses.length > 0) {
@@ -163,13 +192,13 @@ export function registerAwarenessTools(server: McpServer): void {
         }
         const statusList = Object.entries(statusCounts)
           .map(([s, n]) => `${n} ${s}`)
-          .join(', ');
+          .join(", ");
         parts.push(statusList);
       }
       if (chatMessages.length > 0) {
-        parts.push(`${chatMessages.length} new chat message${chatMessages.length > 1 ? 's' : ''}`);
+        parts.push(`${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`);
       }
-      const summary = parts.length > 0 ? parts.join('. ') + '.' : 'No new actions.';
+      const summary = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
 
       const hasNew = userActions.length > 0 || userResponses.length > 0 || chatMessages.length > 0;
 
@@ -186,19 +215,22 @@ export function registerAwarenessTools(server: McpServer): void {
           selectedText,
         },
       });
-    }
+    },
   );
   server.tool(
-    'tandem_reply',
-    'Send a chat message to the user in the Tandem sidebar. Use this to respond to chat messages from tandem_checkInbox.',
+    "tandem_reply",
+    "Send a chat message to the user in the Tandem sidebar. Use this to respond to chat messages from tandem_checkInbox.",
     {
-      text: z.string().describe('Your message to the user'),
-      replyTo: z.string().optional().describe('ID of the user message you are replying to'),
-      documentId: z.string().optional().describe('Document context for this reply (defaults to active document)'),
+      text: z.string().describe("Your message to the user"),
+      replyTo: z.string().optional().describe("ID of the user message you are replying to"),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Document context for this reply (defaults to active document)"),
     },
     async ({ text, replyTo, documentId }) => {
-      const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
-      const chatMap = ctrlDoc.getMap('chat');
+      const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
+      const chatMap = ctrlDoc.getMap("chat");
 
       const id = generateMessageId();
       const current = getCurrentDoc(documentId);
@@ -206,7 +238,7 @@ export function registerAwarenessTools(server: McpServer): void {
 
       const msg: ChatMessage = {
         id,
-        author: 'claude',
+        author: "claude",
         text,
         timestamp: Date.now(),
         ...(docId ? { documentId: docId } : {}),
@@ -217,7 +249,7 @@ export function registerAwarenessTools(server: McpServer): void {
       chatMap.set(id, msg);
 
       return mcpSuccess({ sent: true, messageId: id });
-    }
+    },
   );
 }
 
@@ -225,5 +257,5 @@ function safeSlice(text: string, from: number, to: number): string {
   const start = Math.max(0, Math.min(from, text.length));
   const end = Math.max(start, Math.min(to, text.length));
   const snippet = text.slice(start, end);
-  return snippet.length > 100 ? snippet.slice(0, 97) + '...' : snippet;
+  return snippet.length > 100 ? snippet.slice(0, 97) + "..." : snippet;
 }

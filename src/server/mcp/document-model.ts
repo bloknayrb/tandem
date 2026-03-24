@@ -230,17 +230,83 @@ export function resolveOffset(fragment: Y.XmlFragment, charOffset: number): Reso
 }
 
 /**
- * Find the first Y.XmlText child of a Y.XmlElement.
- * Creates one if the element is empty.
+ * Find the first Y.XmlText child of a Y.XmlElement (read-only).
+ * Returns null if no XmlText child exists.
  */
-export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
       return child;
     }
   }
-  const textNode = new Y.XmlText("");
-  element.insert(0, [textNode]);
-  return textNode;
+  return null;
+}
+
+/**
+ * Find the first Y.XmlText child of a Y.XmlElement.
+ * Creates one if the element is empty.
+ */
+export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+  return (
+    findXmlText(element) ??
+    (() => {
+      const textNode = new Y.XmlText("");
+      element.insert(0, [textNode]);
+      return textNode;
+    })()
+  );
+}
+
+/**
+ * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
+ * Returns null if the offset falls in a heading prefix or can't be resolved.
+ */
+export function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): unknown | null {
+  const fragment = doc.getXmlFragment("default");
+  const resolved = resolveOffset(fragment, offset);
+  if (!resolved || resolved.clampedFromPrefix) return null;
+
+  const node = fragment.get(resolved.elementIndex);
+  if (!(node instanceof Y.XmlElement)) return null;
+
+  const xmlText = getOrCreateXmlText(node);
+  const rpos = Y.createRelativePositionFromTypeIndex(xmlText, resolved.textOffset, assoc);
+  return Y.relativePositionToJSON(rpos);
+}
+
+/**
+ * Resolve a JSON-serialized Yjs RelativePosition back to a flat text offset.
+ * Returns null if the referenced content was deleted.
+ */
+export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | null {
+  const rpos = Y.createRelativePositionFromJSON(relPosJson);
+  const absPos = Y.createAbsolutePositionFromRelativePosition(rpos, doc);
+  if (!absPos) return null;
+
+  const fragment = doc.getXmlFragment("default");
+  let accumulated = 0;
+
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+
+    const prefixLen = getHeadingPrefixLength(node);
+    const text = getElementText(node);
+
+    // Check if this element contains the resolved XmlText (read-only)
+    const xmlText = findXmlText(node);
+    if (xmlText && xmlText === absPos.type) {
+      return accumulated + prefixLen + absPos.index;
+    }
+
+    accumulated += prefixLen + text.length;
+
+    // Separator between elements (not after last)
+    if (i < fragment.length - 1) {
+      accumulated += 1;
+    }
+  }
+
+  return null;
 }
