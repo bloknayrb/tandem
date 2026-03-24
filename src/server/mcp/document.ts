@@ -550,7 +550,7 @@ export function registerDocumentTools(server: McpServer): void {
             if (text.trim().toLowerCase() === section.trim().toLowerCase()) {
               inSection = true;
               sectionLevel = level;
-              lines.push('#'.repeat(level) + ' ' + text);
+              lines.push(headingPrefix(level) + text);
               continue;
             }
           }
@@ -558,7 +558,7 @@ export function registerDocumentTools(server: McpServer): void {
           if (inSection) {
             if (node.nodeName === 'heading') {
               const level = Number(node.getAttribute('level') ?? 1);
-              lines.push('#'.repeat(level) + ' ' + text);
+              lines.push(headingPrefix(level) + text);
             } else {
               lines.push(text);
             }

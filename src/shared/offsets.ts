@@ -29,39 +29,3 @@ export function headingPrefixLength(level: number | null | undefined): number {
 export function headingPrefix(level: number): string {
   return '#'.repeat(level) + ' ';
 }
-
-/**
- * Generic node-walking offset calculator. Iterates over a sequence of block nodes
- * and calls `visitor` for each one with the accumulated flat offset and node metadata.
- *
- * This lets both server (Y.XmlFragment) and client (PmNode) share the same
- * accumulation logic while providing their own node accessor.
- */
-export interface NodeInfo {
-  headingLevel: number | null;
-  textLength: number;
-}
-
-export function walkFlatOffsets<T>(
-  nodeCount: number,
-  getNode: (index: number) => NodeInfo,
-  visitor: (index: number, node: NodeInfo, accumulatedOffset: number, prefixLen: number) => T | undefined,
-): T | undefined {
-  let accumulated = 0;
-
-  for (let i = 0; i < nodeCount; i++) {
-    const node = getNode(i);
-    const prefixLen = headingPrefixLength(node.headingLevel);
-
-    const result = visitor(i, node, accumulated, prefixLen);
-    if (result !== undefined) return result;
-
-    accumulated += prefixLen + node.textLength;
-
-    // Separator between elements
-    if (i < nodeCount - 1) {
-      accumulated += 1;
-    }
-  }
-  return undefined;
-}
