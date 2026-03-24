@@ -26,6 +26,14 @@ export function getOrCreateDocument(name: string): Y.Doc {
   return doc;
 }
 
+/**
+ * Remove a document from the map. Called by afterUnloadDocument when
+ * Hocuspocus destroys a room's doc after all clients disconnect.
+ */
+export function removeDocument(name: string): boolean {
+  return documents.delete(name);
+}
+
 export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
     port,
@@ -65,6 +73,13 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       // The Hocuspocus-provided doc is now the authoritative instance
       documents.set(documentName, document);
       return document;
+    },
+
+    async afterUnloadDocument({ documentName }) {
+      if (documents.has(documentName)) {
+        documents.delete(documentName);
+        console.error(`[Hocuspocus] Unloaded document from map: ${documentName}`);
+      }
     },
   });
 

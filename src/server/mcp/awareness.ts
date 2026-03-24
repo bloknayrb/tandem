@@ -4,7 +4,8 @@ import { getOrCreateDocument } from '../yjs/provider.js';
 import { getCurrentDoc, extractText } from './document.js';
 import { collectAnnotations } from './annotations.js';
 import { mcpSuccess, noDocumentError } from './response.js';
-import type { Annotation } from '../../shared/types.js';
+import type { Annotation, ChatMessage } from '../../shared/types.js';
+import { generateMessageId } from '../../shared/utils.js';
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox
 const surfacedIds = new Set<string>();
@@ -108,6 +109,27 @@ export function registerAwarenessTools(server: McpServer): void {
         }
       }
 
+      // Bucket 3: unread chat messages from __tandem_ctrl__
+      const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+      const chatMap = ctrlDoc.getMap('chat');
+      const chatMessages: Array<Omit<ChatMessage, 'read' | 'author'>> = [];
+
+      chatMap.forEach((value) => {
+        const msg = value as ChatMessage;
+        if (msg.author === 'user' && !msg.read) {
+          chatMessages.push({
+            id: msg.id,
+            text: msg.text,
+            timestamp: msg.timestamp,
+            ...(msg.documentId ? { documentId: msg.documentId } : {}),
+            ...(msg.anchor ? { anchor: msg.anchor } : {}),
+            ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+          });
+          // Mark as read
+          chatMap.set(msg.id, { ...msg, read: true });
+        }
+      });
+
       // Current user activity
       const userAwareness = doc.getMap('userAwareness');
       const selection = userAwareness.get('selection') as { from: number; to: number; timestamp: number } | undefined;
@@ -144,15 +166,19 @@ export function registerAwarenessTools(server: McpServer): void {
           .join(', ');
         parts.push(statusList);
       }
+      if (chatMessages.length > 0) {
+        parts.push(`${chatMessages.length} new chat message${chatMessages.length > 1 ? 's' : ''}`);
+      }
       const summary = parts.length > 0 ? parts.join('. ') + '.' : 'No new actions.';
 
-      const hasNew = userActions.length > 0 || userResponses.length > 0;
+      const hasNew = userActions.length > 0 || userResponses.length > 0 || chatMessages.length > 0;
 
       return mcpSuccess({
         summary,
         hasNew,
         userActions,
         userResponses,
+        chatMessages,
         activity: {
           isTyping: activity?.isTyping ?? false,
           cursor: activity?.cursor ?? null,
@@ -160,6 +186,37 @@ export function registerAwarenessTools(server: McpServer): void {
           selectedText,
         },
       });
+    }
+  );
+  server.tool(
+    'tandem_reply',
+    'Send a chat message to the user in the Tandem sidebar. Use this to respond to chat messages from tandem_checkInbox.',
+    {
+      text: z.string().describe('Your message to the user'),
+      replyTo: z.string().optional().describe('ID of the user message you are replying to'),
+      documentId: z.string().optional().describe('Document context for this reply (defaults to active document)'),
+    },
+    async ({ text, replyTo, documentId }) => {
+      const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+      const chatMap = ctrlDoc.getMap('chat');
+
+      const id = generateMessageId();
+      const current = getCurrentDoc(documentId);
+      const docId = documentId ?? current?.id ?? undefined;
+
+      const msg: ChatMessage = {
+        id,
+        author: 'claude',
+        text,
+        timestamp: Date.now(),
+        ...(docId ? { documentId: docId } : {}),
+        ...(replyTo ? { replyTo } : {}),
+        read: true,
+      };
+
+      chatMap.set(id, msg);
+
+      return mcpSuccess({ sent: true, messageId: id });
     }
   );
 }

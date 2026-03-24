@@ -16,6 +16,7 @@ import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
   startAutoSave, stopAutoSave, isAutoSaveRunning,
+  saveCtrlSession, loadCtrlSession, restoreCtrlDoc,
 } from '../session/manager.js';
 import * as Y from 'yjs';
 
@@ -76,6 +77,19 @@ export async function saveCurrentSession(): Promise<void> {
   for (const [id, state] of openDocs) {
     const doc = getOrCreateDocument(id);
     await saveSession(state.filePath, state.format, doc);
+  }
+  // Also save the ctrl doc (chat history)
+  const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+  await saveCtrlSession(ctrlDoc);
+}
+
+/** Restore __tandem_ctrl__ chat history from session file if available. */
+export async function restoreCtrlSession(): Promise<void> {
+  const saved = await loadCtrlSession();
+  if (saved) {
+    const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+    restoreCtrlDoc(ctrlDoc, saved);
+    console.error('[Tandem] Restored chat history from session');
   }
 }
 
@@ -349,9 +363,8 @@ export function registerDocumentTools(server: McpServer): void {
     'Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.',
     { filePath: z.string().describe('Absolute path to the file to open') },
     async ({ filePath }) => {
+      let resolved = path.resolve(filePath);
       try {
-        // Resolve symlinks/junctions BEFORE path validation (prevents symlink-to-UNC bypass)
-        let resolved: string;
         try {
           resolved = fsSync.realpathSync(path.resolve(filePath));
         } catch {
