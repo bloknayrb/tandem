@@ -6,6 +6,10 @@ import { mcpSuccess, mcpError, noDocumentError } from './response.js';
 import { exportAnnotations } from '../file-io/docx.js';
 import * as Y from 'yjs';
 import type { Annotation, AnnotationType, HighlightColor } from '../../shared/types.js';
+import {
+  AnnotationTypeSchema, AnnotationStatusSchema, AnnotationPrioritySchema,
+  HighlightColorSchema, AuthorSchema, AnnotationActionSchema, ExportFormatSchema,
+} from '../../shared/types.js';
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
@@ -70,10 +74,10 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       from: z.number().describe('Start position'),
       to: z.number().describe('End position'),
-      color: z.enum(['yellow', 'red', 'green', 'blue', 'purple']).describe('Highlight color'),
+      color: HighlightColorSchema.describe('Highlight color'),
       note: z.string().optional().describe('Optional note for the highlight'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
-      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
+      priority: AnnotationPrioritySchema.optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
       textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
     async ({ from, to, color, note, documentId, priority, textSnapshot }) => {
@@ -94,7 +98,7 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       text: z.string().describe('Comment text'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
-      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
+      priority: AnnotationPrioritySchema.optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
       textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
     async ({ from, to, text, documentId, priority, textSnapshot }) => {
@@ -116,7 +120,7 @@ export function registerAnnotationTools(server: McpServer): void {
       newText: z.string().describe('Suggested replacement text'),
       reason: z.string().optional().describe('Reason for the suggestion'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
-      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
+      priority: AnnotationPrioritySchema.optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
       textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
     async ({ from, to, newText, reason, documentId, priority, textSnapshot }) => {
@@ -137,7 +141,7 @@ export function registerAnnotationTools(server: McpServer): void {
       to: z.number().describe('End position'),
       note: z.string().optional().describe('Reason for flagging'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
-      priority: z.enum(['normal', 'urgent']).optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
+      priority: AnnotationPrioritySchema.optional().describe('Annotation priority — urgent bypasses the Hold interruption mode'),
       textSnapshot: z.string().optional().describe('Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch'),
     },
     async ({ from, to, note, documentId, priority, textSnapshot }) => {
@@ -154,9 +158,9 @@ export function registerAnnotationTools(server: McpServer): void {
     'tandem_getAnnotations',
     'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox.',
     {
-      author: z.enum(['user', 'claude']).optional().describe('Filter by author'),
-      type: z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question', 'flag']).optional().describe('Filter by type'),
-      status: z.enum(['pending', 'accepted', 'dismissed']).optional().describe('Filter by status'),
+      author: AuthorSchema.optional().describe('Filter by author'),
+      type: AnnotationTypeSchema.optional().describe('Filter by type'),
+      status: AnnotationStatusSchema.optional().describe('Filter by status'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
     async ({ author, type, status, documentId }) => {
@@ -177,7 +181,7 @@ export function registerAnnotationTools(server: McpServer): void {
     'Accept or dismiss an annotation',
     {
       id: z.string().describe('Annotation ID'),
-      action: z.enum(['accept', 'dismiss']).describe('Action to take'),
+      action: AnnotationActionSchema.describe('Action to take'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
     async ({ id, action, documentId }) => {
@@ -213,7 +217,7 @@ export function registerAnnotationTools(server: McpServer): void {
     'tandem_exportAnnotations',
     'Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.',
     {
-      format: z.enum(['markdown', 'json']).optional().describe('Output format (default: markdown)'),
+      format: ExportFormatSchema.optional().describe('Output format (default: markdown)'),
       documentId: z.string().optional().describe('Target document ID (defaults to active document)'),
     },
     async ({ format, documentId }) => {

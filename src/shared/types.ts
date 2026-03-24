@@ -1,10 +1,32 @@
-// Annotation types
-export type AnnotationType = 'highlight' | 'comment' | 'suggestion' | 'overlay' | 'question' | 'flag';
-export type AnnotationStatus = 'pending' | 'accepted' | 'dismissed';
-export type AnnotationPriority = 'normal' | 'urgent';
-export type InterruptionMode = 'all' | 'urgent-only' | 'paused';
-export type HighlightColor = 'yellow' | 'red' | 'green' | 'blue' | 'purple';
-export type Severity = 'info' | 'warning' | 'error' | 'success';
+import { z } from 'zod';
+
+// --- Zod schemas (source of truth) ---
+
+export const AnnotationTypeSchema = z.enum(['highlight', 'comment', 'suggestion', 'overlay', 'question', 'flag']);
+export const AnnotationStatusSchema = z.enum(['pending', 'accepted', 'dismissed']);
+export const AnnotationPrioritySchema = z.enum(['normal', 'urgent']);
+export const InterruptionModeSchema = z.enum(['all', 'urgent-only', 'paused']);
+export const HighlightColorSchema = z.enum(['yellow', 'red', 'green', 'blue', 'purple']);
+export const SeveritySchema = z.enum(['info', 'warning', 'error', 'success']);
+export const AuthorSchema = z.enum(['user', 'claude']);
+export const AnnotationActionSchema = z.enum(['accept', 'dismiss']);
+export const ExportFormatSchema = z.enum(['markdown', 'json']);
+export const DocumentFormatSchema = z.enum(['md', 'txt', 'html', 'docx']);
+export const ToolErrorCodeSchema = z.enum([
+  'RANGE_STALE', 'FILE_LOCKED', 'FILE_NOT_FOUND', 'NO_DOCUMENT',
+  'INVALID_RANGE', 'FORMAT_ERROR', 'PERMISSION_DENIED',
+]);
+
+// --- Derived TypeScript types ---
+
+export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;
+export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
+export type AnnotationPriority = z.infer<typeof AnnotationPrioritySchema>;
+export type InterruptionMode = z.infer<typeof InterruptionModeSchema>;
+export type HighlightColor = z.infer<typeof HighlightColorSchema>;
+export type Severity = z.infer<typeof SeveritySchema>;
+
+// --- Interfaces (not worth converting to Zod — no runtime validation needed) ---
 
 export interface Annotation {
   id: string;
@@ -70,7 +92,7 @@ export interface DocumentInfo {
   id: string;
   filePath: string;
   fileName: string;
-  format: 'md' | 'txt' | 'html' | 'docx';
+  format: z.infer<typeof DocumentFormatSchema>;
   tokenEstimate: number;
   pageEstimate: number;
   readOnly: boolean;
@@ -91,7 +113,7 @@ export interface ToolSuccess<T = unknown> {
 
 export interface ToolError {
   error: true;
-  code: 'RANGE_STALE' | 'FILE_LOCKED' | 'FILE_NOT_FOUND' | 'NO_DOCUMENT' | 'INVALID_RANGE' | 'FORMAT_ERROR';
+  code: z.infer<typeof ToolErrorCodeSchema>;
   message: string;
   details?: Record<string, unknown>;
 }
