@@ -11,5 +11,12 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: [
+        'src/client/editor/extensions/annotation.ts',
+        'src/client/editor/extensions/awareness.ts',
+      ],
+    },
   },
 });
