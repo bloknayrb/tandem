@@ -5,6 +5,7 @@ import type { Node as PmNode } from '@tiptap/pm/model';
 import * as Y from 'yjs';
 import { HIGHLIGHT_COLORS } from '../../../shared/constants';
 import type { Annotation } from '../../../shared/types';
+import { headingPrefixLength } from '../../../shared/offsets';
 
 const annotationPluginKey = new PluginKey('tandemAnnotations');
 
@@ -26,12 +27,10 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
     // In PM, each block node adds 1 for its opening tag
     const childStart = pmOffset + 1;
 
-    // Calculate heading prefix length (these chars exist in flat text but not in PM)
-    let prefixLen = 0;
-    if (child.type.name === 'heading') {
-      const level = (child.attrs.level as number) || 1;
-      prefixLen = level + 1; // "# " = 2, "## " = 3
-    }
+    // Heading prefix chars exist in flat text but not in PM
+    const prefixLen = child.type.name === 'heading'
+      ? headingPrefixLength((child.attrs.level as number) || 1)
+      : 0;
 
     const textLen = child.textContent.length;
     const fullFlatLen = prefixLen + textLen;

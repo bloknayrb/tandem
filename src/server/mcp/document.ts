@@ -13,6 +13,7 @@ import {
 } from '../../shared/constants.js';
 import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
 import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
+import { headingPrefixLength as sharedHeadingPrefixLength, headingPrefix, FLAT_SEPARATOR } from '../../shared/offsets.js';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
   startAutoSave, stopAutoSave, isAutoSaveRunning,
@@ -219,14 +220,14 @@ export function extractText(doc: Y.Doc): string {
       const text = getElementText(node);
       if (node.nodeName === 'heading') {
         const level = Number(node.getAttribute('level') ?? 1);
-        lines.push('#'.repeat(level) + ' ' + text);
+        lines.push(headingPrefix(level) + text);
       } else {
         lines.push(text);
       }
     }
   }
 
-  return lines.join('\n');
+  return lines.join(FLAT_SEPARATOR);
 }
 
 /**
@@ -239,12 +240,13 @@ export function extractMarkdown(doc: Y.Doc): string {
 }
 
 /**
- * Get the heading prefix length for a node ("## " = 3, "# " = 2, paragraph = 0).
+ * Get the heading prefix length for a Y.XmlElement.
+ * Delegates to shared headingPrefixLength for the actual math.
  */
 export function getHeadingPrefixLength(node: Y.XmlElement): number {
   if (node.nodeName === 'heading') {
     const level = Number(node.getAttribute('level') ?? 1);
-    return level + 1; // "# " = 2, "## " = 3, "### " = 4
+    return sharedHeadingPrefixLength(level);
   }
   return 0;
 }
