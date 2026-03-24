@@ -11,6 +11,7 @@ import { DocumentTabs } from './tabs/DocumentTabs';
 import { ReviewSummary } from './panels/ReviewSummary';
 import { DEFAULT_WS_PORT, INTERRUPTION_MODE_DEFAULT, INTERRUPTION_MODE_KEY, REVIEW_BANNER_THRESHOLD } from '../shared/constants';
 import type { Annotation, InterruptionMode } from '../shared/types';
+import { InterruptionModeSchema } from '../shared/types';
 import { useAnnotationGate } from './hooks/useAnnotationGate';
 
 export interface DocListEntry {
@@ -35,8 +36,7 @@ export default function App() {
   // Interruption mode — persisted to localStorage
   const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
     const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
-    const validModes: InterruptionMode[] = ['all', 'urgent-only', 'paused'];
-    return validModes.includes(saved as InterruptionMode) ? (saved as InterruptionMode) : INTERRUPTION_MODE_DEFAULT;
+    return InterruptionModeSchema.safeParse(saved).success ? (saved as InterruptionMode) : INTERRUPTION_MODE_DEFAULT;
   });
   useEffect(() => { localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode); }, [interruptionMode]);
 
