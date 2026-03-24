@@ -4,11 +4,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
-  sessionKey, deleteSession, cleanupSessions,
+  sessionKey, deleteSession,
 } from '../../src/server/session/manager';
 
 // Use a temp directory for test sessions
-const TEST_SESSION_DIR = path.join('.tandem', 'test-sessions');
+const _TEST_SESSION_DIR = path.join('.tandem', 'test-sessions');
 
 describe('Session persistence', () => {
   // Create a Y.Doc with some content and annotations

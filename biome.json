@@ -1,0 +1,27 @@
+{
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "trailingCommas": "all",
+      "semicolons": "always"
+    }
+  },
+  "linter": {
+    "enabled": false
+  },
+  "files": {
+    "includes": [
+      "src/**/*.{ts,tsx,json}",
+      "*.json",
+      "!dist/**",
+      "!node_modules/**",
+      "!package-lock.json"
+    ]
+  }
+}

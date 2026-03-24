@@ -5,6 +5,7 @@ import type { Node as PmNode } from '@tiptap/pm/model';
 import * as Y from 'yjs';
 import { TYPING_DEBOUNCE } from '../../../shared/constants';
 import type { ClaudeAwareness } from '../../../shared/types';
+import { headingPrefixLength } from '../../../shared/offsets';
 
 const awarenessPluginKey = new PluginKey('tandemAwareness');
 
@@ -23,11 +24,9 @@ export function pmPosToFlatOffset(doc: PmNode, pmPos: number): number {
     const nodeStart = pmOffset + 1; // +1 for block open tag
 
     // Heading prefix in flat text
-    let prefixLen = 0;
-    if (child.type.name === 'heading') {
-      const level = (child.attrs.level as number) || 1;
-      prefixLen = level + 1;
-    }
+    const prefixLen = child.type.name === 'heading'
+      ? headingPrefixLength((child.attrs.level as number) || 1)
+      : 0;
 
     const textLen = child.textContent.length;
     const nodeEnd = nodeStart + textLen;

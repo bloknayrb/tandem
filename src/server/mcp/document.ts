@@ -3,6 +3,7 @@ import { z } from 'zod';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import * as Y from 'yjs';
 import { getOrCreateDocument } from '../yjs/provider.js';
 import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from './response.js';
 import {
@@ -11,353 +12,45 @@ import {
   LARGE_FILE_PAGE_THRESHOLD,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
 } from '../../shared/constants.js';
+import { headingPrefix } from '../../shared/offsets.js';
 import { loadMarkdown, saveMarkdown } from '../file-io/markdown.js';
 import { loadDocx, htmlToYDoc } from '../file-io/docx.js';
 import {
   saveSession, loadSession, restoreYDoc, sourceFileChanged,
   startAutoSave, stopAutoSave, isAutoSaveRunning,
-  saveCtrlSession, loadCtrlSession, restoreCtrlDoc,
 } from '../session/manager.js';
-import * as Y from 'yjs';
 
-// --- Multi-document state ---
+// Document model (pure logic)
+import {
+  extractText, extractMarkdown, populateYDoc, getElementText,
+  resolveOffset, getOrCreateXmlText, verifyAndResolveRange,
+  detectFormat, docIdFromPath,
+} from './document-model.js';
 
-export interface OpenDoc {
-  id: string;
-  filePath: string;
-  format: string;
-  readOnly: boolean;
-}
+// Document service (state management)
+import {
+  getOpenDocs, getActiveDocId, setActiveDocId,
+  getCurrentDoc, requireDocument, broadcastOpenDocs, toDocListEntry,
+  addDoc, removeDoc, hasDoc, docCount,
+} from './document-service.js';
 
-/** All open documents, keyed by document ID (which is also the Hocuspocus room name) */
-const openDocs = new Map<string, OpenDoc>();
-
-/** The active document ID — tools default to this when no documentId is specified */
-let activeDocId: string | null = null;
-
-/**
- * Generate a stable, readable document ID from a file path.
- * Used as both the map key and the Hocuspocus room name.
- */
-export function docIdFromPath(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < normalized.length; i++) {
-    hash = ((hash << 5) - hash + normalized.charCodeAt(i)) | 0;
-  }
-  const name = path.basename(filePath, path.extname(filePath))
-    .replace(/[^a-zA-Z0-9]/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 16);
-  return `${name}-${Math.abs(hash).toString(36).slice(0, 6)}`;
-}
-
-export function getOpenDocs(): Map<string, OpenDoc> {
-  return openDocs;
-}
-
-export function getActiveDocId(): string | null {
-  return activeDocId;
-}
-
-/**
- * Resolve which document to operate on.
- * If documentId is provided, use that. Otherwise use the active doc.
- */
-export function getCurrentDoc(documentId?: string) {
-  const id = documentId ?? activeDocId;
-  if (!id) return null;
-  const doc = openDocs.get(id);
-  if (!doc) return null;
-  return { ...doc, docName: id };
-}
-
-/** Save all open sessions (for shutdown handler). */
-export async function saveCurrentSession(): Promise<void> {
-  for (const [id, state] of openDocs) {
-    const doc = getOrCreateDocument(id);
-    await saveSession(state.filePath, state.format, doc);
-  }
-  // Also save the ctrl doc (chat history)
-  const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
-  await saveCtrlSession(ctrlDoc);
-}
-
-/** Restore __tandem_ctrl__ chat history from session file if available. */
-export async function restoreCtrlSession(): Promise<void> {
-  const saved = await loadCtrlSession();
-  if (saved) {
-    const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
-    restoreCtrlDoc(ctrlDoc, saved);
-    console.error('[Tandem] Restored chat history from session');
-  }
-}
-
-/** Returns the shared Y.Doc or null if the target doc isn't open */
-function requireDocument(documentId?: string): { doc: Y.Doc; filePath: string; docId: string } | null {
-  const current = getCurrentDoc(documentId);
-  if (!current) return null;
-  return { doc: getOrCreateDocument(current.docName), filePath: current.filePath, docId: current.id };
-}
-
-/** Build the document list entry for a single OpenDoc */
-function toDocListEntry(d: OpenDoc) {
-  return {
-    id: d.id,
-    filePath: d.filePath,
-    fileName: path.basename(d.filePath),
-    format: d.format,
-    readOnly: d.readOnly,
-  };
-}
-
-/** Broadcast the open documents list to connected clients.
- *  Writes to both the bootstrap room (__tandem_ctrl__) so new clients discover
- *  docs, and to the active document's room so tab-switching clients stay in sync. */
-function broadcastOpenDocs(): void {
-  try {
-    const docList = Array.from(openDocs.values()).map(toDocListEntry);
-    const activeId = activeDocId;
-
-    // Always write to bootstrap room so the client can discover docs
-    const ctrl = getOrCreateDocument('__tandem_ctrl__');
-    const ctrlMeta = ctrl.getMap('documentMeta');
-    ctrlMeta.set('openDocuments', docList);
-    ctrlMeta.set('activeDocumentId', activeId);
-
-    // Also write to active doc's room (for per-tab observers)
-    if (activeId) {
-      const ydoc = getOrCreateDocument(activeId);
-      const meta = ydoc.getMap('documentMeta');
-      meta.set('openDocuments', docList);
-      meta.set('activeDocumentId', activeId);
-    }
-  } catch (err) {
-    console.error('[Tandem] broadcastOpenDocs error:', err);
-  }
-}
-
-function detectFormat(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  switch (ext) {
-    case '.md': return 'md';
-    case '.txt': return 'txt';
-    case '.html': case '.htm': return 'html';
-    case '.docx': return 'docx';
-    default: return 'txt';
-  }
-}
-
-/** Insert text content into a Y.Doc's XmlFragment as paragraphs */
-export function populateYDoc(doc: Y.Doc, text: string): void {
-  const fragment = doc.getXmlFragment('default');
-
-  // Clear existing content in a single operation
-  if (fragment.length > 0) {
-    fragment.delete(0, fragment.length);
-  }
-
-  // Truly empty input produces empty fragment
-  if (text === '') return;
-
-  const lines = text.split('\n');
-  for (const line of lines) {
-    if (line === '') {
-      const empty = new Y.XmlElement('paragraph');
-      empty.insert(0, [new Y.XmlText('')]);
-      fragment.insert(fragment.length, [empty]);
-      continue;
-    }
-
-    let element: Y.XmlElement;
-
-    if (line.startsWith('### ')) {
-      element = new Y.XmlElement('heading');
-      element.setAttribute('level', 3 as any);
-      element.insert(0, [new Y.XmlText(line.slice(4))]);
-    } else if (line.startsWith('## ')) {
-      element = new Y.XmlElement('heading');
-      element.setAttribute('level', 2 as any);
-      element.insert(0, [new Y.XmlText(line.slice(3))]);
-    } else if (line.startsWith('# ')) {
-      element = new Y.XmlElement('heading');
-      element.setAttribute('level', 1 as any);
-      element.insert(0, [new Y.XmlText(line.slice(2))]);
-    } else {
-      element = new Y.XmlElement('paragraph');
-      element.insert(0, [new Y.XmlText(line)]);
-    }
-
-    fragment.insert(fragment.length, [element]);
-  }
-}
-
-/**
- * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
- */
-export function getElementText(element: Y.XmlElement): string {
-  const parts: string[] = [];
-  for (let i = 0; i < element.length; i++) {
-    const child = element.get(i);
-    if (child instanceof Y.XmlText) {
-      parts.push(child.toString());
-    } else if (child instanceof Y.XmlElement) {
-      parts.push(getElementText(child));
-    }
-  }
-  return parts.join('');
-}
-
-/** Extract plain text from a Y.Doc's XmlFragment */
-export function extractText(doc: Y.Doc): string {
-  const fragment = doc.getXmlFragment('default');
-  const lines: string[] = [];
-
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (node instanceof Y.XmlElement) {
-      const text = getElementText(node);
-      if (node.nodeName === 'heading') {
-        const level = Number(node.getAttribute('level') ?? 1);
-        lines.push('#'.repeat(level) + ' ' + text);
-      } else {
-        lines.push(text);
-      }
-    }
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Extract readable markdown from a Y.Doc via remark serialization.
- * Used for tandem_getTextContent on .md files so Claude can read document structure.
- * NOT used by resolveOffset or tandem_edit (those use extractText).
- */
-export function extractMarkdown(doc: Y.Doc): string {
-  return saveMarkdown(doc).trimEnd();
-}
-
-/**
- * Get the heading prefix length for a node ("## " = 3, "# " = 2, paragraph = 0).
- */
-export function getHeadingPrefixLength(node: Y.XmlElement): number {
-  if (node.nodeName === 'heading') {
-    const level = Number(node.getAttribute('level') ?? 1);
-    return level + 1; // "# " = 2, "## " = 3, "### " = 4
-  }
-  return 0;
-}
-
-// -- RANGE_STALE detection ---------------------------------------------------
-
-export type RangeVerifyResult =
-  | { valid: true }
-  | { valid: false; gone: true }
-  | { valid: false; gone: false; resolvedFrom: number; resolvedTo: number };
-
-/**
- * Check whether [from, to] still contains textSnapshot. If not, search the
- * full document and return the relocated range or { gone: true }.
- * When textSnapshot is omitted the check is a no-op (always valid).
- */
-export function verifyAndResolveRange(
-  doc: Y.Doc,
-  from: number,
-  to: number,
-  textSnapshot: string | undefined,
-): RangeVerifyResult {
-  if (!textSnapshot) return { valid: true };
-  const fullText = extractText(doc);
-  if (fullText.slice(from, to) === textSnapshot) return { valid: true };
-  // Find all occurrences and pick the one closest to the original position
-  const candidates: number[] = [];
-  let searchFrom = 0;
-  while (true) {
-    const idx = fullText.indexOf(textSnapshot, searchFrom);
-    if (idx === -1) break;
-    candidates.push(idx);
-    searchFrom = idx + 1;
-  }
-  if (candidates.length === 0) return { valid: false, gone: true };
-  const best = candidates.reduce((a, b) => Math.abs(a - from) <= Math.abs(b - from) ? a : b);
-  return { valid: false, gone: false, resolvedFrom: best, resolvedTo: best + textSnapshot.length };
-}
-
-export interface ResolvedOffset {
-  elementIndex: number;
-  textOffset: number;
-  /** True if the original offset fell inside a heading prefix (e.g., "## ") and was clamped to 0 */
-  clampedFromPrefix: boolean;
-}
-
-/**
- * Resolve a flat character offset (from extractText) to a Y.Doc element position.
- * Returns { elementIndex, textOffset, clampedFromPrefix } where textOffset is within
- * the element's Y.XmlText (NOT including heading prefix).
- */
-export function resolveOffset(
-  fragment: Y.XmlFragment,
-  charOffset: number
-): ResolvedOffset | null {
-  let accumulated = 0;
-
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (!(node instanceof Y.XmlElement)) continue;
-
-    const prefixLen = getHeadingPrefixLength(node);
-    const text = getElementText(node);
-    const fullLen = prefixLen + text.length;
-
-    // Is the target offset within this element?
-    if (accumulated + fullLen > charOffset) {
-      const offsetInFull = charOffset - accumulated;
-      const clampedFromPrefix = offsetInFull < prefixLen && prefixLen > 0;
-      const textOffset = Math.max(0, offsetInFull - prefixLen);
-      return { elementIndex: i, textOffset, clampedFromPrefix };
-    }
-
-    accumulated += fullLen;
-
-    // Account for the \n separator between elements
-    if (i < fragment.length - 1) {
-      accumulated += 1;
-      if (accumulated > charOffset) {
-        return { elementIndex: i, textOffset: text.length, clampedFromPrefix: false };
-      }
-    }
-  }
-
-  // Offset at or past end of document — return end of last element
-  if (fragment.length > 0) {
-    const lastNode = fragment.get(fragment.length - 1);
-    if (lastNode instanceof Y.XmlElement) {
-      return { elementIndex: fragment.length - 1, textOffset: getElementText(lastNode).length, clampedFromPrefix: false };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Find the first Y.XmlText child of a Y.XmlElement.
- * Creates one if the element is empty.
- */
-export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
-  for (let i = 0; i < element.length; i++) {
-    const child = element.get(i);
-    if (child instanceof Y.XmlText) {
-      return child;
-    }
-  }
-  // No text child — create one
-  const textNode = new Y.XmlText('');
-  element.insert(0, [textNode]);
-  return textNode;
-}
+// Re-export for backward compatibility with existing consumers.
+export {
+  extractText, extractMarkdown, populateYDoc, getElementText,
+  getOrCreateXmlText, resolveOffset, verifyAndResolveRange,
+  detectFormat, docIdFromPath, getHeadingPrefixLength,
+} from './document-model.js';
+export type { ResolvedOffset, RangeVerifyResult } from './document-model.js';
+export {
+  getCurrentDoc, getOpenDocs, getActiveDocId, setActiveDocId,
+  requireDocument, toDocListEntry, saveCurrentSession, restoreCtrlSession,
+  addDoc, removeDoc, hasDoc, docCount,
+} from './document-service.js';
+export type { OpenDoc } from './document-service.js';
 
 export function registerDocumentTools(server: McpServer): void {
+  const openDocs = getOpenDocs();
+
   server.tool(
     'tandem_open',
     'Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.',
@@ -371,7 +64,6 @@ export function registerDocumentTools(server: McpServer): void {
           resolved = path.resolve(filePath);
         }
 
-        // Reject UNC paths (prevents NTLM credential hash leakage via SMB)
         if (resolved.startsWith('\\\\') || resolved.startsWith('//')) {
           return mcpError('FILE_NOT_FOUND', 'UNC paths are not supported for security reasons.');
         }
@@ -385,12 +77,10 @@ export function registerDocumentTools(server: McpServer): void {
         const isDocx = format === 'docx';
         const readOnly = isDocx;
 
-        // Check if this file is already open
         const id = docIdFromPath(resolved);
         const existing = openDocs.get(id);
         if (existing) {
-          // Already open — just switch to it
-          activeDocId = id;
+          setActiveDocId(id);
           broadcastOpenDocs();
           const doc = getOrCreateDocument(id);
           const textContent = extractText(doc);
@@ -412,16 +102,13 @@ export function registerDocumentTools(server: McpServer): void {
         const fileName = path.basename(resolved);
         let restoredFromSession = false;
 
-        // Check for existing session
         const session = await loadSession(resolved);
         if (session) {
           const changed = await sourceFileChanged(session);
           if (!changed) {
-            // Source file unchanged — restore Y.Doc from session (preserves annotations)
             restoreYDoc(doc, session);
             restoredFromSession = true;
           }
-          // If source changed, fall through to fresh load (annotations may be stale)
         }
 
         if (!restoredFromSession) {
@@ -438,11 +125,9 @@ export function registerDocumentTools(server: McpServer): void {
           }
         }
 
-        // Register in the open docs map
-        openDocs.set(id, { id, filePath: resolved, format, readOnly });
-        activeDocId = id;
+        addDoc(id, { id, filePath: resolved, format, readOnly });
+        setActiveDocId(id);
 
-        // Write document metadata for client consumption
         const meta = doc.getMap('documentMeta');
         meta.set('readOnly', readOnly);
         meta.set('format', format);
@@ -451,7 +136,6 @@ export function registerDocumentTools(server: McpServer): void {
 
         broadcastOpenDocs();
 
-        // Start auto-save timer if not already running (saves all open docs)
         if (!isAutoSaveRunning()) {
           startAutoSave(async () => {
             for (const [docId, state] of openDocs) {
@@ -530,7 +214,6 @@ export function registerDocumentTools(server: McpServer): void {
       if (!r) return noDocumentError();
 
       if (section) {
-        // Extract only the section matching the heading
         const fragment = r.doc.getXmlFragment('default');
         const lines: string[] = [];
         let inSection = false;
@@ -544,11 +227,11 @@ export function registerDocumentTools(server: McpServer): void {
 
           if (node.nodeName === 'heading') {
             const level = Number(node.getAttribute('level') ?? 1);
-            if (inSection && level <= sectionLevel) break; // Hit next section at same/higher level
+            if (inSection && level <= sectionLevel) break;
             if (text.trim().toLowerCase() === section.trim().toLowerCase()) {
               inSection = true;
               sectionLevel = level;
-              lines.push('#'.repeat(level) + ' ' + text);
+              lines.push(headingPrefix(level) + text);
               continue;
             }
           }
@@ -556,7 +239,7 @@ export function registerDocumentTools(server: McpServer): void {
           if (inSection) {
             if (node.nodeName === 'heading') {
               const level = Number(node.getAttribute('level') ?? 1);
-              lines.push('#'.repeat(level) + ' ' + text);
+              lines.push(headingPrefix(level) + text);
             } else {
               lines.push(text);
             }
@@ -614,7 +297,6 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
 
-      // Verify range hasn't gone stale before mutating
       if (textSnapshot) {
         const result = verifyAndResolveRange(r.doc, from, to, textSnapshot);
         if (!result.valid) {
@@ -645,19 +327,14 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpError('INVALID_RANGE', `Cannot resolve offset range [${from}, ${to}] in document.`);
       }
 
-      // Validate that offsets don't land inside heading prefixes (e.g., "## ").
-      // If they do, the clamped textOffset=0 would target the wrong content.
       if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {
         return mcpError('INVALID_RANGE',
           'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
           'Use tandem_resolveRange to find the text position.');
       }
 
-      // For v1: handle same-element edits. Cross-element edits are more complex.
       if (startPos.elementIndex !== endPos.elementIndex) {
-        // Cross-element edit: delete from start to end across elements, insert new text in start element
         r.doc.transact(() => {
-          // Delete everything from startPos to end of start element
           const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
           const startText = getOrCreateXmlText(startNode);
           const startLen = startText.toString().length;
@@ -665,31 +342,25 @@ export function registerDocumentTools(server: McpServer): void {
             startText.delete(startPos.textOffset, startLen - startPos.textOffset);
           }
 
-          // Delete all elements between start and end (exclusive)
           const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
           for (let i = 0; i < deleteCount; i++) {
             fragment.delete(startPos.elementIndex + 1, 1);
           }
 
-          // Now endPos.elementIndex shifted — the end element is at startPos.elementIndex + 1
           const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
           const endText = getOrCreateXmlText(endNode);
-          // Delete from start of end element up to endPos.textOffset
           if (endPos.textOffset > 0) {
             endText.delete(0, endPos.textOffset);
           }
-          // Append remaining end text to start element, then delete end element
           const remainingText = endText.toString();
           if (remainingText.length > 0) {
             startText.insert(startPos.textOffset, remainingText);
           }
           fragment.delete(startPos.elementIndex + 1, 1);
 
-          // Insert new text at the start position
           startText.insert(startPos.textOffset, newText);
         });
       } else {
-        // Same-element edit
         r.doc.transact(() => {
           const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
           const textNode = getOrCreateXmlText(node);
@@ -722,7 +393,6 @@ export function registerDocumentTools(server: McpServer): void {
         const readOnly = docState?.readOnly ?? false;
 
         if (readOnly) {
-          // Read-only docs: save session only (annotations persist), don't touch the source file
           await saveSession(r.filePath, format, r.doc);
           return mcpSuccess({
             saved: true,
@@ -733,11 +403,9 @@ export function registerDocumentTools(server: McpServer): void {
         }
 
         const output = format === 'md' ? saveMarkdown(r.doc) : extractText(r.doc);
-        // Atomic save: write to temp, then rename
         const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
         await fs.writeFile(tempPath, output, 'utf-8');
         await fs.rename(tempPath, r.filePath);
-        // Save session alongside file save (captures annotations + doc state)
         await saveSession(r.filePath, format, r.doc);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
@@ -751,7 +419,8 @@ export function registerDocumentTools(server: McpServer): void {
     'Check editor status: running, open documents, active document',
     {},
     async () => {
-      const active = activeDocId ? openDocs.get(activeDocId) : null;
+      const activeId = getActiveDocId();
+      const active = activeId ? openDocs.get(activeId) : null;
       return mcpSuccess({
         running: true,
         activeDocument: active ? { documentId: active.id, filePath: active.filePath, format: active.format } : null,
@@ -761,7 +430,7 @@ export function registerDocumentTools(server: McpServer): void {
           format: d.format,
           readOnly: d.readOnly,
         })),
-        documentCount: openDocs.size,
+        documentCount: docCount(),
       });
     }
   );
@@ -773,26 +442,23 @@ export function registerDocumentTools(server: McpServer): void {
       documentId: z.string().optional().describe('Document ID to close (defaults to active document)'),
     },
     async ({ documentId }) => {
-      const id = documentId ?? activeDocId;
+      const id = documentId ?? getActiveDocId();
       if (!id) return mcpError('NO_DOCUMENT', 'No document to close.');
 
       const docState = openDocs.get(id);
       if (!docState) return mcpError('NO_DOCUMENT', `Document ${id} not found.`);
 
-      // Save session before closing
       const doc = getOrCreateDocument(id);
       await saveSession(docState.filePath, docState.format, doc);
 
-      openDocs.delete(id);
+      removeDoc(id);
 
-      // If we closed the active doc, switch to another or null
-      if (activeDocId === id) {
+      if (getActiveDocId() === id) {
         const remaining = Array.from(openDocs.keys());
-        activeDocId = remaining.length > 0 ? remaining[0] : null;
+        setActiveDocId(remaining.length > 0 ? remaining[0] : null);
       }
 
-      // Stop auto-save if no docs remain
-      if (openDocs.size === 0) {
+      if (docCount() === 0) {
         stopAutoSave();
       }
 
@@ -801,7 +467,7 @@ export function registerDocumentTools(server: McpServer): void {
       return mcpSuccess({
         closed: true,
         was: docState.filePath,
-        activeDocumentId: activeDocId,
+        activeDocumentId: getActiveDocId(),
       });
     }
   );
@@ -814,10 +480,10 @@ export function registerDocumentTools(server: McpServer): void {
       return mcpSuccess({
         documents: Array.from(openDocs.values()).map(d => ({
           ...toDocListEntry(d),
-          isActive: d.id === activeDocId,
+          isActive: d.id === getActiveDocId(),
         })),
-        activeDocumentId: activeDocId,
-        count: openDocs.size,
+        activeDocumentId: getActiveDocId(),
+        count: docCount(),
       });
     }
   );
@@ -829,10 +495,10 @@ export function registerDocumentTools(server: McpServer): void {
       documentId: z.string().describe('Document ID to switch to'),
     },
     async ({ documentId }) => {
-      if (!openDocs.has(documentId)) {
+      if (!hasDoc(documentId)) {
         return mcpError('NO_DOCUMENT', `Document ${documentId} is not open.`);
       }
-      activeDocId = documentId;
+      setActiveDocId(documentId);
       broadcastOpenDocs();
       return mcpSuccess({
         activeDocumentId: documentId,

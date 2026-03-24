@@ -1,17 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
-import type { Editor as TiptapEditor } from '@tiptap/react';
-import * as Y from 'yjs';
-import { pmPosToFlatOffset } from '../extensions/awareness';
-import { generateAnnotationId } from '../../../shared/utils';
-import { HIGHLIGHT_COLORS } from '../../../shared/constants';
-import type { Annotation, AnnotationType, HighlightColor } from '../../../shared/types';
+import React, { useState, useEffect, useRef } from "react";
+import type { Editor as TiptapEditor } from "@tiptap/react";
+import * as Y from "yjs";
+import { pmPosToFlatOffset } from "../extensions/awareness";
+import { generateAnnotationId } from "../../../shared/utils";
+import { HIGHLIGHT_COLORS } from "../../../shared/constants";
+import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
-  { value: 'yellow', label: 'Yellow' },
-  { value: 'red', label: 'Red' },
-  { value: 'green', label: 'Green' },
-  { value: 'blue', label: 'Blue' },
-  { value: 'purple', label: 'Purple' },
+  { value: "yellow", label: "Yellow" },
+  { value: "red", label: "Red" },
+  { value: "green", label: "Green" },
+  { value: "blue", label: "Blue" },
+  { value: "purple", label: "Purple" },
 ];
 
 interface ToolbarProps {
@@ -21,15 +21,15 @@ interface ToolbarProps {
 
 export function Toolbar({ editor, ydoc }: ToolbarProps) {
   const [hasSelection, setHasSelection] = useState(false);
-  const [highlightColor, setHighlightColor] = useState<HighlightColor>('yellow');
+  const [highlightColor, setHighlightColor] = useState<HighlightColor>("yellow");
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [commentMode, setCommentMode] = useState(false);
-  const [commentText, setCommentText] = useState('');
+  const [commentText, setCommentText] = useState("");
   const [suggestMode, setSuggestMode] = useState(false);
-  const [suggestText, setSuggestText] = useState('');
-  const [suggestReason, setSuggestReason] = useState('');
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestReason, setSuggestReason] = useState("");
   const [askClaudeMode, setAskClaudeMode] = useState(false);
-  const [askClaudeText, setAskClaudeText] = useState('');
+  const [askClaudeText, setAskClaudeText] = useState("");
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
   const suggestInputRef = useRef<HTMLInputElement>(null);
@@ -43,11 +43,13 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     function onSelectionUpdate() {
       const { from, to } = ed.state.selection;
       const next = from !== to;
-      setHasSelection(prev => prev === next ? prev : next);
+      setHasSelection((prev) => (prev === next ? prev : next));
     }
 
-    editor.on('selectionUpdate', onSelectionUpdate);
-    return () => { editor.off('selectionUpdate', onSelectionUpdate); };
+    editor.on("selectionUpdate", onSelectionUpdate);
+    return () => {
+      editor.off("selectionUpdate", onSelectionUpdate);
+    };
   }, [editor]);
 
   // Focus inputs when entering modes
@@ -79,8 +81,8 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       }
     }
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showColorPicker]);
 
   function createAnnotation(type: AnnotationType, content: string, color?: HighlightColor) {
@@ -96,16 +98,16 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     const id = generateAnnotationId();
     const annotation: Annotation = {
       id,
-      author: 'user',
+      author: "user",
       type,
       range: { from: flatFrom, to: flatTo },
       content,
-      status: 'pending',
+      status: "pending",
       timestamp: Date.now(),
       ...(color ? { color } : {}),
     };
 
-    ydoc.getMap('annotations').set(id, annotation);
+    ydoc.getMap("annotations").set(id, annotation);
     capturedRangeRef.current = null;
   }
 
@@ -126,12 +128,12 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
 
   function handleHighlight(e: React.MouseEvent) {
     e.preventDefault();
-    createAnnotation('highlight', '', highlightColor);
+    createAnnotation("highlight", "", highlightColor);
   }
 
   function handleColorPickerToggle(e: React.MouseEvent) {
     e.preventDefault();
-    setShowColorPicker(prev => !prev);
+    setShowColorPicker((prev) => !prev);
   }
 
   function handleColorSelect(color: HighlightColor) {
@@ -145,7 +147,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     e.preventDefault();
     captureSelectionRange();
     setCommentMode(true);
-    setCommentText('');
+    setCommentText("");
   }
 
   function handleCommentSubmit() {
@@ -153,23 +155,23 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       handleCommentCancel();
       return;
     }
-    createAnnotation('comment', commentText.trim());
+    createAnnotation("comment", commentText.trim());
     setCommentMode(false);
-    setCommentText('');
+    setCommentText("");
     editor?.chain().focus().run();
   }
 
   function handleCommentCancel() {
     setCommentMode(false);
-    setCommentText('');
+    setCommentText("");
     resetAndFocusEditor();
   }
 
   function handleCommentKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       handleCommentSubmit();
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       handleCommentCancel();
     }
   }
@@ -180,8 +182,8 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     e.preventDefault();
     captureSelectionRange();
     setSuggestMode(true);
-    setSuggestText('');
-    setSuggestReason('');
+    setSuggestText("");
+    setSuggestReason("");
   }
 
   function handleSuggestSubmit() {
@@ -189,25 +191,28 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       handleSuggestCancel();
       return;
     }
-    createAnnotation('suggestion', JSON.stringify({ newText: suggestText.trim(), reason: suggestReason.trim() }));
+    createAnnotation(
+      "suggestion",
+      JSON.stringify({ newText: suggestText.trim(), reason: suggestReason.trim() }),
+    );
     setSuggestMode(false);
-    setSuggestText('');
-    setSuggestReason('');
+    setSuggestText("");
+    setSuggestReason("");
     editor?.chain().focus().run();
   }
 
   function handleSuggestCancel() {
     setSuggestMode(false);
-    setSuggestText('');
-    setSuggestReason('');
+    setSuggestText("");
+    setSuggestReason("");
     resetAndFocusEditor();
   }
 
   function handleSuggestKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       handleSuggestSubmit();
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       handleSuggestCancel();
     }
   }
@@ -216,7 +221,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
 
   function handleFlag(e: React.MouseEvent) {
     e.preventDefault();
-    createAnnotation('flag', '');
+    createAnnotation("flag", "");
   }
 
   // -- Ask Claude mode --
@@ -225,7 +230,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     e.preventDefault();
     captureSelectionRange();
     setAskClaudeMode(true);
-    setAskClaudeText('');
+    setAskClaudeText("");
   }
 
   function handleAskClaudeSubmit() {
@@ -233,23 +238,23 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       handleAskClaudeCancel();
       return;
     }
-    createAnnotation('question', askClaudeText.trim());
+    createAnnotation("question", askClaudeText.trim());
     setAskClaudeMode(false);
-    setAskClaudeText('');
+    setAskClaudeText("");
     editor?.chain().focus().run();
   }
 
   function handleAskClaudeCancel() {
     setAskClaudeMode(false);
-    setAskClaudeText('');
+    setAskClaudeText("");
     resetAndFocusEditor();
   }
 
   function handleAskClaudeKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       handleAskClaudeSubmit();
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       handleAskClaudeCancel();
     }
   }
@@ -257,68 +262,74 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
   const canAnnotate = editor && ydoc && hasSelection;
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      padding: '8px 16px',
-      borderBottom: '1px solid #e5e7eb',
-      background: '#fafafa',
-      userSelect: 'none',
-    }}>
-      <span style={{ fontWeight: 700, fontSize: '15px', color: '#6366f1', letterSpacing: '-0.02em' }}>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "8px 16px",
+        borderBottom: "1px solid #e5e7eb",
+        background: "#fafafa",
+        userSelect: "none",
+      }}
+    >
+      <span
+        style={{ fontWeight: 700, fontSize: "15px", color: "#6366f1", letterSpacing: "-0.02em" }}
+      >
         Tandem
       </span>
-      <div style={{ width: '1px', height: '20px', background: '#e5e7eb', margin: '0 8px' }} />
+      <div style={{ width: "1px", height: "20px", background: "#e5e7eb", margin: "0 8px" }} />
 
       {/* Highlight with color picker */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '2px', position: 'relative' }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "2px", position: "relative" }}>
         <ToolbarButton
           label="Highlight"
           disabled={!canAnnotate || inInputMode}
           onMouseDown={handleHighlight}
-          style={{ borderRadius: '4px 0 0 4px', borderRight: 'none' }}
+          style={{ borderRadius: "4px 0 0 4px", borderRight: "none" }}
         />
         <button
           disabled={!canAnnotate || inInputMode}
           onMouseDown={handleColorPickerToggle}
           title="Choose highlight color"
           style={{
-            padding: '4px 6px',
-            fontSize: '13px',
-            border: '1px solid #e5e7eb',
-            borderRadius: '0 4px 4px 0',
-            background: (!canAnnotate || inInputMode) ? '#f9fafb' : '#fff',
-            cursor: (!canAnnotate || inInputMode) ? 'not-allowed' : 'pointer',
-            display: 'flex',
-            alignItems: 'center',
+            padding: "4px 6px",
+            fontSize: "13px",
+            border: "1px solid #e5e7eb",
+            borderRadius: "0 4px 4px 0",
+            background: !canAnnotate || inInputMode ? "#f9fafb" : "#fff",
+            cursor: !canAnnotate || inInputMode ? "not-allowed" : "pointer",
+            display: "flex",
+            alignItems: "center",
           }}
         >
-          <span style={{
-            display: 'inline-block',
-            width: '12px',
-            height: '12px',
-            borderRadius: '2px',
-            background: HIGHLIGHT_COLORS[highlightColor],
-            border: '1px solid rgba(0,0,0,0.15)',
-          }} />
+          <span
+            style={{
+              display: "inline-block",
+              width: "12px",
+              height: "12px",
+              borderRadius: "2px",
+              background: HIGHLIGHT_COLORS[highlightColor],
+              border: "1px solid rgba(0,0,0,0.15)",
+            }}
+          />
         </button>
         {showColorPicker && (
           <div
             ref={colorPickerRef}
             style={{
-              position: 'absolute',
-              top: '100%',
+              position: "absolute",
+              top: "100%",
               left: 0,
-              marginTop: '4px',
-              background: '#fff',
-              border: '1px solid #e5e7eb',
-              borderRadius: '6px',
-              padding: '6px',
-              display: 'flex',
-              gap: '4px',
+              marginTop: "4px",
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: "6px",
+              padding: "6px",
+              display: "flex",
+              gap: "4px",
               zIndex: 10,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
             }}
           >
             {HIGHLIGHT_COLOR_OPTIONS.map(({ value, label }) => (
@@ -327,12 +338,13 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
                 title={label}
                 onClick={() => handleColorSelect(value)}
                 style={{
-                  width: '24px',
-                  height: '24px',
-                  borderRadius: '4px',
-                  border: value === highlightColor ? '2px solid #374151' : '1px solid rgba(0,0,0,0.15)',
+                  width: "24px",
+                  height: "24px",
+                  borderRadius: "4px",
+                  border:
+                    value === highlightColor ? "2px solid #374151" : "1px solid rgba(0,0,0,0.15)",
                   background: HIGHLIGHT_COLORS[value],
-                  cursor: 'pointer',
+                  cursor: "pointer",
                   padding: 0,
                 }}
               />
@@ -382,27 +394,23 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
             <input
               type="text"
               value={suggestReason}
-              onChange={e => setSuggestReason(e.target.value)}
+              onChange={(e) => setSuggestReason(e.target.value)}
               onKeyDown={handleSuggestKeyDown}
               placeholder="Reason (optional)"
               style={{
-                padding: '3px 8px',
-                fontSize: '13px',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                outline: 'none',
-                width: '140px',
+                padding: "3px 8px",
+                fontSize: "13px",
+                border: "1px solid #d1d5db",
+                borderRadius: "4px",
+                outline: "none",
+                width: "140px",
               }}
             />
           }
         />
       )}
 
-      <ToolbarButton
-        label="Flag"
-        disabled={!canAnnotate || inInputMode}
-        onMouseDown={handleFlag}
-      />
+      <ToolbarButton label="Flag" disabled={!canAnnotate || inInputMode} onMouseDown={handleFlag} />
 
       <ToolbarButton
         label="Ask Claude"
@@ -426,14 +434,26 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       )}
 
       <div style={{ flex: 1 }} />
-      <span style={{ fontSize: '12px', color: '#9ca3af' }}>Review Mode</span>
+      <span style={{ fontSize: "12px", color: "#9ca3af" }}>Review Mode</span>
     </div>
   );
 }
 
 /** Reusable inline input group for comment/question/suggest modes */
-function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, placeholder, submitLabel, borderColor, canSubmit, secondaryInput }: {
-  inputRef: React.RefObject<HTMLInputElement | null>;
+function InputGroup({
+  inputRef,
+  value,
+  onChange,
+  onKeyDown,
+  onSubmit,
+  onCancel,
+  placeholder,
+  submitLabel,
+  borderColor,
+  canSubmit,
+  secondaryInput,
+}: {
+  inputRef: React.RefObject<HTMLInputElement>;
   value: string;
   onChange: (v: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
@@ -446,21 +466,21 @@ function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, 
   secondaryInput?: React.ReactNode;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
       <input
         ref={inputRef}
         type="text"
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         style={{
-          padding: '3px 8px',
-          fontSize: '13px',
+          padding: "3px 8px",
+          fontSize: "13px",
           border: `1px solid ${borderColor}`,
-          borderRadius: '4px',
-          outline: 'none',
-          width: '200px',
+          borderRadius: "4px",
+          outline: "none",
+          width: "200px",
         }}
       />
       {secondaryInput}
@@ -470,7 +490,14 @@ function InputGroup({ inputRef, value, onChange, onKeyDown, onSubmit, onCancel, 
   );
 }
 
-function ToolbarButton({ label, shortcut, disabled, onMouseDown, onClick, style }: {
+function ToolbarButton({
+  label,
+  shortcut,
+  disabled,
+  onMouseDown,
+  onClick,
+  style,
+}: {
   label: string;
   shortcut?: string;
   disabled?: boolean;
@@ -485,13 +512,13 @@ function ToolbarButton({ label, shortcut, disabled, onMouseDown, onClick, style 
       onMouseDown={onMouseDown}
       onClick={onClick}
       style={{
-        padding: '4px 10px',
-        fontSize: '13px',
-        border: '1px solid #e5e7eb',
-        borderRadius: '4px',
-        background: disabled ? '#f9fafb' : '#fff',
-        color: disabled ? '#9ca3af' : '#374151',
-        cursor: disabled ? 'not-allowed' : 'pointer',
+        padding: "4px 10px",
+        fontSize: "13px",
+        border: "1px solid #e5e7eb",
+        borderRadius: "4px",
+        background: disabled ? "#f9fafb" : "#fff",
+        color: disabled ? "#9ca3af" : "#374151",
+        cursor: disabled ? "not-allowed" : "pointer",
         ...style,
       }}
     >

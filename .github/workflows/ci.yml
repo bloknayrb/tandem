@@ -19,8 +19,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck (client)
-        run: npx tsc --noEmit
+        run: npx tsc --noEmit -p tsconfig.client.json
 
       - name: Typecheck (server)
         run: npx tsc --noEmit -p tsconfig.server.json

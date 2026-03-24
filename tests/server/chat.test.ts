@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import * as Y from 'yjs';
 import { getOrCreateDocument } from '../../src/server/yjs/provider.js';
 import { generateMessageId } from '../../src/shared/utils.js';
 import type { ChatMessage } from '../../src/shared/types.js';

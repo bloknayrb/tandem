@@ -6,7 +6,7 @@ import {
   getOrCreateXmlText,
 } from '../../src/server/mcp/document.js';
 import { escapeRegex } from '../../src/server/mcp/response.js';
-import { makeDoc, getFragment } from '../helpers/ydoc-factory.js';
+import { makeDoc } from '../helpers/ydoc-factory.js';
 
 let doc: Y.Doc;
 
