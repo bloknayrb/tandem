@@ -3,7 +3,7 @@
 
 import mammoth from 'mammoth';
 import * as htmlparser2 from 'htmlparser2';
-import type { Document, Element, Text, ChildNode } from 'domhandler';
+import type { Element, Text, ChildNode } from 'domhandler';
 import * as Y from 'yjs';
 import type { Annotation } from '../../shared/types.js';
 import { getElementText } from '../mcp/document.js';

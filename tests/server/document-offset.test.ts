@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import * as Y from 'yjs';
-import { resolveOffset, extractText } from '../../src/server/mcp/document.js';
+import { resolveOffset } from '../../src/server/mcp/document.js';
 import { makeDoc, makeEmptyDoc, getFragment } from '../helpers/ydoc-factory.js';
 
 let doc: Y.Doc;

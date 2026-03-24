@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as Y from 'yjs';
 import { htmlToYDoc, exportAnnotations } from '../../src/server/file-io/docx.js';
 import { getElementText } from '../../src/server/mcp/document.js';
-import { getFragment, getAnnotationsMap } from '../helpers/ydoc-factory.js';
+import { getFragment } from '../helpers/ydoc-factory.js';
 import type { Annotation } from '../../src/shared/types.js';
 
 let doc: Y.Doc;

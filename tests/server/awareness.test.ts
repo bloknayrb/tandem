@@ -47,8 +47,8 @@ describe('tandem_checkInbox logic', () => {
     makeDoc('Hello world test');
     const map = doc.getMap('annotations');
 
-    const highlight = addAnnotation(map, { author: 'user', type: 'highlight', range: { from: 0, to: 5 } });
-    const comment = addAnnotation(map, { author: 'user', type: 'comment', range: { from: 6, to: 11 }, content: 'Nice' });
+    const _highlight = addAnnotation(map, { author: 'user', type: 'highlight', range: { from: 0, to: 5 } });
+    const _comment = addAnnotation(map, { author: 'user', type: 'comment', range: { from: 6, to: 11 }, content: 'Nice' });
 
     const allAnns = collectAnnotations(map);
     const userActions = allAnns.filter(a => a.author === 'user');
@@ -76,7 +76,7 @@ describe('tandem_checkInbox logic', () => {
     makeDoc('Hello world');
     const map = doc.getMap('annotations');
 
-    const question = addAnnotation(map, {
+    const _question = addAnnotation(map, {
       author: 'user',
       type: 'question',
       range: { from: 0, to: 5 },

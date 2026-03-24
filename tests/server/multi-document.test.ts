@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import * as Y from 'yjs';
-import { getOrCreateDocument, getDocument } from '../../src/server/yjs/provider.js';
+import { describe, it, expect } from 'vitest';
+import { getOrCreateDocument } from '../../src/server/yjs/provider.js';
 import {
-  docIdFromPath, getCurrentDoc, getOpenDocs, getActiveDocId,
+  docIdFromPath, getCurrentDoc,
   populateYDoc, extractText,
 } from '../../src/server/mcp/document.js';
 

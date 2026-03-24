@@ -26,7 +26,7 @@ interface EditorProps {
   onEditorReady?: (editor: TiptapEditor | null) => void;
 }
 
-export function Editor({ ydoc, provider, readOnly, reviewMode, activeAnnotationId, onConnectionChange, onEditorReady }: EditorProps) {
+export function Editor({ ydoc, provider, readOnly, reviewMode, activeAnnotationId, onConnectionChange: _onConnectionChange, onEditorReady }: EditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({

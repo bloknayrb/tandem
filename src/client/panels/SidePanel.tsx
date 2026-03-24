@@ -38,7 +38,7 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor) {
   }
 }
 
-export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interruptionMode, onModeChange, reviewMode, onToggleReviewMode, onExitReviewMode, activeAnnotationId, onActiveAnnotationChange }: SidePanelProps) {
+export function SidePanel({ annotations, editor, ydoc, heldCount = 0, interruptionMode: _interruptionMode, onModeChange, reviewMode, onToggleReviewMode, onExitReviewMode, activeAnnotationId: _activeAnnotationId, onActiveAnnotationChange }: SidePanelProps) {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>('all');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
