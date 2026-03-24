@@ -16,7 +16,12 @@
     "enabled": false
   },
   "files": {
-    "include": ["src/**/*.{ts,tsx,json}", "*.json"],
-    "ignore": ["dist/**", "node_modules/**", "package-lock.json"]
+    "includes": [
+      "src/**/*.{ts,tsx,json}",
+      "*.json",
+      "!dist/**",
+      "!node_modules/**",
+      "!package-lock.json"
+    ]
   }
 }
