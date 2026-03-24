@@ -1,7 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
-import * as Y from "yjs";
-import { HocuspocusProvider } from "@hocuspocus/provider";
 import { Editor } from "./editor/Editor";
 import { SidePanel } from "./panels/SidePanel";
 import { ChatPanel } from "./panels/ChatPanel";
@@ -10,23 +8,33 @@ import { Toolbar } from "./editor/toolbar/Toolbar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
 import { ReviewSummary } from "./panels/ReviewSummary";
 import {
-  DEFAULT_WS_PORT,
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
   REVIEW_BANNER_THRESHOLD,
 } from "../shared/constants";
-import type { Annotation, InterruptionMode } from "../shared/types";
+import type { InterruptionMode } from "../shared/types";
 import { InterruptionModeSchema } from "../shared/types";
 import { useAnnotationGate } from "./hooks/useAnnotationGate";
+import { useYjsSync } from "./hooks/useYjsSync";
 import type { DocListEntry, OpenTab } from "./types";
 
 export type { DocListEntry, OpenTab };
 
 export default function App() {
-  const [tabs, setTabs] = useState<OpenTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const {
+    tabs,
+    activeTabId,
+    setActiveTabId,
+    handleTabClose,
+    connected,
+    setConnected,
+    annotations,
+    claudeStatus,
+    claudeActive,
+    readOnly,
+    bootstrapYdoc,
+    ready,
+  } = useYjsSync();
 
   // Interruption mode — persisted to localStorage
   const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
@@ -40,10 +48,7 @@ export default function App() {
   }, [interruptionMode]);
 
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
-  const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
-  const [claudeActive, setClaudeActive] = useState(false);
-  const [readOnly, setReadOnly] = useState(false);
-  const [ready, setReady] = useState(false);
+
   const [showReviewSummary, setShowReviewSummary] = useState(false);
   const [reviewSummaryData, setReviewSummaryData] = useState<{
     accepted: number;
@@ -58,194 +63,11 @@ export default function App() {
 
   const editorRef = useRef<TiptapEditor | null>(null);
   const prevPendingRef = useRef<number>(0);
-  const observersRef = useRef<Map<string, { cleanup: () => void }>>(new Map());
-  const tabsRef = useRef<OpenTab[]>([]);
-  tabsRef.current = tabs;
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
     if (editor) setEditorVersion((v) => v + 1);
   }, []);
-
-  /** Set up observers for a tab's Y.Doc. Returns cleanup function. */
-  const setupTabObservers = useCallback((tab: OpenTab) => {
-    const { ydoc } = tab;
-
-    const annotationsMap = ydoc.getMap("annotations");
-    const annotationObserver = () => {
-      const anns: Annotation[] = [];
-      annotationsMap.forEach((value) => {
-        anns.push(value as Annotation);
-      });
-      setAnnotations(anns);
-    };
-    annotationsMap.observe(annotationObserver);
-    annotationObserver();
-
-    const awarenessMap = ydoc.getMap("awareness");
-    let prevStatus: string | null = null;
-    let prevActive = false;
-    const awarenessObserver = () => {
-      const claude = awarenessMap.get("claude") as
-        | {
-            status: string;
-            timestamp: number;
-            active: boolean;
-          }
-        | undefined;
-      const newStatus = claude?.status ?? null;
-      const newActive = claude?.active ?? false;
-      if (newStatus !== prevStatus) {
-        prevStatus = newStatus;
-        setClaudeStatus(newStatus);
-      }
-      if (newActive !== prevActive) {
-        prevActive = newActive;
-        setClaudeActive(newActive);
-      }
-    };
-    awarenessMap.observe(awarenessObserver);
-    awarenessObserver();
-
-    const documentMetaMap = ydoc.getMap("documentMeta");
-    let prevReadOnly = false;
-    const documentMetaObserver = () => {
-      const ro = (documentMetaMap.get("readOnly") as boolean | undefined) === true;
-      if (ro !== prevReadOnly) {
-        prevReadOnly = ro;
-        setReadOnly(ro);
-      }
-    };
-    documentMetaMap.observe(documentMetaObserver);
-    documentMetaObserver();
-
-    return () => {
-      annotationsMap.unobserve(annotationObserver);
-      awarenessMap.unobserve(awarenessObserver);
-      documentMetaMap.unobserve(documentMetaObserver);
-    };
-  }, []);
-
-  /**
-   * Bootstrap connection to coordinate document list.
-   * Uses '__tandem_ctrl__' room to avoid collision with document IDs.
-   */
-  const bootstrapRef = useRef<{ ydoc: Y.Doc; provider: HocuspocusProvider } | null>(null);
-
-  useEffect(() => {
-    const ydoc = new Y.Doc();
-    const provider = new HocuspocusProvider({
-      url: `ws://localhost:${DEFAULT_WS_PORT}`,
-      name: "__tandem_ctrl__",
-      document: ydoc,
-    });
-    bootstrapRef.current = { ydoc, provider };
-
-    provider.on("status", ({ status }: { status: string }) => {
-      setConnected(status === "connected");
-    });
-
-    setReady(true);
-
-    return () => {
-      provider.destroy();
-      ydoc.destroy();
-      bootstrapRef.current = null;
-    };
-  }, []);
-
-  /**
-   * Sync tabs from server-broadcast 'openDocuments' list.
-   * Allocations happen outside the setTabs updater to be StrictMode-safe.
-   */
-  const handleDocumentListRef =
-    useRef<(docList: DocListEntry[], newActiveId: string | null) => void>();
-  handleDocumentListRef.current = (docList: DocListEntry[], newActiveId: string | null) => {
-    const currentTabs = tabsRef.current;
-    const existingIds = new Set(currentTabs.map((t) => t.id));
-    const serverIds = new Set(docList.map((d) => d.id));
-
-    // Allocate new tabs outside the updater (StrictMode-safe)
-    const newTabs: OpenTab[] = [];
-    for (const doc of docList) {
-      if (!existingIds.has(doc.id)) {
-        const ydoc = new Y.Doc();
-        const provider = new HocuspocusProvider({
-          url: `ws://localhost:${DEFAULT_WS_PORT}`,
-          name: doc.id,
-          document: ydoc,
-        });
-
-        // Listen for openDocuments broadcasts on this doc's meta
-        const meta = ydoc.getMap("documentMeta");
-        meta.observe(() => {
-          const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
-          const active = meta.get("activeDocumentId") as string | null | undefined;
-          if (docs) {
-            handleDocumentListRef.current?.(docs, active ?? null);
-          }
-        });
-
-        newTabs.push({ ...doc, ydoc, provider });
-      }
-    }
-
-    // Remove closed tabs (cleanup outside updater)
-    const toRemove = currentTabs.filter((t) => !serverIds.has(t.id));
-    for (const t of toRemove) {
-      const obs = observersRef.current.get(t.id);
-      if (obs) {
-        obs.cleanup();
-        observersRef.current.delete(t.id);
-      }
-      t.provider.destroy();
-      t.ydoc.destroy();
-    }
-
-    setTabs((prevTabs) => {
-      const kept = prevTabs.filter((t) => serverIds.has(t.id));
-      return [...kept, ...newTabs];
-    });
-
-    if (newActiveId !== null) {
-      setActiveTabId(newActiveId);
-    }
-  };
-
-  // Listen on the bootstrap doc for document list broadcasts
-  useEffect(() => {
-    if (!bootstrapRef.current) return;
-    const meta = bootstrapRef.current.ydoc.getMap("documentMeta");
-    const observer = () => {
-      const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
-      const active = meta.get("activeDocumentId") as string | null | undefined;
-      if (docs) {
-        handleDocumentListRef.current?.(docs, active ?? null);
-      }
-    };
-    meta.observe(observer);
-    observer(); // Handle data already present from initial sync
-    return () => meta.unobserve(observer);
-  }, []);
-
-  // When active tab changes, rewire observers (use tabsRef to avoid tabs dep)
-  useEffect(() => {
-    for (const obs of observersRef.current.values()) {
-      obs.cleanup();
-    }
-    observersRef.current.clear();
-
-    const activeTab = tabsRef.current.find((t) => t.id === activeTabId);
-    if (activeTab) {
-      const cleanup = setupTabObservers(activeTab);
-      observersRef.current.set(activeTab.id, { cleanup });
-    } else {
-      setAnnotations([]);
-      setClaudeStatus(null);
-      setClaudeActive(false);
-      setReadOnly(false);
-    }
-  }, [activeTabId, setupTabObservers]);
 
   // Detect review completion: all pending -> 0 while resolved > 0 (single pass)
   useEffect(() => {
@@ -291,18 +113,6 @@ export default function App() {
     setShowBanner(false);
   }, []);
 
-  const handleTabSwitch = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
-  }, []);
-
-  const handleTabClose = useCallback((tabId: string) => {
-    setActiveTabId((prev) => {
-      if (prev !== tabId) return prev;
-      const remaining = tabsRef.current.filter((t) => t.id !== tabId);
-      return remaining.length > 0 ? remaining[0].id : null;
-    });
-  }, []);
-
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
   if (!ready) {
@@ -328,7 +138,7 @@ export default function App() {
         <DocumentTabs
           tabs={tabs}
           activeTabId={activeTabId}
-          onTabSwitch={handleTabSwitch}
+          onTabSwitch={setActiveTabId}
           onTabClose={handleTabClose}
         />
       )}
@@ -458,7 +268,7 @@ export default function App() {
           {/* Panel content */}
           {showChat ? (
             <ChatPanel
-              ctrlYdoc={bootstrapRef.current?.ydoc ?? null}
+              ctrlYdoc={bootstrapYdoc}
               editor={editorRef.current}
               activeDocId={activeTabId}
               openDocs={tabs.map((t) => ({ id: t.id, fileName: t.fileName }))}

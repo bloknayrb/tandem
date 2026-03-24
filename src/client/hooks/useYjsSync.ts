@@ -11,6 +11,7 @@ export interface YjsSyncResult {
   setActiveTabId: (id: string) => void;
   handleTabClose: (id: string) => void;
   connected: boolean;
+  setConnected: (connected: boolean) => void;
   annotations: Annotation[];
   claudeStatus: string | null;
   claudeActive: boolean;
@@ -210,6 +211,7 @@ export function useYjsSync(): YjsSyncResult {
     setActiveTabId,
     handleTabClose,
     connected,
+    setConnected,
     annotations,
     claudeStatus,
     claudeActive,
