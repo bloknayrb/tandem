@@ -100,6 +100,26 @@
 
 **Impact:** Issue #8 resolved. Multi-document browser testing unblocked.
 
+## 15. Y.Map Observers Created in Event Handlers Need Explicit Cleanup
+
+**Problem:** When a Y.Map observer is registered *inside* another observer's callback (e.g., creating a `documentMeta.observe()` for each new tab inside `handleDocumentListRef`), the observer function is not reachable by any existing cleanup path — the standard `useEffect` cleanup only covers observers registered at effect setup time, not ones created dynamically later.
+
+**Solution:** Store the unobserve function in a parallel ref-based Map (e.g., `tabMetaCleanupsRef`) keyed by the resource ID. When the resource is removed (tab closed), look up and call the cleanup before calling `ydoc.destroy()`.
+
+**Pattern:**
+```typescript
+const metaObserver = () => { /* ... */ };
+meta.observe(metaObserver);
+cleanupMapRef.current.set(id, () => meta.unobserve(metaObserver));
+
+// On removal:
+cleanupMapRef.current.get(id)?.();
+cleanupMapRef.current.delete(id);
+t.ydoc.destroy();
+```
+
+**Impact:** Without explicit unobserve, the Y.Map retains a reference to the observer closure, preventing GC of the closure's captured variables. `ydoc.destroy()` stops further event delivery but doesn't always free the observer reference depending on Y.js internals.
+
 ## 14. Streamable HTTP Transport Requires Stateful Mode
 
 **Problem:** The MCP SDK's `StreamableHTTPServerTransport` in stateless mode (`sessionIdGenerator: undefined`) creates a new transport per request that crashes on the second call, because `server.connect(transport)` binds internal state to the first transport instance.
