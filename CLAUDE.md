@@ -45,7 +45,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
 - Server broadcasts `openDocuments` list via Y.Map('documentMeta') on each doc's Y.Doc. Client listens and syncs tabs.
 
-## Implementation Status (as of 2026-03-22)
+## Implementation Status (as of 2026-03-24)
 
 **Done (Steps 0-6 + Phase 1):**
 - [x] Step 0: Repo scaffolding, npm install, TypeScript compiles, Vite builds
@@ -62,12 +62,15 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Phase 1.5 - Chat Sidebar: session-scoped chat via Y.Map('chat'), tandem_reply tool, ChatPanel UI
 - [x] Phase 1.5 - Edit sync fix: afterUnloadDocument hook cleans up stale Y.Doc references
 
-**Infrastructure fixes (2026-03-20 — 2026-03-22):**
+**Infrastructure fixes (2026-03-20 — 2026-03-24):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
 - [x] MCP starts before Hocuspocus to beat Claude Code's initialize timeout (stdio mode only)
 - [x] `freePort()` evicts stale processes on startup; uncaughtException handler survives malformed WS frames
 - [x] `console.log = console.error` + `quiet: true` prevent stdout pollution of the MCP wire
 - [x] Migrate MCP from stdio to Streamable HTTP transport (fixes Issue #8 — stdio disconnect)
+- [x] fix(server): normalize path in `docIdFromPath` for cross-platform basename extraction (Windows backslash vs Linux)
+- [x] fix(ci): add `@types/node` and split client/server tsconfigs to resolve typecheck failures
+- [x] fix(ci): update OIDC permissions in claude-review workflow
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
