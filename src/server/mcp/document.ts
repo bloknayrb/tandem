@@ -31,10 +31,10 @@ import {
 import {
   getOpenDocs, getActiveDocId, setActiveDocId,
   getCurrentDoc, requireDocument, broadcastOpenDocs, toDocListEntry,
+  addDoc, removeDoc, hasDoc, docCount,
 } from './document-service.js';
 
-// Re-export everything consumers need from a single entry point.
-// Avoids breaking existing imports — consumers can migrate gradually.
+// Re-export for backward compatibility with existing consumers.
 export {
   extractText, extractMarkdown, populateYDoc, getElementText,
   getOrCreateXmlText, resolveOffset, verifyAndResolveRange,
@@ -42,8 +42,9 @@ export {
 } from './document-model.js';
 export type { ResolvedOffset, RangeVerifyResult } from './document-model.js';
 export {
-  getCurrentDoc, getOpenDocs, getActiveDocId,
-  toDocListEntry, saveCurrentSession, restoreCtrlSession,
+  getCurrentDoc, getOpenDocs, getActiveDocId, setActiveDocId,
+  requireDocument, toDocListEntry, saveCurrentSession, restoreCtrlSession,
+  addDoc, removeDoc, hasDoc, docCount,
 } from './document-service.js';
 export type { OpenDoc } from './document-service.js';
 
@@ -124,7 +125,7 @@ export function registerDocumentTools(server: McpServer): void {
           }
         }
 
-        openDocs.set(id, { id, filePath: resolved, format, readOnly });
+        addDoc(id, { id, filePath: resolved, format, readOnly });
         setActiveDocId(id);
 
         const meta = doc.getMap('documentMeta');
@@ -429,7 +430,7 @@ export function registerDocumentTools(server: McpServer): void {
           format: d.format,
           readOnly: d.readOnly,
         })),
-        documentCount: openDocs.size,
+        documentCount: docCount(),
       });
     }
   );
@@ -450,14 +451,14 @@ export function registerDocumentTools(server: McpServer): void {
       const doc = getOrCreateDocument(id);
       await saveSession(docState.filePath, docState.format, doc);
 
-      openDocs.delete(id);
+      removeDoc(id);
 
       if (getActiveDocId() === id) {
         const remaining = Array.from(openDocs.keys());
         setActiveDocId(remaining.length > 0 ? remaining[0] : null);
       }
 
-      if (openDocs.size === 0) {
+      if (docCount() === 0) {
         stopAutoSave();
       }
 
@@ -482,7 +483,7 @@ export function registerDocumentTools(server: McpServer): void {
           isActive: d.id === getActiveDocId(),
         })),
         activeDocumentId: getActiveDocId(),
-        count: openDocs.size,
+        count: docCount(),
       });
     }
   );
@@ -494,7 +495,7 @@ export function registerDocumentTools(server: McpServer): void {
       documentId: z.string().describe('Document ID to switch to'),
     },
     async ({ documentId }) => {
-      if (!openDocs.has(documentId)) {
+      if (!hasDoc(documentId)) {
         return mcpError('NO_DOCUMENT', `Document ${documentId} is not open.`);
       }
       setActiveDocId(documentId);

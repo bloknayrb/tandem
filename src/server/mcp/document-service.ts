@@ -21,8 +21,24 @@ const openDocs = new Map<string, OpenDoc>();
 /** The active document ID — tools default to this when no documentId is specified */
 let activeDocId: string | null = null;
 
-export function getOpenDocs(): Map<string, OpenDoc> {
+export function getOpenDocs(): ReadonlyMap<string, OpenDoc> {
   return openDocs;
+}
+
+export function addDoc(id: string, entry: OpenDoc): void {
+  openDocs.set(id, entry);
+}
+
+export function removeDoc(id: string): boolean {
+  return openDocs.delete(id);
+}
+
+export function hasDoc(id: string): boolean {
+  return openDocs.has(id);
+}
+
+export function docCount(): number {
+  return openDocs.size;
 }
 
 export function getActiveDocId(): string | null {
