@@ -1,20 +1,20 @@
-import React, { useEffect } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
-import type { Editor as TiptapEditor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Collaboration from '@tiptap/extension-collaboration';
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
-import Highlight from '@tiptap/extension-highlight';
-import Link from '@tiptap/extension-link';
-import Placeholder from '@tiptap/extension-placeholder';
-import Table from '@tiptap/extension-table';
-import TableRow from '@tiptap/extension-table-row';
-import TableCell from '@tiptap/extension-table-cell';
-import TableHeader from '@tiptap/extension-table-header';
-import * as Y from 'yjs';
-import { HocuspocusProvider } from '@hocuspocus/provider';
-import { AnnotationExtension } from './extensions/annotation';
-import { AwarenessExtension } from './extensions/awareness';
+import React, { useEffect } from "react";
+import { useEditor, EditorContent } from "@tiptap/react";
+import type { Editor as TiptapEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Collaboration from "@tiptap/extension-collaboration";
+import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
+import Highlight from "@tiptap/extension-highlight";
+import Link from "@tiptap/extension-link";
+import Placeholder from "@tiptap/extension-placeholder";
+import Table from "@tiptap/extension-table";
+import TableRow from "@tiptap/extension-table-row";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import * as Y from "yjs";
+import { HocuspocusProvider } from "@hocuspocus/provider";
+import { AnnotationExtension } from "./extensions/annotation";
+import { AwarenessExtension } from "./extensions/awareness";
 
 interface EditorProps {
   ydoc: Y.Doc;
@@ -22,45 +22,54 @@ interface EditorProps {
   readOnly: boolean;
   reviewMode?: boolean;
   activeAnnotationId?: string | null;
-  onConnectionChange: (connected: boolean) => void;
   onEditorReady?: (editor: TiptapEditor | null) => void;
 }
 
-export function Editor({ ydoc, provider, readOnly, reviewMode, activeAnnotationId, onConnectionChange: _onConnectionChange, onEditorReady }: EditorProps) {
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        history: false, // Yjs handles undo/redo
-      }),
-      Highlight.configure({ multicolor: true }),
-      Link.configure({
-        openOnClick: false,
-        HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
-      }),
-      Placeholder.configure({
-        placeholder: 'Open a document with Claude to get started...',
-      }),
-      Table.configure({ resizable: true }),
-      TableRow,
-      TableCell,
-      TableHeader,
-      Collaboration.configure({
-        document: ydoc,
-      }),
-      CollaborationCursor.configure({
-        provider: provider,
-        user: { name: 'Bryan', color: '#f59e0b' },
-      }),
-      AnnotationExtension.configure({ ydoc }),
-      AwarenessExtension.configure({ ydoc }),
-    ],
-    editorProps: {
-      attributes: {
-        class: 'tandem-editor',
-        style: 'outline: none; min-height: 500px; font-size: 16px; line-height: 1.6;',
+export function Editor({
+  ydoc,
+  provider,
+  readOnly,
+  reviewMode,
+  activeAnnotationId,
+  onEditorReady,
+}: EditorProps) {
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({
+          history: false, // Yjs handles undo/redo
+        }),
+        Highlight.configure({ multicolor: true }),
+        Link.configure({
+          openOnClick: false,
+          HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
+        }),
+        Placeholder.configure({
+          placeholder: "Open a document with Claude to get started...",
+        }),
+        Table.configure({ resizable: true }),
+        TableRow,
+        TableCell,
+        TableHeader,
+        Collaboration.configure({
+          document: ydoc,
+        }),
+        CollaborationCursor.configure({
+          provider: provider,
+          user: { name: "Bryan", color: "#f59e0b" },
+        }),
+        AnnotationExtension.configure({ ydoc }),
+        AwarenessExtension.configure({ ydoc }),
+      ],
+      editorProps: {
+        attributes: {
+          class: "tandem-editor",
+          style: "outline: none; min-height: 500px; font-size: 16px; line-height: 1.6;",
+        },
       },
     },
-  }, [ydoc, provider]); // Re-create editor if ydoc or provider change
+    [ydoc, provider],
+  ); // Re-create editor if ydoc or provider change
 
   // Toggle editable mode without recreating the editor (preserves HocuspocusProvider)
   useEffect(() => {
@@ -79,18 +88,20 @@ export function Editor({ ydoc, provider, readOnly, reviewMode, activeAnnotationI
     if (!editor) return;
     const container = editor.view.dom;
 
-    container.querySelectorAll('.tandem-annotation-active').forEach(el => {
-      el.classList.remove('tandem-annotation-active');
+    container.querySelectorAll(".tandem-annotation-active").forEach((el) => {
+      el.classList.remove("tandem-annotation-active");
     });
 
     if (activeAnnotationId && reviewMode) {
-      container.querySelectorAll(`[data-annotation-id="${CSS.escape(activeAnnotationId)}"]`).forEach(el => {
-        el.classList.add('tandem-annotation-active');
-      });
+      container
+        .querySelectorAll(`[data-annotation-id="${CSS.escape(activeAnnotationId)}"]`)
+        .forEach((el) => {
+          el.classList.add("tandem-annotation-active");
+        });
     }
   }, [editor, activeAnnotationId, reviewMode]);
 
-  const containerClass = reviewMode ? 'tandem-review-dimmed' : '';
+  const containerClass = reviewMode ? "tandem-review-dimmed" : "";
 
   return (
     <div className={containerClass}>

@@ -11,7 +11,6 @@ export interface YjsSyncResult {
   setActiveTabId: (id: string) => void;
   handleTabClose: (id: string) => void;
   connected: boolean;
-  setConnected: (connected: boolean) => void;
   annotations: Annotation[];
   claudeStatus: string | null;
   claudeActive: boolean;
@@ -34,6 +33,7 @@ export function useYjsSync(): YjsSyncResult {
   const tabsRef = useRef<OpenTab[]>([]);
   tabsRef.current = tabs;
   const observersRef = useRef<Map<string, { cleanup: () => void }>>(new Map());
+  const tabMetaCleanupsRef = useRef<Map<string, () => void>>(new Map());
   const handleDocumentListRef =
     useRef<(docList: DocListEntry[], newActiveId: string | null) => void>();
 
@@ -109,11 +109,13 @@ export function useYjsSync(): YjsSyncResult {
         });
 
         const meta = ydoc.getMap("documentMeta");
-        meta.observe(() => {
+        const metaObserver = () => {
           const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
           const active = meta.get("activeDocumentId") as string | null | undefined;
           if (docs) handleDocumentListRef.current?.(docs, active ?? null);
-        });
+        };
+        meta.observe(metaObserver);
+        tabMetaCleanupsRef.current.set(doc.id, () => meta.unobserve(metaObserver));
 
         newTabs.push({ ...doc, ydoc, provider });
       }
@@ -126,6 +128,8 @@ export function useYjsSync(): YjsSyncResult {
         obs.cleanup();
         observersRef.current.delete(t.id);
       }
+      tabMetaCleanupsRef.current.get(t.id)?.();
+      tabMetaCleanupsRef.current.delete(t.id);
       t.provider.destroy();
       t.ydoc.destroy();
     }
@@ -211,7 +215,6 @@ export function useYjsSync(): YjsSyncResult {
     setActiveTabId,
     handleTabClose,
     connected,
-    setConnected,
     annotations,
     claudeStatus,
     claudeActive,

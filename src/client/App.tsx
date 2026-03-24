@@ -27,7 +27,6 @@ export default function App() {
     setActiveTabId,
     handleTabClose,
     connected,
-    setConnected,
     annotations,
     claudeStatus,
     claudeActive,
@@ -59,14 +58,11 @@ export default function App() {
   const [showBanner, setShowBanner] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
-  const [, setEditorVersion] = useState(0);
-
   const editorRef = useRef<TiptapEditor | null>(null);
   const prevPendingRef = useRef<number>(0);
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
-    if (editor) setEditorVersion((v) => v + 1);
   }, []);
 
   // Detect review completion: all pending -> 0 while resolved > 0 (single pass)
@@ -199,7 +195,6 @@ export default function App() {
               readOnly={readOnly}
               reviewMode={reviewMode}
               activeAnnotationId={activeAnnotationId}
-              onConnectionChange={setConnected}
               onEditorReady={handleEditorReady}
             />
           ) : (
