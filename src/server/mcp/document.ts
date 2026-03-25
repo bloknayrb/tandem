@@ -5,7 +5,13 @@ import fsSync from "fs";
 import path from "path";
 import * as Y from "yjs";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import { mcpSuccess, mcpError, noDocumentError, getErrorMessage } from "./response.js";
+import {
+  mcpSuccess,
+  mcpError,
+  noDocumentError,
+  getErrorMessage,
+  withErrorBoundary,
+} from "./response.js";
 import {
   MAX_FILE_SIZE,
   CHARS_PER_PAGE,
@@ -93,7 +99,7 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_open",
     "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.",
     { filePath: z.string().describe("Absolute path to the file to open") },
-    async ({ filePath }) => {
+    withErrorBoundary("tandem_open", async ({ filePath }) => {
       let resolved = path.resolve(filePath);
       try {
         try {
@@ -243,7 +249,7 @@ export function registerDocumentTools(server: McpServer): void {
         }
         return mcpError("FORMAT_ERROR", getErrorMessage(err));
       }
-    },
+    }),
   );
 
   server.tool(
@@ -255,12 +261,12 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_getContent", async ({ documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment("default");
       return mcpSuccess({ content: fragment.toJSON(), filePath: r.filePath, documentId: r.docId });
-    },
+    }),
   );
 
   server.tool(
@@ -273,7 +279,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ section, documentId }) => {
+    withErrorBoundary("tandem_getTextContent", async ({ section, documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
 
@@ -320,7 +326,7 @@ export function registerDocumentTools(server: McpServer): void {
       const format = docState?.format;
       const text = format === "md" ? extractMarkdown(r.doc) : extractText(r.doc);
       return mcpSuccess({ text, filePath: r.filePath, documentId: r.docId });
-    },
+    }),
   );
 
   server.tool(
@@ -332,7 +338,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_getOutline", async ({ documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment("default");
@@ -347,7 +353,7 @@ export function registerDocumentTools(server: McpServer): void {
       }
 
       return mcpSuccess({ outline, totalNodes: fragment.length });
-    },
+    }),
   );
 
   server.tool(
@@ -368,7 +374,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
         ),
     },
-    async ({ from, to, newText, documentId, textSnapshot }) => {
+    withErrorBoundary("tandem_edit", async ({ from, to, newText, documentId, textSnapshot }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
 
@@ -459,7 +465,7 @@ export function registerDocumentTools(server: McpServer): void {
       }
 
       return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
-    },
+    }),
   );
 
   server.tool(
@@ -471,7 +477,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_save", async ({ documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       try {
@@ -499,14 +505,14 @@ export function registerDocumentTools(server: McpServer): void {
       } catch (err: unknown) {
         return mcpError("FILE_LOCKED", getErrorMessage(err));
       }
-    },
+    }),
   );
 
   server.tool(
     "tandem_status",
     "Check editor status: running, open documents, active document",
     {},
-    async () => {
+    withErrorBoundary("tandem_status", async () => {
       const activeId = getActiveDocId();
       const active = activeId ? openDocs.get(activeId) : null;
       return mcpSuccess({
@@ -522,7 +528,7 @@ export function registerDocumentTools(server: McpServer): void {
         })),
         documentCount: docCount(),
       });
-    },
+    }),
   );
 
   server.tool(
@@ -534,7 +540,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Document ID to close (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_close", async ({ documentId }) => {
       const id = documentId ?? getActiveDocId();
       if (!id) return mcpError("NO_DOCUMENT", "No document to close.");
 
@@ -562,14 +568,14 @@ export function registerDocumentTools(server: McpServer): void {
         was: docState.filePath,
         activeDocumentId: getActiveDocId(),
       });
-    },
+    }),
   );
 
   server.tool(
     "tandem_listDocuments",
     "List all open documents with their IDs, file paths, and formats.",
     {},
-    async () => {
+    withErrorBoundary("tandem_listDocuments", async () => {
       return mcpSuccess({
         documents: Array.from(openDocs.values()).map((d) => ({
           ...toDocListEntry(d),
@@ -578,7 +584,7 @@ export function registerDocumentTools(server: McpServer): void {
         activeDocumentId: getActiveDocId(),
         count: docCount(),
       });
-    },
+    }),
   );
 
   server.tool(
@@ -587,7 +593,7 @@ export function registerDocumentTools(server: McpServer): void {
     {
       documentId: z.string().describe("Document ID to switch to"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_switchDocument", async ({ documentId }) => {
       if (!hasDoc(documentId)) {
         return mcpError("NO_DOCUMENT", `Document ${documentId} is not open.`);
       }
@@ -597,6 +603,6 @@ export function registerDocumentTools(server: McpServer): void {
         activeDocumentId: documentId,
         ...toDocListEntry(openDocs.get(documentId)!),
       });
-    },
+    }),
   );
 }
