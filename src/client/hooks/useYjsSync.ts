@@ -120,9 +120,12 @@ export function useYjsSync(): YjsSyncResult {
     const existingIds = new Set(currentTabs.map((t) => t.id));
     const serverIds = new Set(docList.map((d) => d.id));
 
-    // Clean up orphaned pending providers for docs the server no longer lists
+    // Clean up orphaned pending providers for docs the server no longer lists.
+    // Deleting during Map for...of iteration is safe per the JS spec.
     for (const [id, pending] of pendingProvidersRef.current) {
       if (!serverIds.has(id)) {
+        tabMetaCleanupsRef.current.get(id)?.();
+        tabMetaCleanupsRef.current.delete(id);
         pending.provider.destroy();
         pending.ydoc.destroy();
         pendingProvidersRef.current.delete(id);

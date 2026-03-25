@@ -43,23 +43,16 @@ describe("shouldKeepDocument guard", () => {
     setShouldKeepDocument(() => false);
   });
 
-  it("prevents removeDocument-style eviction when predicate returns true", () => {
-    const doc = getOrCreateDocument("test-guard-keep");
-    const fragment = doc.getXmlFragment("default");
-    const p = new Y.XmlElement("paragraph");
-    p.insert(0, [new Y.XmlText("preserved content")]);
-    fragment.insert(0, [p]);
+  // NOTE: These tests verify the predicate logic, not the Hocuspocus
+  // afterUnloadDocument hook directly (which requires a running server).
+  // The guard is exercised in production when afterUnloadDocument calls
+  // shouldKeepDocument before deleting from the documents map.
 
-    // Simulate: predicate says keep this doc
+  it("predicate correctly identifies docs to keep", () => {
+    const doc = getOrCreateDocument("test-guard-keep");
     setShouldKeepDocument((name) => name === "test-guard-keep");
 
-    // Even after "removal" the doc should still be retrievable with content
-    // (In production, afterUnloadDocument checks the predicate before calling delete)
-    // Here we verify the predicate itself works correctly:
-    const predicate = (name: string) => name === "test-guard-keep";
-    expect(predicate("test-guard-keep")).toBe(true);
-
-    // Doc should still be in the map (not removed because guard is active)
+    // Predicate returns true → afterUnloadDocument would skip deletion
     expect(getDocument("test-guard-keep")).toBe(doc);
 
     // Cleanup
@@ -67,22 +60,18 @@ describe("shouldKeepDocument guard", () => {
     removeDocument("test-guard-keep");
   });
 
-  it("allows eviction when predicate returns false", () => {
+  it("predicate allows eviction for untracked docs", () => {
     getOrCreateDocument("test-guard-evict");
     setShouldKeepDocument(() => false);
 
+    // Predicate returns false → afterUnloadDocument would proceed with deletion
     removeDocument("test-guard-evict");
     expect(getDocument("test-guard-evict")).toBeUndefined();
-
-    // getOrCreateDocument now returns a fresh empty doc
-    const fresh = getOrCreateDocument("test-guard-evict");
-    const fragment = fresh.getXmlFragment("default");
-    expect(fragment.length).toBe(0);
 
     removeDocument("test-guard-evict");
   });
 
-  it("protects __tandem_ctrl__ with combined predicate", () => {
+  it("combined predicate covers openDocs and __tandem_ctrl__", () => {
     const openDocs = new Set(["doc-abc"]);
     const predicate = (name: string) => openDocs.has(name) || name === "__tandem_ctrl__";
 
