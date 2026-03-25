@@ -6,6 +6,7 @@ import {
   removeDocument,
   setShouldKeepDocument,
 } from "../../src/server/yjs/provider.js";
+import { CTRL_ROOM } from "../../src/shared/constants.js";
 
 describe("Y.Doc lifecycle (provider)", () => {
   it("getOrCreateDocument creates a new doc if none exists", () => {
@@ -71,11 +72,11 @@ describe("shouldKeepDocument guard", () => {
     removeDocument("test-guard-evict");
   });
 
-  it("combined predicate covers openDocs and __tandem_ctrl__", () => {
+  it("combined predicate covers openDocs and CTRL_ROOM", () => {
     const openDocs = new Set(["doc-abc"]);
-    const predicate = (name: string) => openDocs.has(name) || name === "__tandem_ctrl__";
+    const predicate = (name: string) => openDocs.has(name) || name === CTRL_ROOM;
 
-    expect(predicate("__tandem_ctrl__")).toBe(true);
+    expect(predicate(CTRL_ROOM)).toBe(true);
     expect(predicate("doc-abc")).toBe(true);
     expect(predicate("unknown-room")).toBe(false);
   });

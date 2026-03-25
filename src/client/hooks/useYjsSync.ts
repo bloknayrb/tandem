@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
-import { DEFAULT_WS_PORT } from "../../shared/constants";
+import { DEFAULT_WS_PORT, CTRL_ROOM } from "../../shared/constants";
 import type { Annotation } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
 
@@ -189,7 +189,7 @@ export function useYjsSync(): YjsSyncResult {
     const ydoc = new Y.Doc();
     const provider = new HocuspocusProvider({
       url: `ws://localhost:${DEFAULT_WS_PORT}`,
-      name: "__tandem_ctrl__",
+      name: CTRL_ROOM,
       document: ydoc,
     });
     bootstrapRef.current = { ydoc, provider };
