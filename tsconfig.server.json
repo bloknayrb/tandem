@@ -9,13 +9,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "outDir": "dist/server",
+    "noEmit": true,
     "rootDir": "src",
-    "declaration": true,
-    "baseUrl": ".",
-    "paths": {
-      "@shared/*": ["src/shared/*"]
-    }
+    "baseUrl": "."
   },
   "include": ["src/server", "src/shared"],
   "exclude": ["node_modules"]
