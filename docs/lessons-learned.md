@@ -74,21 +74,21 @@
 
 **Impact:** Without this, every document open in dev mode creates a duplicate WebSocket connection that leaks until page reload.
 
-## 11. broadcastOpenDocs Scope
+## 11. broadcastOpenDocs Must Update All Open Doc Rooms
 
-**Problem:** Writing the open documents list to every open document's Y.Map creates O(n) Hocuspocus sync operations per open/close/switch. With 10 docs, a single tab switch triggers 20 Y.Map mutations across 10 rooms.
+**Problem (revised):** Writing the open documents list only to the active document's Y.Map leaves previously-active docs with a stale list. Example: open `a.md` (active, writes `[a]` to `a`'s room), then open `b.md` (active, writes `[a,b]` to `b`'s room and CTRL_ROOM). When the browser connects and creates a HocuspocusProvider for `a.md`, `a`'s `documentMeta.openDocuments` is still `[a]`. The per-tab `metaObserver` fires with `serverIds = {a}`, which triggers removal of `b`'s tab — the browser is left with 1 tab even though 2 docs are open.
 
-**Solution:** Only write to the active document's Y.Map('documentMeta'). The client's per-tab meta observer handles the broadcast. Non-active rooms don't receive unsolicited updates.
+**Solution:** `broadcastOpenDocs` writes the full list to ALL open doc rooms on every call (O(n) writes), plus the CTRL_ROOM bootstrap channel. This ensures every Y.Doc in every room always carries the current complete list, so no per-tab sync can produce a stale removal.
 
-**Impact:** Reduces broadcast cost from O(n) to O(1) per operation. However, the bootstrap room (`__tandem_ctrl__`) must ALSO receive the broadcast — otherwise new clients can't discover the first document (see Lesson 12).
+**Tradeoff:** O(n) writes per broadcast vs. the original O(1) design. With typical document counts (1–10 docs), this is not a practical concern.
 
 ## 12. Bootstrap Room Must Receive Doc List Broadcast
 
-**Problem:** The client's bootstrap HocuspocusProvider connects to room `__tandem_ctrl__` to discover which documents are open. If `broadcastOpenDocs` only writes to the active document's room, the bootstrap observer never fires, and the browser shows "No document open" even after `tandem_open` succeeds.
+**Problem:** The client's bootstrap HocuspocusProvider connects to room `__tandem_ctrl__` to discover which documents are open. If `broadcastOpenDocs` only writes to individual document rooms, the bootstrap observer never fires on initial page load, and the browser shows "No document open" even after `tandem_open` succeeds.
 
-**Solution:** `broadcastOpenDocs` writes to both `__tandem_ctrl__` (so new/reconnecting clients discover docs) and the active document's room (so per-tab observers stay in sync). This is O(2) writes per broadcast, not O(n).
+**Solution:** `broadcastOpenDocs` always writes to `__tandem_ctrl__` first (so new/reconnecting clients discover docs), then to all open doc rooms (Lesson 11). The CTRL_ROOM write is the primary discovery channel; per-doc writes keep per-tab observers consistent.
 
-**Impact:** Without this, the client can never render tabs for the first document. The server reports docs as open but the browser doesn't know about them.
+**Impact:** Without the CTRL_ROOM write, the client can never render tabs on first load. The server reports docs as open but the browser doesn't know about them.
 
 ## 13. MCP Stdio Transport Disconnects Under Claude Code
 
