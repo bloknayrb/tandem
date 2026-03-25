@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -119,11 +119,12 @@ Deferred — only if demand appears:
 ### Goal
 First-run experience, error handling, and UX refinements.
 
-### 8a: Launch Experience
+### 8a: Launch Experience — PARTIALLY DONE
 
 - Server auto-starts when Claude Code calls any Tandem tool (check PID in `.tandem/.server-info`)
 - Server auto-stops after 30 min idle (`IDLE_TIMEOUT` in constants.ts)
 - Browser auto-open (removed — `open` package wrote to stdout, corrupting the MCP wire; user opens http://localhost:5173 manually)
+- ~~Browser file open~~ — implemented: "+" button in tab bar opens FileOpenDialog (path input or drag-and-drop upload), HTTP API endpoints (`/api/open`, `/api/upload`)
 
 ### 8b: Onboarding
 
@@ -164,6 +165,7 @@ Remaining:
 - Suggest: propose a change for Claude to evaluate
 - ~~Accept All / Dismiss All buttons~~ — implemented in SidePanel
 - ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
+- ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
 - Highlight color picker (5 colors available server-side, UI picker not yet built)
 
 ### Verification
@@ -171,6 +173,22 @@ Remaining:
 - Keyboard shortcuts work in review mode
 - Error messages are clear and actionable
 - Server auto-starts and auto-stops correctly
+
+---
+
+## E2E Testing — DONE
+
+**Files:** `playwright.config.ts`, `tests/e2e/`
+
+Playwright E2E tests cover the critical annotation lifecycle path. Infrastructure:
+
+- **McpTestClient** (`tests/e2e/helpers.ts`): wraps MCP SDK's `Client` + `StreamableHTTPClientTransport` for tool calls from tests
+- **Fixture management**: `createFixtureDir()` copies sample files to a temp dir per test, `cleanupFixtureDir()` removes it
+- **Config**: `workers: 1` (server supports one MCP session), `webServer` starts `dev:standalone`, `reuseExistingServer` for local dev
+- **CI**: Playwright Chromium install + E2E step after build, report artifact uploaded on failure
+- **8 tests**: document load, annotation decoration, annotation card, accept, dismiss, suggestion apply, tab switching, review mode keyboard
+
+Run: `npm run test:e2e` (auto-starts servers) or `npm run test:e2e:ui` (Playwright UI mode)
 
 ---
 

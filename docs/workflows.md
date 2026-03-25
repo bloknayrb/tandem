@@ -247,3 +247,45 @@ For bulk operations, use **Accept All** or **Dismiss All** buttons in the side p
 4. Open additional documents with more `tandem_open()` calls -- each gets its own tab
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
+
+## Opening Files from the Browser
+
+Users can open files without Claude Code using the browser UI:
+
+### Path Input
+1. Click the **+** button at the end of the tab bar
+2. Enter the absolute file path in the text input
+3. Click **Open** — the file loads in a new tab
+
+### Drag-and-Drop
+1. Drag a file from Windows Explorer (or Finder) onto the editor area
+2. A dashed border appears as a drop indicator
+3. Drop the file — it opens in a new tab
+
+### File Upload
+1. Click **+** → switch to **Upload** mode
+2. Click the drop zone to browse, or drag a file onto it
+3. The file content is sent to the server and loaded
+
+**Note:** Uploaded files have no disk path — they use synthetic `upload://` paths and are always read-only. `tandem_save` on an uploaded file saves only the session (annotations), not the file content.
+
+## Running E2E Tests
+
+Playwright E2E tests verify the annotation lifecycle end-to-end (browser + server).
+
+```bash
+# Run all E2E tests (auto-starts servers)
+npm run test:e2e
+
+# Playwright UI mode for debugging
+npm run test:e2e:ui
+```
+
+**Requirements:** No dev server running (the test harness starts its own via `dev:standalone`; `freePort()` will kill existing servers on :3478/:3479).
+
+**How tests work:**
+1. `beforeEach`: McpTestClient connects to MCP, fixture files copied to temp dir
+2. Test body: MCP calls open documents/create annotations, Playwright asserts browser state
+3. `afterEach`: All docs closed via MCP, temp dir cleaned up
+
+Tests use `data-testid` attributes for reliable selectors (e.g. `[data-testid="accept-btn"]`). Timing uses Playwright's auto-waiting with 10s timeout for annotation sync (multi-hop: MCP → Y.Doc → Hocuspocus WS → browser → React → ProseMirror).
