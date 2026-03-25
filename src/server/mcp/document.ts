@@ -145,7 +145,17 @@ export function registerDocumentTools(server: McpServer): void {
           const changed = await sourceFileChanged(session);
           if (!changed) {
             restoreYDoc(doc, session);
-            restoredFromSession = true;
+            // Defensive: if the session file contained empty state (e.g. saved
+            // after a stale afterUnloadDocument eviction), fall back to the
+            // source file instead of showing an empty document.
+            const fragment = doc.getXmlFragment("default");
+            if (fragment.length > 0) {
+              restoredFromSession = true;
+            } else {
+              console.error(
+                `[Tandem] Session restore yielded empty doc for ${fileName}, falling back to source file`,
+              );
+            }
           }
         }
 

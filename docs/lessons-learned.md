@@ -127,3 +127,13 @@ t.ydoc.destroy();
 **Solution:** Rotate the transport on each `initialize` request while reusing the long-lived `McpServer` (tool registrations in `_registeredTools` survive `close()`/`connect()` cycles). The POST handler uses the SDK's `isInitializeRequest()` to detect initialize messages and calls `connectFreshTransport()`, which tears down the old transport via `mcpServer.close()` and creates a fresh one. A promise-chain lock serializes concurrent rotations. Stateless mode (`sessionIdGenerator: undefined`) still doesn't work — each transport needs `sessionIdGenerator` for session tracking.
 
 **Impact:** Without per-session rotation, every `/mcp` restart in Claude Code requires a full server restart. The SDK's `Protocol.connect()` explicitly supports reconnection ("Call close() before connecting to a new transport").
+
+## 15. Hocuspocus `afterUnloadDocument` vs MCP Document Lifetime
+
+**Problem:** Hocuspocus fires `afterUnloadDocument` when all WebSocket clients disconnect from a room, deleting the Y.Doc from the shared `documents` map. But MCP tools may still consider that document "open" (it's in the `openDocs` map). If auto-save then calls `getOrCreateDocument()`, it gets a new empty Y.Doc and overwrites the session file with empty content. On the next restore, the session appears valid (`restoredFromSession: true`) but the document is empty (`tokenEstimate: 0`).
+
+A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc including `documentMeta.openDocuments`. After a server restart, browsers see this stale list and create providers for rooms the server hasn't opened, causing phantom/duplicate tabs.
+
+**Solution:** Use a callback predicate (`setShouldKeepDocument`) so `afterUnloadDocument` checks whether MCP still tracks the document (or it's the `__tandem_ctrl__` bootstrap channel) before evicting it. This avoids a circular import between `provider.ts` and `document-service.ts`. Additionally, clear `openDocuments` and `activeDocumentId` from the ctrl doc immediately after restoring chat history, and add a defensive fallback in `tandem_open` that re-reads the source file if a restored session yields an empty doc.
+
+**Impact:** Without this fix, any browser disconnect (tab close, navigation, network hiccup) can silently corrupt the session file, causing data loss on next open. The stale `openDocuments` list causes confusing phantom tabs on every server restart.

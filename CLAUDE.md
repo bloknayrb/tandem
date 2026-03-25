@@ -75,6 +75,10 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] fix(ci): update OIDC permissions in claude-review workflow
 - [x] fix(server): per-session MCP transport rotation so `/mcp` restart works without server restart (Issue #18)
 - [x] feat(annotations): migrate ranges to Yjs RelativePosition for CRDT-anchored positions (Issue #37)
+- [x] fix(session): guard afterUnloadDocument so auto-save never persists empty Y.Docs (Issue #44)
+- [x] fix(session): clear stale openDocuments from ctrl session on restore, await before Hocuspocus starts (Issue #44)
+- [x] fix(session): defensive fallback when restored session yields empty doc (Issue #44)
+- [x] fix(client): prevent duplicate tab creation from concurrent observer firings via pendingIdsRef (Issue #44)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
