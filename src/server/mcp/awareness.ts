@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { getCurrentDoc, extractText } from "./document.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
-import { mcpSuccess, noDocumentError } from "./response.js";
+import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 import type { Annotation, ChatMessage } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { CTRL_ROOM } from "../../shared/constants.js";
@@ -26,7 +26,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_getSelections", async ({ documentId }) => {
       const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
@@ -44,7 +44,7 @@ export function registerAwarenessTools(server: McpServer): void {
         selections: [{ from: selection.from, to: selection.to }],
         timestamp: selection.timestamp,
       });
-    },
+    }),
   );
 
   server.tool(
@@ -56,7 +56,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_getActivity", async ({ documentId }) => {
       const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
@@ -88,7 +88,7 @@ export function registerAwarenessTools(server: McpServer): void {
         cursor: activity.cursor,
         lastEdit: activity.lastEdit,
       });
-    },
+    }),
   );
 
   server.tool(
@@ -100,7 +100,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ documentId }) => {
+    withErrorBoundary("tandem_checkInbox", async ({ documentId }) => {
       const current = getCurrentDoc(documentId);
       if (!current) return noDocumentError();
 
@@ -216,7 +216,7 @@ export function registerAwarenessTools(server: McpServer): void {
           selectedText,
         },
       });
-    },
+    }),
   );
   server.tool(
     "tandem_reply",
@@ -229,7 +229,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .optional()
         .describe("Document context for this reply (defaults to active document)"),
     },
-    async ({ text, replyTo, documentId }) => {
+    withErrorBoundary("tandem_reply", async ({ text, replyTo, documentId }) => {
       const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
       const chatMap = ctrlDoc.getMap("chat");
 
@@ -250,7 +250,7 @@ export function registerAwarenessTools(server: McpServer): void {
       chatMap.set(id, msg);
 
       return mcpSuccess({ sent: true, messageId: id });
-    },
+    }),
   );
 }
 

@@ -8,7 +8,7 @@ import {
   flatOffsetToRelPos,
   relPosToFlatOffset,
 } from "./document.js";
-import { mcpSuccess, mcpError, noDocumentError } from "./response.js";
+import { mcpSuccess, mcpError, noDocumentError, withErrorBoundary } from "./response.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import * as Y from "yjs";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
@@ -156,22 +156,25 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
         ),
     },
-    async ({ from, to, color, note, documentId, priority, textSnapshot }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
-      const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-      if (staleError) return staleError;
-      const id = createAnnotation(
-        da.map,
-        "highlight",
-        from,
-        to,
-        note || "",
-        { color: color as HighlightColor, ...(priority ? { priority } : {}) },
-        da.ydoc,
-      );
-      return mcpSuccess({ annotationId: id });
-    },
+    withErrorBoundary(
+      "tandem_highlight",
+      async ({ from, to, color, note, documentId, priority, textSnapshot }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
+        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
+        if (staleError) return staleError;
+        const id = createAnnotation(
+          da.map,
+          "highlight",
+          from,
+          to,
+          note || "",
+          { color: color as HighlightColor, ...(priority ? { priority } : {}) },
+          da.ydoc,
+        );
+        return mcpSuccess({ annotationId: id });
+      },
+    ),
   );
 
   server.tool(
@@ -195,22 +198,25 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
         ),
     },
-    async ({ from, to, text, documentId, priority, textSnapshot }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
-      const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-      if (staleError) return staleError;
-      const id = createAnnotation(
-        da.map,
-        "comment",
-        from,
-        to,
-        text,
-        priority ? { priority } : {},
-        da.ydoc,
-      );
-      return mcpSuccess({ annotationId: id });
-    },
+    withErrorBoundary(
+      "tandem_comment",
+      async ({ from, to, text, documentId, priority, textSnapshot }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
+        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
+        if (staleError) return staleError;
+        const id = createAnnotation(
+          da.map,
+          "comment",
+          from,
+          to,
+          text,
+          priority ? { priority } : {},
+          da.ydoc,
+        );
+        return mcpSuccess({ annotationId: id });
+      },
+    ),
   );
 
   server.tool(
@@ -235,22 +241,25 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
         ),
     },
-    async ({ from, to, newText, reason, documentId, priority, textSnapshot }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
-      const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-      if (staleError) return staleError;
-      const id = createAnnotation(
-        da.map,
-        "suggestion",
-        from,
-        to,
-        JSON.stringify({ newText, reason: reason || "" }),
-        priority ? { priority } : {},
-        da.ydoc,
-      );
-      return mcpSuccess({ annotationId: id });
-    },
+    withErrorBoundary(
+      "tandem_suggest",
+      async ({ from, to, newText, reason, documentId, priority, textSnapshot }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
+        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
+        if (staleError) return staleError;
+        const id = createAnnotation(
+          da.map,
+          "suggestion",
+          from,
+          to,
+          JSON.stringify({ newText, reason: reason || "" }),
+          priority ? { priority } : {},
+          da.ydoc,
+        );
+        return mcpSuccess({ annotationId: id });
+      },
+    ),
   );
 
   server.tool(
@@ -274,22 +283,25 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
         ),
     },
-    async ({ from, to, note, documentId, priority, textSnapshot }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
-      const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-      if (staleError) return staleError;
-      const id = createAnnotation(
-        da.map,
-        "flag",
-        from,
-        to,
-        note || "",
-        priority ? { priority } : {},
-        da.ydoc,
-      );
-      return mcpSuccess({ annotationId: id });
-    },
+    withErrorBoundary(
+      "tandem_flag",
+      async ({ from, to, note, documentId, priority, textSnapshot }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
+        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
+        if (staleError) return staleError;
+        const id = createAnnotation(
+          da.map,
+          "flag",
+          from,
+          to,
+          note || "",
+          priority ? { priority } : {},
+          da.ydoc,
+        );
+        return mcpSuccess({ annotationId: id });
+      },
+    ),
   );
 
   server.tool(
@@ -304,7 +316,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ author, type, status, documentId }) => {
+    withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
@@ -314,7 +326,7 @@ export function registerAnnotationTools(server: McpServer): void {
       if (status) results = results.filter((a) => a.status === status);
 
       return mcpSuccess({ annotations: results, count: results.length });
-    },
+    }),
   );
 
   server.tool(
@@ -328,7 +340,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ id, action, documentId }) => {
+    withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
@@ -341,7 +353,7 @@ export function registerAnnotationTools(server: McpServer): void {
       };
       da.map.set(id, updated);
       return mcpSuccess({ id, status: updated.status });
-    },
+    }),
   );
 
   server.tool(
@@ -354,13 +366,13 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ id, documentId }) => {
+    withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
       if (!da.map.has(id)) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
       da.map.delete(id);
       return mcpSuccess({ removed: true, id });
-    },
+    }),
   );
 
   server.tool(
@@ -373,7 +385,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    async ({ format, documentId }) => {
+    withErrorBoundary("tandem_exportAnnotations", async ({ format, documentId }) => {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
@@ -394,6 +406,6 @@ export function registerAnnotationTools(server: McpServer): void {
 
       const markdown = exportAnnotations(ydoc, annotations);
       return mcpSuccess({ markdown, count: annotations.length });
-    },
+    }),
   );
 }
