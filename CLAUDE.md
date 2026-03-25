@@ -5,6 +5,9 @@
 - `npm run dev:client` -- Frontend: Vite on :5173
 - `npm run dev:standalone` -- Both frontend + backend (via concurrently)
 - `npm run dev` -- Alias for `vite` (frontend only)
+- `npm run build:server` -- Bundle server via tsup → `dist/index.js`
+- `npm run start:server` -- Run bundled server (`node dist/index.js`)
+- `npm run typecheck` -- Type-check server + client without emitting
 - `npm test` -- Run vitest
 
 ## Architecture
@@ -82,6 +85,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] fix(session): defensive fallback when restored session yields empty doc (Issue #44)
 - [x] fix(client): prevent duplicate tab creation from concurrent observer firings via pendingIdsRef (Issue #44)
 - [x] feat(server): cross-platform freePort + session paths via env-paths (Issue #29)
+- [x] feat(build): tsup server bundling — single-file `dist/index.js` output (Issue #32)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -100,7 +104,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-014)
+- [Design Decisions](docs/decisions.md) -- ADRs (001-015)
 - [Lessons Learned](docs/lessons-learned.md) -- 14 lessons including multi-doc gotchas
 
 ## Gotchas (save yourself time)
