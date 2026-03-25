@@ -197,6 +197,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     } else if (code === "EACCES") {
       res.status(403).json({ error: "PERMISSION_DENIED", message: msg });
     } else {
+      console.error("[Tandem] Unhandled API error:", err);
       res.status(500).json({ error: "INTERNAL", message: msg });
     }
   }
@@ -225,6 +226,10 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     }
     if (content === undefined || content === null) {
       res.status(400).json({ error: "BAD_REQUEST", message: "content is required" });
+      return;
+    }
+    if (typeof content !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "content must be a base64 string" });
       return;
     }
     try {

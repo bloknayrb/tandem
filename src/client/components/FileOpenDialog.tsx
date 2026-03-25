@@ -31,8 +31,15 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
         return;
       }
       onClose();
-    } catch {
-      setError("Cannot reach server. Is it running?");
+    } catch (err) {
+      console.error("FileOpenDialog: path open failed", err);
+      if (err instanceof SyntaxError) {
+        setError("Server returned an unexpected response");
+      } else if (err instanceof TypeError) {
+        setError("Unexpected response format");
+      } else {
+        setError("Cannot reach server. Is it running?");
+      }
     } finally {
       setLoading(false);
     }
@@ -56,8 +63,15 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
           return;
         }
         onClose();
-      } catch {
-        setError("Cannot reach server. Is it running?");
+      } catch (err) {
+        console.error("FileOpenDialog: upload failed", err);
+        if (err instanceof SyntaxError) {
+          setError("Server returned an unexpected response");
+        } else if (err instanceof TypeError) {
+          setError("Unexpected response format");
+        } else {
+          setError("Cannot reach server. Is it running?");
+        }
       } finally {
         setLoading(false);
       }
