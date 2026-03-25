@@ -115,7 +115,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-017)
-- [Lessons Learned](docs/lessons-learned.md) -- 16 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 18 lessons including E2E testing gotchas
 
 ## Gotchas (save yourself time)
 - **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.

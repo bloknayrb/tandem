@@ -109,7 +109,7 @@ The status bar shows real-time connection state, open document count, and Claude
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
 - [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-017
-- [Lessons Learned](docs/lessons-learned.md) -- 17 implementation lessons
+- [Lessons Learned](docs/lessons-learned.md) -- 18 implementation lessons
 
 ## Tech Stack
 

@@ -100,7 +100,7 @@
 
 **Impact:** Issue #8 resolved. Multi-document browser testing unblocked.
 
-## 15. Y.Map Observers Created in Event Handlers Need Explicit Cleanup
+## 14. Y.Map Observers Created in Event Handlers Need Explicit Cleanup
 
 **Problem:** When a Y.Map observer is registered *inside* another observer's callback (e.g., creating a `documentMeta.observe()` for each new tab inside `handleDocumentListRef`), the observer function is not reachable by any existing cleanup path — the standard `useEffect` cleanup only covers observers registered at effect setup time, not ones created dynamically later.
 
@@ -120,7 +120,7 @@ t.ydoc.destroy();
 
 **Impact:** Without explicit unobserve, the Y.Map retains a reference to the observer closure, preventing GC of the closure's captured variables. `ydoc.destroy()` stops further event delivery but doesn't always free the observer reference depending on Y.js internals.
 
-## 14. Streamable HTTP Transport: Per-Session Lifecycle
+## 15. Streamable HTTP Transport: Per-Session Lifecycle
 
 **Problem:** The MCP SDK's `StreamableHTTPServerTransport` rejects re-initialization on an already-initialized transport (400 "Server already initialized"). A single long-lived transport means Claude Code's `/mcp` restart fails silently — the only workaround was restarting the entire Tandem server.
 
@@ -128,7 +128,7 @@ t.ydoc.destroy();
 
 **Impact:** Without per-session rotation, every `/mcp` restart in Claude Code requires a full server restart. The SDK's `Protocol.connect()` explicitly supports reconnection ("Call close() before connecting to a new transport").
 
-## 15. Hocuspocus `afterUnloadDocument` vs MCP Document Lifetime
+## 16. Hocuspocus `afterUnloadDocument` vs MCP Document Lifetime
 
 **Problem:** Hocuspocus fires `afterUnloadDocument` when all WebSocket clients disconnect from a room, deleting the Y.Doc from the shared `documents` map. But MCP tools may still consider that document "open" (it's in the `openDocs` map). If auto-save then calls `getOrCreateDocument()`, it gets a new empty Y.Doc and overwrites the session file with empty content. On the next restore, the session appears valid (`restoredFromSession: true`) but the document is empty (`tokenEstimate: 0`).
 
@@ -138,7 +138,7 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 
 **Impact:** Without this fix, any browser disconnect (tab close, navigation, network hiccup) can silently corrupt the session file, causing data loss on next open. The stale `openDocuments` list causes confusing phantom tabs on every server restart.
 
-## 16. Extracting Shared Logic from MCP Handlers
+## 17. Extracting Shared Logic from MCP Handlers
 
 **Problem:** `tandem_open` in `document.ts` was a 150-line function combining path resolution, format detection, session restore, Y.Doc loading, doc registration, and broadcast. When the HTTP API needed the same logic, the only option was copy-paste or extraction.
 
@@ -146,7 +146,7 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 
 **Impact:** `document.ts` dropped from ~600 to ~450 lines. The open logic is independently testable (11 unit tests). Adding new file-open entry points (CLI, VS Code extension) only requires calling `openFileByPath`.
 
-## 17. E2E Test Reliability with Yjs Sync
+## 18. E2E Test Reliability with Yjs Sync
 
 **Problem:** E2E tests create server-side state via MCP tool calls, then assert on browser-side DOM changes. The multi-hop sync chain (MCP → Y.Doc → Hocuspocus WS → browser provider → React → ProseMirror decorations) introduces variable latency. Tests that assert immediately after MCP calls fail intermittently.
 
