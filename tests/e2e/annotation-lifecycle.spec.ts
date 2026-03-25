@@ -18,7 +18,7 @@ async function openWithComment(dir: string, content?: string): Promise<void> {
     await mcp.callTool("tandem_comment", {
       from: TITLE_FROM,
       to: TITLE_TO,
-      content,
+      text: content,
       textSnapshot: TITLE_TEXT,
     });
   }
@@ -131,13 +131,14 @@ test("review mode navigates with keyboard", async ({ page }) => {
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
     to: TITLE_TO,
-    content: "First comment",
+    text: "First comment",
     textSnapshot: TITLE_TEXT,
   });
   await mcp.callTool("tandem_comment", {
     from: 16,
     to: 65,
-    content: "Second comment",
+    text: "Second comment",
+    textSnapshot: "This is the first paragraph of the test document",
   });
 
   await page.goto("/");

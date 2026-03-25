@@ -18,15 +18,28 @@ export class McpTestClient {
     this.client = new Client({ name: "tandem-e2e-test", version: "1.0.0" });
   }
 
-  async connect(): Promise<void> {
-    const transport = new StreamableHTTPClientTransport(new URL(MCP_URL));
-    await this.client.connect(transport);
-    this.connected = true;
+  async connect(retries = 5, delayMs = 1000): Promise<void> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const transport = new StreamableHTTPClientTransport(new URL(MCP_URL));
+        await this.client.connect(transport);
+        this.connected = true;
+        return;
+      } catch (err) {
+        if (attempt === retries) throw err;
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
   }
 
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     if (!this.connected) throw new Error("Not connected — call connect() first");
     const result = await this.client.callTool({ name, arguments: args });
+    if (result.isError) {
+      const content = result.content as Array<{ type: string; text?: string }>;
+      const msg = content?.find((c) => c.type === "text")?.text ?? "unknown error";
+      throw new Error(`MCP tool "${name}" failed: ${msg}`);
+    }
     const content = result.content as Array<{ type: string; text?: string }>;
     const textItem = content?.find((c) => c.type === "text");
     if (textItem?.text) {
