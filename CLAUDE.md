@@ -81,6 +81,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] refactor(file-io): FormatAdapter interface + registry, atomicWrite helper (Issue #36, #52)
 - [x] fix(session): defensive fallback when restored session yields empty doc (Issue #44)
 - [x] fix(client): prevent duplicate tab creation from concurrent observer firings via pendingIdsRef (Issue #44)
+- [x] feat(server): cross-platform freePort + session paths via env-paths (Issue #29)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -99,7 +100,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-012)
+- [Design Decisions](docs/decisions.md) -- ADRs (001-014)
 - [Lessons Learned](docs/lessons-learned.md) -- 14 lessons including multi-doc gotchas
 
 ## Gotchas (save yourself time)
@@ -108,12 +109,12 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Y.XmlElement.setAttribute needs `as any` for numbers.** TypeScript types say string-only but Tiptap stores numeric heading levels. Cast with `as any`.
 - **Start the server before connecting Claude Code.** `npm run dev:server` starts both Hocuspocus (:3478) and MCP HTTP (:3479). Claude Code connects via the `url` in `.mcp.json`. To test server changes, restart `dev:server` then `/mcp` in Claude Code. Vite hot-reloads client code automatically.
 - **Hocuspocus rooms = document IDs.** The room name IS the document ID from `docIdFromPath()`. `CTRL_ROOM` (exported from `shared/constants.ts`) is reserved for the bootstrap coordination channel. Never use it as a document ID.
-- **Session files live at `%LOCALAPPDATA%\tandem\sessions\`.** Keyed by URL-encoded file path. Delete them to force a fresh load (useful when debugging session restore issues).
-- **The `freePort()` function kills stale processes on ports 3478 and 3479 at startup.** This is intentional — it clears zombie instances from crashed servers. But it means you can't run two Tandem instances simultaneously.
+- **Session files live in a platform-appropriate directory** (via `env-paths`): `%LOCALAPPDATA%\tandem\sessions\` on Windows, `~/Library/Application Support/tandem/sessions/` on macOS, `~/.local/share/tandem/sessions/` on Linux. Keyed by URL-encoded file path. Delete them to force a fresh load (useful when debugging session restore issues). See `src/server/platform.ts`.
+- **The `freePort()` function kills stale processes on ports 3478 and 3479 at startup.** Cross-platform: `netstat`/`taskkill` on Windows, `lsof`/`process.kill` on macOS/Linux, `ss` fallback on Linux. Intentional — clears zombie instances from crashed servers. But it means you can't run two Tandem instances simultaneously.
 - **Coordinate system mismatch is the #1 source of annotation bugs.** Server uses flat text offsets (includes `## ` heading prefixes + `\n` separators). Client uses ProseMirror positions (structural, no prefixes). `flatOffsetToPmPos` and `pmPosToFlatOffset` convert between them. If annotations appear in the wrong place, check the conversion.
 
 ## Security
 - Server binds to 127.0.0.1 only
-- Rejects UNC paths (prevents NTLM hash leakage)
+- Rejects UNC paths on Windows (prevents NTLM hash leakage)
 - File size limit: 50MB
 - Atomic file saves (write to temp, then rename)

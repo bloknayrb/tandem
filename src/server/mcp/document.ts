@@ -107,7 +107,10 @@ export function registerDocumentTools(server: McpServer): void {
           resolved = path.resolve(filePath);
         }
 
-        if (resolved.startsWith("\\\\") || resolved.startsWith("//")) {
+        if (
+          process.platform === "win32" &&
+          (resolved.startsWith("\\\\") || resolved.startsWith("//"))
+        ) {
           return mcpError("FILE_NOT_FOUND", "UNC paths are not supported for security reasons.");
         }
 
