@@ -121,6 +121,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 
 ## Security
 - Server binds to 127.0.0.1 only
+- DNS rebinding protection: `/mcp` routes via `createMcpExpressApp({ host })`; `/api` routes via Host-header validation in `apiMiddleware` (both reject non-localhost Host headers)
+- CORS on `/api` routes reflects any `http://localhost:*` origin — no hardcoded port
 - Rejects UNC paths on Windows (prevents NTLM hash leakage)
-- File size limit: 50MB
+- File size limit: 50MB (enforced in both `openFileByPath` via `fs.stat` and `openFileFromContent` via content length)
 - Atomic file saves (write to temp, then rename)
