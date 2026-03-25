@@ -1,7 +1,5 @@
 import React, { useState, useRef, useCallback } from "react";
-import { DEFAULT_MCP_PORT } from "../../shared/constants";
-
-const API_BASE = `http://localhost:${DEFAULT_MCP_PORT}/api`;
+import { API_BASE, readFileForUpload } from "../utils/fileUpload";
 
 interface FileOpenDialogProps {
   onClose: () => void;
@@ -46,14 +44,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
       setError(null);
       setLoading(true);
       try {
-        const isBinary = file.name.toLowerCase().endsWith(".docx");
-        let content: string;
-        if (isBinary) {
-          const buf = await file.arrayBuffer();
-          content = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""));
-        } else {
-          content = await file.text();
-        }
+        const content = await readFileForUpload(file);
         const res = await fetch(`${API_BASE}/upload`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

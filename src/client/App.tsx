@@ -17,6 +17,7 @@ import { InterruptionModeSchema } from "../shared/types";
 import { useAnnotationGate } from "./hooks/useAnnotationGate";
 import { useYjsSync } from "./hooks/useYjsSync";
 import type { DocListEntry, OpenTab } from "./types";
+import { API_BASE, readFileForUpload } from "./utils/fileUpload";
 
 export type { DocListEntry, OpenTab };
 
@@ -88,16 +89,9 @@ export default function App() {
     if (!e.dataTransfer.files.length) return;
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    const isBinary = file.name.toLowerCase().endsWith(".docx");
-    let content: string;
-    if (isBinary) {
-      const buf = await file.arrayBuffer();
-      content = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""));
-    } else {
-      content = await file.text();
-    }
+    const content = await readFileForUpload(file);
     try {
-      await fetch(`http://localhost:3479/api/upload`, {
+      await fetch(`${API_BASE}/upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileName: file.name, content }),

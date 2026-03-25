@@ -10,6 +10,8 @@ import { registerAnnotationTools } from "./annotations.js";
 import { registerNavigationTools } from "./navigation.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
+import { detectFormat } from "./document-model.js";
+import { DEFAULT_CLIENT_PORT } from "../../shared/constants.js";
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -167,7 +169,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
 
   /** CORS + large-body middleware for /api/* routes */
   function apiMiddleware(req: any, res: any, next: any): void {
-    res.header("Access-Control-Allow-Origin", "http://localhost:5173");
+    res.header("Access-Control-Allow-Origin", `http://localhost:${DEFAULT_CLIENT_PORT}`);
     res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") {
@@ -226,10 +228,8 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
       return;
     }
     try {
-      // Binary formats (docx) arrive as base64; text formats as plain string
-      const ext = fileName.toLowerCase().split(".").pop() ?? "";
-      const isBinary = ext === "docx";
-      const decoded = isBinary ? Buffer.from(content, "base64") : String(content);
+      const format = detectFormat(fileName);
+      const decoded = format === "docx" ? Buffer.from(content, "base64") : String(content);
       const result = await openFileFromContent(fileName, decoded);
       res.json({ data: result });
     } catch (err: unknown) {

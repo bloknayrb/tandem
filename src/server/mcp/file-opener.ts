@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
+import type * as Y from "yjs";
 import { randomUUID } from "node:crypto";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -8,6 +9,7 @@ import {
   CHARS_PER_PAGE,
   LARGE_FILE_PAGE_THRESHOLD,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
+  SUPPORTED_EXTENSIONS,
 } from "../../shared/constants.js";
 import { getAdapter } from "../file-io/index.js";
 import {
@@ -21,8 +23,7 @@ import {
 import { extractText, detectFormat, docIdFromPath } from "./document-model.js";
 import { getOpenDocs, setActiveDocId, broadcastOpenDocs, addDoc } from "./document-service.js";
 
-/** File extensions the server accepts. Used by HTTP API validation. */
-export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
+export { SUPPORTED_EXTENSIONS };
 
 export interface OpenFileResult {
   documentId: string;
@@ -40,7 +41,6 @@ export interface OpenFileResult {
 
 /**
  * Open a file by its absolute path on disk.
- * Handles path resolution, format detection, session restore, and Y.Doc loading.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
  */
 export async function openFileByPath(filePath: string): Promise<OpenFileResult> {
@@ -83,8 +83,6 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
   if (existing) {
     setActiveDocId(id);
     broadcastOpenDocs();
-    const doc = getOrCreateDocument(id);
-    const textContent = extractText(doc);
     return {
       documentId: id,
       filePath: resolved,
@@ -92,8 +90,8 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
       format,
       readOnly,
       source: "file",
-      tokenEstimate: Math.ceil(textContent.length / 4),
-      pageEstimate: Math.ceil(textContent.length / CHARS_PER_PAGE),
+      tokenEstimate: 0,
+      pageEstimate: 0,
       restoredFromSession: false,
       alreadyOpen: true,
     };
@@ -127,42 +125,19 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
 
   addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
   setActiveDocId(id);
-
-  const meta = doc.getMap("documentMeta");
-  meta.set("readOnly", readOnly);
-  meta.set("format", format);
-  meta.set("documentId", id);
-  meta.set("fileName", fileName);
-
+  writeDocMeta(doc, id, fileName, format, readOnly);
   broadcastOpenDocs();
   ensureAutoSave();
 
-  const textContent = extractText(doc);
-  const textLen = textContent.length;
-  const pageEstimate = Math.ceil(textLen / CHARS_PER_PAGE);
-
-  const warnings: string[] = [];
-  if (pageEstimate >= VERY_LARGE_FILE_PAGE_THRESHOLD) {
-    warnings.push(
-      `Very large document (~${pageEstimate} pages). Consider splitting into smaller files.`,
-    );
-  } else if (pageEstimate >= LARGE_FILE_PAGE_THRESHOLD) {
-    warnings.push(`Large document (~${pageEstimate} pages). Operations may be slower than usual.`);
-  }
-
-  return {
+  return buildResult(doc, {
     documentId: id,
     filePath: resolved,
     fileName,
     format,
     readOnly,
     source: "file",
-    tokenEstimate: Math.ceil(textLen / 4),
-    pageEstimate,
     restoredFromSession,
-    alreadyOpen: false,
-    ...(warnings.length > 0 ? { warnings } : {}),
-  };
+  });
 }
 
 /**
@@ -184,7 +159,6 @@ export async function openFileFromContent(
   }
 
   const format = detectFormat(fileName);
-  // Uploads are always read-only — no disk path to save to
   const readOnly = true;
   const syntheticPath = `upload://${randomUUID()}/${fileName}`;
   const id = docIdFromPath(syntheticPath);
@@ -195,40 +169,67 @@ export async function openFileFromContent(
 
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
-
-  const meta = doc.getMap("documentMeta");
-  meta.set("readOnly", readOnly);
-  meta.set("format", format);
-  meta.set("documentId", id);
-  meta.set("fileName", fileName);
-
+  writeDocMeta(doc, id, fileName, format, readOnly);
   broadcastOpenDocs();
   ensureAutoSave();
 
-  const textContent = extractText(doc);
-  const textLen = textContent.length;
-  const pageEstimate = Math.ceil(textLen / CHARS_PER_PAGE);
-
-  return {
+  return buildResult(doc, {
     documentId: id,
     filePath: syntheticPath,
     fileName,
     format,
     readOnly,
     source: "upload",
+    restoredFromSession: false,
+  });
+}
+
+// --- Private helpers ---
+
+function writeDocMeta(
+  doc: Y.Doc,
+  id: string,
+  fileName: string,
+  format: string,
+  readOnly: boolean,
+): void {
+  const meta = doc.getMap("documentMeta");
+  meta.set("readOnly", readOnly);
+  meta.set("format", format);
+  meta.set("documentId", id);
+  meta.set("fileName", fileName);
+}
+
+function buildResult(
+  doc: Y.Doc,
+  base: Omit<OpenFileResult, "tokenEstimate" | "pageEstimate" | "alreadyOpen" | "warnings">,
+): OpenFileResult {
+  const textContent = extractText(doc);
+  const textLen = textContent.length;
+  const pageEstimate = Math.ceil(textLen / CHARS_PER_PAGE);
+
+  const warnings: string[] = [];
+  if (pageEstimate >= VERY_LARGE_FILE_PAGE_THRESHOLD) {
+    warnings.push(
+      `Very large document (~${pageEstimate} pages). Consider splitting into smaller files.`,
+    );
+  } else if (pageEstimate >= LARGE_FILE_PAGE_THRESHOLD) {
+    warnings.push(`Large document (~${pageEstimate} pages). Operations may be slower than usual.`);
+  }
+
+  return {
+    ...base,
     tokenEstimate: Math.ceil(textLen / 4),
     pageEstimate,
-    restoredFromSession: false,
     alreadyOpen: false,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
-/** Start auto-save if not already running */
 function ensureAutoSave(): void {
   if (isAutoSaveRunning()) return;
-  const openDocs = getOpenDocs();
   startAutoSave(async () => {
-    for (const [docId, state] of openDocs) {
+    for (const [docId, state] of getOpenDocs()) {
       const d = getOrCreateDocument(docId);
       await saveSession(state.filePath, state.format, d);
     }
