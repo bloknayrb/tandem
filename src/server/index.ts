@@ -5,6 +5,7 @@ import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
 import { freePort } from "./platform.js";
+import { isKnownHocuspocusError } from "./error-filter.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -19,15 +20,27 @@ const wsPort = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
 const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT), 10);
 
 let httpServer: Server | null = null;
+let isShuttingDown = false;
 
-// Swallow all uncaught exceptions to keep the server alive during stale browser reconnects.
-// Hocuspocus throws on malformed WebSocket frames; we log but never exit.
-process.on("uncaughtException", (err: Error) => {
-  console.error("[Tandem] uncaughtException (swallowed):", err.name, err.message, err.stack);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("[Tandem] unhandledRejection (swallowed):", reason);
-});
+// Swallow known Hocuspocus/ws protocol errors but crash on genuine bugs.
+function handleFatalError(label: string, value: unknown): void {
+  if (value instanceof Error && isKnownHocuspocusError(value)) {
+    console.error("[Tandem] Known WS error (swallowed):", value.message, value.stack);
+    return;
+  }
+  if (isShuttingDown) {
+    console.error(`[Tandem] ${label} during shutdown (ignored):`, value);
+    return;
+  }
+  if (value instanceof Error) {
+    console.error(`[Tandem] ${label} (FATAL):`, value.name, value.message, value.stack);
+  } else {
+    console.error(`[Tandem] ${label} (FATAL):`, value);
+  }
+  process.exit(1);
+}
+process.on("uncaughtException", (err) => handleFatalError("uncaughtException", err));
+process.on("unhandledRejection", (reason) => handleFatalError("unhandledRejection", reason));
 process.on("exit", (code) => {
   console.error(`[Tandem] Process exiting with code ${code}`);
 });
@@ -40,6 +53,8 @@ if (transportMode === "stdio") {
 
 // Graceful shutdown: save session + stop auto-save before exit
 async function shutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
     await saveCurrentSession();
@@ -47,7 +62,11 @@ async function shutdown(signal: string) {
   } catch (err) {
     console.error("[Tandem] Session save on shutdown failed:", err);
   }
-  await closeMcpSession();
+  try {
+    await closeMcpSession();
+  } catch (err) {
+    console.error("[Tandem] MCP session close on shutdown failed:", err);
+  }
   if (httpServer) {
     httpServer.close();
   }
