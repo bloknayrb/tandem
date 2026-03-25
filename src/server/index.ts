@@ -1,10 +1,10 @@
 import type { Server } from "http";
-import { execSync } from "child_process";
 import { startMcpServerStdio, startMcpServerHttp, closeMcpSession } from "./mcp/server.js";
 import { startHocuspocus } from "./yjs/provider.js";
 import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
+import { freePort } from "./platform.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -19,23 +19,6 @@ const wsPort = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
 const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT), 10);
 
 let httpServer: Server | null = null;
-
-/** Kill any process currently listening on the given TCP port (Windows). */
-function freePort(p: number): void {
-  try {
-    const out = execSync(`netstat -ano | findstr ":${p}.*LISTENING"`, {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-    const pid = out.trim().split(/\s+/).at(-1);
-    if (pid && /^\d+$/.test(pid)) {
-      execSync(`taskkill /PID ${pid} /F`, { stdio: "ignore" });
-      console.error(`[Tandem] Killed stale PID ${pid} holding port ${p}`);
-    }
-  } catch {
-    // Nothing listening or kill failed — proceed anyway
-  }
-}
 
 // Swallow all uncaught exceptions to keep the server alive during stale browser reconnects.
 // Hocuspocus throws on malformed WebSocket frames; we log but never exit.
