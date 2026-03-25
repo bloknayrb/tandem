@@ -4,6 +4,10 @@ import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}/mcp`;
 
