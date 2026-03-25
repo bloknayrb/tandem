@@ -8,7 +8,9 @@
 - `npm run build:server` -- Bundle server via tsup → `dist/server/index.js`
 - `npm run start:server` -- Run bundled server (`node dist/server/index.js`)
 - `npm run typecheck` -- Type-check server + client without emitting
-- `npm test` -- Run vitest
+- `npm test` -- Run vitest (unit tests)
+- `npm run test:e2e` -- Run Playwright E2E tests (requires server running or auto-starts via webServer)
+- `npm run test:e2e:ui` -- Playwright UI mode for interactive E2E debugging
 
 ## Architecture
 Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude Code
@@ -67,7 +69,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument, tandem_flag (26 total MCP tools)
 - [x] Phase 1.5 - Chat Sidebar: session-scoped chat via Y.Map('chat'), tandem_reply tool, ChatPanel UI
 - [x] Phase 1.5 - Edit sync fix: afterUnloadDocument hook cleans up stale Y.Doc references
-- [x] Browser file open: "+" button in tab bar, path input + upload dialog, drag-and-drop on editor, HTTP API endpoints
+- [x] Browser file open: "+" button in tab bar, path input + upload dialog, drag-and-drop on editor, HTTP API (`/api/open`, `/api/upload`)
+- [x] Playwright E2E test suite: 8 tests (7 passing, 1 skipped pending decoration fix), McpTestClient helper, data-testid attrs, CI integration
 
 **Infrastructure fixes (2026-03-20 — 2026-03-24):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
