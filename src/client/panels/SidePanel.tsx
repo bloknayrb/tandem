@@ -316,6 +316,7 @@ export function SidePanel({
           </h3>
           {allPending.length > 0 && (
             <button
+              data-testid="review-mode-btn"
               onClick={onToggleReviewMode}
               title="Keyboard review mode (Ctrl+Shift+R)"
               style={{
@@ -568,6 +569,7 @@ function AnnotationCard({
   return (
     <div
       onClick={onClick}
+      data-testid={`annotation-card-${annotation.id}`}
       style={{
         padding: "8px 10px",
         marginBottom: "6px",
@@ -617,6 +619,7 @@ function AnnotationCard({
         <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
           {onAccept && (
             <button
+              data-testid="accept-btn"
               onClick={(e) => {
                 e.stopPropagation();
                 onAccept(annotation.id);
@@ -636,6 +639,7 @@ function AnnotationCard({
           )}
           {onDismiss && (
             <button
+              data-testid="dismiss-btn"
               onClick={(e) => {
                 e.stopPropagation();
                 onDismiss(annotation.id);

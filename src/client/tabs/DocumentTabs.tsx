@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import type { OpenTab } from "../types";
+import { FileOpenDialog } from "../components/FileOpenDialog";
 
 interface DocumentTabsProps {
   tabs: OpenTab[];
@@ -16,6 +17,8 @@ const FORMAT_ICONS: Record<string, string> = {
 };
 
 export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: DocumentTabsProps) {
+  const [showDialog, setShowDialog] = useState(false);
+
   return (
     <div
       style={{
@@ -34,6 +37,7 @@ export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: Doc
         return (
           <div
             key={tab.id}
+            data-testid={`tab-${tab.id}`}
             onClick={() => onTabSwitch(tab.id)}
             style={{
               display: "flex",
@@ -101,6 +105,33 @@ export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: Doc
           </div>
         );
       })}
+      <button
+        onClick={() => setShowDialog(true)}
+        data-testid="open-file-btn"
+        title="Open file"
+        style={{
+          background: "none",
+          border: "1px solid #d1d5db",
+          borderRadius: "4px",
+          cursor: "pointer",
+          fontSize: "16px",
+          lineHeight: 1,
+          color: "#6b7280",
+          padding: "2px 8px",
+          marginLeft: "4px",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "#6366f1";
+          e.currentTarget.style.borderColor = "#6366f1";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "#6b7280";
+          e.currentTarget.style.borderColor = "#d1d5db";
+        }}
+      >
+        +
+      </button>
+      {showDialog && <FileOpenDialog onClose={() => setShowDialog(false)} />}
     </div>
   );
 }

@@ -1,5 +1,8 @@
 export const DEFAULT_WS_PORT = 3478;
 export const DEFAULT_MCP_PORT = 3479;
+
+/** File extensions the server accepts for opening. */
+export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 export const MAX_WS_PAYLOAD = 10 * 1024 * 1024; // 10MB
 export const MAX_WS_CONNECTIONS = 4;

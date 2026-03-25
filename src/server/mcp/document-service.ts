@@ -17,6 +17,7 @@ export interface OpenDoc {
   filePath: string;
   format: string;
   readOnly: boolean;
+  source: "file" | "upload";
 }
 
 /** All open documents, keyed by document ID (which is also the Hocuspocus room name) */

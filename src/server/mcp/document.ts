@@ -1,8 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import fs from "fs/promises";
-import fsSync from "fs";
-import path from "path";
 import * as Y from "yjs";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -12,23 +9,10 @@ import {
   getErrorMessage,
   withErrorBoundary,
 } from "./response.js";
-import {
-  MAX_FILE_SIZE,
-  CHARS_PER_PAGE,
-  LARGE_FILE_PAGE_THRESHOLD,
-  VERY_LARGE_FILE_PAGE_THRESHOLD,
-} from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
-import {
-  saveSession,
-  loadSession,
-  restoreYDoc,
-  sourceFileChanged,
-  startAutoSave,
-  stopAutoSave,
-  isAutoSaveRunning,
-} from "../session/manager.js";
+import { saveSession, stopAutoSave } from "../session/manager.js";
+import { openFileByPath } from "./file-opener.js";
 
 // Document model (pure logic)
 import {
@@ -38,8 +22,6 @@ import {
   resolveOffset,
   getOrCreateXmlText,
   verifyAndResolveRange,
-  detectFormat,
-  docIdFromPath,
 } from "./document-model.js";
 
 // Document service (state management)
@@ -51,7 +33,6 @@ import {
   requireDocument,
   broadcastOpenDocs,
   toDocListEntry,
-  addDoc,
   removeDoc,
   hasDoc,
   docCount,
@@ -90,6 +71,8 @@ export {
   docCount,
 } from "./document-service.js";
 export type { OpenDoc } from "./document-service.js";
+export { openFileByPath, openFileFromContent, SUPPORTED_EXTENSIONS } from "./file-opener.js";
+export type { OpenFileResult } from "./file-opener.js";
 
 export function registerDocumentTools(server: McpServer): void {
   const openDocs = getOpenDocs();
@@ -99,137 +82,28 @@ export function registerDocumentTools(server: McpServer): void {
     "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.",
     { filePath: z.string().describe("Absolute path to the file to open") },
     withErrorBoundary("tandem_open", async ({ filePath }) => {
-      let resolved = path.resolve(filePath);
       try {
-        try {
-          resolved = fsSync.realpathSync(path.resolve(filePath));
-        } catch {
-          resolved = path.resolve(filePath);
-        }
-
-        if (
-          process.platform === "win32" &&
-          (resolved.startsWith("\\\\") || resolved.startsWith("//"))
-        ) {
-          return mcpError("FILE_NOT_FOUND", "UNC paths are not supported for security reasons.");
-        }
-
-        const stat = await fs.stat(resolved);
-        if (stat.size > MAX_FILE_SIZE) {
-          return mcpError("FORMAT_ERROR", "File exceeds 50MB limit.");
-        }
-
-        const format = detectFormat(resolved);
-        const isDocx = format === "docx";
-        const readOnly = isDocx;
-
-        const id = docIdFromPath(resolved);
-        const existing = openDocs.get(id);
-        if (existing) {
-          setActiveDocId(id);
-          broadcastOpenDocs();
-          const doc = getOrCreateDocument(id);
-          const textContent = extractText(doc);
-          return mcpSuccess({
-            documentId: id,
-            filePath: resolved,
-            fileName: path.basename(resolved),
-            format,
-            readOnly,
-            tokenEstimate: Math.ceil(textContent.length / 4),
-            pageEstimate: Math.ceil(textContent.length / 3000),
-            restoredFromSession: false,
-            alreadyOpen: true,
-            message: `Switched to already-open document: ${path.basename(resolved)}`,
-          });
-        }
-
-        const doc = getOrCreateDocument(id);
-        const fileName = path.basename(resolved);
-        let restoredFromSession = false;
-
-        const session = await loadSession(resolved);
-        if (session) {
-          const changed = await sourceFileChanged(session);
-          if (!changed) {
-            restoreYDoc(doc, session);
-            // Defensive: if the session file contained empty state (e.g. saved
-            // after a stale afterUnloadDocument eviction), fall back to the
-            // source file instead of showing an empty document.
-            const fragment = doc.getXmlFragment("default");
-            if (fragment.length > 0) {
-              restoredFromSession = true;
-            } else {
-              console.error(
-                `[Tandem] Session restore yielded empty doc for ${fileName}, falling back to source file`,
-              );
-            }
-          }
-        }
-
-        if (!restoredFromSession) {
-          const adapter = getAdapter(format);
-          const fileContent = isDocx
-            ? await fs.readFile(resolved)
-            : await fs.readFile(resolved, "utf-8");
-          await adapter.load(doc, fileContent);
-        }
-
-        addDoc(id, { id, filePath: resolved, format, readOnly });
-        setActiveDocId(id);
-
-        const meta = doc.getMap("documentMeta");
-        meta.set("readOnly", readOnly);
-        meta.set("format", format);
-        meta.set("documentId", id);
-        meta.set("fileName", fileName);
-
-        broadcastOpenDocs();
-
-        if (!isAutoSaveRunning()) {
-          startAutoSave(async () => {
-            for (const [docId, state] of openDocs) {
-              const d = getOrCreateDocument(docId);
-              await saveSession(state.filePath, state.format, d);
-            }
-          });
-        }
-
-        const textContent = extractText(doc);
-        const textLen = textContent.length;
-        const pageEstimate = Math.ceil(textLen / CHARS_PER_PAGE);
-
-        const warnings: string[] = [];
-        if (pageEstimate >= VERY_LARGE_FILE_PAGE_THRESHOLD) {
-          warnings.push(
-            `Very large document (~${pageEstimate} pages). Consider splitting into smaller files.`,
-          );
-        } else if (pageEstimate >= LARGE_FILE_PAGE_THRESHOLD) {
-          warnings.push(
-            `Large document (~${pageEstimate} pages). Operations may be slower than usual.`,
-          );
-        }
-
+        const result = await openFileByPath(filePath);
         return mcpSuccess({
-          documentId: id,
-          filePath: resolved,
-          fileName,
-          format,
-          readOnly,
-          tokenEstimate: Math.ceil(textLen / 4),
-          pageEstimate,
-          restoredFromSession,
-          ...(warnings.length > 0 ? { warnings } : {}),
-          message: restoredFromSession
-            ? `Session restored: ${fileName} (annotations preserved)`
-            : readOnly
-              ? `Document opened (review only): ${fileName}`
-              : `Document opened: ${fileName}`,
+          ...result,
+          message: result.alreadyOpen
+            ? `Switched to already-open document: ${result.fileName}`
+            : result.restoredFromSession
+              ? `Session restored: ${result.fileName} (annotations preserved)`
+              : result.readOnly
+                ? `Document opened (review only): ${result.fileName}`
+                : `Document opened: ${result.fileName}`,
         });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
-        if (e.code === "ENOENT") {
-          return mcpError("FILE_NOT_FOUND", `File not found: ${resolved}`);
+        if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {
+          return mcpError("FILE_NOT_FOUND", e.message);
+        }
+        if (e.code === "INVALID_PATH") {
+          return mcpError("FILE_NOT_FOUND", e.message);
+        }
+        if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
+          return mcpError("FORMAT_ERROR", e.message);
         }
         if (e.code === "EBUSY" || e.code === "EPERM") {
           return mcpError(
@@ -238,10 +112,7 @@ export function registerDocumentTools(server: McpServer): void {
           );
         }
         if (e.code === "EACCES") {
-          return mcpError(
-            "PERMISSION_DENIED",
-            `Permission denied — check file permissions for: ${resolved}`,
-          );
+          return mcpError("PERMISSION_DENIED", e.message);
         }
         return mcpError("FORMAT_ERROR", getErrorMessage(err));
       }
@@ -480,6 +351,18 @@ export function registerDocumentTools(server: McpServer): void {
         const docState = getCurrentDoc(documentId);
         const format = docState?.format ?? "txt";
         const readOnly = docState?.readOnly ?? false;
+
+        // Uploaded files have no disk path — session-only save
+        if (docState?.source === "upload") {
+          await saveSession(r.filePath, format, r.doc);
+          return mcpSuccess({
+            saved: true,
+            sessionOnly: true,
+            filePath: r.filePath,
+            message:
+              "Session saved (annotations preserved). This file was uploaded — no disk path to save to.",
+          });
+        }
 
         const adapter = getAdapter(format);
 
