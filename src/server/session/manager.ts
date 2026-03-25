@@ -2,11 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
 import type { SessionData } from "../../shared/types.js";
-
-// Session storage in %LOCALAPPDATA%\tandem\sessions\ (not project dir, avoids OneDrive sync)
-const SESSION_DIR = process.env.LOCALAPPDATA
-  ? path.join(process.env.LOCALAPPDATA, "tandem", "sessions")
-  : path.join(".tandem", "sessions");
+import { SESSION_DIR } from "../platform.js";
 
 import { SESSION_MAX_AGE, CTRL_ROOM } from "../../shared/constants.js";
 
