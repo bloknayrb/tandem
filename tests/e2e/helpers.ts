@@ -1,14 +1,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
 
-const MCP_URL = "http://localhost:3479/mcp";
+const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}/mcp`;
 
 /**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.
- * Handles initialize, session tracking, and tool calls.
  */
 export class McpTestClient {
   private client: Client;
@@ -27,7 +27,6 @@ export class McpTestClient {
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     if (!this.connected) throw new Error("Not connected — call connect() first");
     const result = await this.client.callTool({ name, arguments: args });
-    // MCP tool results have content array; parse the first text item
     const content = result.content as Array<{ type: string; text?: string }>;
     const textItem = content?.find((c) => c.type === "text");
     if (textItem?.text) {
@@ -48,10 +47,7 @@ export class McpTestClient {
   }
 }
 
-/**
- * Create a temp directory and copy fixture files into it.
- * Returns the temp dir path. Caller is responsible for cleanup.
- */
+/** Create a temp directory and copy fixture files into it. */
 export function createFixtureDir(...fixtureNames: string[]): string {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-e2e-"));
   const fixturesDir = path.join(__dirname, "fixtures");
