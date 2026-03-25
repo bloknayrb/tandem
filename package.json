@@ -12,7 +12,7 @@
     "build:server": "tsup",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit",
     "server": "tsx src/server/index.ts",
-    "start:server": "node dist/index.js",
+    "start:server": "node dist/server/index.js",
     "test": "vitest",
     "preview": "vite preview",
     "lint": "eslint .",

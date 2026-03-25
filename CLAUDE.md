@@ -5,8 +5,8 @@
 - `npm run dev:client` -- Frontend: Vite on :5173
 - `npm run dev:standalone` -- Both frontend + backend (via concurrently)
 - `npm run dev` -- Alias for `vite` (frontend only)
-- `npm run build:server` -- Bundle server via tsup → `dist/index.js`
-- `npm run start:server` -- Run bundled server (`node dist/index.js`)
+- `npm run build:server` -- Bundle server via tsup → `dist/server/index.js`
+- `npm run start:server` -- Run bundled server (`node dist/server/index.js`)
 - `npm run typecheck` -- Type-check server + client without emitting
 - `npm test` -- Run vitest
 
