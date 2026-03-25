@@ -619,7 +619,7 @@ function AnnotationCard({
         <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
           {onAccept && (
             <button
-              data-testid="accept-btn"
+              data-testid={`accept-btn-${annotation.id}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onAccept(annotation.id);
@@ -639,7 +639,7 @@ function AnnotationCard({
           )}
           {onDismiss && (
             <button
-              data-testid="dismiss-btn"
+              data-testid={`dismiss-btn-${annotation.id}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onDismiss(annotation.id);

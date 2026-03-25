@@ -80,7 +80,7 @@ test("accept annotation changes status", async ({ page }) => {
   await openWithComment(tmpDir, "Looks good");
 
   await page.goto("/");
-  const acceptBtn = page.locator("[data-testid='accept-btn']");
+  const acceptBtn = page.locator("[data-testid^='accept-btn-']");
   await expect(acceptBtn.first()).toBeVisible({ timeout: 10_000 });
   await acceptBtn.first().click();
 
@@ -94,7 +94,7 @@ test("dismiss annotation changes status", async ({ page }) => {
   await openWithComment(tmpDir, "Dismiss me");
 
   await page.goto("/");
-  const dismissBtn = page.locator("[data-testid='dismiss-btn']");
+  const dismissBtn = page.locator("[data-testid^='dismiss-btn-']");
   await expect(dismissBtn.first()).toBeVisible({ timeout: 10_000 });
   await dismissBtn.first().click();
 
@@ -114,7 +114,7 @@ test("suggestion accept applies text change", async ({ page }) => {
   });
 
   await page.goto("/");
-  const acceptBtn = page.locator("[data-testid='accept-btn']");
+  const acceptBtn = page.locator("[data-testid^='accept-btn-']");
   await expect(acceptBtn.first()).toBeVisible({ timeout: 10_000 });
   await acceptBtn.first().click();
 
@@ -161,7 +161,7 @@ test("review mode navigates with keyboard", async ({ page }) => {
     textSnapshot: TITLE_TEXT,
   });
   await mcp.callTool("tandem_comment", {
-    from: 16,
+    from: 17,
     to: 65,
     text: "Second comment",
     textSnapshot: "This is the first paragraph of the test document",
