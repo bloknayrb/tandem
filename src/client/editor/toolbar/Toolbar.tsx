@@ -453,7 +453,7 @@ function InputGroup({
   canSubmit,
   secondaryInput,
 }: {
-  inputRef: React.RefObject<HTMLInputElement>;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   value: string;
   onChange: (v: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;

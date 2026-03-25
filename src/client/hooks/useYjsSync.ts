@@ -62,7 +62,7 @@ export function useYjsSync(): YjsSyncResult {
   const observersRef = useRef<Map<string, { cleanup: () => void }>>(new Map());
   const tabMetaCleanupsRef = useRef<Map<string, () => void>>(new Map());
   const handleDocumentListRef =
-    useRef<(docList: DocListEntry[], newActiveId: string | null) => void>();
+    useRef<(docList: DocListEntry[], newActiveId: string | null) => void>(undefined);
 
   /** Wire annotation, awareness, documentMeta observers for the active tab. Returns cleanup fn. */
   const setupTabObservers = useCallback((tab: OpenTab) => {
