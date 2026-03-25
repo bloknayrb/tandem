@@ -14,6 +14,8 @@
     "server": "tsx src/server/index.ts",
     "start:server": "node dist/server/index.js",
     "test": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "biome format --write .",
@@ -65,6 +67,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
+    "@playwright/test": "^1.58.2",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
