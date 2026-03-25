@@ -8,7 +8,7 @@ import {
   restoreCtrlDoc,
 } from "../session/manager.js";
 import { CTRL_ROOM } from "../../shared/constants.js";
-import crypto from "crypto";
+import { randomUUID } from "node:crypto";
 
 // --- Multi-document state ---
 
@@ -148,7 +148,7 @@ export async function restoreCtrlSession(): Promise<void> {
 export function writeGenerationId(): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const meta = ctrlDoc.getMap("documentMeta");
-  const generationId = crypto.randomUUID();
+  const generationId = randomUUID();
   meta.set("generationId", generationId);
   console.error(`[Tandem] Server generationId: ${generationId}`);
 }

@@ -40,6 +40,7 @@ export function useYjsSync(): YjsSyncResult {
   const [readOnly, setReadOnly] = useState(false);
   const [ready, setReady] = useState(false);
   const [serverRestarted, setServerRestarted] = useState(false);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const bootstrapRef = useRef<{ ydoc: Y.Doc; provider: HocuspocusProvider } | null>(null);
   const generationIdRef = useRef<string | null>(null);
@@ -223,7 +224,8 @@ export function useYjsSync(): YjsSyncResult {
       if (newGenId && generationIdRef.current && newGenId !== generationIdRef.current) {
         console.warn("[Tandem] Server restarted — refreshing documents");
         setServerRestarted(true);
-        setTimeout(() => setServerRestarted(false), 5000);
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => setServerRestarted(false), 5000);
       }
       if (newGenId) generationIdRef.current = newGenId;
 
@@ -233,7 +235,10 @@ export function useYjsSync(): YjsSyncResult {
     };
     meta.observe(observer);
     observer();
-    return () => meta.unobserve(observer);
+    return () => {
+      meta.unobserve(observer);
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    };
   }, []);
 
   // Rewire observers when active tab changes
