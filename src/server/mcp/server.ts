@@ -9,6 +9,7 @@ import { registerDocumentTools } from "./document.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { registerNavigationTools } from "./navigation.js";
 import { registerAwarenessTools } from "./awareness.js";
+import { openFileByPath, openFileFromContent } from "./file-opener.js";
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -99,9 +100,21 @@ export async function startMcpServerStdio(): Promise<void> {
 /** Start the MCP server on HTTP using Streamable HTTP transport. Returns the http.Server for lifecycle management. */
 export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Promise<Server> {
   mcpServer = createMcpServer();
-  const app = createMcpExpressApp({ host });
 
-  app.post("/mcp", async (req: any, res: any) => {
+  // We need two different body parser limits: 100kb for MCP (SDK default)
+  // and 70MB for file upload API. createMcpExpressApp applies express.json()
+  // globally with 100kb limit. Solution: create our own outer app, register
+  // /api routes with a larger body parser, then mount the SDK app for /mcp.
+  const { default: express } = await import("express");
+  const app = express();
+
+  // /api routes need large bodies — register parser BEFORE SDK app
+  app.use("/api", express.json({ limit: "70mb" }) as any);
+
+  // SDK app provides express.json() (100kb limit) + DNS rebinding protection
+  const mcpApp = createMcpExpressApp({ host });
+
+  mcpApp.post("/mcp", async (req: any, res: any) => {
     const body = req.body as unknown;
     const isInit =
       isInitializeRequest(body) || (Array.isArray(body) && body.some(isInitializeRequest));
@@ -125,7 +138,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     await currentTransport.handleRequest(req, res, body);
   });
 
-  app.get("/mcp", async (req: any, res: any) => {
+  mcpApp.get("/mcp", async (req: any, res: any) => {
     if (!currentTransport) {
       sendJsonRpcError(res, 503, -32000, "No active session");
       return;
@@ -133,9 +146,8 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     await currentTransport.handleRequest(req, res, req.body);
   });
 
-  // DELETE — SDK handles session teardown internally via handleDeleteRequest,
-  // which closes the transport and triggers Protocol._onclose().
-  app.delete("/mcp", async (req: any, res: any) => {
+  // DELETE — SDK handles session teardown internally
+  mcpApp.delete("/mcp", async (req: any, res: any) => {
     if (!currentTransport) {
       sendJsonRpcError(res, 404, -32001, "Session not found");
       return;
@@ -144,8 +156,85 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     currentTransport = null;
   });
 
-  app.get("/health", (_req: unknown, res: { json: (body: unknown) => void }) => {
+  mcpApp.get("/health", (_req: any, res: any) => {
     res.json({ status: "ok", transport: "http", hasSession: currentTransport !== null });
+  });
+
+  // Mount SDK app (handles /mcp, /health with 100kb body parser)
+  app.use(mcpApp);
+
+  // --- REST API for browser-initiated file opening ---
+
+  /** CORS + large-body middleware for /api/* routes */
+  function apiMiddleware(req: any, res: any, next: any): void {
+    res.header("Access-Control-Allow-Origin", "http://localhost:5173");
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  }
+
+  /** Map error codes from file-opener to HTTP responses */
+  function sendApiError(res: any, err: unknown): void {
+    const e = err as NodeJS.ErrnoException;
+    const code = e.code ?? "";
+    const msg = e.message ?? String(err);
+    if (code === "ENOENT" || code === "FILE_NOT_FOUND") {
+      res.status(404).json({ error: "FILE_NOT_FOUND", message: msg });
+    } else if (code === "INVALID_PATH") {
+      res.status(400).json({ error: "INVALID_PATH", message: msg });
+    } else if (code === "UNSUPPORTED_FORMAT") {
+      res.status(400).json({ error: "UNSUPPORTED_FORMAT", message: msg });
+    } else if (code === "FILE_TOO_LARGE") {
+      res.status(413).json({ error: "FILE_TOO_LARGE", message: msg });
+    } else if (code === "EBUSY" || code === "EPERM") {
+      res.status(423).json({ error: "FILE_LOCKED", message: "File is locked by another program." });
+    } else if (code === "EACCES") {
+      res.status(403).json({ error: "PERMISSION_DENIED", message: msg });
+    } else {
+      res.status(500).json({ error: "INTERNAL", message: msg });
+    }
+  }
+
+  app.options("/api/open", apiMiddleware);
+  app.post("/api/open", apiMiddleware, async (req: any, res: any) => {
+    const { filePath } = req.body ?? {};
+    if (!filePath || typeof filePath !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "filePath is required" });
+      return;
+    }
+    try {
+      const result = await openFileByPath(filePath);
+      res.json({ data: result });
+    } catch (err: unknown) {
+      sendApiError(res, err);
+    }
+  });
+
+  app.options("/api/upload", apiMiddleware);
+  app.post("/api/upload", apiMiddleware, async (req: any, res: any) => {
+    const { fileName, content } = req.body ?? {};
+    if (!fileName || typeof fileName !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "fileName is required" });
+      return;
+    }
+    if (content === undefined || content === null) {
+      res.status(400).json({ error: "BAD_REQUEST", message: "content is required" });
+      return;
+    }
+    try {
+      // Binary formats (docx) arrive as base64; text formats as plain string
+      const ext = fileName.toLowerCase().split(".").pop() ?? "";
+      const isBinary = ext === "docx";
+      const decoded = isBinary ? Buffer.from(content, "base64") : String(content);
+      const result = await openFileFromContent(fileName, decoded);
+      res.json({ data: result });
+    } catch (err: unknown) {
+      sendApiError(res, err);
+    }
   });
 
   return new Promise<Server>((resolve, reject) => {

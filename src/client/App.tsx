@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useRef, useCallback, useEffect, useMemo, type DragEvent } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { Editor } from "./editor/Editor";
 import { SidePanel } from "./panels/SidePanel";
@@ -59,11 +59,52 @@ export default function App() {
   const [showBanner, setShowBanner] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [fileDragOver, setFileDragOver] = useState(false);
   const editorRef = useRef<TiptapEditor | null>(null);
   const prevPendingRef = useRef<number>(0);
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
+  }, []);
+
+  // File drag-and-drop on editor area
+  const handleEditorDragOver = useCallback((e: DragEvent) => {
+    // Only show drop indicator for file drops, not editor content drags
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      setFileDragOver(true);
+    }
+  }, []);
+
+  const handleEditorDragLeave = useCallback((e: DragEvent) => {
+    // Only reset if leaving the wrapper (not entering a child)
+    if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+      setFileDragOver(false);
+    }
+  }, []);
+
+  const handleEditorDrop = useCallback(async (e: DragEvent) => {
+    setFileDragOver(false);
+    if (!e.dataTransfer.files.length) return;
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    const isBinary = file.name.toLowerCase().endsWith(".docx");
+    let content: string;
+    if (isBinary) {
+      const buf = await file.arrayBuffer();
+      content = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""));
+    } else {
+      content = await file.text();
+    }
+    try {
+      await fetch(`http://localhost:3479/api/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: file.name, content }),
+      });
+    } catch {
+      // Server unreachable — silently fail (user can use the dialog instead)
+    }
   }, []);
 
   // Detect review completion: all pending -> 0 while resolved > 0 (single pass)
@@ -201,7 +242,19 @@ export default function App() {
         </div>
       )}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <div style={{ flex: 1, overflow: "auto", padding: "24px 48px" }}>
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: "24px 48px",
+            border: fileDragOver ? "2px dashed #6366f1" : "2px solid transparent",
+            background: fileDragOver ? "#eef2ff" : undefined,
+            transition: "border-color 0.15s, background 0.15s",
+          }}
+          onDragOver={handleEditorDragOver}
+          onDragLeave={handleEditorDragLeave}
+          onDrop={handleEditorDrop}
+        >
           {activeTab ? (
             <Editor
               key={activeTab.id}
@@ -222,7 +275,7 @@ export default function App() {
                 color: "#9ca3af",
               }}
             >
-              No document open. Use Claude to open a file with tandem_open.
+              No document open. Click + in the tab bar or drop a file here.
             </div>
           )}
         </div>

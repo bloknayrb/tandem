@@ -18,11 +18,14 @@ export function sessionKey(filePath: string): string {
 export async function saveSession(filePath: string, format: string, doc: Y.Doc): Promise<void> {
   const key = sessionKey(filePath);
   let sourceFileMtime = 0;
-  try {
-    const stat = await fs.stat(filePath);
-    sourceFileMtime = stat.mtimeMs;
-  } catch {
-    // File may not exist yet (new doc)
+  // Upload paths have no disk file — skip stat
+  if (!filePath.startsWith("upload://")) {
+    try {
+      const stat = await fs.stat(filePath);
+      sourceFileMtime = stat.mtimeMs;
+    } catch {
+      // File may not exist yet (new doc)
+    }
   }
 
   const state = Y.encodeStateAsUpdate(doc);
@@ -71,6 +74,8 @@ export function restoreYDoc(doc: Y.Doc, session: SessionData): void {
 
 /** Check if the source file has changed since the session was saved */
 export async function sourceFileChanged(session: SessionData): Promise<boolean> {
+  // Uploaded files have no disk path — session is the only truth
+  if (session.filePath.startsWith("upload://")) return false;
   try {
     const stat = await fs.stat(session.filePath);
     return stat.mtimeMs !== session.sourceFileMtime;
