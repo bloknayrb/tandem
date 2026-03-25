@@ -79,6 +79,7 @@ export {
   toDocListEntry,
   saveCurrentSession,
   restoreCtrlSession,
+  writeGenerationId,
   addDoc,
   removeDoc,
   hasDoc,
