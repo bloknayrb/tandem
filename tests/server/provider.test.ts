@@ -7,6 +7,7 @@ import {
   setShouldKeepDocument,
 } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM } from "../../src/shared/constants.js";
+import { writeGenerationId } from "../../src/server/mcp/document-service.js";
 
 describe("Y.Doc lifecycle (provider)", () => {
   it("getOrCreateDocument creates a new doc if none exists", () => {
@@ -79,5 +80,28 @@ describe("shouldKeepDocument guard", () => {
     expect(predicate(CTRL_ROOM)).toBe(true);
     expect(predicate("doc-abc")).toBe(true);
     expect(predicate("unknown-room")).toBe(false);
+  });
+});
+
+describe("writeGenerationId", () => {
+  it("writes a generationId to the CTRL_ROOM documentMeta", () => {
+    writeGenerationId();
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const meta = ctrlDoc.getMap("documentMeta");
+    const genId = meta.get("generationId") as string;
+    expect(genId).toBeDefined();
+    expect(typeof genId).toBe("string");
+    expect(genId.length).toBeGreaterThan(0);
+  });
+
+  it("produces a different generationId on each call", () => {
+    writeGenerationId();
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const meta = ctrlDoc.getMap("documentMeta");
+    const first = meta.get("generationId") as string;
+
+    writeGenerationId();
+    const second = meta.get("generationId") as string;
+    expect(second).not.toBe(first);
   });
 });

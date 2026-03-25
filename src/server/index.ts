@@ -4,7 +4,7 @@ import { startMcpServerStdio, startMcpServerHttp, closeMcpSession } from "./mcp/
 import { startHocuspocus } from "./yjs/provider.js";
 import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
-import { saveCurrentSession, restoreCtrlSession } from "./mcp/document.js";
+import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -89,6 +89,9 @@ async function main() {
   await restoreCtrlSession().catch((err) => {
     console.error("[Tandem] Failed to restore chat history:", err);
   });
+
+  // Write a unique ID so clients can detect when the server process has restarted
+  writeGenerationId();
 
   if (transportMode === "http") {
     // HTTP mode: no startup-order constraint — start both concurrently

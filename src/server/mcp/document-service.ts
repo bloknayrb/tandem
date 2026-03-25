@@ -8,6 +8,7 @@ import {
   restoreCtrlDoc,
 } from "../session/manager.js";
 import { CTRL_ROOM } from "../../shared/constants.js";
+import { randomUUID } from "node:crypto";
 
 // --- Multi-document state ---
 
@@ -141,4 +142,13 @@ export async function restoreCtrlSession(): Promise<void> {
 
     console.error("[Tandem] Restored chat history from session (cleared stale doc list)");
   }
+}
+
+/** Write a unique generationId to the ctrl doc so clients can detect server restarts. */
+export function writeGenerationId(): void {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const meta = ctrlDoc.getMap("documentMeta");
+  const generationId = randomUUID();
+  meta.set("generationId", generationId);
+  console.error(`[Tandem] Server generationId: ${generationId}`);
 }

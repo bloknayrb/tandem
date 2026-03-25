@@ -26,6 +26,8 @@ export interface YjsSyncResult {
   readOnly: boolean;
   bootstrapYdoc: Y.Doc | null;
   ready: boolean;
+  /** Briefly true after the server restarts and the client reconnects. */
+  serverRestarted: boolean;
 }
 
 export function useYjsSync(): YjsSyncResult {
@@ -37,8 +39,11 @@ export function useYjsSync(): YjsSyncResult {
   const [claudeActive, setClaudeActive] = useState(false);
   const [readOnly, setReadOnly] = useState(false);
   const [ready, setReady] = useState(false);
+  const [serverRestarted, setServerRestarted] = useState(false);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const bootstrapRef = useRef<{ ydoc: Y.Doc; provider: HocuspocusProvider } | null>(null);
+  const generationIdRef = useRef<string | null>(null);
   const tabsRef = useRef<OpenTab[]>([]);
   tabsRef.current = tabs;
 
@@ -207,20 +212,33 @@ export function useYjsSync(): YjsSyncResult {
     };
   }, []);
 
-  // Observe bootstrap doc for openDocuments broadcasts.
+  // Observe bootstrap doc for openDocuments broadcasts and server restart detection.
   // Uses [] because bootstrapRef.current is guaranteed populated by the effect above
   // (effects run in declaration order within a component/hook).
   useEffect(() => {
     if (!bootstrapRef.current) return;
     const meta = bootstrapRef.current.ydoc.getMap("documentMeta");
     const observer = () => {
+      // Detect server restart via generationId change
+      const newGenId = meta.get("generationId") as string | undefined;
+      if (newGenId && generationIdRef.current && newGenId !== generationIdRef.current) {
+        console.warn("[Tandem] Server restarted — refreshing documents");
+        setServerRestarted(true);
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => setServerRestarted(false), 5000);
+      }
+      if (newGenId) generationIdRef.current = newGenId;
+
       const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
       const active = meta.get("activeDocumentId") as string | null | undefined;
       if (docs) handleDocumentListRef.current?.(docs, active ?? null);
     };
     meta.observe(observer);
     observer();
-    return () => meta.unobserve(observer);
+    return () => {
+      meta.unobserve(observer);
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    };
   }, []);
 
   // Rewire observers when active tab changes
@@ -264,5 +282,6 @@ export function useYjsSync(): YjsSyncResult {
     // renders past the `if (!ready)` guard.
     bootstrapYdoc: bootstrapRef.current?.ydoc ?? null,
     ready,
+    serverRestarted,
   };
 }

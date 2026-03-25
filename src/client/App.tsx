@@ -33,6 +33,7 @@ export default function App() {
     readOnly,
     bootstrapYdoc,
     ready,
+    serverRestarted,
   } = useYjsSync();
 
   // Interruption mode — persisted to localStorage
@@ -129,6 +130,20 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      {serverRestarted && (
+        <div
+          style={{
+            padding: "8px 16px",
+            background: "#fef3c7",
+            borderBottom: "1px solid #fbbf24",
+            fontSize: "13px",
+            color: "#92400e",
+            textAlign: "center",
+          }}
+        >
+          Server restarted — refreshing documents
+        </div>
+      )}
       <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
       {tabs.length > 0 && (
         <DocumentTabs
