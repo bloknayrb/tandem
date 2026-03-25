@@ -81,7 +81,9 @@ async function main() {
     .then((n) => {
       if (n > 0) console.error(`[Tandem] Cleaned up ${n} stale session(s)`);
     })
-    .catch(() => {});
+    .catch((err) => {
+      console.error("[Tandem] Failed to clean up stale sessions:", err);
+    });
 
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
   await restoreCtrlSession().catch((err) => {

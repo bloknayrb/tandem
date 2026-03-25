@@ -165,7 +165,7 @@ export interface SessionData {
   lastAccessed: number;
 }
 
-/** Chat message between user and Claude, stored in Y.Map('chat') on __tandem_ctrl__ */
+/** Chat message between user and Claude, stored in Y.Map('chat') on CTRL_ROOM */
 export interface ChatMessage {
   id: string;
   author: "user" | "claude";

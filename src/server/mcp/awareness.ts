@@ -6,6 +6,7 @@ import { collectAnnotations, refreshRange } from "./annotations.js";
 import { mcpSuccess, noDocumentError } from "./response.js";
 import type { Annotation, ChatMessage } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import { CTRL_ROOM } from "../../shared/constants.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox
 const surfacedIds = new Set<string>();
@@ -134,8 +135,8 @@ export function registerAwarenessTools(server: McpServer): void {
         }
       }
 
-      // Bucket 3: unread chat messages from __tandem_ctrl__
-      const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
+      // Bucket 3: unread chat messages from CTRL_ROOM
+      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
       const chatMap = ctrlDoc.getMap("chat");
       const chatMessages: Array<Omit<ChatMessage, "read" | "author">> = [];
 
@@ -229,7 +230,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Document context for this reply (defaults to active document)"),
     },
     async ({ text, replyTo, documentId }) => {
-      const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
+      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
       const chatMap = ctrlDoc.getMap("chat");
 
       const id = generateMessageId();

@@ -7,6 +7,7 @@ import {
   loadCtrlSession,
   restoreCtrlDoc,
 } from "../session/manager.js";
+import { CTRL_ROOM } from "../../shared/constants.js";
 
 // --- Multi-document state ---
 
@@ -21,8 +22,8 @@ export interface OpenDoc {
 const openDocs = new Map<string, OpenDoc>();
 
 // Prevent Hocuspocus from evicting Y.Docs that MCP still tracks as open,
-// or the bootstrap channel (__tandem_ctrl__) which holds persistent chat history.
-setShouldKeepDocument((name) => openDocs.has(name) || name === "__tandem_ctrl__");
+// or the bootstrap channel (CTRL_ROOM) which holds persistent chat history.
+setShouldKeepDocument((name) => openDocs.has(name) || name === CTRL_ROOM);
 
 /** The active document ID — tools default to this when no documentId is specified */
 let activeDocId: string | null = null;
@@ -92,14 +93,14 @@ export function toDocListEntry(d: OpenDoc) {
 }
 
 /** Broadcast the open documents list to connected clients.
- *  Writes to both the bootstrap room (__tandem_ctrl__) so new clients discover
+ *  Writes to both the bootstrap room (CTRL_ROOM) so new clients discover
  *  docs, and to the active document's room so tab-switching clients stay in sync. */
 export function broadcastOpenDocs(): void {
   try {
     const docList = Array.from(openDocs.values()).map(toDocListEntry);
     const id = activeDocId;
 
-    const ctrl = getOrCreateDocument("__tandem_ctrl__");
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
     const ctrlMeta = ctrl.getMap("documentMeta");
     ctrlMeta.set("openDocuments", docList);
     ctrlMeta.set("activeDocumentId", id);
@@ -121,15 +122,15 @@ export async function saveCurrentSession(): Promise<void> {
     const doc = getOrCreateDocument(id);
     await saveSession(state.filePath, state.format, doc);
   }
-  const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   await saveCtrlSession(ctrlDoc);
 }
 
-/** Restore __tandem_ctrl__ chat history from session file if available. */
+/** Restore CTRL_ROOM chat history from session file if available. */
 export async function restoreCtrlSession(): Promise<void> {
   const saved = await loadCtrlSession();
   if (saved) {
-    const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     restoreCtrlDoc(ctrlDoc, saved);
 
     // Clear stale document tracking — no docs are actually open after a restart.
