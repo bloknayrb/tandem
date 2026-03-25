@@ -35,6 +35,8 @@ graph LR
     subgraph "Tandem Server (Node.js)"
         HP["Hocuspocus<br/>WebSocket :3478"]
         MCP["MCP Server<br/>HTTP :3479"]
+        API["REST API<br/>/api/open, /api/upload"]
+        FO["file-opener.ts<br/>(shared open logic)"]
         YDoc["Y.Doc per room<br/>(one per open document)"]
         FileIO["File I/O<br/>markdown, txt, docx"]
     end
@@ -45,10 +47,12 @@ graph LR
 
     Tiptap <-->|@hocuspocus/provider| HP
     HP <--> YDoc
-    MCP <--> YDoc
+    MCP -->|tandem_open| FO
+    API -->|/api/open, /api/upload| FO
+    FO <--> YDoc
+    FO <--> FileIO
     Tools <-->|HTTP| MCP
-    FileIO --> YDoc
-    YDoc --> FileIO
+    DocTabs -->|fetch| API
     AnnExt -.->|observes| YDoc
     AwExt -.->|observes| YDoc
     SidePanel -.->|observes| YDoc
@@ -124,6 +128,30 @@ Claude calls tandem_open("invoice.docx")
 
 Claude calls tandem_highlight({ from: 10, to: 20, color: "red", documentId: "report-a1b2c3" })
     → Targets report.md even though invoice.docx is the active document
+```
+
+### Browser Opens a File (HTTP API)
+
+```
+User clicks "+" in DocumentTabs or drops a file on the editor
+    → FileOpenDialog sends POST /api/open { filePath } or POST /api/upload { fileName, content }
+    → Express route calls openFileByPath() or openFileFromContent() in file-opener.ts
+    → Same logic as tandem_open: format detection, session restore, adapter load
+    → addDoc() registers in openDocs, broadcastOpenDocs() writes to Y.Map
+    → Browser's useYjsSync observes Y.Map change, creates new tab
+    → For uploads: synthetic upload:// path, readOnly=true, no disk save
+```
+
+### E2E Test Architecture
+
+```
+Playwright (test runner)
+    → Chromium browser: navigates to http://localhost:5173
+    → McpTestClient (SDK Client + StreamableHTTPClientTransport)
+        → Connects to http://localhost:3479/mcp
+        → Calls tandem_open, tandem_comment, etc. to set up state
+    → Browser assertions: locator queries for [data-testid], .ProseMirror content
+    → Cleanup: tandem_close all docs, rm temp fixture dir
 ```
 
 ## Chat Data Flow

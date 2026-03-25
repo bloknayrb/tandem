@@ -686,3 +686,51 @@ tandem_reply({ text: "I've finished reviewing the cost section. Two figures need
 - Chat messages are stored in `Y.Map('chat')` on the `__tandem_ctrl__` Y.Doc, so they persist across the session but are not tied to a specific document.
 - The `documentId` field captures which document was active for context, but the message itself lives on the control channel.
 - New user messages appear in `tandem_checkInbox` via the `chatMessages` array.
+
+---
+
+## HTTP API (Browser File Opening)
+
+In addition to MCP tools, the server exposes REST endpoints on the same port (:3479) for browser-initiated file opening. These are NOT MCP tools — they use standard HTTP request/response with JSON bodies.
+
+Both endpoints converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
+
+### POST /api/open
+
+Open a file by its absolute path on disk. Equivalent to `tandem_open` but callable from the browser.
+
+**Request:**
+```json
+{ "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
+```
+
+**Response (200):**
+```json
+{ "data": { "documentId": "report-a1b2c3", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", ... } }
+```
+
+**Errors:** `404 FILE_NOT_FOUND`, `400 UNSUPPORTED_FORMAT`, `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`
+
+### POST /api/upload
+
+Open a file from uploaded content (no disk path). Used by the browser's drag-and-drop and file picker UI.
+
+**Request:**
+```json
+{ "fileName": "notes.md", "content": "# My Notes\n\nSome content..." }
+```
+
+For binary formats (.docx), `content` is base64-encoded.
+
+**Response (200):**
+```json
+{ "data": { "documentId": "notes-x1y2z3", "fileName": "notes.md", "format": "md", "readOnly": true, "source": "upload", "filePath": "upload://uuid/notes.md", ... } }
+```
+
+Uploaded files are always read-only — there is no disk path to save to. The synthetic `upload://` path is used as the session key. `tandem_save` on an uploaded file returns a session-only save.
+
+**Errors:** `400 UNSUPPORTED_FORMAT`, `400 BAD_REQUEST`
+
+### CORS
+
+Both `/api/*` endpoints include CORS headers for `http://localhost:5173` (the Vite dev server). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).

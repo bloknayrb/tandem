@@ -81,10 +81,12 @@ The status bar shows real-time connection state, open document count, and Claude
 ### More
 
 - **Multi-document tabs** -- open `.md`, `.txt`, `.docx` files side by side, each in its own Y.Doc room
+- **Browser file open** -- click "+" in the tab bar or drag-and-drop a file onto the editor (no Claude needed)
 - **Markdown round-trip** -- lossless MDAST-based conversion preserves formatting through load/save cycles
 - **.docx review-only mode** -- open Word documents for annotation without modifying the original
 - **Session persistence** -- Y.Doc state and annotations survive server restarts
 - **User→Claude inbox** -- highlights, comments, and questions you add are surfaced to Claude via `tandem_checkInbox`
+- **E2E tested** -- 8 Playwright tests cover the annotation lifecycle end-to-end
 - **Atomic file saves** -- write to temp, then rename, preventing partial writes
 
 ## Scripts
@@ -96,20 +98,22 @@ The status bar shows real-time connection state, open document count, and Claude
 | `npm run dev:standalone` | Both frontend + backend (via concurrently) |
 | `npm run dev` | Alias for `vite` (frontend only) |
 | `npm run build` | Production build |
-| `npm test` | Run vitest |
+| `npm test` | Run vitest (unit tests) |
+| `npm run test:e2e` | Run Playwright E2E tests |
+| `npm run test:e2e:ui` | Playwright UI mode |
 
 ## Documentation
 
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 25 tools with parameters, returns, and examples
+- [MCP Tool Reference](docs/mcp-tools.md) -- 26 MCP tools + HTTP API endpoints
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-012
-- [Lessons Learned](docs/lessons-learned.md) -- 14 implementation lessons
+- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-017
+- [Lessons Learned](docs/lessons-learned.md) -- 17 implementation lessons
 
 ## Tech Stack
 
-**Frontend:** React 18, Tiptap, Vite, TypeScript
+**Frontend:** React 19, Tiptap, Vite, TypeScript
 **Backend:** Node.js, Hocuspocus (Yjs WebSocket), MCP SDK (Streamable HTTP transport), Express
 **Collaboration:** Yjs (CRDT), @hocuspocus/provider, y-prosemirror
 **File I/O:** mammoth.js (.docx), unified/remark (.md)
