@@ -107,8 +107,11 @@ export function broadcastOpenDocs(): void {
     ctrlMeta.set("openDocuments", docList);
     ctrlMeta.set("activeDocumentId", id);
 
-    if (id) {
-      const ydoc = getOrCreateDocument(id);
+    // Update ALL open doc rooms so no per-doc Y.Doc ever has a stale list.
+    // If only the active doc were updated, a previously active doc's stale list
+    // could fire the client's metaObserver and incorrectly remove tabs.
+    for (const [docId] of openDocs) {
+      const ydoc = getOrCreateDocument(docId);
       const meta = ydoc.getMap("documentMeta");
       meta.set("openDocuments", docList);
       meta.set("activeDocumentId", id);
