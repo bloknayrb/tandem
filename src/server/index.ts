@@ -83,8 +83,11 @@ async function main() {
     })
     .catch(() => {});
 
-  // Restore chat history from previous session
-  restoreCtrlSession().catch(() => {});
+  // Restore chat history from previous session (must complete before Hocuspocus
+  // starts so browsers never see stale openDocuments from the previous session)
+  await restoreCtrlSession().catch((err) => {
+    console.error("[Tandem] Failed to restore chat history:", err);
+  });
 
   if (transportMode === "http") {
     // HTTP mode: no startup-order constraint — start both concurrently

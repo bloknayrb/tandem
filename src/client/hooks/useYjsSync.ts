@@ -5,6 +5,15 @@ import { DEFAULT_WS_PORT } from "../../shared/constants";
 import type { Annotation } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
 
+/** Filter a document list to only docs not already represented in tabs or pending creation. */
+export function deduplicateDocList(
+  docList: DocListEntry[],
+  existingIds: Set<string>,
+  pendingIds: Set<string>,
+): DocListEntry[] {
+  return docList.filter((d) => !existingIds.has(d.id) && !pendingIds.has(d.id));
+}
+
 export interface YjsSyncResult {
   tabs: OpenTab[];
   activeTabId: string | null;
@@ -32,6 +41,19 @@ export function useYjsSync(): YjsSyncResult {
   const bootstrapRef = useRef<{ ydoc: Y.Doc; provider: HocuspocusProvider } | null>(null);
   const tabsRef = useRef<OpenTab[]>([]);
   tabsRef.current = tabs;
+
+  // Synchronous dedup guards — prevent duplicate provider creation when multiple
+  // Yjs observers fire before React re-renders (tabsRef would still be stale).
+  const pendingIdsRef = useRef<Set<string>>(new Set());
+  const pendingProvidersRef = useRef<Map<string, { ydoc: Y.Doc; provider: HocuspocusProvider }>>(
+    new Map(),
+  );
+  // Once tabs state catches up, clear pending tracking for IDs that are now real tabs
+  for (const t of tabs) {
+    pendingIdsRef.current.delete(t.id);
+    pendingProvidersRef.current.delete(t.id);
+  }
+
   const observersRef = useRef<Map<string, { cleanup: () => void }>>(new Map());
   const tabMetaCleanupsRef = useRef<Map<string, () => void>>(new Map());
   const handleDocumentListRef =
@@ -98,27 +120,39 @@ export function useYjsSync(): YjsSyncResult {
     const existingIds = new Set(currentTabs.map((t) => t.id));
     const serverIds = new Set(docList.map((d) => d.id));
 
-    const newTabs: OpenTab[] = [];
-    for (const doc of docList) {
-      if (!existingIds.has(doc.id)) {
-        const ydoc = new Y.Doc();
-        const provider = new HocuspocusProvider({
-          url: `ws://localhost:${DEFAULT_WS_PORT}`,
-          name: doc.id,
-          document: ydoc,
-        });
-
-        const meta = ydoc.getMap("documentMeta");
-        const metaObserver = () => {
-          const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
-          const active = meta.get("activeDocumentId") as string | null | undefined;
-          if (docs) handleDocumentListRef.current?.(docs, active ?? null);
-        };
-        meta.observe(metaObserver);
-        tabMetaCleanupsRef.current.set(doc.id, () => meta.unobserve(metaObserver));
-
-        newTabs.push({ ...doc, ydoc, provider });
+    // Clean up orphaned pending providers for docs the server no longer lists
+    for (const [id, pending] of pendingProvidersRef.current) {
+      if (!serverIds.has(id)) {
+        pending.provider.destroy();
+        pending.ydoc.destroy();
+        pendingProvidersRef.current.delete(id);
+        pendingIdsRef.current.delete(id);
       }
+    }
+
+    const toCreate = deduplicateDocList(docList, existingIds, pendingIdsRef.current);
+    const newTabs: OpenTab[] = [];
+    for (const doc of toCreate) {
+      pendingIdsRef.current.add(doc.id);
+
+      const ydoc = new Y.Doc();
+      const provider = new HocuspocusProvider({
+        url: `ws://localhost:${DEFAULT_WS_PORT}`,
+        name: doc.id,
+        document: ydoc,
+      });
+      pendingProvidersRef.current.set(doc.id, { ydoc, provider });
+
+      const meta = ydoc.getMap("documentMeta");
+      const metaObserver = () => {
+        const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
+        const active = meta.get("activeDocumentId") as string | null | undefined;
+        if (docs) handleDocumentListRef.current?.(docs, active ?? null);
+      };
+      meta.observe(metaObserver);
+      tabMetaCleanupsRef.current.set(doc.id, () => meta.unobserve(metaObserver));
+
+      newTabs.push({ ...doc, ydoc, provider });
     }
 
     const toRemove = currentTabs.filter((t) => !serverIds.has(t.id));
@@ -130,6 +164,8 @@ export function useYjsSync(): YjsSyncResult {
       }
       tabMetaCleanupsRef.current.get(t.id)?.();
       tabMetaCleanupsRef.current.delete(t.id);
+      pendingIdsRef.current.delete(t.id);
+      pendingProvidersRef.current.delete(t.id);
       t.provider.destroy();
       t.ydoc.destroy();
     }

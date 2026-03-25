@@ -1,10 +1,12 @@
-import path from 'path';
-import * as Y from 'yjs';
-import { getOrCreateDocument } from '../yjs/provider.js';
+import path from "path";
+import * as Y from "yjs";
+import { getOrCreateDocument, setShouldKeepDocument } from "../yjs/provider.js";
 import {
   saveSession,
-  saveCtrlSession, loadCtrlSession, restoreCtrlDoc,
-} from '../session/manager.js';
+  saveCtrlSession,
+  loadCtrlSession,
+  restoreCtrlDoc,
+} from "../session/manager.js";
 
 // --- Multi-document state ---
 
@@ -17,6 +19,10 @@ export interface OpenDoc {
 
 /** All open documents, keyed by document ID (which is also the Hocuspocus room name) */
 const openDocs = new Map<string, OpenDoc>();
+
+// Prevent Hocuspocus from evicting Y.Docs that MCP still tracks as open,
+// or the bootstrap channel (__tandem_ctrl__) which holds persistent chat history.
+setShouldKeepDocument((name) => openDocs.has(name) || name === "__tandem_ctrl__");
 
 /** The active document ID — tools default to this when no documentId is specified */
 let activeDocId: string | null = null;
@@ -62,10 +68,16 @@ export function getCurrentDoc(documentId?: string) {
 }
 
 /** Returns the shared Y.Doc or null if the target doc isn't open */
-export function requireDocument(documentId?: string): { doc: Y.Doc; filePath: string; docId: string } | null {
+export function requireDocument(
+  documentId?: string,
+): { doc: Y.Doc; filePath: string; docId: string } | null {
   const current = getCurrentDoc(documentId);
   if (!current) return null;
-  return { doc: getOrCreateDocument(current.docName), filePath: current.filePath, docId: current.id };
+  return {
+    doc: getOrCreateDocument(current.docName),
+    filePath: current.filePath,
+    docId: current.id,
+  };
 }
 
 /** Build the document list entry for a single OpenDoc */
@@ -87,19 +99,19 @@ export function broadcastOpenDocs(): void {
     const docList = Array.from(openDocs.values()).map(toDocListEntry);
     const id = activeDocId;
 
-    const ctrl = getOrCreateDocument('__tandem_ctrl__');
-    const ctrlMeta = ctrl.getMap('documentMeta');
-    ctrlMeta.set('openDocuments', docList);
-    ctrlMeta.set('activeDocumentId', id);
+    const ctrl = getOrCreateDocument("__tandem_ctrl__");
+    const ctrlMeta = ctrl.getMap("documentMeta");
+    ctrlMeta.set("openDocuments", docList);
+    ctrlMeta.set("activeDocumentId", id);
 
     if (id) {
       const ydoc = getOrCreateDocument(id);
-      const meta = ydoc.getMap('documentMeta');
-      meta.set('openDocuments', docList);
-      meta.set('activeDocumentId', id);
+      const meta = ydoc.getMap("documentMeta");
+      meta.set("openDocuments", docList);
+      meta.set("activeDocumentId", id);
     }
   } catch (err) {
-    console.error('[Tandem] broadcastOpenDocs error:', err);
+    console.error("[Tandem] broadcastOpenDocs error:", err);
   }
 }
 
@@ -109,7 +121,7 @@ export async function saveCurrentSession(): Promise<void> {
     const doc = getOrCreateDocument(id);
     await saveSession(state.filePath, state.format, doc);
   }
-  const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+  const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
   await saveCtrlSession(ctrlDoc);
 }
 
@@ -117,8 +129,15 @@ export async function saveCurrentSession(): Promise<void> {
 export async function restoreCtrlSession(): Promise<void> {
   const saved = await loadCtrlSession();
   if (saved) {
-    const ctrlDoc = getOrCreateDocument('__tandem_ctrl__');
+    const ctrlDoc = getOrCreateDocument("__tandem_ctrl__");
     restoreCtrlDoc(ctrlDoc, saved);
-    console.error('[Tandem] Restored chat history from session');
+
+    // Clear stale document tracking — no docs are actually open after a restart.
+    // Chat history is preserved; only the document list is wiped.
+    const meta = ctrlDoc.getMap("documentMeta");
+    meta.delete("openDocuments");
+    meta.delete("activeDocumentId");
+
+    console.error("[Tandem] Restored chat history from session (cleared stale doc list)");
   }
 }

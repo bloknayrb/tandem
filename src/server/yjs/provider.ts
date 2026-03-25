@@ -1,8 +1,19 @@
-import { Hocuspocus } from '@hocuspocus/server';
-import * as Y from 'yjs';
+import { Hocuspocus } from "@hocuspocus/server";
+import * as Y from "yjs";
 
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
+
+// Callback predicate: returns true if Hocuspocus should keep a document in the
+// map even after all WebSocket clients disconnect.  Registered by document-service
+// to avoid a circular import (provider -> document-service -> provider).
+let shouldKeepDocument: ((name: string) => boolean) | null = null;
+
+/** Register a predicate that prevents afterUnloadDocument from evicting docs
+ *  that MCP (or the bootstrap channel) still needs. */
+export function setShouldKeepDocument(fn: (name: string) => boolean): void {
+  shouldKeepDocument = fn;
+}
 
 /**
  * Get a document by room name. Returns undefined if it doesn't exist.
@@ -37,7 +48,7 @@ export function removeDocument(name: string): boolean {
 export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
     port,
-    address: '127.0.0.1',
+    address: "127.0.0.1",
     quiet: true, // stdout is the MCP wire — suppress the startup banner
 
     async onConnect({ request, documentName }) {
@@ -45,9 +56,9 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       const origin = request?.headers?.origin;
       if (origin) {
         const url = new URL(origin);
-        if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+        if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
           console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
-          throw new Error('Connection rejected: invalid origin');
+          throw new Error("Connection rejected: invalid origin");
         }
       }
       console.error(`[Hocuspocus] Client connected to: ${documentName}`);
@@ -76,6 +87,10 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     },
 
     async afterUnloadDocument({ documentName }) {
+      if (shouldKeepDocument?.(documentName)) {
+        console.error(`[Hocuspocus] Kept document in map (MCP still tracking): ${documentName}`);
+        return;
+      }
       if (documents.has(documentName)) {
         documents.delete(documentName);
         console.error(`[Hocuspocus] Unloaded document from map: ${documentName}`);
