@@ -77,7 +77,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 **Infrastructure fixes (2026-03-20 — 2026-03-24):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
 - [x] MCP starts before Hocuspocus to beat Claude Code's initialize timeout (stdio mode only)
-- [x] `freePort()` evicts stale processes on startup; uncaughtException handler survives malformed WS frames
+- [x] `freePort()` evicts stale processes on startup; narrowed uncaughtException handler for known WS errors
 - [x] `console.log = console.error` + `quiet: true` prevent stdout pollution of the MCP wire
 - [x] Migrate MCP from stdio to Streamable HTTP transport (fixes Issue #8 — stdio disconnect)
 - [x] fix(server): normalize path in `docIdFromPath` for cross-platform basename extraction (Windows backslash vs Linux)
@@ -107,6 +107,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **MCP stdio disconnect (Issue #8):** Resolved by migrating to Streamable HTTP transport. Stdio fallback (`TANDEM_TRANSPORT=stdio`) still has this issue — use HTTP mode (default).
 - **MCP session re-initialization (Issue #18):** Resolved. Transport is now rotated per session — Claude Code's `/mcp` restart works without restarting the Tandem server.
 - **Y.js "Invalid access" warnings:** Harmless stderr noise during session restore. Data syncs correctly.
+- **Exception handler is narrowed, not blanket.** `uncaughtException` and `unhandledRejection` handlers in `index.ts` only swallow known Hocuspocus/ws protocol errors (via `isKnownHocuspocusError` in `error-filter.ts`). Unknown errors log full details and call `process.exit(1)`. If the server starts crashing on a new Hocuspocus error pattern, add the pattern to the discriminator.
 - **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:server` first.
 
 ## Documentation

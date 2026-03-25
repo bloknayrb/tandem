@@ -4,3 +4,6 @@ dist/
 *.log
 .env
 .env.local
+
+.gemini/
+gha-creds-*.json
