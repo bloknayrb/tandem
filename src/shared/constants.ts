@@ -1,6 +1,5 @@
 export const DEFAULT_WS_PORT = 3478;
 export const DEFAULT_MCP_PORT = 3479;
-export const DEFAULT_CLIENT_PORT = 5173;
 
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);

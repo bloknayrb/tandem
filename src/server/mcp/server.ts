@@ -11,7 +11,6 @@ import { registerNavigationTools } from "./navigation.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
 import { detectFormat } from "./document-model.js";
-import { DEFAULT_CLIENT_PORT } from "../../shared/constants.js";
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -167,9 +166,18 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
 
   // --- REST API for browser-initiated file opening ---
 
-  /** CORS + large-body middleware for /api/* routes */
+  /** CORS + DNS rebinding protection middleware for /api/* routes */
   function apiMiddleware(req: any, res: any, next: any): void {
-    res.header("Access-Control-Allow-Origin", `http://localhost:${DEFAULT_CLIENT_PORT}`);
+    // DNS rebinding protection: reject requests whose Host header is not localhost
+    const reqHost = (req.headers.host ?? "").split(":")[0];
+    if (reqHost !== "localhost" && reqHost !== "127.0.0.1") {
+      res.status(403).json({ error: "FORBIDDEN", message: "Host not allowed." });
+      return;
+    }
+    // Reflect any localhost origin back — supports any Vite dev port (5173, 5174, etc.)
+    const origin = req.headers.origin as string | undefined;
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin ?? "");
+    res.header("Access-Control-Allow-Origin", isLocalhost ? origin! : "null");
     res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") {

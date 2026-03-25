@@ -78,21 +78,22 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
   const id = docIdFromPath(resolved);
   const openDocs = getOpenDocs();
 
-  // Already open — just switch to it
+  // Already open — switch to it and return real token/page estimates from the live doc
   const existing = openDocs.get(id);
   if (existing) {
     setActiveDocId(id);
     broadcastOpenDocs();
+    const doc = getOrCreateDocument(id);
     return {
-      documentId: id,
-      filePath: resolved,
-      fileName: path.basename(resolved),
-      format,
-      readOnly,
-      source: "file",
-      tokenEstimate: 0,
-      pageEstimate: 0,
-      restoredFromSession: false,
+      ...buildResult(doc, {
+        documentId: id,
+        filePath: resolved,
+        fileName: path.basename(resolved),
+        format,
+        readOnly,
+        source: "file",
+        restoredFromSession: false,
+      }),
       alreadyOpen: true,
     };
   }
@@ -156,6 +157,12 @@ export async function openFileFromContent(
       ),
       { code: "UNSUPPORTED_FORMAT" },
     );
+  }
+
+  const contentSize =
+    content instanceof Buffer ? content.length : Buffer.byteLength(content as string);
+  if (contentSize > MAX_FILE_SIZE) {
+    throw Object.assign(new Error("File exceeds 50MB limit."), { code: "FILE_TOO_LARGE" });
   }
 
   const format = detectFormat(fileName);
