@@ -14,7 +14,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness)
 - `yjs/` -- Y.Doc management, the authoritative document state
-- `file-io/` -- File format converters (markdown, plaintext, docx)
+- `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx), `atomicWrite` helper
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\
 
 ### Client (src/client/)
@@ -77,6 +77,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] feat(annotations): migrate ranges to Yjs RelativePosition for CRDT-anchored positions (Issue #37)
 - [x] fix(session): guard afterUnloadDocument so auto-save never persists empty Y.Docs (Issue #44)
 - [x] fix(session): clear stale openDocuments from ctrl session on restore, await before Hocuspocus starts (Issue #44)
+- [x] feat(client): upgrade React 18 → 19 (Issue #28)
+- [x] refactor(file-io): FormatAdapter interface + registry, atomicWrite helper (Issue #36, #52)
 - [x] fix(session): defensive fallback when restored session yields empty doc (Issue #44)
 - [x] fix(client): prevent duplicate tab creation from concurrent observer firings via pendingIdsRef (Issue #44)
 

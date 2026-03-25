@@ -19,8 +19,7 @@ import {
   VERY_LARGE_FILE_PAGE_THRESHOLD,
 } from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
-import { loadMarkdown, saveMarkdown } from "../file-io/markdown.js";
-import { loadDocx, htmlToYDoc } from "../file-io/docx.js";
+import { getAdapter, atomicWrite } from "../file-io/index.js";
 import {
   saveSession,
   loadSession,
@@ -35,7 +34,6 @@ import {
 import {
   extractText,
   extractMarkdown,
-  populateYDoc,
   getElementText,
   resolveOffset,
   getOrCreateXmlText,
@@ -167,17 +165,11 @@ export function registerDocumentTools(server: McpServer): void {
         }
 
         if (!restoredFromSession) {
-          if (isDocx) {
-            const html = await loadDocx(resolved);
-            htmlToYDoc(doc, html);
-          } else {
-            const fileContent = await fs.readFile(resolved, "utf-8");
-            if (format === "md") {
-              loadMarkdown(doc, fileContent);
-            } else {
-              populateYDoc(doc, fileContent);
-            }
-          }
+          const adapter = getAdapter(format);
+          const fileContent = isDocx
+            ? await fs.readFile(resolved)
+            : await fs.readFile(resolved, "utf-8");
+          await adapter.load(doc, fileContent);
         }
 
         addDoc(id, { id, filePath: resolved, format, readOnly });
@@ -486,7 +478,9 @@ export function registerDocumentTools(server: McpServer): void {
         const format = docState?.format ?? "txt";
         const readOnly = docState?.readOnly ?? false;
 
-        if (readOnly) {
+        const adapter = getAdapter(format);
+
+        if (readOnly || !adapter.canSave) {
           await saveSession(r.filePath, format, r.doc);
           return mcpSuccess({
             saved: true,
@@ -497,10 +491,8 @@ export function registerDocumentTools(server: McpServer): void {
           });
         }
 
-        const output = format === "md" ? saveMarkdown(r.doc) : extractText(r.doc);
-        const tempPath = path.join(path.dirname(r.filePath), `.tandem-tmp-${Date.now()}`);
-        await fs.writeFile(tempPath, output, "utf-8");
-        await fs.rename(tempPath, r.filePath);
+        const output = adapter.save(r.doc)!;
+        await atomicWrite(r.filePath, output);
         await saveSession(r.filePath, format, r.doc);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {

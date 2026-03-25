@@ -1,19 +1,19 @@
 // .docx review-only mode: mammoth.js → HTML → Y.Doc
 // Editing disabled; annotations persist via session system
 
-import mammoth from 'mammoth';
-import * as htmlparser2 from 'htmlparser2';
-import type { Element, Text, ChildNode } from 'domhandler';
-import * as Y from 'yjs';
-import type { Annotation } from '../../shared/types.js';
-import { getElementText } from '../mcp/document.js';
+import mammoth from "mammoth";
+import * as htmlparser2 from "htmlparser2";
+import type { Element, Text, ChildNode } from "domhandler";
+import * as Y from "yjs";
+import type { Annotation } from "../../shared/types.js";
+import { getElementText } from "../mcp/document-model.js";
 
 /**
- * Convert a .docx file to HTML via mammoth.js.
+ * Convert a .docx buffer to HTML via mammoth.js.
  * Warnings logged to stderr (stdout reserved for MCP).
  */
-export async function loadDocx(filePath: string): Promise<string> {
-  const result = await mammoth.convertToHtml({ path: filePath });
+export async function loadDocx(content: Buffer): Promise<string> {
+  const result = await mammoth.convertToHtml({ buffer: content });
 
   for (const msg of result.messages) {
     console.error(`[mammoth] ${msg.type}: ${msg.message}`);
@@ -25,7 +25,16 @@ export async function loadDocx(filePath: string): Promise<string> {
 // -- HTML → Y.Doc conversion --
 
 /** All marks that can appear on inline text (superset of mdast-ydoc) */
-const ALL_MARKS = ['bold', 'italic', 'strike', 'code', 'link', 'underline', 'superscript', 'subscript'] as const;
+const ALL_MARKS = [
+  "bold",
+  "italic",
+  "strike",
+  "code",
+  "link",
+  "underline",
+  "superscript",
+  "subscript",
+] as const;
 
 /** Map HTML tag names to the mark they apply */
 const INLINE_MARK_TAGS: Record<string, (el: Element) => Record<string, object>> = {
@@ -39,16 +48,32 @@ const INLINE_MARK_TAGS: Record<string, (el: Element) => Record<string, object>> 
   sup: () => ({ superscript: {} }),
   sub: () => ({ subscript: {} }),
   a: (el) => ({
-    link: { href: el.attribs.href || '' },
+    link: { href: el.attribs.href || "" },
   }),
 };
 
 /** Tags that represent block-level elements */
 const BLOCK_TAGS = new Set([
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'p', 'ul', 'ol', 'li', 'blockquote',
-  'table', 'tr', 'td', 'th',
-  'pre', 'img', 'hr', 'br', 'div',
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "table",
+  "tr",
+  "td",
+  "th",
+  "pre",
+  "img",
+  "hr",
+  "br",
+  "div",
 ]);
 
 type DeferredText = { xmlText: Y.XmlText; children: ChildNode[]; marks: Record<string, object> };
@@ -66,11 +91,11 @@ function buildAttrs(marks: Record<string, object>): Record<string, object | null
 }
 
 function isElement(node: ChildNode): node is Element {
-  return node.type === 'tag';
+  return node.type === "tag";
 }
 
 function isText(node: ChildNode): node is Text {
-  return node.type === 'text';
+  return node.type === "text";
 }
 
 /**
@@ -78,7 +103,7 @@ function isText(node: ChildNode): node is Text {
  * Two-pass pattern per ADR-009: build element tree first, then populate text.
  */
 export function htmlToYDoc(doc: Y.Doc, html: string): void {
-  const fragment = doc.getXmlFragment('default');
+  const fragment = doc.getXmlFragment("default");
 
   // Clear existing content
   if (fragment.length > 0) {
@@ -113,7 +138,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     // Top-level text node — wrap in paragraph
     const text = node.data;
     if (!text.trim()) return [];
-    const el = new Y.XmlElement('paragraph');
+    const el = new Y.XmlElement("paragraph");
     const xmlText = new Y.XmlText();
     el.insert(0, [xmlText]);
     deferred.push({ xmlText, children: [node], marks: {} });
@@ -127,8 +152,8 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
   // Heading
   const headingMatch = tag.match(/^h([1-6])$/);
   if (headingMatch) {
-    const el = new Y.XmlElement('heading');
-    el.setAttribute('level', parseInt(headingMatch[1]) as any);
+    const el = new Y.XmlElement("heading");
+    el.setAttribute("level", parseInt(headingMatch[1]) as any);
     const xmlText = new Y.XmlText();
     el.insert(0, [xmlText]);
     deferred.push({ xmlText, children: node.children, marks: {} });
@@ -136,16 +161,16 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
   }
 
   switch (tag) {
-    case 'p': {
-      const el = new Y.XmlElement('paragraph');
+    case "p": {
+      const el = new Y.XmlElement("paragraph");
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       deferred.push({ xmlText, children: node.children, marks: {} });
       return [el];
     }
 
-    case 'blockquote': {
-      const el = new Y.XmlElement('blockquote');
+    case "blockquote": {
+      const el = new Y.XmlElement("blockquote");
       const blockChildren = collectBlockChildren(node.children, deferred);
       for (const child of blockChildren) {
         el.insert(el.length, [child]);
@@ -153,32 +178,32 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
       return [el];
     }
 
-    case 'ul': {
-      const el = new Y.XmlElement('bulletList');
+    case "ul": {
+      const el = new Y.XmlElement("bulletList");
       for (const child of node.children) {
-        if (isElement(child) && child.tagName.toLowerCase() === 'li') {
+        if (isElement(child) && child.tagName.toLowerCase() === "li") {
           el.insert(el.length, [buildListItem(child, deferred)]);
         }
       }
       return [el];
     }
 
-    case 'ol': {
-      const el = new Y.XmlElement('orderedList');
-      const start = parseInt(node.attribs.start || '1');
+    case "ol": {
+      const el = new Y.XmlElement("orderedList");
+      const start = parseInt(node.attribs.start || "1");
       if (start !== 1) {
-        el.setAttribute('start', start as any);
+        el.setAttribute("start", start as any);
       }
       for (const child of node.children) {
-        if (isElement(child) && child.tagName.toLowerCase() === 'li') {
+        if (isElement(child) && child.tagName.toLowerCase() === "li") {
           el.insert(el.length, [buildListItem(child, deferred)]);
         }
       }
       return [el];
     }
 
-    case 'table': {
-      const el = new Y.XmlElement('table');
+    case "table": {
+      const el = new Y.XmlElement("table");
       // Walk tbody/thead/tfoot or direct tr children
       const rows = collectTableRows(node);
       for (const row of rows) {
@@ -187,8 +212,8 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
       return [el];
     }
 
-    case 'pre': {
-      const el = new Y.XmlElement('codeBlock');
+    case "pre": {
+      const el = new Y.XmlElement("codeBlock");
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       // Collect all text content from pre (which may contain a <code> child)
@@ -196,26 +221,26 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
       return [el];
     }
 
-    case 'img': {
-      const el = new Y.XmlElement('image');
-      el.setAttribute('src', node.attribs.src || '');
-      if (node.attribs.alt) el.setAttribute('alt', node.attribs.alt);
-      if (node.attribs.title) el.setAttribute('title', node.attribs.title);
+    case "img": {
+      const el = new Y.XmlElement("image");
+      el.setAttribute("src", node.attribs.src || "");
+      if (node.attribs.alt) el.setAttribute("alt", node.attribs.alt);
+      if (node.attribs.title) el.setAttribute("title", node.attribs.title);
       return [el];
     }
 
-    case 'hr': {
-      return [new Y.XmlElement('horizontalRule')];
+    case "hr": {
+      return [new Y.XmlElement("horizontalRule")];
     }
 
-    case 'br': {
+    case "br": {
       // Top-level <br> — produce an empty paragraph
-      const el = new Y.XmlElement('paragraph');
-      el.insert(0, [new Y.XmlText('')]);
+      const el = new Y.XmlElement("paragraph");
+      el.insert(0, [new Y.XmlText("")]);
       return [el];
     }
 
-    case 'div': {
+    case "div": {
       // Recurse into div, treating it as a transparent container
       const results: Y.XmlElement[] = [];
       for (const child of node.children) {
@@ -235,7 +260,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
         return results;
       }
       // Pure inline content — wrap in paragraph
-      const el = new Y.XmlElement('paragraph');
+      const el = new Y.XmlElement("paragraph");
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       deferred.push({ xmlText, children: node.children, marks: {} });
@@ -259,11 +284,9 @@ function collectBlockChildren(children: ChildNode[], deferred: DeferredText[]): 
   const flushInline = () => {
     if (inlineBuffer.length === 0) return;
     // Only flush if there's non-whitespace content
-    const hasContent = inlineBuffer.some(n =>
-      isText(n) ? n.data.trim().length > 0 : true,
-    );
+    const hasContent = inlineBuffer.some((n) => (isText(n) ? n.data.trim().length > 0 : true));
     if (hasContent) {
-      const el = new Y.XmlElement('paragraph');
+      const el = new Y.XmlElement("paragraph");
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       deferred.push({ xmlText, children: inlineBuffer, marks: {} });
@@ -284,8 +307,8 @@ function collectBlockChildren(children: ChildNode[], deferred: DeferredText[]): 
 
   // Ensure at least one paragraph (Tiptap requires content in block containers)
   if (result.length === 0) {
-    const el = new Y.XmlElement('paragraph');
-    el.insert(0, [new Y.XmlText('')]);
+    const el = new Y.XmlElement("paragraph");
+    el.insert(0, [new Y.XmlText("")]);
     result.push(el);
   }
 
@@ -294,7 +317,7 @@ function collectBlockChildren(children: ChildNode[], deferred: DeferredText[]): 
 
 /** Build a listItem Y.XmlElement from an <li> DOM node */
 function buildListItem(li: Element, deferred: DeferredText[]): Y.XmlElement {
-  const listItem = new Y.XmlElement('listItem');
+  const listItem = new Y.XmlElement("listItem");
   const blockChildren = collectBlockChildren(li.children, deferred);
   for (const child of blockChildren) {
     listItem.insert(listItem.length, [child]);
@@ -308,11 +331,11 @@ function collectTableRows(table: Element): Element[] {
   for (const child of table.children) {
     if (!isElement(child)) continue;
     const tag = child.tagName.toLowerCase();
-    if (tag === 'tr') {
+    if (tag === "tr") {
       rows.push(child);
-    } else if (tag === 'thead' || tag === 'tbody' || tag === 'tfoot') {
+    } else if (tag === "thead" || tag === "tbody" || tag === "tfoot") {
       for (const grandchild of child.children) {
-        if (isElement(grandchild) && grandchild.tagName.toLowerCase() === 'tr') {
+        if (isElement(grandchild) && grandchild.tagName.toLowerCase() === "tr") {
           rows.push(grandchild);
         }
       }
@@ -323,20 +346,20 @@ function collectTableRows(table: Element): Element[] {
 
 /** Build a tableRow Y.XmlElement from a <tr> */
 function buildTableRow(tr: Element, deferred: DeferredText[]): Y.XmlElement {
-  const row = new Y.XmlElement('tableRow');
+  const row = new Y.XmlElement("tableRow");
   for (const child of tr.children) {
     if (!isElement(child)) continue;
     const tag = child.tagName.toLowerCase();
-    if (tag === 'td' || tag === 'th') {
-      const nodeName = tag === 'th' ? 'tableHeader' : 'tableCell';
+    if (tag === "td" || tag === "th") {
+      const nodeName = tag === "th" ? "tableHeader" : "tableCell";
       const cell = new Y.XmlElement(nodeName);
 
       // Copy colspan/rowspan
-      if (child.attribs.colspan && child.attribs.colspan !== '1') {
-        cell.setAttribute('colspan', parseInt(child.attribs.colspan) as any);
+      if (child.attribs.colspan && child.attribs.colspan !== "1") {
+        cell.setAttribute("colspan", parseInt(child.attribs.colspan) as any);
       }
-      if (child.attribs.rowspan && child.attribs.rowspan !== '1') {
-        cell.setAttribute('rowspan', parseInt(child.attribs.rowspan) as any);
+      if (child.attribs.rowspan && child.attribs.rowspan !== "1") {
+        cell.setAttribute("rowspan", parseInt(child.attribs.rowspan) as any);
       }
 
       // Tiptap requires cells to contain block elements (content: 'block+')
@@ -374,8 +397,8 @@ function processInlineNodes(
     const tag = node.tagName.toLowerCase();
 
     // Hard break
-    if (tag === 'br') {
-      const embed = new Y.XmlElement('hardBreak');
+    if (tag === "br") {
+      const embed = new Y.XmlElement("hardBreak");
       xmlText.insertEmbed(xmlText.length, embed);
       continue;
     }
@@ -389,7 +412,7 @@ function processInlineNodes(
     }
 
     // Code element inside pre — just extract text
-    if (tag === 'code') {
+    if (tag === "code") {
       processInlineNodes(xmlText, node.children, marks);
       continue;
     }
@@ -407,10 +430,10 @@ function processInlineNodes(
  */
 export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string {
   if (annotations.length === 0) {
-    return '# Document Review\n\nNo annotations found.';
+    return "# Document Review\n\nNo annotations found.";
   }
 
-  const fragment = doc.getXmlFragment('default');
+  const fragment = doc.getXmlFragment("default");
   const fullText = extractFullText(fragment);
 
   const groups: Record<string, Annotation[]> = {};
@@ -420,27 +443,27 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     groups[key].push(ann);
   }
 
-  const lines: string[] = ['# Document Review', ''];
+  const lines: string[] = ["# Document Review", ""];
 
   const typeLabels: Record<string, string> = {
-    highlight: 'Highlights',
-    comment: 'Comments',
-    suggestion: 'Suggestions',
-    overlay: 'Overlays',
-    question: 'Questions',
-    flag: 'Flags',
+    highlight: "Highlights",
+    comment: "Comments",
+    suggestion: "Suggestions",
+    overlay: "Overlays",
+    question: "Questions",
+    flag: "Flags",
   };
 
   for (const [type, anns] of Object.entries(groups)) {
-    lines.push(`## ${typeLabels[type] || type}`, '');
+    lines.push(`## ${typeLabels[type] || type}`, "");
 
     for (const ann of anns) {
       const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
-      const truncated = snippet.length > 80 ? snippet.slice(0, 77) + '...' : snippet;
+      const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "..." : snippet;
 
       lines.push(`- **"${truncated}"** (${ann.author})`);
 
-      if (ann.type === 'suggestion') {
+      if (ann.type === "suggestion") {
         try {
           const { newText, reason } = JSON.parse(ann.content);
           lines.push(`  - Replace with: "${newText}"`);
@@ -456,11 +479,11 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
         lines.push(`  - Color: ${ann.color}`);
       }
 
-      lines.push('');
+      lines.push("");
     }
   }
 
-  return lines.join('\n').trimEnd();
+  return lines.join("\n").trimEnd();
 }
 
 /** Extract full flat text from a Y.Doc fragment (simplified — no heading prefixes) */
@@ -472,7 +495,7 @@ function extractFullText(fragment: Y.XmlFragment): string {
       parts.push(getElementText(node));
     }
   }
-  return parts.join('\n');
+  return parts.join("\n");
 }
 
 /** Safe string slice that handles out-of-bounds gracefully */
