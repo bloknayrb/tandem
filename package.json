@@ -8,7 +8,7 @@
     "dev:standalone": "concurrently \"vite\" \"tsx watch src/server/index.ts\"",
     "dev:client": "vite",
     "dev:server": "tsx watch src/server/index.ts",
-    "build": "tsc -p tsconfig.server.json --noEmit && vite build && tsup",
+    "build": "npm run typecheck && vite build && tsup",
     "build:server": "tsup",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit",
     "server": "tsx src/server/index.ts",
