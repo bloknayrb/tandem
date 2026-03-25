@@ -25,7 +25,7 @@ let isShuttingDown = false;
 // Swallow known Hocuspocus/ws protocol errors but crash on genuine bugs.
 function handleFatalError(label: string, value: unknown): void {
   if (value instanceof Error && isKnownHocuspocusError(value)) {
-    console.error("[Tandem] Known WS error (swallowed):", value.message);
+    console.error("[Tandem] Known WS error (swallowed):", value.message, value.stack);
     return;
   }
   if (isShuttingDown) {
@@ -53,6 +53,7 @@ if (transportMode === "stdio") {
 
 // Graceful shutdown: save session + stop auto-save before exit
 async function shutdown(signal: string) {
+  if (isShuttingDown) return;
   isShuttingDown = true;
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
@@ -61,7 +62,11 @@ async function shutdown(signal: string) {
   } catch (err) {
     console.error("[Tandem] Session save on shutdown failed:", err);
   }
-  await closeMcpSession();
+  try {
+    await closeMcpSession();
+  } catch (err) {
+    console.error("[Tandem] MCP session close on shutdown failed:", err);
+  }
   if (httpServer) {
     httpServer.close();
   }
