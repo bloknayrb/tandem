@@ -19,10 +19,11 @@ import {
   extractText,
   extractMarkdown,
   getElementText,
-  resolveOffset,
   getOrCreateXmlText,
-  verifyAndResolveRange,
 } from "./document-model.js";
+
+// Position system
+import { validateRange, resolveToElement } from "../positions.js";
 
 // Document service (state management)
 import {
@@ -51,10 +52,24 @@ export {
   detectFormat,
   docIdFromPath,
   getHeadingPrefixLength,
-  flatOffsetToRelPos,
-  relPosToFlatOffset,
 } from "./document-model.js";
 export type { ResolvedOffset, RangeVerifyResult } from "./document-model.js";
+
+// Position system re-exports
+export {
+  validateRange,
+  anchoredRange,
+  resolveToElement,
+  flatOffsetToRelPos,
+  relPosToFlatOffset,
+  refreshRange,
+  refreshAllRanges,
+} from "../positions.js";
+export type {
+  RangeValidation,
+  AnchoredRangeResult,
+  ElementPosition,
+} from "../../shared/positions/index.js";
 export {
   getCurrentDoc,
   getOpenDocs,
@@ -265,48 +280,44 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
 
-      if (textSnapshot) {
-        const result = verifyAndResolveRange(r.doc, from, to, textSnapshot);
-        if (!result.valid) {
-          if (result.gone) {
-            return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
-          }
-          return mcpError(
-            "RANGE_STALE",
-            "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
-            {
-              resolvedFrom: result.resolvedFrom,
-              resolvedTo: result.resolvedTo,
-            },
-          );
-        }
-      }
-
       const docState = getCurrentDoc(documentId);
       if (docState?.readOnly) {
         return mcpError("FORMAT_ERROR", "Document is read-only (.docx). Use annotations instead.");
       }
 
-      if (from > to) {
-        return mcpError("INVALID_RANGE", `Invalid range: from (${from}) must be <= to (${to}).`);
+      const v = validateRange(r.doc, from, to, {
+        textSnapshot,
+        rejectHeadingOverlap: true,
+      });
+      if (!v.ok) {
+        if (v.code === "RANGE_STALE") {
+          if (v.gone) {
+            return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
+          }
+          return mcpError(
+            "RANGE_STALE",
+            "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
+            { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
+          );
+        }
+        if (v.code === "HEADING_OVERLAP") {
+          return mcpError(
+            "INVALID_RANGE",
+            'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
+              "Use tandem_resolveRange to find the text position.",
+          );
+        }
+        return mcpError("INVALID_RANGE", v.message);
       }
 
       const fragment = r.doc.getXmlFragment("default");
-      const startPos = resolveOffset(fragment, from);
-      const endPos = resolveOffset(fragment, to);
+      const startPos = resolveToElement(fragment, from);
+      const endPos = resolveToElement(fragment, to);
 
       if (!startPos || !endPos) {
         return mcpError(
           "INVALID_RANGE",
           `Cannot resolve offset range [${from}, ${to}] in document.`,
-        );
-      }
-
-      if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {
-        return mcpError(
-          "INVALID_RANGE",
-          'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
-            "Use tandem_resolveRange to find the text position.",
         );
       }
 

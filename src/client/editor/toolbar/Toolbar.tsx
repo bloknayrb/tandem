@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
-import { pmPosToFlatOffset } from "../extensions/awareness";
+import { pmPosToFlatOffset } from "../../positions";
 import { generateAnnotationId } from "../../../shared/utils";
 import { HIGHLIGHT_COLORS } from "../../../shared/constants";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
