@@ -1,6 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { shouldShow } from "../../src/client/hooks/useAnnotationGate.js";
-import type { Annotation } from "../../src/shared/types.js";
+import type { Annotation, InterruptionMode } from "../../src/shared/types.js";
+
+/**
+ * Inline implementation of the useAnnotationGate hook logic (without React useMemo).
+ * This lets us test the filtering + counting logic the hook performs.
+ */
+function gateAnnotations(annotations: Annotation[], mode: InterruptionMode) {
+  const visibleAnnotations: Annotation[] = [];
+  let heldCount = 0;
+  for (const a of annotations) {
+    if (shouldShow(a, mode)) {
+      visibleAnnotations.push(a);
+    } else if (a.status === "pending") {
+      heldCount++;
+    }
+  }
+  return { visibleAnnotations, heldCount };
+}
 
 function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
   return {
@@ -99,5 +116,57 @@ describe("shouldShow", () => {
         false,
       );
     });
+  });
+});
+
+describe("gateAnnotations (useAnnotationGate hook logic)", () => {
+  it("shows all pending annotations in 'all' mode, heldCount is 0", () => {
+    const anns = [
+      makeAnnotation({ id: "a1", status: "pending" }),
+      makeAnnotation({ id: "a2", status: "pending" }),
+      makeAnnotation({ id: "a3", status: "accepted" }),
+    ];
+    const result = gateAnnotations(anns, "all");
+    expect(result.visibleAnnotations).toHaveLength(3);
+    expect(result.heldCount).toBe(0);
+  });
+
+  it("holds non-urgent pending in 'urgent-only' mode", () => {
+    const anns = [
+      makeAnnotation({ id: "a1", status: "pending" }), // normal → held
+      makeAnnotation({ id: "a2", status: "pending", priority: "urgent" }), // urgent → visible
+      makeAnnotation({ id: "a3", status: "accepted" }), // resolved → visible
+    ];
+    const result = gateAnnotations(anns, "urgent-only");
+    expect(result.visibleAnnotations).toHaveLength(2);
+    expect(result.heldCount).toBe(1);
+  });
+
+  it("holds all pending in 'paused' mode", () => {
+    const anns = [
+      makeAnnotation({ id: "a1", status: "pending" }),
+      makeAnnotation({ id: "a2", status: "pending", priority: "urgent" }),
+      makeAnnotation({ id: "a3", status: "dismissed" }),
+    ];
+    const result = gateAnnotations(anns, "paused");
+    expect(result.visibleAnnotations).toHaveLength(1); // only dismissed
+    expect(result.heldCount).toBe(2);
+  });
+
+  it("returns empty for empty input", () => {
+    const result = gateAnnotations([], "all");
+    expect(result.visibleAnnotations).toHaveLength(0);
+    expect(result.heldCount).toBe(0);
+  });
+
+  it("does not count resolved annotations as held", () => {
+    const anns = [
+      makeAnnotation({ id: "a1", status: "accepted" }),
+      makeAnnotation({ id: "a2", status: "dismissed" }),
+    ];
+    const result = gateAnnotations(anns, "paused");
+    // Both resolved → visible, none held
+    expect(result.visibleAnnotations).toHaveLength(2);
+    expect(result.heldCount).toBe(0);
   });
 });

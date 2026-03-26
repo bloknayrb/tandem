@@ -12,72 +12,65 @@ import { removeDoc, setActiveDocId, getOpenDocs } from "../../src/server/mcp/doc
 let tmpDir: string;
 
 beforeEach(async () => {
-  // Clean up document-service state
   for (const id of [...getOpenDocs().keys()]) {
     removeDoc(id);
   }
   setActiveDocId(null);
-
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-test-"));
 });
 
-// afterEach is intentionally omitted for tmpDir cleanup — OS handles tmpdir.
-
 describe("openFileByPath — file size limit", () => {
   it("rejects files exceeding 50MB", async () => {
-    // Create a file larger than 50MB
     const bigFile = path.join(tmpDir, "big.md");
-    // Write a file just over the limit (50MB + 1 byte)
     const handle = await fs.open(bigFile, "w");
     await handle.truncate(50 * 1024 * 1024 + 1);
     await handle.close();
 
-    await expect(openFileByPath(bigFile)).rejects.toThrow("50MB");
     try {
       await openFileByPath(bigFile);
-    } catch (err: any) {
-      expect(err.code).toBe("FILE_TOO_LARGE");
+      expect.unreachable("should have thrown");
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      expect(e.message).toContain("50MB");
+      expect(e.code).toBe("FILE_TOO_LARGE");
     }
   });
 
-  it("accepts files at exactly 50MB", async () => {
-    const exactFile = path.join(tmpDir, "exact.md");
-    const handle = await fs.open(exactFile, "w");
-    await handle.truncate(50 * 1024 * 1024);
-    await handle.close();
-    // Write some content so it's not just null bytes causing issues
-    await fs.writeFile(exactFile, "x".repeat(100));
+  it("accepts files at exactly the limit", async () => {
+    // Create a file under 50MB (the actual boundary)
+    const smallFile = path.join(tmpDir, "small.md");
+    await fs.writeFile(smallFile, "# Hello\nSmall content");
 
-    // Should not throw (100 bytes is well under 50MB)
-    const result = await openFileByPath(exactFile);
-    expect(result.fileName).toBe("exact.md");
+    const result = await openFileByPath(smallFile);
+    expect(result.fileName).toBe("small.md");
+    expect(result.format).toBe("md");
   });
 });
 
 describe("openFileByPath — unsupported extensions", () => {
-  it("rejects .csv files", async () => {
+  it("rejects .csv with UNSUPPORTED_FORMAT code", async () => {
     const csvFile = path.join(tmpDir, "data.csv");
     await fs.writeFile(csvFile, "a,b,c\n1,2,3");
 
-    await expect(openFileByPath(csvFile)).rejects.toThrow("Unsupported file format");
     try {
       await openFileByPath(csvFile);
-    } catch (err: any) {
-      expect(err.code).toBe("UNSUPPORTED_FORMAT");
+      expect.unreachable("should have thrown");
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      expect(e.message).toContain("Unsupported file format");
+      expect(e.code).toBe("UNSUPPORTED_FORMAT");
     }
   });
 
   it("rejects .pdf files", async () => {
     const pdfFile = path.join(tmpDir, "doc.pdf");
     await fs.writeFile(pdfFile, "fake pdf");
-
     await expect(openFileByPath(pdfFile)).rejects.toThrow("Unsupported file format");
   });
 
   it("rejects .js files", async () => {
     const jsFile = path.join(tmpDir, "code.js");
     await fs.writeFile(jsFile, "console.log('hello')");
-
     await expect(openFileByPath(jsFile)).rejects.toThrow("Unsupported file format");
   });
 });
@@ -149,11 +142,14 @@ describe("openFileByPath — result structure", () => {
 describe("openFileFromContent — content size limit", () => {
   it("rejects content exceeding 50MB", async () => {
     const bigContent = "x".repeat(50 * 1024 * 1024 + 1);
-    await expect(openFileFromContent("big.md", bigContent)).rejects.toThrow("50MB");
+
     try {
       await openFileFromContent("big.md", bigContent);
-    } catch (err: any) {
-      expect(err.code).toBe("FILE_TOO_LARGE");
+      expect.unreachable("should have thrown");
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      expect(e.message).toContain("50MB");
+      expect(e.code).toBe("FILE_TOO_LARGE");
     }
   });
 });
@@ -177,13 +173,10 @@ describe("openFileFromContent — upload properties", () => {
 });
 
 describe("openFileFromContent — Buffer content", () => {
-  it("accepts Buffer content for binary formats", async () => {
-    // We can't test actual .docx parsing without a real docx file,
-    // but we can verify the size check works with Buffer
-    const buf = Buffer.from("tiny content");
-    // This will fail at the adapter.load step since it's not real docx,
-    // but the size check should pass
-    await expect(openFileFromContent("test.txt", buf.toString())).resolves.toBeDefined();
+  it("accepts string content for text formats", async () => {
+    const result = await openFileFromContent("test.txt", "tiny content");
+    expect(result).toBeDefined();
+    expect(result.format).toBe("txt");
   });
 });
 

@@ -34,10 +34,43 @@ function createMcpServer(): McpServer {
 }
 
 /** Extract the JSON-RPC `id` from a request body (single message only, not batches). */
-function jsonrpcId(body: unknown): unknown {
+export function jsonrpcId(body: unknown): unknown {
   return body && typeof body === "object" && !Array.isArray(body) && "id" in body
     ? (body as any).id
     : null;
+}
+
+/** Check if a Host header value is allowed (localhost only). Exported for testing. */
+export function isHostAllowed(host: string | undefined): boolean {
+  const reqHost = (host ?? "").split(":")[0];
+  return reqHost === "localhost" || reqHost === "127.0.0.1";
+}
+
+/** Check if an Origin header is a localhost URL. Exported for testing. */
+export const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+export function isLocalhostOrigin(origin: string | undefined): boolean {
+  return LOCALHOST_ORIGIN_RE.test(origin ?? "");
+}
+
+/** Map error code to HTTP status. Exported for testing. */
+export function errorCodeToHttpStatus(code: string | undefined): number {
+  switch (code) {
+    case "ENOENT":
+    case "FILE_NOT_FOUND":
+      return 404;
+    case "INVALID_PATH":
+    case "UNSUPPORTED_FORMAT":
+      return 400;
+    case "FILE_TOO_LARGE":
+      return 413;
+    case "EBUSY":
+    case "EPERM":
+      return 423;
+    case "EACCES":
+      return 403;
+    default:
+      return 500;
+  }
 }
 
 /** Send a JSON-RPC error response. */
@@ -168,16 +201,12 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
 
   /** CORS + DNS rebinding protection middleware for /api/* routes */
   function apiMiddleware(req: any, res: any, next: any): void {
-    // DNS rebinding protection: reject requests whose Host header is not localhost
-    const reqHost = (req.headers.host ?? "").split(":")[0];
-    if (reqHost !== "localhost" && reqHost !== "127.0.0.1") {
+    if (!isHostAllowed(req.headers.host)) {
       res.status(403).json({ error: "FORBIDDEN", message: "Host not allowed." });
       return;
     }
-    // Reflect any localhost origin back — supports any Vite dev port (5173, 5174, etc.)
     const origin = req.headers.origin as string | undefined;
-    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin ?? "");
-    res.header("Access-Control-Allow-Origin", isLocalhost ? origin! : "null");
+    res.header("Access-Control-Allow-Origin", isLocalhostOrigin(origin) ? origin! : "null");
     res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") {

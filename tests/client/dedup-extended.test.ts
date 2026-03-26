@@ -69,14 +69,14 @@ describe("deduplicateDocList — extended edge cases", () => {
     expect(result[0]).toEqual(entry);
   });
 
-  it("handles duplicate IDs in the doc list gracefully", () => {
+  it("does not dedup duplicate IDs within the input list itself", () => {
     const docList = [makeEntry("a"), makeEntry("a"), makeEntry("b")];
     const result = deduplicateDocList(docList, new Set(), new Set());
-    // Both "a" entries pass the filter since the function doesn't dedup within the list
+    // deduplicateDocList only filters against existing/pending, not within the list
     expect(result).toHaveLength(3);
   });
 
-  it("performance: handles large doc lists", () => {
+  it("handles large doc lists correctly", () => {
     const docList = Array.from({ length: 100 }, (_, i) => makeEntry(`doc-${i}`));
     const existing = new Set(Array.from({ length: 50 }, (_, i) => `doc-${i}`));
     const result = deduplicateDocList(docList, existing, new Set());

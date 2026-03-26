@@ -17,6 +17,69 @@ function getFullText(docName: string): string {
   return extractText(doc);
 }
 
+export interface SearchMatch {
+  from: number;
+  to: number;
+  text: string;
+}
+
+/** Search for text in a document. Pure logic extracted for testability. */
+export function searchText(
+  fullText: string,
+  query: string,
+  useRegex?: boolean,
+): { matches: SearchMatch[]; error?: string } {
+  const matches: SearchMatch[] = [];
+  try {
+    const pattern = useRegex ? new RegExp(query, "gi") : new RegExp(escapeRegex(query), "gi");
+    let match;
+    while ((match = pattern.exec(fullText)) !== null) {
+      matches.push({ from: match.index, to: match.index + match[0].length, text: match[0] });
+    }
+  } catch (err) {
+    return { matches: [], error: `Invalid regex: ${getErrorMessage(err)}` };
+  }
+  return { matches };
+}
+
+/** Find the nth occurrence of a pattern. Pure logic extracted for testability. */
+export function findOccurrence(
+  fullText: string,
+  pattern: string,
+  occurrence: number = 1,
+): { from: number; to: number; text: string } | { error: string; totalCount: number } {
+  const regex = new RegExp(escapeRegex(pattern), "g");
+  let match;
+  let count = 0;
+  while ((match = regex.exec(fullText)) !== null) {
+    count++;
+    if (count === occurrence) {
+      return { from: match.index, to: match.index + match[0].length, text: match[0] };
+    }
+  }
+  return {
+    error: `Text "${pattern}" not found (occurrence ${occurrence}, found ${count} total)`,
+    totalCount: count,
+  };
+}
+
+/** Extract context window around a range. Pure logic extracted for testability. */
+export function extractContext(
+  fullText: string,
+  from: number,
+  to: number,
+  windowSize: number = 500,
+) {
+  const contextStart = Math.max(0, from - windowSize);
+  const contextEnd = Math.min(fullText.length, to + windowSize);
+  return {
+    context: fullText.slice(contextStart, contextEnd),
+    selection: fullText.slice(from, to),
+    contextRange: { from: contextStart, to: contextEnd },
+    selectionRange: { from, to },
+  };
+}
+
 export function registerNavigationTools(server: McpServer): void {
   server.tool(
     "tandem_search",
@@ -34,19 +97,9 @@ export function registerNavigationTools(server: McpServer): void {
       if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
-      const matches: Array<{ from: number; to: number; text: string }> = [];
-
-      try {
-        const pattern = regex ? new RegExp(query, "gi") : new RegExp(escapeRegex(query), "gi");
-        let match;
-        while ((match = pattern.exec(fullText)) !== null) {
-          matches.push({ from: match.index, to: match.index + match[0].length, text: match[0] });
-        }
-      } catch (err) {
-        return mcpError("FORMAT_ERROR", `Invalid regex: ${getErrorMessage(err)}`);
-      }
-
-      return mcpSuccess({ matches, count: matches.length });
+      const result = searchText(fullText, query, regex);
+      if (result.error) return mcpError("FORMAT_ERROR", result.error);
+      return mcpSuccess({ matches: result.matches, count: result.matches.length });
     }),
   );
 
@@ -66,25 +119,9 @@ export function registerNavigationTools(server: McpServer): void {
       if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
-      const regex = new RegExp(escapeRegex(pattern), "g");
-
-      let match;
-      let count = 0;
-      while ((match = regex.exec(fullText)) !== null) {
-        count++;
-        if (count === occurrence) {
-          return mcpSuccess({
-            from: match.index,
-            to: match.index + match[0].length,
-            text: match[0],
-          });
-        }
-      }
-
-      return mcpError(
-        "INVALID_RANGE",
-        `Text "${pattern}" not found (occurrence ${occurrence}, found ${count} total)`,
-      );
+      const result = findOccurrence(fullText, pattern, occurrence);
+      if ("error" in result) return mcpError("INVALID_RANGE", result.error);
+      return mcpSuccess(result);
     }),
   );
 
@@ -139,15 +176,7 @@ export function registerNavigationTools(server: McpServer): void {
       if (!current) return noDocumentError();
 
       const fullText = getFullText(current.docName);
-      const contextStart = Math.max(0, from - windowSize);
-      const contextEnd = Math.min(fullText.length, to + windowSize);
-
-      return mcpSuccess({
-        context: fullText.slice(contextStart, contextEnd),
-        selection: fullText.slice(from, to),
-        contextRange: { from: contextStart, to: contextEnd },
-        selectionRange: { from, to },
-      });
+      return mcpSuccess(extractContext(fullText, from, to, windowSize));
     }),
   );
 }

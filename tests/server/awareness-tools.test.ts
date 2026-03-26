@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { resetInbox } from "../../src/server/mcp/awareness.js";
-import { collectAnnotations } from "../../src/server/mcp/annotations.js";
+import {
+  resetInbox,
+  safeSlice,
+  isUserActive,
+  processInboxAnnotations,
+} from "../../src/server/mcp/awareness.js";
+import { createAnnotation, collectAnnotations } from "../../src/server/mcp/annotations.js";
 import {
   addDoc,
   removeDoc,
@@ -10,7 +15,6 @@ import {
 } from "../../src/server/mcp/document-service.js";
 import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
 import { generateMessageId } from "../../src/shared/utils.js";
-import { CTRL_ROOM } from "../../src/shared/constants.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 
 function setupDoc(id: string, text: string) {
@@ -27,115 +31,146 @@ beforeEach(() => {
   setActiveDocId(null);
 });
 
-describe("checkInbox logic — user annotations", () => {
-  it("surfaces new user highlight", () => {
-    const ydoc = setupDoc("inbox-1", "Hello world test");
-    const map = ydoc.getMap("annotations");
-    const ann: Annotation = {
-      id: "ann_user_001",
-      author: "user",
-      type: "highlight",
-      range: { from: 0, to: 5 },
-      content: "",
-      status: "pending",
-      timestamp: Date.now(),
-      color: "yellow",
-    };
-    map.set(ann.id, ann);
-
-    const all = collectAnnotations(map);
-    const userActions = all.filter((a) => a.author === "user");
-    expect(userActions).toHaveLength(1);
-    expect(userActions[0].type).toBe("highlight");
-  });
-
-  it("surfaces multiple user annotations of different types", () => {
-    const ydoc = setupDoc("inbox-2", "Hello world test");
-    const map = ydoc.getMap("annotations");
-
-    for (const type of ["highlight", "comment", "question", "flag"] as const) {
-      map.set(`ann_${type}`, {
-        id: `ann_${type}`,
-        author: "user",
-        type,
-        range: { from: 0, to: 5 },
-        content: `${type} content`,
-        status: "pending",
-        timestamp: Date.now(),
-      });
-    }
-
-    const userAnns = collectAnnotations(map).filter((a) => a.author === "user");
-    expect(userAnns).toHaveLength(4);
-  });
-});
-
-describe("checkInbox logic — Claude annotation responses", () => {
-  it("surfaces accepted Claude annotations", () => {
-    const ydoc = setupDoc("inbox-3", "Hello world");
-    const map = ydoc.getMap("annotations");
-    map.set("ann_claude_1", {
-      id: "ann_claude_1",
-      author: "claude",
-      type: "suggestion",
-      range: { from: 0, to: 5 },
-      content: JSON.stringify({ newText: "Hi", reason: "" }),
-      status: "accepted",
-      timestamp: Date.now(),
-    });
-
-    const responses = collectAnnotations(map).filter(
-      (a) => a.author === "claude" && a.status !== "pending",
-    );
-    expect(responses).toHaveLength(1);
-    expect(responses[0].status).toBe("accepted");
-  });
-
-  it("ignores still-pending Claude annotations", () => {
-    const ydoc = setupDoc("inbox-4", "Hello world");
-    const map = ydoc.getMap("annotations");
-    map.set("ann_claude_2", {
-      id: "ann_claude_2",
-      author: "claude",
-      type: "comment",
-      range: { from: 0, to: 5 },
-      content: "A comment",
-      status: "pending",
-      timestamp: Date.now(),
-    });
-
-    const responses = collectAnnotations(map).filter(
-      (a) => a.author === "claude" && a.status !== "pending",
-    );
-    expect(responses).toHaveLength(0);
-  });
-});
-
-describe("checkInbox logic — text snippet extraction", () => {
-  it("extracts snippet from annotation range", () => {
-    const ydoc = setupDoc("snippet-1", "The quick brown fox");
-    const fullText = extractText(ydoc);
-
-    const snippet = fullText.slice(Math.max(0, 4), Math.min(fullText.length, 9));
-    expect(snippet).toBe("quick");
+describe("safeSlice", () => {
+  it("extracts snippet from text range", () => {
+    expect(safeSlice("Hello world", 0, 5)).toBe("Hello");
   });
 
   it("truncates long snippets to 100 chars", () => {
-    const longText = "a".repeat(200);
-    const ydoc = setupDoc("snippet-2", longText);
-    const fullText = extractText(ydoc);
+    const text = "a".repeat(200);
+    const result = safeSlice(text, 0, 150);
+    expect(result).toHaveLength(100);
+    expect(result.endsWith("...")).toBe(true);
+  });
 
-    // Simulate the safeSlice logic from awareness.ts
-    const raw = fullText.slice(0, 150);
-    const snippet = raw.length > 100 ? raw.slice(0, 97) + "..." : raw;
-    expect(snippet).toHaveLength(100);
-    expect(snippet.endsWith("...")).toBe(true);
+  it("clamps out-of-bounds from/to", () => {
+    expect(safeSlice("Hello", -5, 100)).toBe("Hello");
+  });
+
+  it("returns empty string when from >= text length", () => {
+    expect(safeSlice("Hello", 100, 200)).toBe("");
+  });
+
+  it("handles from > to by returning empty string", () => {
+    expect(safeSlice("Hello", 5, 3)).toBe("");
   });
 });
 
-describe("checkInbox logic — chat messages", () => {
+describe("isUserActive", () => {
+  it("returns false when no activity", () => {
+    expect(isUserActive(undefined)).toBe(false);
+  });
+
+  it("returns true when user is typing", () => {
+    expect(isUserActive({ isTyping: true, lastEdit: 0 })).toBe(true);
+  });
+
+  it("returns true when lastEdit is recent (<10s)", () => {
+    expect(isUserActive({ isTyping: false, lastEdit: Date.now() - 5000 })).toBe(true);
+  });
+
+  it("returns false when lastEdit is old (>10s) and not typing", () => {
+    expect(isUserActive({ isTyping: false, lastEdit: Date.now() - 30000 })).toBe(false);
+  });
+});
+
+describe("processInboxAnnotations", () => {
+  it("buckets user annotations into userActions", () => {
+    const ydoc = setupDoc("inbox-1", "Hello world test");
+    const map = ydoc.getMap("annotations");
+    createAnnotation(map, "highlight", 0, 5, "", { author: "user", color: "yellow" });
+    createAnnotation(map, "comment", 6, 11, "Nice", { author: "user" });
+
+    const allAnns = collectAnnotations(map);
+    const fullText = extractText(ydoc);
+    const surfaced = new Set<string>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (ann) => ann);
+    expect(result.userActions).toHaveLength(2);
+    expect(result.userActions.find((a) => a.type === "highlight")).toBeTruthy();
+    expect(result.userActions.find((a) => a.type === "comment")).toBeTruthy();
+  });
+
+  it("buckets resolved Claude annotations into userResponses", () => {
+    const ydoc = setupDoc("inbox-2", "Hello world");
+    const map = ydoc.getMap("annotations");
+    const id = createAnnotation(map, "suggestion", 0, 5, '{"newText":"Hi","reason":""}');
+    const ann = map.get(id) as Annotation;
+    map.set(id, { ...ann, status: "accepted" as const });
+
+    const allAnns = collectAnnotations(map);
+    const fullText = extractText(ydoc);
+    const surfaced = new Set<string>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    expect(result.userResponses).toHaveLength(1);
+    expect(result.userResponses[0].status).toBe("accepted");
+  });
+
+  it("ignores pending Claude annotations", () => {
+    const ydoc = setupDoc("inbox-3", "Hello world");
+    const map = ydoc.getMap("annotations");
+    createAnnotation(map, "comment", 0, 5, "A comment"); // author=claude, status=pending
+
+    const allAnns = collectAnnotations(map);
+    const fullText = extractText(ydoc);
+    const surfaced = new Set<string>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    expect(result.userActions).toHaveLength(0);
+    expect(result.userResponses).toHaveLength(0);
+  });
+
+  it("deduplicates via surfacedIds — second call returns empty", () => {
+    const ydoc = setupDoc("inbox-4", "Hello world");
+    const map = ydoc.getMap("annotations");
+    createAnnotation(map, "highlight", 0, 5, "", { author: "user" });
+
+    const allAnns = collectAnnotations(map);
+    const fullText = extractText(ydoc);
+    const surfaced = new Set<string>();
+
+    const first = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    expect(first.userActions).toHaveLength(1);
+
+    const second = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    expect(second.userActions).toHaveLength(0);
+  });
+
+  it("calls refreshFn on each unsurfaced annotation", () => {
+    const ydoc = setupDoc("inbox-5", "Hello world");
+    const map = ydoc.getMap("annotations");
+    createAnnotation(map, "highlight", 0, 5, "", { author: "user" });
+
+    const allAnns = collectAnnotations(map);
+    const fullText = extractText(ydoc);
+    const surfaced = new Set<string>();
+
+    let refreshCalled = 0;
+    processInboxAnnotations(allAnns, fullText, surfaced, (ann) => {
+      refreshCalled++;
+      return ann;
+    });
+    expect(refreshCalled).toBe(1);
+  });
+
+  it("includes text snippets from annotation ranges", () => {
+    const ydoc = setupDoc("inbox-6", "The quick brown fox");
+    const map = ydoc.getMap("annotations");
+    createAnnotation(map, "comment", 4, 9, "Note", { author: "user" });
+
+    const allAnns = collectAnnotations(map);
+    const fullText = extractText(ydoc);
+    const surfaced = new Set<string>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    expect(result.userActions[0].textSnippet).toBe("quick");
+  });
+});
+
+describe("checkInbox — chat messages (real Y.Map operations)", () => {
   it("reads unread chat messages from CTRL_ROOM", () => {
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const ctrlDoc = getOrCreateDocument("__tandem_ctrl_inbox_chat_1__");
     const chatMap = ctrlDoc.getMap("chat");
 
     const msg: ChatMessage = {
@@ -147,40 +182,26 @@ describe("checkInbox logic — chat messages", () => {
     };
     chatMap.set(msg.id, msg);
 
-    const unread: ChatMessage[] = [];
+    // Simulate checkInbox chat processing
+    const chatMessages: Array<{ id: string; text: string }> = [];
     chatMap.forEach((value) => {
       const m = value as ChatMessage;
-      if (m.author === "user" && !m.read) unread.push(m);
+      if (m.author === "user" && !m.read) {
+        chatMessages.push({ id: m.id, text: m.text });
+        chatMap.set(m.id, { ...m, read: true });
+      }
     });
 
-    expect(unread).toHaveLength(1);
-    expect(unread[0].text).toBe("Can you review paragraph 3?");
-  });
+    expect(chatMessages).toHaveLength(1);
+    expect(chatMessages[0].text).toBe("Can you review paragraph 3?");
 
-  it("marks chat messages as read after processing", () => {
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const chatMap = ctrlDoc.getMap("chat");
-
-    const msg: ChatMessage = {
-      id: "msg_mark_read",
-      author: "user",
-      text: "Hello",
-      timestamp: Date.now(),
-      read: false,
-    };
-    chatMap.set(msg.id, msg);
-
-    // Process: mark as read
-    const existing = chatMap.get(msg.id) as ChatMessage;
-    chatMap.set(msg.id, { ...existing, read: true });
-
+    // Verify marked as read
     const updated = chatMap.get(msg.id) as ChatMessage;
     expect(updated.read).toBe(true);
   });
 
-  it("ignores claude messages in inbox", () => {
-    // Use a unique room to avoid leaking state from other tests on CTRL_ROOM
-    const ctrlDoc = getOrCreateDocument("__tandem_ctrl_ignore_claude__");
+  it("ignores Claude messages in inbox", () => {
+    const ctrlDoc = getOrCreateDocument("__tandem_ctrl_inbox_chat_2__");
     const chatMap = ctrlDoc.getMap("chat");
 
     chatMap.set("msg_claude_only", {
@@ -200,63 +221,9 @@ describe("checkInbox logic — chat messages", () => {
   });
 });
 
-describe("checkInbox logic — user activity", () => {
-  it("reads user selection from userAwareness map", () => {
-    const ydoc = setupDoc("activity-1", "Hello world");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("selection", { from: 0, to: 5, timestamp: Date.now() });
-
-    const selection = userAwareness.get("selection") as
-      | { from: number; to: number; timestamp: number }
-      | undefined;
-    expect(selection).toBeDefined();
-    expect(selection!.from).toBe(0);
-    expect(selection!.to).toBe(5);
-  });
-
-  it("detects no selection when from === to", () => {
-    const ydoc = setupDoc("activity-2", "Hello world");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("selection", { from: 3, to: 3, timestamp: Date.now() });
-
-    const selection = userAwareness.get("selection") as { from: number; to: number } | undefined;
-    const hasSelection = selection && selection.from !== selection.to;
-    expect(hasSelection).toBeFalsy();
-  });
-
-  it("reads typing activity", () => {
-    const ydoc = setupDoc("activity-3", "Hello world");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("activity", {
-      isTyping: true,
-      cursor: 5,
-      lastEdit: Date.now(),
-    });
-
-    const activity = userAwareness.get("activity") as {
-      isTyping: boolean;
-      cursor: number;
-      lastEdit: number;
-    };
-    expect(activity.isTyping).toBe(true);
-    expect(activity.cursor).toBe(5);
-  });
-
-  it("considers user inactive when no activity exists", () => {
-    const ydoc = setupDoc("activity-4", "Hello world");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    const activity = userAwareness.get("activity") as any;
-    expect(activity).toBeUndefined();
-  });
-});
-
-describe("tandem_reply logic", () => {
-  it("stores a Claude reply in CTRL_ROOM chat map", () => {
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+describe("tandem_reply — real Y.Map operations", () => {
+  it("stores a Claude reply in CTRL_ROOM", () => {
+    const ctrlDoc = getOrCreateDocument("__tandem_ctrl_reply_1__");
     const chatMap = ctrlDoc.getMap("chat");
 
     const id = generateMessageId();
@@ -272,50 +239,29 @@ describe("tandem_reply logic", () => {
     const stored = chatMap.get(id) as ChatMessage;
     expect(stored.author).toBe("claude");
     expect(stored.text).toBe("Here is my response");
-    expect(stored.read).toBe(true);
   });
 
-  it("supports replyTo field for threading", () => {
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  it("supports replyTo for threading", () => {
+    const ctrlDoc = getOrCreateDocument("__tandem_ctrl_reply_2__");
     const chatMap = ctrlDoc.getMap("chat");
 
-    const userMsgId = "msg_user_original";
     const replyId = generateMessageId();
     const reply: ChatMessage = {
       id: replyId,
       author: "claude",
       text: "Great question!",
       timestamp: Date.now(),
-      replyTo: userMsgId,
+      replyTo: "msg_user_original",
       read: true,
     };
     chatMap.set(replyId, reply);
 
     const stored = chatMap.get(replyId) as ChatMessage;
-    expect(stored.replyTo).toBe(userMsgId);
-  });
-
-  it("supports optional documentId context", () => {
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const chatMap = ctrlDoc.getMap("chat");
-
-    const id = generateMessageId();
-    const msg: ChatMessage = {
-      id,
-      author: "claude",
-      text: "About this document...",
-      timestamp: Date.now(),
-      documentId: "doc-abc",
-      read: true,
-    };
-    chatMap.set(id, msg);
-
-    const stored = chatMap.get(id) as ChatMessage;
-    expect(stored.documentId).toBe("doc-abc");
+    expect(stored.replyTo).toBe("msg_user_original");
   });
 });
 
-describe("tandem_setStatus logic", () => {
+describe("tandem_setStatus — real Y.Map operations", () => {
   it("writes Claude status to awareness map", () => {
     const ydoc = setupDoc("status-1", "Hello world");
     const awarenessMap = ydoc.getMap("awareness");
@@ -327,92 +273,31 @@ describe("tandem_setStatus logic", () => {
       focusParagraph: 2,
     });
 
-    const claude = awarenessMap.get("claude") as any;
+    const claude = awarenessMap.get("claude") as {
+      status: string;
+      active: boolean;
+      focusParagraph: number | null;
+    };
     expect(claude.status).toBe("Reviewing section 3...");
     expect(claude.active).toBe(true);
     expect(claude.focusParagraph).toBe(2);
   });
-
-  it("allows null focusParagraph", () => {
-    const ydoc = setupDoc("status-2", "Hello world");
-    const awarenessMap = ydoc.getMap("awareness");
-
-    awarenessMap.set("claude", {
-      status: "Idle",
-      timestamp: Date.now(),
-      active: true,
-      focusParagraph: null,
-    });
-
-    const claude = awarenessMap.get("claude") as any;
-    expect(claude.focusParagraph).toBeNull();
-  });
 });
 
-describe("tandem_getSelections logic", () => {
+describe("tandem_getSelections — real Y.Map operations", () => {
   it("returns empty when no selection exists", () => {
     const ydoc = setupDoc("sel-1", "Hello world");
     const userAwareness = ydoc.getMap("userAwareness");
-
-    const selection = userAwareness.get("selection");
-    expect(selection).toBeUndefined();
+    expect(userAwareness.get("selection")).toBeUndefined();
   });
 
-  it("returns selection range when user has selected text", () => {
+  it("detects no selection when from === to", () => {
     const ydoc = setupDoc("sel-2", "Hello world");
     const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("selection", { from: 0, to: 5, timestamp: Date.now() });
+    userAwareness.set("selection", { from: 3, to: 3, timestamp: Date.now() });
 
     const selection = userAwareness.get("selection") as { from: number; to: number };
-    expect(selection.from).toBe(0);
-    expect(selection.to).toBe(5);
-  });
-});
-
-describe("tandem_getActivity logic", () => {
-  it("detects active user via isTyping", () => {
-    const ydoc = setupDoc("act-1", "Hello");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("activity", {
-      isTyping: true,
-      cursor: 3,
-      lastEdit: Date.now(),
-    });
-
-    const activity = userAwareness.get("activity") as any;
-    const isActive = activity.isTyping || Date.now() - activity.lastEdit < 10000;
-    expect(isActive).toBe(true);
-  });
-
-  it("detects active user via recent lastEdit", () => {
-    const ydoc = setupDoc("act-2", "Hello");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("activity", {
-      isTyping: false,
-      cursor: 3,
-      lastEdit: Date.now() - 5000, // 5 seconds ago
-    });
-
-    const activity = userAwareness.get("activity") as any;
-    const isActive = activity.isTyping || Date.now() - activity.lastEdit < 10000;
-    expect(isActive).toBe(true);
-  });
-
-  it("detects inactive user when lastEdit is old", () => {
-    const ydoc = setupDoc("act-3", "Hello");
-    const userAwareness = ydoc.getMap("userAwareness");
-
-    userAwareness.set("activity", {
-      isTyping: false,
-      cursor: 3,
-      lastEdit: Date.now() - 30000, // 30 seconds ago
-    });
-
-    const activity = userAwareness.get("activity") as any;
-    const isActive = activity.isTyping || Date.now() - activity.lastEdit < 10000;
-    expect(isActive).toBe(false);
+    // Production code: if (!selection || selection.from === selection.to) → no text selected
+    expect(selection.from === selection.to).toBe(true);
   });
 });

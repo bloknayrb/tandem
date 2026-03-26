@@ -7,7 +7,7 @@ import {
   getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
 import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
-import { escapeRegex } from "../../src/server/mcp/response.js";
+import { searchText, findOccurrence, extractContext } from "../../src/server/mcp/navigation.js";
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -22,212 +22,127 @@ beforeEach(() => {
   setActiveDocId(null);
 });
 
-describe("tandem_search logic", () => {
+describe("searchText", () => {
   it("finds literal text matches case-insensitively", () => {
-    const ydoc = setupDoc("search-1", "The Quick Brown Fox");
-    const fullText = extractText(ydoc);
-    const pattern = new RegExp(escapeRegex("quick"), "gi");
-    const matches: Array<{ from: number; to: number; text: string }> = [];
-
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({ from: match.index, to: match.index + match[0].length, text: match[0] });
-    }
-
-    expect(matches).toHaveLength(1);
-    expect(matches[0].text).toBe("Quick");
-    expect(matches[0].from).toBe(4);
-    expect(matches[0].to).toBe(9);
+    const result = searchText("The Quick Brown Fox", "quick");
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0].text).toBe("Quick");
+    expect(result.matches[0].from).toBe(4);
+    expect(result.matches[0].to).toBe(9);
   });
 
   it("finds multiple occurrences", () => {
-    const ydoc = setupDoc("search-2", "cat and cat and cat");
-    const fullText = extractText(ydoc);
-    const pattern = new RegExp(escapeRegex("cat"), "gi");
-    const matches: Array<{ from: number; to: number }> = [];
-
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({ from: match.index, to: match.index + match[0].length });
-    }
-
-    expect(matches).toHaveLength(3);
+    const result = searchText("cat and cat and cat", "cat");
+    expect(result.matches).toHaveLength(3);
   });
 
   it("supports regex mode", () => {
-    const ydoc = setupDoc("search-3", "Hello 123 World 456");
-    const fullText = extractText(ydoc);
-    const pattern = new RegExp("\\d+", "gi");
-    const matches: Array<{ text: string }> = [];
-
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({ text: match[0] });
-    }
-
-    expect(matches).toHaveLength(2);
-    expect(matches[0].text).toBe("123");
-    expect(matches[1].text).toBe("456");
+    const result = searchText("Hello 123 World 456", "\\d+", true);
+    expect(result.matches).toHaveLength(2);
+    expect(result.matches[0].text).toBe("123");
+    expect(result.matches[1].text).toBe("456");
   });
 
   it("returns empty array for no matches", () => {
-    const ydoc = setupDoc("search-4", "Hello world");
-    const fullText = extractText(ydoc);
-    const pattern = new RegExp(escapeRegex("xyz"), "gi");
-    const matches: any[] = [];
-
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push(match);
-    }
-
-    expect(matches).toHaveLength(0);
+    const result = searchText("Hello world", "xyz");
+    expect(result.matches).toHaveLength(0);
+    expect(result.error).toBeUndefined();
   });
 
   it("escapes regex metacharacters in literal mode", () => {
-    const ydoc = setupDoc("search-5", "price is $9.99 (USD)");
-    const fullText = extractText(ydoc);
-    const pattern = new RegExp(escapeRegex("$9.99"), "gi");
-    const matches: Array<{ text: string }> = [];
+    const result = searchText("price is $9.99 (USD)", "$9.99");
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0].text).toBe("$9.99");
+  });
 
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({ text: match[0] });
-    }
-
-    expect(matches).toHaveLength(1);
-    expect(matches[0].text).toBe("$9.99");
+  it("returns error for invalid regex", () => {
+    const result = searchText("Hello", "[invalid", true);
+    expect(result.error).toBeDefined();
+    expect(result.matches).toHaveLength(0);
   });
 });
 
-describe("tandem_resolveRange logic", () => {
+describe("findOccurrence", () => {
   it("finds first occurrence by default", () => {
-    const ydoc = setupDoc("resolve-1", "foo bar foo baz foo");
-    const fullText = extractText(ydoc);
-    const regex = new RegExp(escapeRegex("foo"), "g");
-
-    let match;
-    let count = 0;
-    let result: { from: number; to: number } | null = null;
-    while ((match = regex.exec(fullText)) !== null) {
-      count++;
-      if (count === 1) {
-        result = { from: match.index, to: match.index + match[0].length };
-      }
+    const result = findOccurrence("foo bar foo baz foo", "foo", 1);
+    expect("from" in result).toBe(true);
+    if ("from" in result) {
+      expect(result).toEqual({ from: 0, to: 3, text: "foo" });
     }
-
-    expect(result).toEqual({ from: 0, to: 3 });
-    expect(count).toBe(3);
   });
 
   it("finds nth occurrence", () => {
-    const ydoc = setupDoc("resolve-2", "foo bar foo baz foo");
-    const fullText = extractText(ydoc);
-    const regex = new RegExp(escapeRegex("foo"), "g");
-
-    let match;
-    let count = 0;
-    let result: { from: number; to: number } | null = null;
-    while ((match = regex.exec(fullText)) !== null) {
-      count++;
-      if (count === 3) {
-        result = { from: match.index, to: match.index + match[0].length };
-      }
+    const result = findOccurrence("foo bar foo baz foo", "foo", 3);
+    expect("from" in result).toBe(true);
+    if ("from" in result) {
+      expect(result).toEqual({ from: 16, to: 19, text: "foo" });
     }
-
-    expect(result).toEqual({ from: 16, to: 19 });
   });
 
-  it("reports error when occurrence not found", () => {
-    const ydoc = setupDoc("resolve-3", "foo bar");
-    const fullText = extractText(ydoc);
-    const regex = new RegExp(escapeRegex("foo"), "g");
-
-    let _match;
-    let count = 0;
-    while ((_match = regex.exec(fullText)) !== null) {
-      count++;
+  it("returns error when occurrence not found", () => {
+    const result = findOccurrence("foo bar", "foo", 5);
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.totalCount).toBe(1);
+      expect(result.error).toContain("occurrence 5");
+      expect(result.error).toContain("found 1 total");
     }
+  });
 
-    // Asking for occurrence 5, but only found 1
-    expect(count).toBe(1);
+  it("returns error when text not found at all", () => {
+    const result = findOccurrence("foo bar", "xyz");
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.totalCount).toBe(0);
+    }
   });
 });
 
-describe("tandem_getContext logic", () => {
+describe("extractContext", () => {
   it("returns context window around a range", () => {
-    const ydoc = setupDoc("ctx-1", "The quick brown fox jumps over the lazy dog");
-    const fullText = extractText(ydoc);
-    const from = 10;
-    const to = 19; // "brown fox"
-    const windowSize = 5;
-
-    const contextStart = Math.max(0, from - windowSize);
-    const contextEnd = Math.min(fullText.length, to + windowSize);
-
-    const context = fullText.slice(contextStart, contextEnd);
-    const selection = fullText.slice(from, to);
-
-    expect(selection).toBe("brown fox");
-    expect(context).toContain("brown fox");
-    expect(context.length).toBeGreaterThan(selection.length);
+    const result = extractContext("The quick brown fox jumps over the lazy dog", 10, 19, 5);
+    expect(result.selection).toBe("brown fox");
+    expect(result.context).toContain("brown fox");
+    expect(result.context.length).toBeGreaterThan(result.selection.length);
+    expect(result.contextRange.from).toBe(5);
+    expect(result.contextRange.to).toBe(24);
   });
 
   it("clamps at document boundaries", () => {
-    const ydoc = setupDoc("ctx-2", "Hello");
-    const fullText = extractText(ydoc);
-    const windowSize = 500;
-
-    const contextStart = Math.max(0, 0 - windowSize);
-    const contextEnd = Math.min(fullText.length, 5 + windowSize);
-
-    expect(contextStart).toBe(0);
-    expect(contextEnd).toBe(fullText.length);
+    const result = extractContext("Hello", 0, 5, 500);
+    expect(result.contextRange.from).toBe(0);
+    expect(result.contextRange.to).toBe(5);
+    expect(result.context).toBe("Hello");
   });
 
   it("handles zero windowSize", () => {
-    const ydoc = setupDoc("ctx-3", "Hello world");
-    const fullText = extractText(ydoc);
-    const from = 0;
-    const to = 5;
+    const result = extractContext("Hello world", 0, 5, 0);
+    expect(result.context).toBe("Hello");
+    expect(result.selection).toBe("Hello");
+  });
 
-    const context = fullText.slice(Math.max(0, from), Math.min(fullText.length, to));
-    expect(context).toBe("Hello");
+  it("uses default windowSize of 500", () => {
+    const text = "x".repeat(2000);
+    const result = extractContext(text, 1000, 1010);
+    expect(result.contextRange.from).toBe(500);
+    expect(result.contextRange.to).toBe(1510);
   });
 });
 
-describe("search across headings", () => {
+describe("searchText on real Y.Doc content", () => {
   it("finds text in headings (including prefix in flat text)", () => {
     const ydoc = setupDoc("heading-search", "## My Heading\nSome body text");
     const fullText = extractText(ydoc);
 
-    // Flat text includes heading prefix: "## My Heading\nSome body text"
-    expect(fullText).toContain("## My Heading");
-    const pattern = new RegExp(escapeRegex("My Heading"), "gi");
-    const matches: Array<{ from: number; to: number }> = [];
-
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({ from: match.index, to: match.index + match[0].length });
-    }
-
-    expect(matches).toHaveLength(1);
-    expect(matches[0].from).toBe(3); // After "## "
+    const result = searchText(fullText, "My Heading");
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0].from).toBe(3); // After "## "
   });
-});
 
-describe("search in multi-paragraph documents", () => {
   it("finds text across paragraphs", () => {
     const ydoc = setupDoc("multi-para", "first paragraph\nsecond paragraph\nthird paragraph");
     const fullText = extractText(ydoc);
-    const pattern = new RegExp(escapeRegex("paragraph"), "gi");
-    const matches: any[] = [];
-
-    let match;
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push(match[0]);
-    }
-
-    expect(matches).toHaveLength(3);
+    const result = searchText(fullText, "paragraph");
+    expect(result.matches).toHaveLength(3);
   });
 });

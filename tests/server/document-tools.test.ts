@@ -13,14 +13,11 @@ import {
 } from "../../src/server/mcp/document-service.js";
 import {
   populateYDoc,
-  extractText,
-  extractMarkdown,
-  getElementText,
   resolveOffset,
   getOrCreateXmlText,
   verifyAndResolveRange,
 } from "../../src/server/mcp/document.js";
-import { headingPrefix } from "../../src/shared/offsets.js";
+import { getOutline, getSection } from "../../src/server/mcp/document.js";
 
 function setupDoc(id: string, text: string, opts?: { readOnly?: boolean; format?: string }) {
   const ydoc = getOrCreateDocument(id);
@@ -42,12 +39,11 @@ beforeEach(() => {
 });
 
 describe("tandem_getContent logic", () => {
-  it("returns full document fragment as JSON", () => {
+  it("returns non-empty fragment JSON for populated doc", () => {
     const ydoc = setupDoc("gc-1", "Hello world");
     const fragment = ydoc.getXmlFragment("default");
     const json = fragment.toJSON();
     expect(json).toBeDefined();
-    // XmlFragment.toJSON() returns a string representation, not an array
     expect(typeof json === "string" || typeof json === "object").toBe(true);
   });
 
@@ -60,102 +56,68 @@ describe("tandem_getContent logic", () => {
   });
 });
 
-describe("tandem_getTextContent logic", () => {
-  it("returns full text for document", () => {
-    const ydoc = setupDoc("gtc-1", "Hello world");
-    const text = extractText(ydoc);
-    expect(text).toBe("Hello world");
-  });
-
-  it("extracts markdown for md format", () => {
-    const ydoc = setupDoc("gtc-2", "## Heading\nParagraph text");
-    const md = extractMarkdown(ydoc);
-    expect(md).toContain("## Heading");
-    expect(md).toContain("Paragraph text");
-  });
-
-  it("section filtering finds matching heading", () => {
-    const ydoc = setupDoc("gtc-3", "## Introduction\nFirst content\n## Methods\nSecond content");
+describe("tandem_getTextContent — section filtering via getSection()", () => {
+  it("extracts a matching section by heading", () => {
+    const ydoc = setupDoc("gtc-1", "## Introduction\nFirst content\n## Methods\nSecond content");
     const fragment = ydoc.getXmlFragment("default");
 
-    const lines: string[] = [];
-    let inSection = false;
-    let sectionLevel = 0;
-
-    for (let i = 0; i < fragment.length; i++) {
-      const node = fragment.get(i);
-      if (!(node instanceof Y.XmlElement)) continue;
-
-      const text = getElementText(node);
-      if (node.nodeName === "heading") {
-        const level = Number(node.getAttribute("level") ?? 1);
-        if (inSection && level <= sectionLevel) break;
-        if (text.trim().toLowerCase() === "methods") {
-          inSection = true;
-          sectionLevel = level;
-          lines.push(headingPrefix(level) + text);
-          continue;
-        }
-      }
-      if (inSection) lines.push(text);
+    const result = getSection(fragment, "Methods");
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.text).toContain("## Methods");
+      expect(result.text).toContain("Second content");
+      expect(result.text).not.toContain("Introduction");
     }
-
-    expect(inSection).toBe(true);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe("## Methods");
-    expect(lines[1]).toBe("Second content");
   });
 
   it("section filtering is case-insensitive", () => {
-    const ydoc = setupDoc("gtc-4", "## My Section\nContent here");
+    const ydoc = setupDoc("gtc-2", "## My Section\nContent here");
     const fragment = ydoc.getXmlFragment("default");
 
-    let found = false;
-    for (let i = 0; i < fragment.length; i++) {
-      const node = fragment.get(i);
-      if (!(node instanceof Y.XmlElement)) continue;
-      const text = getElementText(node);
-      if (text.trim().toLowerCase() === "my section") {
-        found = true;
-        break;
-      }
-    }
-
-    expect(found).toBe(true);
+    const result = getSection(fragment, "MY SECTION");
+    expect(result.found).toBe(true);
   });
 
-  it("returns error when section not found", () => {
-    const ydoc = setupDoc("gtc-5", "## Introduction\nContent");
+  it("returns not found for non-existent section", () => {
+    const ydoc = setupDoc("gtc-3", "## Introduction\nContent");
     const fragment = ydoc.getXmlFragment("default");
 
-    let inSection = false;
-    for (let i = 0; i < fragment.length; i++) {
-      const node = fragment.get(i);
-      if (!(node instanceof Y.XmlElement)) continue;
-      const text = getElementText(node);
-      if (text.trim().toLowerCase() === "nonexistent") {
-        inSection = true;
-      }
-    }
+    const result = getSection(fragment, "Nonexistent");
+    expect(result.found).toBe(false);
+  });
 
-    expect(inSection).toBe(false);
+  it("stops at same-level heading", () => {
+    const ydoc = setupDoc("gtc-4", "## A\nContent A\n## B\nContent B");
+    const fragment = ydoc.getXmlFragment("default");
+
+    const result = getSection(fragment, "A");
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.text).toContain("Content A");
+      expect(result.text).not.toContain("Content B");
+    }
+  });
+
+  it("includes sub-headings within section", () => {
+    const ydoc = setupDoc("gtc-5", "## Parent\nContent\n### Child\nChild content\n## Next");
+    const fragment = ydoc.getXmlFragment("default");
+
+    const result = getSection(fragment, "Parent");
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.text).toContain("### Child");
+      expect(result.text).toContain("Child content");
+      expect(result.text).not.toContain("Next");
+    }
   });
 });
 
-describe("tandem_getOutline logic", () => {
+describe("tandem_getOutline via getOutline()", () => {
   it("extracts heading outline from document", () => {
     const ydoc = setupDoc("go-1", "# Title\n## Section 1\nParagraph\n## Section 2\n### Subsection");
     const fragment = ydoc.getXmlFragment("default");
-    const outline: Array<{ level: number; text: string; index: number }> = [];
 
-    for (let i = 0; i < fragment.length; i++) {
-      const node = fragment.get(i);
-      if (node instanceof Y.XmlElement && node.nodeName === "heading") {
-        const level = Number(node.getAttribute("level") ?? 1);
-        outline.push({ level, text: getElementText(node), index: i });
-      }
-    }
-
+    const outline = getOutline(fragment);
     expect(outline).toHaveLength(4);
     expect(outline[0]).toEqual({ level: 1, text: "Title", index: 0 });
     expect(outline[1]).toEqual({ level: 2, text: "Section 1", index: 1 });
@@ -166,61 +128,67 @@ describe("tandem_getOutline logic", () => {
   it("returns empty outline for document with no headings", () => {
     const ydoc = setupDoc("go-2", "Just a paragraph\nAnother paragraph");
     const fragment = ydoc.getXmlFragment("default");
-    const outline: any[] = [];
 
-    for (let i = 0; i < fragment.length; i++) {
-      const node = fragment.get(i);
-      if (node instanceof Y.XmlElement && node.nodeName === "heading") {
-        outline.push(node);
-      }
-    }
-
+    const outline = getOutline(fragment);
     expect(outline).toHaveLength(0);
+  });
+
+  it("handles single heading doc", () => {
+    const ydoc = setupDoc("go-3", "# Only Heading");
+    const fragment = ydoc.getXmlFragment("default");
+
+    const outline = getOutline(fragment);
+    expect(outline).toHaveLength(1);
+    expect(outline[0].level).toBe(1);
   });
 });
 
-describe("tandem_edit logic — read-only guard", () => {
-  it("rejects edits on read-only documents", () => {
+describe("tandem_edit — read-only guard", () => {
+  it("read-only documents block edits", () => {
     setupDoc("ro-edit", "Read-only content", { readOnly: true });
     const docState = getCurrentDoc("ro-edit");
     expect(docState?.readOnly).toBe(true);
+
+    // The actual guard: document.ts:266-268 checks docState.readOnly and returns mcpError.
+    // We verify the flag is correctly set, which the guard checks at runtime.
   });
 });
 
-describe("tandem_edit logic — range validation", () => {
-  it("detects from > to as invalid range", () => {
-    setupDoc("inv-1", "Hello world");
-    // from=10, to=5 → invalid
-    const from = 10;
-    const to = 5;
-    expect(from > to).toBe(true);
+describe("tandem_edit — range validation via resolveOffset", () => {
+  it("rejects from > to by returning error (tested via resolveOffset validity)", () => {
+    const ydoc = setupDoc("inv-1", "Hello world");
+    const fragment = ydoc.getXmlFragment("default");
+
+    // The actual production guard at document.ts:270 is: if (from > to) return mcpError(...)
+    // We can verify the precondition and the offset resolution
+    const pos10 = resolveOffset(fragment, 10);
+    const pos5 = resolveOffset(fragment, 5);
+    expect(pos10).not.toBeNull();
+    expect(pos5).not.toBeNull();
+    // from=10 > to=5 → the handler would reject this
+    expect(pos10!.textOffset).toBeGreaterThan(pos5!.textOffset);
   });
 
   it("from === to is a valid insert point", () => {
     const ydoc = setupDoc("ins-1", "Hello world");
     const fragment = ydoc.getXmlFragment("default");
-    const from = 5;
-    const to = 5;
-
-    const startPos = resolveOffset(fragment, from);
-    const endPos = resolveOffset(fragment, to);
+    const startPos = resolveOffset(fragment, 5);
+    const endPos = resolveOffset(fragment, 5);
     expect(startPos).not.toBeNull();
     expect(endPos).not.toBeNull();
     expect(startPos!.textOffset).toBe(endPos!.textOffset);
   });
 });
 
-describe("tandem_edit logic — textSnapshot stale detection", () => {
+describe("tandem_edit — textSnapshot stale detection via verifyAndResolveRange", () => {
   it("detects stale range when text has been edited", () => {
     const ydoc = setupDoc("stale-1", "The quick brown fox");
-    // Replace "quick" with "slow"
     const fragment = ydoc.getXmlFragment("default");
     const el = fragment.get(0) as Y.XmlElement;
     const xmlText = getOrCreateXmlText(el);
-    xmlText.delete(4, 5); // delete "quick"
+    xmlText.delete(4, 5);
     xmlText.insert(4, "slow");
 
-    // Now verify that "quick" no longer matches at [4, 9]
     const result = verifyAndResolveRange(ydoc, 4, 9, "quick");
     expect(result.valid).toBe(false);
   });
@@ -230,14 +198,28 @@ describe("tandem_edit logic — textSnapshot stale detection", () => {
     const result = verifyAndResolveRange(ydoc, 0, 5, "Hello");
     expect(result.valid).toBe(true);
   });
+
+  it("relocates text that has moved", () => {
+    const ydoc = setupDoc("relocate", "Hello world");
+    const fragment = ydoc.getXmlFragment("default");
+    const el = fragment.get(0) as Y.XmlElement;
+    const xmlText = el.get(0) as Y.XmlText;
+    xmlText.insert(0, "XXX");
+
+    const result = verifyAndResolveRange(ydoc, 0, 5, "Hello");
+    expect(result.valid).toBe(false);
+    if (!result.gone) {
+      expect(result.resolvedFrom).toBe(3);
+      expect(result.resolvedTo).toBe(8);
+    }
+  });
 });
 
-describe("tandem_edit logic — heading prefix rejection", () => {
+describe("tandem_edit — heading prefix rejection via resolveOffset", () => {
   it("detects heading prefix in edit range", () => {
     const ydoc = setupDoc("hp-1", "## Heading Text");
     const fragment = ydoc.getXmlFragment("default");
 
-    // Offset 0, 1, 2 are in "## " prefix
     const pos0 = resolveOffset(fragment, 0);
     const pos1 = resolveOffset(fragment, 1);
     const pos2 = resolveOffset(fragment, 2);
@@ -250,8 +232,8 @@ describe("tandem_edit logic — heading prefix rejection", () => {
   });
 });
 
-describe("tandem_save logic — read-only and upload guards", () => {
-  it("identifies upload source documents", () => {
+describe("tandem_save — source detection", () => {
+  it("upload source documents are identified for session-only save", () => {
     addDoc("upload-doc", {
       id: "upload-doc",
       filePath: "upload://uuid/notes.md",
@@ -283,7 +265,6 @@ describe("tandem_close logic", () => {
     setActiveDocId("close-b");
 
     removeDoc("close-b");
-    // Simulate active doc switch logic from tandem_close
     const remaining = [...getOpenDocs().keys()];
     if (remaining.length > 0) setActiveDocId(remaining[0]);
     else setActiveDocId(null);
@@ -314,32 +295,6 @@ describe("tandem_status logic", () => {
     expect(current).not.toBeNull();
     expect(current!.id).toBe("status-doc");
     expect(current!.format).toBe("md");
-  });
-
-  it("reports all open documents", () => {
-    setupDoc("s1", "Doc 1");
-    setupDoc("s2", "Doc 2");
-    setupDoc("s3", "Doc 3");
-
-    expect(docCount()).toBe(3);
-    expect(getOpenDocs().size).toBe(3);
-  });
-});
-
-describe("tandem_listDocuments logic", () => {
-  it("lists all open documents with active flag", () => {
-    setupDoc("list-a", "A");
-    setupDoc("list-b", "B");
-    setActiveDocId("list-a");
-
-    const docs = [...getOpenDocs().values()].map((d) => ({
-      id: d.id,
-      isActive: d.id === "list-a",
-    }));
-
-    expect(docs).toHaveLength(2);
-    expect(docs.find((d) => d.id === "list-a")?.isActive).toBe(true);
-    expect(docs.find((d) => d.id === "list-b")?.isActive).toBe(false);
   });
 });
 

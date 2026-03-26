@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { arrayBufferToBase64, isBinaryFormat } from "../../src/client/utils/fileUpload.js";
+import {
+  arrayBufferToBase64,
+  isBinaryFormat,
+  readFileForUpload,
+} from "../../src/client/utils/fileUpload.js";
 
 describe("isBinaryFormat", () => {
   it("returns true for .docx", () => {
@@ -57,7 +61,40 @@ describe("arrayBufferToBase64", () => {
     const bytes = new Uint8Array(100);
     for (let i = 0; i < 100; i++) bytes[i] = i;
     const b64 = arrayBufferToBase64(bytes.buffer);
-    // Base64 should only contain valid characters
     expect(b64).toMatch(/^[A-Za-z0-9+/=]*$/);
+  });
+});
+
+describe("readFileForUpload", () => {
+  it("reads text file as plain text", async () => {
+    const file = new File(["Hello world"], "test.md", { type: "text/markdown" });
+    const result = await readFileForUpload(file);
+    expect(result).toBe("Hello world");
+  });
+
+  it("reads .docx file as base64", async () => {
+    const bytes = new Uint8Array([80, 75, 3, 4]); // PK zip header
+    const file = new File([bytes], "test.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const result = await readFileForUpload(file);
+    // Should be base64 encoded
+    expect(result).toMatch(/^[A-Za-z0-9+/=]+$/);
+    // Verify it round-trips
+    const decoded = atob(result);
+    expect(decoded.charCodeAt(0)).toBe(80); // 'P'
+    expect(decoded.charCodeAt(1)).toBe(75); // 'K'
+  });
+
+  it("reads .txt file as plain text", async () => {
+    const file = new File(["plain text content"], "notes.txt", { type: "text/plain" });
+    const result = await readFileForUpload(file);
+    expect(result).toBe("plain text content");
+  });
+
+  it("reads .html file as plain text", async () => {
+    const file = new File(["<p>hello</p>"], "page.html", { type: "text/html" });
+    const result = await readFileForUpload(file);
+    expect(result).toBe("<p>hello</p>");
   });
 });

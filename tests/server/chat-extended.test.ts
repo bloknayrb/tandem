@@ -137,14 +137,14 @@ describe("chat message document context", () => {
       author: "user",
       text: "What about this sentence?",
       timestamp: Date.now(),
-      anchor: { from: 10, to: 25, text: "selected text here" },
+      anchor: { from: 10, to: 25, textSnapshot: "selected text here" },
       read: false,
     };
     chatMap.set(msg.id, msg);
 
     const stored = chatMap.get(msg.id) as ChatMessage;
     expect(stored.anchor).toBeDefined();
-    expect(stored.anchor!.text).toBe("selected text here");
+    expect(stored.anchor!.textSnapshot).toBe("selected text here");
     expect(stored.anchor!.from).toBe(10);
     expect(stored.anchor!.to).toBe(25);
   });
