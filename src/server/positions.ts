@@ -114,8 +114,11 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | nu
   try {
     const rpos = Y.createRelativePositionFromJSON(relPosJson);
     absPos = Y.createAbsolutePositionFromRelativePosition(rpos, doc);
-  } catch {
-    return null; // malformed relRange JSON
+  } catch (err) {
+    if (!(err instanceof TypeError) && !(err instanceof SyntaxError)) {
+      console.error("[positions] relPosToFlatOffset: unexpected error resolving relRange:", err);
+    }
+    return null;
   }
   if (!absPos) return null;
 
@@ -278,7 +281,14 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
   // Resolve relRange to current flat offsets
   const newFrom = relPosToFlatOffset(ydoc, ann.relRange.fromRel);
   const newTo = relPosToFlatOffset(ydoc, ann.relRange.toRel);
-  if (newFrom === null || newTo === null || newFrom > newTo) return ann; // deleted/inverted content
+  if (newFrom === null || newTo === null) return ann; // deleted content
+  if (newFrom > newTo) {
+    console.error(
+      `[positions] refreshRange: inverted CRDT range for annotation ${ann.id}: ` +
+        `resolved [${newFrom}, ${newTo}] from flat [${ann.range.from}, ${ann.range.to}]`,
+    );
+    return ann;
+  }
   if (newFrom === ann.range.from && newTo === ann.range.to) return ann; // unchanged
 
   const updated = { ...ann, range: { from: newFrom, to: newTo } };

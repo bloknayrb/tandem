@@ -88,6 +88,17 @@ describe("validateRange", () => {
     const result = validateRange(doc, 0, 3);
     expect(result.ok).toBe(true);
   });
+
+  it("returns INVALID_RANGE when rejectHeadingOverlap + unresolvable offset", () => {
+    doc = new Y.Doc();
+    // Empty fragment — no elements to resolve against
+    doc.getXmlFragment("default");
+    const result = validateRange(doc, 0, 5, { rejectHeadingOverlap: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("INVALID_RANGE");
+    }
+  });
 });
 
 describe("anchoredRange", () => {
@@ -214,6 +225,14 @@ describe("flatOffsetToRelPos / relPosToFlatOffset round-trip", () => {
     const flat = relPosToFlatOffset(doc, relPos);
     expect(flat).toBe(9); // shifted by 3
   });
+
+  it("returns null for malformed relRange JSON", () => {
+    doc = makeDoc("hello");
+    expect(relPosToFlatOffset(doc, "not-json")).toBeNull();
+    expect(relPosToFlatOffset(doc, { garbage: true })).toBeNull();
+    expect(relPosToFlatOffset(doc, null)).toBeNull();
+    expect(relPosToFlatOffset(doc, 42)).toBeNull();
+  });
 });
 
 describe("refreshRange (via positions module)", () => {
@@ -259,6 +278,25 @@ describe("refreshRange (via positions module)", () => {
 
     const refreshed = refreshRange(ann, doc, map);
     expect(refreshed.range).toEqual({ from: 9, to: 14 });
+  });
+
+  it("returns original annotation when CRDT resolves to inverted range", () => {
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation(map, 0, 5, doc); // "hello"
+
+    // Manually craft an inverted relRange by swapping fromRel and toRel
+    const invertedAnn: Annotation = {
+      ...ann,
+      relRange: ann.relRange
+        ? { fromRel: ann.relRange.toRel, toRel: ann.relRange.fromRel }
+        : undefined,
+    };
+    map.set(invertedAnn.id, invertedAnn);
+
+    const refreshed = refreshRange(invertedAnn, doc, map);
+    // Should return original (unchanged) since resolved range is inverted
+    expect(refreshed.range).toEqual(invertedAnn.range);
   });
 });
 

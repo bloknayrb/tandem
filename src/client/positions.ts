@@ -159,8 +159,9 @@ export function relRangeToPmPositions(
     const toRpos = Y.createRelativePositionFromJSON(relRange.toRel);
     fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
     toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
-  } catch {
-    return null; // malformed relRange JSON
+  } catch (err) {
+    console.warn("[positions] relRangeToPmPositions: failed to resolve relRange:", err);
+    return null;
   }
   if (!fromAbs || !toAbs) return null;
 
@@ -192,6 +193,11 @@ export function annotationToPmRange(
   if (ann.relRange && ydoc) {
     const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange);
     if (resolved && resolved.from <= resolved.to) return { ...resolved, method: "rel" };
+    if (resolved) {
+      console.warn(
+        `[positions] annotationToPmRange: inverted rel range for ${ann.id}, falling back to flat`,
+      );
+    }
   }
   // Fall back to flat offsets
   if (!ann.range) return null;
