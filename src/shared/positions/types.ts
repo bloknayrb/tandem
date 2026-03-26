@@ -26,17 +26,15 @@ export interface RelativeRange {
 /** Result of validating a flat-offset range against a document. */
 export type RangeValidation =
   | { ok: true; range: DocumentRange }
-  | { ok: false; code: "RANGE_STALE"; gone: true }
-  | { ok: false; code: "RANGE_STALE"; gone: false; resolvedFrom: number; resolvedTo: number }
+  | { ok: false; code: "RANGE_GONE" }
+  | { ok: false; code: "RANGE_MOVED"; resolvedFrom: number; resolvedTo: number }
   | { ok: false; code: "INVALID_RANGE"; message: string }
   | { ok: false; code: "HEADING_OVERLAP" };
 
 /** Result of anchoredRange: validated flat + CRDT-anchored range ready to store on an Annotation. */
-export interface AnchoredRangeResult {
-  ok: true;
-  range: DocumentRange;
-  relRange?: RelativeRange;
-}
+export type AnchoredRangeResult =
+  | { ok: true; fullyAnchored: true; range: DocumentRange; relRange: RelativeRange }
+  | { ok: true; fullyAnchored: false; range: DocumentRange; relRange?: undefined };
 
 /** A resolved element position inside a Y.Doc XmlFragment. */
 export interface ElementPosition {

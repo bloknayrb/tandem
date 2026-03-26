@@ -16,7 +16,7 @@ import {
   ExportFormatSchema,
 } from "../../shared/types.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
-import type { RangeValidation } from "../../shared/positions/index.js";
+import type { RangeValidation, AnchoredRangeResult } from "../../shared/positions/index.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
@@ -28,11 +28,11 @@ function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<un
 
 /** Convert an anchoredRange validation failure to an MCP error response. */
 function rangeFailureToError(result: Extract<RangeValidation, { ok: false }>) {
-  if (result.code === "RANGE_STALE") {
-    if (result.gone) {
-      return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
-    }
-    return mcpError("RANGE_STALE", "Target text has moved. Use resolvedFrom/resolvedTo to retry.", {
+  if (result.code === "RANGE_GONE") {
+    return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
+  }
+  if (result.code === "RANGE_MOVED") {
+    return mcpError("RANGE_MOVED", "Target text has moved. Use resolvedFrom/resolvedTo to retry.", {
       resolvedFrom: result.resolvedFrom,
       resolvedTo: result.resolvedTo,
     });
@@ -54,10 +54,7 @@ export { generateId };
 export function createAnnotation(
   map: Y.Map<unknown>,
   type: AnnotationType,
-  anchored: {
-    range: { from: number; to: number };
-    relRange?: { fromRel: unknown; toRel: unknown };
-  },
+  anchored: AnchoredRangeResult,
   content: string,
   extras?: Partial<Annotation>,
 ): string {
@@ -107,7 +104,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
+          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
     withErrorBoundary(
@@ -144,7 +141,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
+          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
     withErrorBoundary(
@@ -179,7 +176,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
+          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
     withErrorBoundary(
@@ -219,7 +216,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
+          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
     withErrorBoundary(

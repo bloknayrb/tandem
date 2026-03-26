@@ -273,7 +273,7 @@ export function registerDocumentTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_STALE with relocated range on mismatch",
+          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
     withErrorBoundary("tandem_edit", async ({ from, to, newText, documentId, textSnapshot }) => {
@@ -290,12 +290,12 @@ export function registerDocumentTools(server: McpServer): void {
         rejectHeadingOverlap: true,
       });
       if (!v.ok) {
-        if (v.code === "RANGE_STALE") {
-          if (v.gone) {
-            return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
-          }
+        if (v.code === "RANGE_GONE") {
+          return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
+        }
+        if (v.code === "RANGE_MOVED") {
           return mcpError(
-            "RANGE_STALE",
+            "RANGE_MOVED",
             "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
             { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
           );

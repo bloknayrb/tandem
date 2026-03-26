@@ -191,13 +191,12 @@ export function validateRange(
         searchFrom = idx + 1;
       }
       if (candidates.length === 0) {
-        return { ok: false, code: "RANGE_STALE", gone: true };
+        return { ok: false, code: "RANGE_GONE" };
       }
       const best = candidates.reduce((a, b) => (Math.abs(a - from) <= Math.abs(b - from) ? a : b));
       return {
         ok: false,
-        code: "RANGE_STALE",
-        gone: false,
+        code: "RANGE_MOVED",
         resolvedFrom: best,
         resolvedTo: best + opts.textSnapshot.length,
       };
@@ -257,7 +256,10 @@ export function anchoredRange(
     }
   }
 
-  return { ok: true, range, relRange };
+  if (relRange) {
+    return { ok: true, fullyAnchored: true, range, relRange };
+  }
+  return { ok: true, fullyAnchored: false, range };
 }
 
 // ---------------------------------------------------------------------------

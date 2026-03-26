@@ -45,8 +45,8 @@ describe("validateRange", () => {
     const result = validateRange(doc, 0, 5, { textSnapshot: "hello" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.code).toBe("RANGE_STALE");
-      if (!result.gone) {
+      expect(result.code).toBe("RANGE_MOVED");
+      if (result.code === "RANGE_MOVED") {
         expect(result.resolvedFrom).toBe(3);
         expect(result.resolvedTo).toBe(8);
       }
@@ -65,8 +65,7 @@ describe("validateRange", () => {
     const result = validateRange(doc, 0, 5, { textSnapshot: "hello" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.code).toBe("RANGE_STALE");
-      expect(result.gone).toBe(true);
+      expect(result.code).toBe("RANGE_GONE");
     }
   });
 
@@ -122,7 +121,7 @@ describe("anchoredRange", () => {
 
     const result = anchoredRange(doc, 0, 5, "hello");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("RANGE_STALE");
+    if (!result.ok) expect(result.code).toBe("RANGE_MOVED");
   });
 
   it("omits relRange when offset is in heading prefix", () => {
