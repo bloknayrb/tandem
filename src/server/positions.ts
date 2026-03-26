@@ -110,8 +110,13 @@ export function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): u
  * Returns null if the referenced content was deleted.
  */
 export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | null {
-  const rpos = Y.createRelativePositionFromJSON(relPosJson);
-  const absPos = Y.createAbsolutePositionFromRelativePosition(rpos, doc);
+  let absPos;
+  try {
+    const rpos = Y.createRelativePositionFromJSON(relPosJson);
+    absPos = Y.createAbsolutePositionFromRelativePosition(rpos, doc);
+  } catch {
+    return null; // malformed relRange JSON
+  }
   if (!absPos) return null;
 
   const fragment = doc.getXmlFragment("default");
@@ -238,6 +243,15 @@ export function anchoredRange(
   const toRel = flatOffsetToRelPos(ydoc, to, -1); // assoc -1: stick left
   const relRange: RelativeRange | undefined = fromRel && toRel ? { fromRel, toRel } : undefined;
 
+  if (!relRange) {
+    const fragment = ydoc.getXmlFragment("default");
+    const fromEl = resolveToElement(fragment, from);
+    const toEl = resolveToElement(fragment, to);
+    if (fromEl && !fromEl.clampedFromPrefix && toEl && !toEl.clampedFromPrefix) {
+      console.error(`[positions] anchoredRange: relRange creation failed for [${from}, ${to}]`);
+    }
+  }
+
   return { ok: true, range, relRange };
 }
 
@@ -264,7 +278,7 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
   // Resolve relRange to current flat offsets
   const newFrom = relPosToFlatOffset(ydoc, ann.relRange.fromRel);
   const newTo = relPosToFlatOffset(ydoc, ann.relRange.toRel);
-  if (newFrom === null || newTo === null) return ann; // deleted content, keep old range
+  if (newFrom === null || newTo === null || newFrom > newTo) return ann; // deleted/inverted content
   if (newFrom === ann.range.from && newTo === ann.range.to) return ann; // unchanged
 
   const updated = { ...ann, range: { from: newFrom, to: newTo } };

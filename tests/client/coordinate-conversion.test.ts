@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { flatOffsetToPmPos, pmPosToFlatOffset } from "../../src/client/positions";
+import {
+  flatOffsetToPmPos,
+  pmPosToFlatOffset,
+  annotationToPmRange,
+  relRangeToPmPositions,
+} from "../../src/client/positions";
+import { makeDoc, getFragment } from "../helpers/ydoc-factory";
+import { flatOffsetToRelPos } from "../../src/server/positions";
+import type { Annotation } from "../../src/shared/types";
 
 // Minimal ProseMirror-compatible mock. Assumes single flat text run per block
 // (no inline marks). nodeSize = 1 (open) + text.length + 1 (close).
@@ -138,5 +146,162 @@ describe("round-trip: pmPosToFlatOffset(flatOffsetToPmPos(offset)) === offset", 
       expect(pm).toBe(1);
       expect(pmPosToFlatOffset(doc as any, pm)).toBe(3);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helper: create a test annotation with optional relRange from a Y.Doc
+// ---------------------------------------------------------------------------
+
+function makeAnnotation(
+  overrides: Partial<Annotation> & { range?: { from: number; to: number } },
+): Annotation {
+  return {
+    id: "test-1",
+    author: "claude",
+    type: "comment",
+    range: { from: 0, to: 5 },
+    content: "test",
+    status: "pending",
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// annotationToPmRange
+// ---------------------------------------------------------------------------
+
+describe("annotationToPmRange", () => {
+  it("relRange path returns method 'rel'", () => {
+    // Y.Doc: single paragraph "Hello"
+    const ydoc = makeDoc("Hello");
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+
+    const fromRel = flatOffsetToRelPos(ydoc, 0, 0);
+    const toRel = flatOffsetToRelPos(ydoc, 5, -1);
+    const ann = makeAnnotation({
+      range: { from: 0, to: 5 },
+      relRange: { fromRel: fromRel!, toRel: toRel! },
+    });
+
+    const result = annotationToPmRange(ann, pmDoc as any, ydoc);
+    expect(result).not.toBeNull();
+    expect(result!.method).toBe("rel");
+    expect(result!.from).toBe(1); // PM pos 1 = start of paragraph text
+    expect(result!.to).toBe(6); // PM pos 6 = end of paragraph text
+  });
+
+  it("flat fallback returns method 'flat' when no relRange", () => {
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+    const ann = makeAnnotation({ range: { from: 0, to: 5 } });
+
+    const result = annotationToPmRange(ann, pmDoc as any, null);
+    expect(result).not.toBeNull();
+    expect(result!.method).toBe("flat");
+  });
+
+  it("flat fallback when ydoc is null", () => {
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+    const ydoc = makeDoc("Hello");
+    const fromRel = flatOffsetToRelPos(ydoc, 0, 0);
+    const toRel = flatOffsetToRelPos(ydoc, 5, -1);
+    const ann = makeAnnotation({
+      range: { from: 0, to: 5 },
+      relRange: { fromRel: fromRel!, toRel: toRel! },
+    });
+
+    // Even though relRange exists, ydoc=null forces flat fallback
+    const result = annotationToPmRange(ann, pmDoc as any, null);
+    expect(result).not.toBeNull();
+    expect(result!.method).toBe("flat");
+  });
+
+  it("returns null when no range at all", () => {
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+    const ann = makeAnnotation({});
+    // Remove range to simulate missing data
+    (ann as any).range = undefined;
+
+    const result = annotationToPmRange(ann, pmDoc as any, null);
+    expect(result).toBeNull();
+  });
+
+  it("falls back to flat when relRange resolves from > to (CRDT inversion)", () => {
+    // Create a Y.Doc, get relRange, then delete content to cause inversion
+    const ydoc = makeDoc("ABCDE");
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "ABCDE" }]);
+
+    const fromRel = flatOffsetToRelPos(ydoc, 3, 0); // points to 'D'
+    const toRel = flatOffsetToRelPos(ydoc, 1, -1); // points to 'B'
+    // Construct an inverted relRange (from > to)
+    const ann = makeAnnotation({
+      range: { from: 1, to: 3 },
+      relRange: { fromRel: fromRel!, toRel: toRel! },
+    });
+
+    const result = annotationToPmRange(ann, pmDoc as any, ydoc);
+    // Should fall back to flat since rel resolves inverted
+    expect(result).not.toBeNull();
+    expect(result!.method).toBe("flat");
+  });
+
+  it("returns null for malformed relRange JSON", () => {
+    const ydoc = makeDoc("Hello");
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+    const ann = makeAnnotation({
+      range: { from: 0, to: 5 },
+      relRange: { fromRel: "garbage", toRel: "garbage" },
+    });
+
+    // Should fall back to flat (malformed relRange caught internally)
+    const result = annotationToPmRange(ann, pmDoc as any, ydoc);
+    expect(result).not.toBeNull();
+    expect(result!.method).toBe("flat");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// relRangeToPmPositions
+// ---------------------------------------------------------------------------
+
+describe("relRangeToPmPositions", () => {
+  it("correct positions for single paragraph", () => {
+    const ydoc = makeDoc("Hello");
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+
+    const fromRel = flatOffsetToRelPos(ydoc, 1, 0)!;
+    const toRel = flatOffsetToRelPos(ydoc, 4, -1)!;
+
+    const result = relRangeToPmPositions(ydoc, pmDoc as any, { fromRel, toRel });
+    expect(result).not.toBeNull();
+    // Flat offset 1 = 'e' → PM pos 2; flat offset 4 = 'o' → PM pos 5
+    expect(result!.from).toBe(2);
+    expect(result!.to).toBe(5);
+  });
+
+  it("returns null for deleted content", () => {
+    const ydoc = makeDoc("Hello");
+    const fromRel = flatOffsetToRelPos(ydoc, 0, 0)!;
+    const toRel = flatOffsetToRelPos(ydoc, 5, -1)!;
+
+    // Delete all content — RelativePositions now point to deleted items
+    const fragment = getFragment(ydoc);
+    fragment.delete(0, fragment.length);
+
+    const pmDoc = makeMockDoc([]);
+    const result = relRangeToPmPositions(ydoc, pmDoc as any, { fromRel, toRel });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for malformed relRange JSON", () => {
+    const ydoc = makeDoc("Hello");
+    const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
+
+    const result = relRangeToPmPositions(ydoc, pmDoc as any, {
+      fromRel: { bogus: true },
+      toRel: 42,
+    });
+    expect(result).toBeNull();
   });
 });

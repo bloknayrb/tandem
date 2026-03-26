@@ -31,6 +31,7 @@ export interface AnchoredRangeResult {
 /** A resolved element position inside a Y.Doc XmlFragment. */
 export interface ElementPosition {
   elementIndex: number;
+  /** Character offset within the element's text. Always 0 when clampedFromPrefix is true. */
   textOffset: number;
   /** True if the original offset fell inside a heading prefix and was clamped to 0 */
   clampedFromPrefix: boolean;

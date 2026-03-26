@@ -168,6 +168,14 @@ describe("resolveToElement", () => {
     const result = resolveToElement(fragment, 100);
     expect(result).toEqual({ elementIndex: 0, textOffset: 5, clampedFromPrefix: false });
   });
+
+  it("resolves offset on separator boundary to end of preceding element", () => {
+    doc = makeDoc("first\nsecond");
+    const fragment = getFragment(doc);
+    // "first" = 5 chars, separator at offset 5
+    const result = resolveToElement(fragment, 5);
+    expect(result).toEqual({ elementIndex: 0, textOffset: 5, clampedFromPrefix: false });
+  });
 });
 
 describe("flatOffsetToRelPos / relPosToFlatOffset round-trip", () => {

@@ -82,8 +82,9 @@ function buildDecorations(
 
     try {
       decorations.push(Decoration.inline(from, to, attrs));
-    } catch {
-      // Range might be invalid after doc changes — skip silently
+    } catch (err) {
+      // RangeError expected during concurrent edits (stale positions)
+      if (!(err instanceof RangeError)) throw err;
     }
   });
 

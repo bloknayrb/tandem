@@ -153,11 +153,15 @@ export function relRangeToPmPositions(
   pmDoc: PmNode,
   relRange: RelativeRange,
 ): { from: number; to: number } | null {
-  const fromRpos = Y.createRelativePositionFromJSON(relRange.fromRel);
-  const toRpos = Y.createRelativePositionFromJSON(relRange.toRel);
-
-  const fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
-  const toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
+  let fromAbs, toAbs;
+  try {
+    const fromRpos = Y.createRelativePositionFromJSON(relRange.fromRel);
+    const toRpos = Y.createRelativePositionFromJSON(relRange.toRel);
+    fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
+    toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
+  } catch {
+    return null; // malformed relRange JSON
+  }
   if (!fromAbs || !toAbs) return null;
 
   const fragment = ydoc.getXmlFragment("default");
@@ -187,7 +191,7 @@ export function annotationToPmRange(
   // Try relRange first
   if (ann.relRange && ydoc) {
     const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange);
-    if (resolved) return { ...resolved, method: "rel" };
+    if (resolved && resolved.from <= resolved.to) return { ...resolved, method: "rel" };
   }
   // Fall back to flat offsets
   if (!ann.range) return null;
