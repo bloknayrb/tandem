@@ -11,7 +11,17 @@
  *   - src/client/positions.ts (ProseMirror operations)
  */
 
-import type { DocumentRange, RelativeRange } from "../types.js";
+/** Flat-offset range used by MCP tools and annotations. */
+export interface DocumentRange {
+  from: number;
+  to: number;
+}
+
+/** CRDT-anchored range that survives concurrent edits. Serialized via Y.relativePositionToJSON(). */
+export interface RelativeRange {
+  fromRel: unknown;
+  toRel: unknown;
+}
 
 /** Result of validating a flat-offset range against a document. */
 export type RangeValidation =
