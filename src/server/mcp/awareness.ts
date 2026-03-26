@@ -254,9 +254,54 @@ export function registerAwarenessTools(server: McpServer): void {
   );
 }
 
-function safeSlice(text: string, from: number, to: number): string {
+/** Safely slice text and truncate to 100 chars. Exported for testing. */
+export function safeSlice(text: string, from: number, to: number): string {
   const start = Math.max(0, Math.min(from, text.length));
   const end = Math.max(start, Math.min(to, text.length));
   const snippet = text.slice(start, end);
   return snippet.length > 100 ? snippet.slice(0, 97) + "..." : snippet;
+}
+
+/** Determine if user is active based on activity data. Exported for testing. */
+export function isUserActive(
+  activity: { isTyping: boolean; lastEdit: number } | undefined,
+): boolean {
+  if (!activity) return false;
+  return activity.isTyping || Date.now() - activity.lastEdit < 10000;
+}
+
+/**
+ * Process annotations into inbox buckets. Exported for testing.
+ * Mutates surfacedIds to track which annotations have been surfaced.
+ */
+export function processInboxAnnotations(
+  allAnnotations: Annotation[],
+  fullText: string,
+  surfaced: Set<string>,
+  refreshFn: (ann: Annotation) => Annotation,
+): {
+  userActions: Array<Annotation & { textSnippet: string }>;
+  userResponses: Array<Annotation & { textSnippet: string }>;
+} {
+  const userActions: Array<Annotation & { textSnippet: string }> = [];
+  const userResponses: Array<Annotation & { textSnippet: string }> = [];
+
+  const unsurfaced: Annotation[] = [];
+  for (const raw of allAnnotations) {
+    if (surfaced.has(raw.id)) continue;
+    unsurfaced.push(refreshFn(raw));
+  }
+
+  for (const ann of unsurfaced) {
+    const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
+    if (ann.author === "user") {
+      userActions.push({ ...ann, textSnippet: snippet });
+      surfaced.add(ann.id);
+    } else if (ann.author === "claude" && ann.status !== "pending") {
+      userResponses.push({ ...ann, textSnippet: snippet });
+      surfaced.add(ann.id);
+    }
+  }
+
+  return { userActions, userResponses };
 }

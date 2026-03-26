@@ -74,6 +74,65 @@ export type { OpenDoc } from "./document-service.js";
 export { openFileByPath, openFileFromContent, SUPPORTED_EXTENSIONS } from "./file-opener.js";
 export type { OpenFileResult } from "./file-opener.js";
 
+export interface OutlineEntry {
+  level: number;
+  text: string;
+  index: number;
+}
+
+/** Extract document outline (headings). Pure logic exported for testing. */
+export function getOutline(fragment: Y.XmlFragment): OutlineEntry[] {
+  const outline: OutlineEntry[] = [];
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (node instanceof Y.XmlElement && node.nodeName === "heading") {
+      const level = Number(node.getAttribute("level") ?? 1);
+      outline.push({ level, text: getElementText(node), index: i });
+    }
+  }
+  return outline;
+}
+
+/** Extract a section by heading text (case-insensitive). Pure logic exported for testing. */
+export function getSection(
+  fragment: Y.XmlFragment,
+  sectionName: string,
+): { found: true; text: string } | { found: false } {
+  const lines: string[] = [];
+  let inSection = false;
+  let sectionLevel = 0;
+
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+
+    const text = getElementText(node);
+
+    if (node.nodeName === "heading") {
+      const level = Number(node.getAttribute("level") ?? 1);
+      if (inSection && level <= sectionLevel) break;
+      if (text.trim().toLowerCase() === sectionName.trim().toLowerCase()) {
+        inSection = true;
+        sectionLevel = level;
+        lines.push(headingPrefix(level) + text);
+        continue;
+      }
+    }
+
+    if (inSection) {
+      if (node.nodeName === "heading") {
+        const level = Number(node.getAttribute("level") ?? 1);
+        lines.push(headingPrefix(level) + text);
+      } else {
+        lines.push(text);
+      }
+    }
+  }
+
+  if (!inSection) return { found: false };
+  return { found: true, text: lines.join("\n") };
+}
+
 export function registerDocumentTools(server: McpServer): void {
   const openDocs = getOpenDocs();
 
@@ -152,41 +211,11 @@ export function registerDocumentTools(server: McpServer): void {
 
       if (section) {
         const fragment = r.doc.getXmlFragment("default");
-        const lines: string[] = [];
-        let inSection = false;
-        let sectionLevel = 0;
-
-        for (let i = 0; i < fragment.length; i++) {
-          const node = fragment.get(i);
-          if (!(node instanceof Y.XmlElement)) continue;
-
-          const text = getElementText(node);
-
-          if (node.nodeName === "heading") {
-            const level = Number(node.getAttribute("level") ?? 1);
-            if (inSection && level <= sectionLevel) break;
-            if (text.trim().toLowerCase() === section.trim().toLowerCase()) {
-              inSection = true;
-              sectionLevel = level;
-              lines.push(headingPrefix(level) + text);
-              continue;
-            }
-          }
-
-          if (inSection) {
-            if (node.nodeName === "heading") {
-              const level = Number(node.getAttribute("level") ?? 1);
-              lines.push(headingPrefix(level) + text);
-            } else {
-              lines.push(text);
-            }
-          }
-        }
-
-        if (!inSection) {
+        const result = getSection(fragment, section);
+        if (!result.found) {
           return mcpError("INVALID_RANGE", `Section "${section}" not found in document.`);
         }
-        return mcpSuccess({ text: lines.join("\n"), filePath: r.filePath, section });
+        return mcpSuccess({ text: result.text, filePath: r.filePath, section });
       }
 
       const docState = getCurrentDoc(documentId);
@@ -209,16 +238,7 @@ export function registerDocumentTools(server: McpServer): void {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment("default");
-      const outline: Array<{ level: number; text: string; index: number }> = [];
-
-      for (let i = 0; i < fragment.length; i++) {
-        const node = fragment.get(i);
-        if (node instanceof Y.XmlElement && node.nodeName === "heading") {
-          const level = Number(node.getAttribute("level") ?? 1);
-          outline.push({ level, text: getElementText(node), index: i });
-        }
-      }
-
+      const outline = getOutline(fragment);
       return mcpSuccess({ outline, totalNodes: fragment.length });
     }),
   );
