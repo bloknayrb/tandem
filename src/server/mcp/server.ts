@@ -75,7 +75,7 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
 
 /** Send a JSON-RPC error response. */
 function sendJsonRpcError(
-  res: { status(code: number): { json(body: unknown): void } },
+  res: import("express").Response,
   status: number,
   code: number,
   message: string,
@@ -149,7 +149,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   // SDK app provides express.json() (100kb limit) + DNS rebinding protection
   const mcpApp = createMcpExpressApp({ host });
 
-  mcpApp.post("/mcp", async (req: any, res: any) => {
+  mcpApp.post("/mcp", async (req: import("express").Request, res: import("express").Response) => {
     const body = req.body as unknown;
     const isInit =
       isInitializeRequest(body) || (Array.isArray(body) && body.some(isInitializeRequest));
@@ -173,7 +173,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     await currentTransport.handleRequest(req, res, body);
   });
 
-  mcpApp.get("/mcp", async (req: any, res: any) => {
+  mcpApp.get("/mcp", async (req: import("express").Request, res: import("express").Response) => {
     if (!currentTransport) {
       sendJsonRpcError(res, 503, -32000, "No active session");
       return;
@@ -182,7 +182,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   });
 
   // DELETE — SDK handles session teardown internally
-  mcpApp.delete("/mcp", async (req: any, res: any) => {
+  mcpApp.delete("/mcp", async (req: import("express").Request, res: import("express").Response) => {
     if (!currentTransport) {
       sendJsonRpcError(res, 404, -32001, "Session not found");
       return;
@@ -191,7 +191,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     currentTransport = null;
   });
 
-  mcpApp.get("/health", (_req: any, res: any) => {
+  mcpApp.get("/health", (_req: import("express").Request, res: import("express").Response) => {
     res.json({ status: "ok", transport: "http", hasSession: currentTransport !== null });
   });
 
@@ -247,8 +247,8 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   app.options("/api/open", apiMiddleware);
   app.post(
     "/api/open",
-    largeBody,
     apiMiddleware,
+    largeBody,
     async (req: import("express").Request, res: import("express").Response) => {
       const { filePath } = (req.body ?? {}) as Record<string, unknown>;
       if (!filePath || typeof filePath !== "string") {
@@ -267,8 +267,8 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   app.options("/api/upload", apiMiddleware);
   app.post(
     "/api/upload",
-    largeBody,
     apiMiddleware,
+    largeBody,
     async (req: import("express").Request, res: import("express").Response) => {
       const { fileName, content } = (req.body ?? {}) as Record<string, unknown>;
       if (!fileName || typeof fileName !== "string") {

@@ -2,39 +2,41 @@
 // express-serve-static-core (not installed). This minimal ambient declaration
 // covers only the subset we actually use: app factory, JSON body parser, and
 // the core request/response/middleware shapes.
+//
+// Request extends IncomingMessage and Response extends ServerResponse so our
+// types are assignable to the MCP SDK's handleRequest(req, res, body) signature.
 declare module "express" {
-  interface Request {
+  import { IncomingMessage, ServerResponse } from "http";
+
+  interface Request extends IncomingMessage {
     body: unknown;
-    headers: Record<string, string | string[] | undefined>;
     params: Record<string, string>;
-    method: string;
-    path: string;
+    method: string; // narrows IncomingMessage's string | undefined
+    path: string; // Express-only (IncomingMessage has url, not path)
   }
 
-  interface Response {
+  interface Response extends ServerResponse {
     status(code: number): Response;
     json(body: unknown): void;
     header(name: string, value: string): void;
-    setHeader(name: string, value: string): void;
     sendStatus(code: number): void;
-    end(): void;
   }
 
   type NextFunction = (err?: unknown) => void;
 
+  // biome-ignore lint/suspicious/noExplicitAny: Express overloads are too complex to replicate without @types/express
+  type RouteHandler = any;
+
   interface Application {
-    // biome-ignore lint/suspicious/noExplicitAny: Express overloads are too complex to replicate without @types/express
-    use(...args: any[]): Application;
-    // biome-ignore lint/suspicious/noExplicitAny: see above
-    post(path: string, ...handlers: any[]): Application;
-    // biome-ignore lint/suspicious/noExplicitAny: see above
-    get(path: string, ...handlers: any[]): Application;
-    // biome-ignore lint/suspicious/noExplicitAny: see above
-    options(path: string, ...handlers: any[]): Application;
-    // biome-ignore lint/suspicious/noExplicitAny: see above
-    delete(path: string, ...handlers: any[]): Application;
+    use(...args: RouteHandler[]): Application;
+    post(path: string, ...handlers: RouteHandler[]): Application;
+    get(path: string, ...handlers: RouteHandler[]): Application;
+    options(path: string, ...handlers: RouteHandler[]): Application;
+    delete(path: string, ...handlers: RouteHandler[]): Application;
     listen(port: number, host: string, callback?: () => void): import("http").Server;
   }
+
+  type Express = Application;
 
   function express(): Application;
 
@@ -45,5 +47,5 @@ declare module "express" {
   }
 
   export default express;
-  export { Request, Response, NextFunction, Application };
+  export { Request, Response, NextFunction, Application, Express };
 }
