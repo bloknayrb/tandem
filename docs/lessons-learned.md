@@ -12,7 +12,7 @@
 
 **Problem:** Calling `toJSON()` on a Y.XmlElement returns an XML/JSON structure representation, not the plain text content.
 
-**Solution:** Recursively walk children, collecting `Y.XmlText.toString()` for text extraction. Implemented as `getElementText()` in `document.ts`.
+**Solution:** Recursively walk children, collecting `Y.XmlText.toString()` for text extraction. Implemented as `getElementText()` in `document-model.ts`.
 
 ## 3. MCP stdio Transport Reserves stdout
 

@@ -49,7 +49,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Annotations stored in Y.Map('annotations'), not in the document content
 - Claude's status stored in Y.Map('awareness') key 'claude'; user's selection in Y.Map('userAwareness')
 - Server logs use console.error (stdout reserved for MCP protocol in stdio mode; defense-in-depth in HTTP mode)
-- Ranges use `resolveRange()` for safe targeting (not raw offsets)
+- Ranges use `validateRange()` and `anchoredRange()` for safe targeting (not raw offsets)
 - Three coordinate systems unified in position modules: "flat text offsets" (server, includes heading prefixes), "ProseMirror positions" (client, structural), and "Yjs RelativePositions" (CRDT-anchored, survive edits). Server logic in `src/server/positions.ts`, client logic in `src/client/positions.ts`, shared types in `src/shared/positions/`.
 - Annotation ranges use Yjs RelativePosition (`relRange` field) for CRDT-anchored positions. `anchoredRange()` creates both flat + rel in one call. `refreshRange()` resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it. `annotationToPmRange()` resolves to PM positions with a `method` diagnostic ('rel' | 'flat').
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only

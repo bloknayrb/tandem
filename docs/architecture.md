@@ -66,7 +66,7 @@ graph LR
 ```
 Claude calls tandem_edit(from, to, "new text")
     → MCP server receives tool call
-    → resolveOffset() maps flat text offset to Y.XmlElement position
+    → resolveToElement() maps flat text offset to Y.XmlElement + local offset
     → Y.Doc.transact() mutates the XmlFragment
     → Yjs generates update
     → Hocuspocus broadcasts update via WebSocket
@@ -216,7 +216,13 @@ This is documented in [ADR decisions](decisions.md) and [lessons learned](lesson
 
 ## Coordinate Systems
 
-MCP tools use **flat text offsets**. The browser uses **ProseMirror positions**. These are different.
+Three coordinate systems, unified in dedicated position modules:
+
+1. **Flat text offsets** (server) — includes heading prefixes (`## `) and `\n` separators
+2. **ProseMirror positions** (client) — structural node boundaries, no prefixes
+3. **Yjs RelativePositions** (CRDT-anchored) — survive concurrent edits
+
+All conversions go through `src/server/positions.ts` (server) and `src/client/positions.ts` (client). Shared types live in `src/shared/positions/`.
 
 ### Example
 
@@ -254,7 +260,20 @@ Some text here
 - Flat offsets use `\n` between elements -- PM uses structural node boundaries (+1 per open/close tag)
 - Flat offset 3 ("T" in Title) = PM position 1
 
-The `flatOffsetToPmPos` function (in `annotation.ts`) and `pmPosToFlatOffset` function (in `awareness.ts`) handle this conversion. MCP tool users never need to think about PM positions.
+### Server position module (`src/server/positions.ts`)
+
+- `validateRange(doc, from, to)` — validates a flat offset range against the document, returns `RangeValidation`
+- `anchoredRange(doc, from, to)` — creates both flat range + Yjs RelativePosition range in one call
+- `resolveToElement(doc, offset)` — maps flat offset to Y.XmlElement + local offset (replaces the old `resolveOffset`)
+- `refreshRange(doc, annotation)` — resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it
+- `flatOffsetToRelPos(doc, offset, assoc)` — flat offset → serialized RelativePosition JSON
+- `relPosToFlatOffset(doc, relPosJson)` — serialized RelativePosition → flat offset (or null if deleted)
+
+### Client position module (`src/client/positions.ts`)
+
+- `annotationToPmRange(view, annotation)` — resolves annotation to ProseMirror `from`/`to` with a `method` diagnostic (`'rel'` | `'flat'`)
+- `pmSelectionToFlat(view)` — current PM selection → flat offset range
+- `flatOffsetToPmPos(view, offset)` / `pmPosToFlatOffset(view, pos)` — individual position conversion
 
 ### Yjs RelativePosition (CRDT-anchored ranges)
 
@@ -269,15 +288,11 @@ interface Annotation {
 }
 ```
 
-**Creation:** Server computes `relRange` via `flatOffsetToRelPos()` when creating annotations. The `assoc` parameter controls boundary behavior: `0` for range start (stick right — annotation grows on insert at boundary), `-1` for range end (stick left — annotation doesn't grow).
+**Creation:** `anchoredRange()` computes both flat range and `relRange` in one call. The `assoc` parameter controls boundary behavior: `0` for range start (stick right — annotation grows on insert at boundary), `-1` for range end (stick left — annotation doesn't grow).
 
 **Reading:** `refreshRange()` resolves `relRange` back to flat offsets, correcting any drift. It also lazily attaches `relRange` to annotations that lack it (user-created or legacy). All server-side read paths (`tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox`) call `refreshRange` before returning data.
 
-**Client rendering:** `buildDecorations()` prefers `relRange` resolution via `relRangeToPmPositions()`, bypassing the flat-offset-to-PM conversion and its heading-prefix math. Falls back to `flatOffsetToPmPos()` when `relRange` is absent or can't resolve.
-
-**Conversion utilities** (in `document-model.ts`):
-- `flatOffsetToRelPos(doc, offset, assoc)` — flat offset → serialized RelativePosition JSON
-- `relPosToFlatOffset(doc, relPosJson)` — serialized RelativePosition → flat offset (or null if deleted)
+**Client rendering:** `annotationToPmRange()` prefers relRange resolution (bypassing flat-offset-to-PM conversion and its heading-prefix math). Falls back to `flatOffsetToPmPos()` when `relRange` is absent or can't resolve. The `method` field in the result indicates which path was used — useful for debugging annotation placement issues.
 
 ## Security
 
@@ -291,7 +306,7 @@ interface Annotation {
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-011), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-018), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
