@@ -6,7 +6,6 @@ import {
   collectAnnotations,
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
-import { anchoredRange } from "../../src/server/positions.js";
 import {
   addDoc,
   removeDoc,
@@ -16,6 +15,7 @@ import {
 import { populateYDoc, extractText, verifyAndResolveRange } from "../../src/server/mcp/document.js";
 import { exportAnnotations } from "../../src/server/file-io/docx.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { rangeOf } from "../helpers/ydoc-factory.js";
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -23,16 +23,6 @@ function setupDoc(id: string, text: string) {
   addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
   setActiveDocId(id);
   return ydoc;
-}
-
-/** Helper: create anchored range from ydoc, or plain range if no ydoc */
-function rangeOf(from: number, to: number, ydoc?: Y.Doc) {
-  if (ydoc) {
-    const result = anchoredRange(ydoc, from, to);
-    if (!result.ok) throw new Error("anchoredRange failed in test helper");
-    return result;
-  }
-  return { range: { from, to } };
 }
 
 beforeEach(() => {

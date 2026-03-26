@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { flatOffsetToPmPos } from "../../src/client/editor/extensions/annotation";
-import { pmPosToFlatOffset } from "../../src/client/editor/extensions/awareness";
+import { flatOffsetToPmPos, pmPosToFlatOffset } from "../../src/client/positions";
 
 // Minimal ProseMirror-compatible mock. Assumes single flat text run per block
 // (no inline marks). nodeSize = 1 (open) + text.length + 1 (close).

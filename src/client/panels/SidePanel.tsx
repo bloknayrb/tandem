@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
 import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/types";
 import { HIGHLIGHT_COLORS } from "../../shared/constants";
-import { resolveAnnotationPmRange } from "../editor/extensions/annotation";
+import { annotationToPmRange } from "../positions";
 
 interface SidePanelProps {
   annotations: Annotation[];
@@ -29,7 +29,7 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | nu
   try {
     const { newText } = JSON.parse(ann.content);
     if (typeof newText === "string") {
-      const resolved = resolveAnnotationPmRange(ann, editor.state.doc, ydoc);
+      const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
       if (!resolved) return;
       editor
         .chain()
@@ -124,7 +124,7 @@ export function SidePanel({
   const scrollToAnnotation = useCallback((ann: Annotation) => {
     const ed = editorRef.current;
     if (!ed) return;
-    const resolved = resolveAnnotationPmRange(ann, ed.state.doc, ydocRef.current);
+    const resolved = annotationToPmRange(ann, ed.state.doc, ydocRef.current);
     if (!resolved) return;
     ed.chain().focus().setTextSelection({ from: resolved.from, to: resolved.to }).run();
     const domAtPos = ed.view.domAtPos(resolved.from);

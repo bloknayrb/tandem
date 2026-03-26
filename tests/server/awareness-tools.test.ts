@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import * as Y from "yjs";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   resetInbox,
@@ -8,17 +7,7 @@ import {
   processInboxAnnotations,
 } from "../../src/server/mcp/awareness.js";
 import { createAnnotation, collectAnnotations } from "../../src/server/mcp/annotations.js";
-import { anchoredRange } from "../../src/server/positions.js";
-
-/** Helper: create anchored range from ydoc, or plain range if no ydoc */
-function rangeOf(from: number, to: number, ydoc?: Y.Doc) {
-  if (ydoc) {
-    const result = anchoredRange(ydoc, from, to);
-    if (!result.ok) throw new Error("anchoredRange failed in test helper");
-    return result;
-  }
-  return { range: { from, to } };
-}
+import { rangeOf } from "../helpers/ydoc-factory.js";
 import {
   addDoc,
   removeDoc,

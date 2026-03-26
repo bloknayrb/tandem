@@ -7,21 +7,6 @@ import { HIGHLIGHT_COLORS } from "../../../shared/constants";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";
 
-// Re-export for backward compatibility with existing consumers
-export { flatOffsetToPmPos, relRangeToPmPositions } from "../../positions";
-
-/**
- * @deprecated Use annotationToPmRange from client/positions instead.
- * Kept for backward compatibility — delegates to the positions module.
- */
-export function resolveAnnotationPmRange(
-  ann: Annotation,
-  pmDoc: PmNode,
-  ydoc: Y.Doc | null,
-): { from: number; to: number } | null {
-  return annotationToPmRange(ann, pmDoc, ydoc);
-}
-
 const annotationPluginKey = new PluginKey("tandemAnnotations");
 
 /**
@@ -40,7 +25,7 @@ function buildDecorations(
     if (ann.status !== "pending") return;
     if (!ann.range && !ann.relRange) return;
 
-    const resolved = resolveAnnotationPmRange(ann, doc, ydoc);
+    const resolved = annotationToPmRange(ann, doc, ydoc);
     if (!resolved) return;
     const { from, to } = resolved;
 

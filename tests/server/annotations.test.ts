@@ -6,8 +6,7 @@ import {
   collectAnnotations,
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
-import { anchoredRange } from "../../src/server/positions.js";
-import { makeDoc, getAnnotationsMap, getFragment } from "../helpers/ydoc-factory.js";
+import { makeDoc, getAnnotationsMap, getFragment, rangeOf } from "../helpers/ydoc-factory.js";
 import { getOrCreateXmlText, extractText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 
@@ -16,16 +15,6 @@ let doc: Y.Doc;
 afterEach(() => {
   doc?.destroy();
 });
-
-/** Helper: create anchored range from ydoc, or plain range if no ydoc */
-function rangeOf(from: number, to: number, ydoc?: Y.Doc) {
-  if (ydoc) {
-    const result = anchoredRange(ydoc, from, to);
-    if (!result.ok) throw new Error("anchoredRange failed in test helper");
-    return result;
-  }
-  return { range: { from, to } };
-}
 
 describe("generateId", () => {
   it("matches expected format", () => {

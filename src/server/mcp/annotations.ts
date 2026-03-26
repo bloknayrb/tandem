@@ -16,6 +16,7 @@ import {
   ExportFormatSchema,
 } from "../../shared/types.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
+import type { RangeValidation } from "../../shared/positions/index.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
@@ -26,15 +27,9 @@ function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<un
 }
 
 /** Convert an anchoredRange validation failure to an MCP error response. */
-function rangeFailureToError(result: {
-  ok: false;
-  code: string;
-  gone?: boolean;
-  resolvedFrom?: number;
-  resolvedTo?: number;
-}) {
+function rangeFailureToError(result: Extract<RangeValidation, { ok: false }>) {
   if (result.code === "RANGE_STALE") {
-    if ("gone" in result && result.gone) {
+    if (result.gone) {
       return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
     }
     return mcpError("RANGE_STALE", "Target text has moved. Use resolvedFrom/resolvedTo to retry.", {
@@ -42,9 +37,13 @@ function rangeFailureToError(result: {
       resolvedTo: result.resolvedTo,
     });
   }
+  if (result.code === "INVALID_RANGE") {
+    return mcpError("INVALID_RANGE", result.message);
+  }
+  // HEADING_OVERLAP
   return mcpError(
     "INVALID_RANGE",
-    "message" in result ? (result as { message: string }).message : "Invalid range.",
+    'Range overlaps with heading markup (e.g., "## "). Target the text content only.',
   );
 }
 
@@ -86,7 +85,6 @@ export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
   return result;
 }
 
-// Re-export from positions module for backward compatibility
 export { refreshRange, refreshAllRanges } from "../positions.js";
 
 export function registerAnnotationTools(server: McpServer): void {

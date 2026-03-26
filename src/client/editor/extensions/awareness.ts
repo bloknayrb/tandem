@@ -7,9 +7,6 @@ import { TYPING_DEBOUNCE } from "../../../shared/constants";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { pmSelectionToFlat } from "../../positions";
 
-// Re-export for backward compatibility with existing consumers
-export { pmPosToFlatOffset } from "../../positions";
-
 const awarenessPluginKey = new PluginKey("tandemAwareness");
 
 /**
