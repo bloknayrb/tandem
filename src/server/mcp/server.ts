@@ -195,6 +195,29 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     res.json({ status: "ok", transport: "http", hasSession: currentTransport !== null });
   });
 
+  // RFC 9728 Protected Resource Metadata — declares no auth required.
+  // Newer Claude Code versions probe this before connecting to MCP.
+  app.get(
+    "/.well-known/oauth-protected-resource/mcp",
+    (_req: import("express").Request, res: import("express").Response) => {
+      res.header("Access-Control-Allow-Origin", "*");
+      res.json({
+        resource: `http://localhost:${port}/mcp`,
+        bearer_methods_supported: [],
+      });
+    },
+  );
+  app.get(
+    "/.well-known/oauth-protected-resource",
+    (_req: import("express").Request, res: import("express").Response) => {
+      res.header("Access-Control-Allow-Origin", "*");
+      res.json({
+        resource: `http://localhost:${port}/mcp`,
+        bearer_methods_supported: [],
+      });
+    },
+  );
+
   // Mount SDK app (handles /mcp, /health with 100kb body parser)
   app.use(mcpApp);
 
