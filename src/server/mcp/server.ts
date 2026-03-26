@@ -75,7 +75,7 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
 
 /** Send a JSON-RPC error response. */
 function sendJsonRpcError(
-  res: any,
+  res: { status(code: number): { json(body: unknown): void } },
   status: number,
   code: number,
   message: string,
@@ -142,8 +142,9 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   const { default: express } = await import("express");
   const app = express();
 
-  // /api routes need large bodies — register parser BEFORE SDK app
-  app.use("/api", express.json({ limit: "70mb" }) as any);
+  // Large body parser for file-open and upload routes only (up to 70MB).
+  // NOT mounted globally — other routes (MCP, /health) use the SDK's own parser.
+  const largeBody = express.json({ limit: "70mb" });
 
   // SDK app provides express.json() (100kb limit) + DNS rebinding protection
   const mcpApp = createMcpExpressApp({ host });
@@ -200,8 +201,12 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   // --- REST API for browser-initiated file opening ---
 
   /** CORS + DNS rebinding protection middleware for /api/* routes */
-  function apiMiddleware(req: any, res: any, next: any): void {
-    if (!isHostAllowed(req.headers.host)) {
+  function apiMiddleware(
+    req: import("express").Request,
+    res: import("express").Response,
+    next: import("express").NextFunction,
+  ): void {
+    if (!isHostAllowed(req.headers.host as string | undefined)) {
       res.status(403).json({ error: "FORBIDDEN", message: "Host not allowed." });
       return;
     }
@@ -217,7 +222,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   }
 
   /** Map error codes from file-opener to HTTP responses */
-  function sendApiError(res: any, err: unknown): void {
+  function sendApiError(res: import("express").Response, err: unknown): void {
     const e = err as NodeJS.ErrnoException;
     const code = e.code ?? "";
     const msg = e.message ?? String(err);
@@ -240,44 +245,54 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   }
 
   app.options("/api/open", apiMiddleware);
-  app.post("/api/open", apiMiddleware, async (req: any, res: any) => {
-    const { filePath } = req.body ?? {};
-    if (!filePath || typeof filePath !== "string") {
-      res.status(400).json({ error: "BAD_REQUEST", message: "filePath is required" });
-      return;
-    }
-    try {
-      const result = await openFileByPath(filePath);
-      res.json({ data: result });
-    } catch (err: unknown) {
-      sendApiError(res, err);
-    }
-  });
+  app.post(
+    "/api/open",
+    largeBody,
+    apiMiddleware,
+    async (req: import("express").Request, res: import("express").Response) => {
+      const { filePath } = (req.body ?? {}) as Record<string, unknown>;
+      if (!filePath || typeof filePath !== "string") {
+        res.status(400).json({ error: "BAD_REQUEST", message: "filePath is required" });
+        return;
+      }
+      try {
+        const result = await openFileByPath(filePath);
+        res.json({ data: result });
+      } catch (err: unknown) {
+        sendApiError(res, err);
+      }
+    },
+  );
 
   app.options("/api/upload", apiMiddleware);
-  app.post("/api/upload", apiMiddleware, async (req: any, res: any) => {
-    const { fileName, content } = req.body ?? {};
-    if (!fileName || typeof fileName !== "string") {
-      res.status(400).json({ error: "BAD_REQUEST", message: "fileName is required" });
-      return;
-    }
-    if (content === undefined || content === null) {
-      res.status(400).json({ error: "BAD_REQUEST", message: "content is required" });
-      return;
-    }
-    if (typeof content !== "string") {
-      res.status(400).json({ error: "BAD_REQUEST", message: "content must be a base64 string" });
-      return;
-    }
-    try {
-      const format = detectFormat(fileName);
-      const decoded = format === "docx" ? Buffer.from(content, "base64") : String(content);
-      const result = await openFileFromContent(fileName, decoded);
-      res.json({ data: result });
-    } catch (err: unknown) {
-      sendApiError(res, err);
-    }
-  });
+  app.post(
+    "/api/upload",
+    largeBody,
+    apiMiddleware,
+    async (req: import("express").Request, res: import("express").Response) => {
+      const { fileName, content } = (req.body ?? {}) as Record<string, unknown>;
+      if (!fileName || typeof fileName !== "string") {
+        res.status(400).json({ error: "BAD_REQUEST", message: "fileName is required" });
+        return;
+      }
+      if (content === undefined || content === null) {
+        res.status(400).json({ error: "BAD_REQUEST", message: "content is required" });
+        return;
+      }
+      if (typeof content !== "string") {
+        res.status(400).json({ error: "BAD_REQUEST", message: "content must be a base64 string" });
+        return;
+      }
+      try {
+        const format = detectFormat(fileName);
+        const decoded = format === "docx" ? Buffer.from(content, "base64") : String(content);
+        const result = await openFileFromContent(fileName, decoded);
+        res.json({ data: result });
+      } catch (err: unknown) {
+        sendApiError(res, err);
+      }
+    },
+  );
 
   return new Promise<Server>((resolve, reject) => {
     const httpServer = app.listen(port, host, () => {
