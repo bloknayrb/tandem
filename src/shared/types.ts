@@ -1,4 +1,8 @@
 import { z } from "zod";
+import type { DocumentRange, RelativeRange } from "./positions/types.js";
+
+// Canonical definitions live in the positions module; re-exported for backward compatibility.
+export type { DocumentRange, RelativeRange } from "./positions/types.js";
 
 // --- Zod schemas (source of truth) ---
 
@@ -52,17 +56,6 @@ export interface Annotation {
   timestamp: number;
   color?: HighlightColor;
   priority?: AnnotationPriority;
-}
-
-export interface DocumentRange {
-  from: number;
-  to: number;
-}
-
-/** CRDT-anchored range that survives concurrent edits. Serialized via Y.relativePositionToJSON(). */
-export interface RelativeRange {
-  fromRel: unknown;
-  toRel: unknown;
 }
 
 export interface AnchoredRange {

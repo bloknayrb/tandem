@@ -17,8 +17,10 @@
  */
 
 import * as Y from "yjs";
-import type { Annotation, DocumentRange, RelativeRange } from "../shared/types.js";
+import type { Annotation } from "../shared/types.js";
 import type {
+  DocumentRange,
+  RelativeRange,
   RangeValidation,
   AnchoredRangeResult,
   ElementPosition,

@@ -1,4 +1,6 @@
 export type {
+  DocumentRange,
+  RelativeRange,
   RangeValidation,
   AnchoredRangeResult,
   ElementPosition,

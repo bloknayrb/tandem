@@ -16,7 +16,8 @@
 
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
-import type { Annotation, RelativeRange, DocumentRange } from "../shared/types";
+import type { Annotation } from "../shared/types";
+import type { DocumentRange, RelativeRange } from "../shared/positions/types";
 import type { PmRangeResult } from "../shared/positions/index";
 import { headingPrefixLength } from "../shared/offsets";
 
