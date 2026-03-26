@@ -413,7 +413,11 @@ export function registerDocumentTools(server: McpServer): void {
         await saveSession(r.filePath, format, r.doc);
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
-        return mcpError("FILE_LOCKED", getErrorMessage(err));
+        const errCode = (err as NodeJS.ErrnoException).code;
+        if (errCode === "EACCES" || errCode === "EPERM") {
+          return mcpError("FILE_LOCKED", getErrorMessage(err));
+        }
+        return mcpError("FORMAT_ERROR", `Save failed: ${getErrorMessage(err)}`);
       }
     }),
   );
