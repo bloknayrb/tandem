@@ -4,142 +4,25 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
 import { HIGHLIGHT_COLORS } from "../../../shared/constants";
-import type { Annotation, RelativeRange } from "../../../shared/types";
-import { headingPrefixLength } from "../../../shared/offsets";
+import type { Annotation } from "../../../shared/types";
+import { annotationToPmRange } from "../../positions";
 
-const annotationPluginKey = new PluginKey("tandemAnnotations");
-
-/**
- * Convert a flat character offset (from the server's extractText format) to a
- * ProseMirror document position.
- *
- * extractText() joins element texts with '\n' and prepends heading prefixes
- * like "# ", "## ". ProseMirror doesn't have those prefixes in its content,
- * so we need to account for them when mapping.
- */
-export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
-  let accumulated = 0;
-  let pmOffset = 0; // Running ProseMirror position
-
-  const nodeCount = doc.childCount;
-  for (let i = 0; i < nodeCount; i++) {
-    const child = doc.child(i);
-    // In PM, each block node adds 1 for its opening tag
-    const childStart = pmOffset + 1;
-
-    // Heading prefix chars exist in flat text but not in PM
-    const prefixLen =
-      child.type.name === "heading" ? headingPrefixLength((child.attrs.level as number) || 1) : 0;
-
-    const textLen = child.textContent.length;
-    const fullFlatLen = prefixLen + textLen;
-
-    if (accumulated + fullFlatLen > flatOffset) {
-      // Target is within this node
-      const offsetInFlat = flatOffset - accumulated;
-      const textOffset = Math.max(0, offsetInFlat - prefixLen);
-      // Clamp to actual text length
-      return childStart + Math.min(textOffset, textLen);
-    }
-
-    accumulated += fullFlatLen;
-    pmOffset += child.nodeSize; // nodeSize includes open tag + content + close tag
-
-    // Account for '\n' separator between elements in flat text
-    if (i < nodeCount - 1) {
-      accumulated += 1;
-      if (accumulated > flatOffset) {
-        // Offset falls on the newline — treat as end of this node
-        return childStart + textLen;
-      }
-    }
-  }
-
-  // Past end of doc
-  return doc.content.size;
-}
+// Re-export for backward compatibility with existing consumers
+export { flatOffsetToPmPos, relRangeToPmPositions } from "../../positions";
 
 /**
- * Resolve a Y.AbsolutePosition (from a RelativePosition) to a ProseMirror position.
- * Walks the Y.XmlFragment and PM doc in parallel, matching by XmlText identity.
- */
-function xmlTextIndexToPmPos(
-  pmDoc: PmNode,
-  fragment: Y.XmlFragment,
-  absPos: { type: Y.AbstractType<unknown>; index: number },
-): number | null {
-  let pmOffset = 0;
-
-  const nodeCount = Math.min(pmDoc.childCount, fragment.length);
-  for (let i = 0; i < nodeCount; i++) {
-    const yNode = fragment.get(i);
-    const pmChild = pmDoc.child(i);
-    const childStart = pmOffset + 1; // +1 for PM block open tag
-
-    if (yNode instanceof Y.XmlElement) {
-      // Walk XmlText siblings, accumulating char offsets for multi-span (formatted) text
-      let charAccum = 0;
-      for (let j = 0; j < yNode.length; j++) {
-        const child = yNode.get(j);
-        if (child instanceof Y.XmlText) {
-          if (child === absPos.type) {
-            return childStart + Math.min(charAccum + absPos.index, pmChild.textContent.length);
-          }
-          charAccum += child.length;
-        }
-      }
-    }
-
-    pmOffset += pmChild.nodeSize;
-  }
-
-  return null;
-}
-
-/**
- * Resolve a RelativeRange to ProseMirror positions.
- * Returns null if either position can't be resolved (e.g., deleted content).
- */
-export function relRangeToPmPositions(
-  ydoc: Y.Doc,
-  pmDoc: PmNode,
-  relRange: RelativeRange,
-): { from: number; to: number } | null {
-  const fromRpos = Y.createRelativePositionFromJSON(relRange.fromRel);
-  const toRpos = Y.createRelativePositionFromJSON(relRange.toRel);
-
-  const fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
-  const toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
-  if (!fromAbs || !toAbs) return null;
-
-  const fragment = ydoc.getXmlFragment("default");
-  const fromPm = xmlTextIndexToPmPos(pmDoc, fragment, fromAbs);
-  const toPm = xmlTextIndexToPmPos(pmDoc, fragment, toAbs);
-  if (fromPm === null || toPm === null) return null;
-
-  return { from: fromPm, to: toPm };
-}
-
-/**
- * Resolve an annotation's range to PM positions, preferring relRange.
+ * @deprecated Use annotationToPmRange from client/positions instead.
+ * Kept for backward compatibility — delegates to the positions module.
  */
 export function resolveAnnotationPmRange(
   ann: Annotation,
   pmDoc: PmNode,
   ydoc: Y.Doc | null,
 ): { from: number; to: number } | null {
-  // Try relRange first
-  if (ann.relRange && ydoc) {
-    const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange);
-    if (resolved) return resolved;
-  }
-  // Fall back to flat offsets
-  if (!ann.range) return null;
-  return {
-    from: flatOffsetToPmPos(pmDoc, ann.range.from),
-    to: flatOffsetToPmPos(pmDoc, ann.range.to),
-  };
+  return annotationToPmRange(ann, pmDoc, ydoc);
 }
+
+const annotationPluginKey = new PluginKey("tandemAnnotations");
 
 /**
  * Build a DecorationSet from all pending annotations in the Y.Map.

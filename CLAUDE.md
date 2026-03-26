@@ -17,12 +17,14 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 
 ### Server (src/server/)
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
+- `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (Express app with MCP routes + REST API)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx), `atomicWrite` helper
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\
 
 ### Client (src/client/)
+- `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
 - Tiptap editor with collaboration extensions
 - Connects to Hocuspocus via WebSocket (@hocuspocus/provider)
 - App.tsx is layout + UI state only; `useYjsSync` hook (src/client/hooks/) manages OpenTab objects (one per open document), each with its own Y.Doc + provider
@@ -38,6 +40,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ### Shared (src/shared/)
 - `types.ts` -- TypeScript interfaces shared between server and client
 - `constants.ts` -- Colors, annotation types, defaults, ports, `SUPPORTED_EXTENSIONS`
+- `offsets.ts` -- Flat-text format contract: `headingPrefixLength`, `FLAT_SEPARATOR`
+- `positions/` -- Shared position types: `RangeValidation`, `AnchoredRangeResult`, `PmRangeResult`, `ElementPosition`
 
 ## Key Patterns
 - All document mutations go through the server's Y.Doc
@@ -46,8 +50,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Claude's status stored in Y.Map('awareness') key 'claude'; user's selection in Y.Map('userAwareness')
 - Server logs use console.error (stdout reserved for MCP protocol in stdio mode; defense-in-depth in HTTP mode)
 - Ranges use `resolveRange()` for safe targeting (not raw offsets)
-- Two coordinate systems: "flat text offsets" (server side, includes heading prefixes) and "ProseMirror positions" (client side, structural). Extensions convert between them.
-- Annotation ranges use Yjs RelativePosition (`relRange` field) for CRDT-anchored positions that survive concurrent edits. Flat offsets in `range` are the fallback. `refreshRange()` resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it.
+- Three coordinate systems unified in position modules: "flat text offsets" (server, includes heading prefixes), "ProseMirror positions" (client, structural), and "Yjs RelativePositions" (CRDT-anchored, survive edits). Server logic in `src/server/positions.ts`, client logic in `src/client/positions.ts`, shared types in `src/shared/positions/`.
+- Annotation ranges use Yjs RelativePosition (`relRange` field) for CRDT-anchored positions. `anchoredRange()` creates both flat + rel in one call. `refreshRange()` resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it. `annotationToPmRange()` resolves to PM positions with a `method` diagnostic ('rel' | 'flat').
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
 - User→Claude communication via `tandem_checkInbox` (annotation actions, responses, and chat messages) and `tandem_reply` (Claude's chat responses). Chat sidebar provides freeform conversation alongside annotation-based review. Call `tandem_checkInbox` between tasks.
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
@@ -96,6 +100,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] feat(client): browser file open UI — FileOpenDialog, HTTP API, file-opener.ts extraction (Issue #42)
 - [x] test(e2e): Playwright E2E tests for annotation lifecycle — 8 tests, McpTestClient, CI integration (Issue #30)
 - [x] refactor: data-testid attributes on SidePanel and DocumentTabs for E2E selectors
+- [x] refactor: unify position/coordinate system into deep modules (Issue #68)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -126,7 +131,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Hocuspocus rooms = document IDs.** The room name IS the document ID from `docIdFromPath()`. `CTRL_ROOM` (exported from `shared/constants.ts`) is reserved for the bootstrap coordination channel. Never use it as a document ID.
 - **Session files live in a platform-appropriate directory** (via `env-paths`): `%LOCALAPPDATA%\tandem\sessions\` on Windows, `~/Library/Application Support/tandem/sessions/` on macOS, `~/.local/share/tandem/sessions/` on Linux. Keyed by URL-encoded file path. Delete them to force a fresh load (useful when debugging session restore issues). See `src/server/platform.ts`.
 - **The `freePort()` function kills stale processes on ports 3478 and 3479 at startup.** Cross-platform: `netstat`/`taskkill` on Windows, `lsof`/`process.kill` on macOS/Linux, `ss` fallback on Linux. Intentional — clears zombie instances from crashed servers. But it means you can't run two Tandem instances simultaneously.
-- **Coordinate system mismatch is the #1 source of annotation bugs.** Server uses flat text offsets (includes `## ` heading prefixes + `\n` separators). Client uses ProseMirror positions (structural, no prefixes). `flatOffsetToPmPos` and `pmPosToFlatOffset` convert between them. If annotations appear in the wrong place, check the conversion.
+- **Coordinate system conversion is centralized in position modules.** Server uses flat text offsets (includes `## ` heading prefixes + `\n` separators). Client uses ProseMirror positions (structural, no prefixes). All conversions go through `src/server/positions.ts` (server) and `src/client/positions.ts` (client). If annotations appear in the wrong place, check `annotationToPmRange`'s `method` field to see which path resolved.
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save for these. `sourceFileChanged()` returns false (no disk file to check). Sessions still persist normally — the synthetic path is the session key.
 - **E2E tests require no running dev server.** `npm run test:e2e` starts both servers via Playwright's `webServer` config. `freePort()` will kill any existing server on :3478/:3479. Running E2E alongside `dev:server` will terminate your dev server.
 - **`data-testid` naming convention:** kebab-case, descriptive. Examples: `accept-btn`, `dismiss-btn`, `review-mode-btn`, `annotation-card-{id}`, `tab-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`.

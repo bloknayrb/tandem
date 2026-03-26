@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import * as Y from "yjs";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   resetInbox,
@@ -7,6 +8,17 @@ import {
   processInboxAnnotations,
 } from "../../src/server/mcp/awareness.js";
 import { createAnnotation, collectAnnotations } from "../../src/server/mcp/annotations.js";
+import { anchoredRange } from "../../src/server/positions.js";
+
+/** Helper: create anchored range from ydoc, or plain range if no ydoc */
+function rangeOf(from: number, to: number, ydoc?: Y.Doc) {
+  if (ydoc) {
+    const result = anchoredRange(ydoc, from, to);
+    if (!result.ok) throw new Error("anchoredRange failed in test helper");
+    return result;
+  }
+  return { range: { from, to } };
+}
 import {
   addDoc,
   removeDoc,
@@ -78,8 +90,8 @@ describe("processInboxAnnotations", () => {
   it("buckets user annotations into userActions", () => {
     const ydoc = setupDoc("inbox-1", "Hello world test");
     const map = ydoc.getMap("annotations");
-    createAnnotation(map, "highlight", 0, 5, "", { author: "user", color: "yellow" });
-    createAnnotation(map, "comment", 6, 11, "Nice", { author: "user" });
+    createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user", color: "yellow" });
+    createAnnotation(map, "comment", rangeOf(6, 11), "Nice", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);
@@ -94,7 +106,7 @@ describe("processInboxAnnotations", () => {
   it("buckets resolved Claude annotations into userResponses", () => {
     const ydoc = setupDoc("inbox-2", "Hello world");
     const map = ydoc.getMap("annotations");
-    const id = createAnnotation(map, "suggestion", 0, 5, '{"newText":"Hi","reason":""}');
+    const id = createAnnotation(map, "suggestion", rangeOf(0, 5), '{"newText":"Hi","reason":""}');
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
 
@@ -110,7 +122,7 @@ describe("processInboxAnnotations", () => {
   it("ignores pending Claude annotations", () => {
     const ydoc = setupDoc("inbox-3", "Hello world");
     const map = ydoc.getMap("annotations");
-    createAnnotation(map, "comment", 0, 5, "A comment"); // author=claude, status=pending
+    createAnnotation(map, "comment", rangeOf(0, 5), "A comment"); // author=claude, status=pending
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);
@@ -124,7 +136,7 @@ describe("processInboxAnnotations", () => {
   it("deduplicates via surfacedIds — second call returns empty", () => {
     const ydoc = setupDoc("inbox-4", "Hello world");
     const map = ydoc.getMap("annotations");
-    createAnnotation(map, "highlight", 0, 5, "", { author: "user" });
+    createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);
@@ -140,7 +152,7 @@ describe("processInboxAnnotations", () => {
   it("calls refreshFn on each unsurfaced annotation", () => {
     const ydoc = setupDoc("inbox-5", "Hello world");
     const map = ydoc.getMap("annotations");
-    createAnnotation(map, "highlight", 0, 5, "", { author: "user" });
+    createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);
@@ -157,7 +169,7 @@ describe("processInboxAnnotations", () => {
   it("includes text snippets from annotation ranges", () => {
     const ydoc = setupDoc("inbox-6", "The quick brown fox");
     const map = ydoc.getMap("annotations");
-    createAnnotation(map, "comment", 4, 9, "Note", { author: "user" });
+    createAnnotation(map, "comment", rangeOf(4, 9), "Note", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);

@@ -1,13 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import {
-  getCurrentDoc,
-  extractText,
-  verifyAndResolveRange,
-  flatOffsetToRelPos,
-  relPosToFlatOffset,
-} from "./document.js";
+import { getCurrentDoc, extractText } from "./document.js";
 import { mcpSuccess, mcpError, noDocumentError, withErrorBoundary } from "./response.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import * as Y from "yjs";
@@ -21,6 +15,7 @@ import {
   AnnotationActionSchema,
   ExportFormatSchema,
 } from "../../shared/types.js";
+import { anchoredRange, refreshAllRanges } from "../positions.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
@@ -30,51 +25,51 @@ function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<un
   return { ydoc, map: ydoc.getMap("annotations") };
 }
 
-/** Check textSnapshot against the document range. Returns an error response if stale, or null if valid. */
-function checkRangeStale(ydoc: Y.Doc, from: number, to: number, textSnapshot: string | undefined) {
-  if (!textSnapshot) return null;
-  const result = verifyAndResolveRange(ydoc, from, to, textSnapshot);
-  if (result.valid) return null;
-  if (result.gone) {
-    return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
+/** Convert an anchoredRange validation failure to an MCP error response. */
+function rangeFailureToError(result: {
+  ok: false;
+  code: string;
+  gone?: boolean;
+  resolvedFrom?: number;
+  resolvedTo?: number;
+}) {
+  if (result.code === "RANGE_STALE") {
+    if ("gone" in result && result.gone) {
+      return mcpError("RANGE_STALE", "Target text no longer exists in the document.");
+    }
+    return mcpError("RANGE_STALE", "Target text has moved. Use resolvedFrom/resolvedTo to retry.", {
+      resolvedFrom: result.resolvedFrom,
+      resolvedTo: result.resolvedTo,
+    });
   }
-  return mcpError("RANGE_STALE", "Target text has moved. Use resolvedFrom/resolvedTo to retry.", {
-    resolvedFrom: result.resolvedFrom,
-    resolvedTo: result.resolvedTo,
-  });
+  return mcpError(
+    "INVALID_RANGE",
+    "message" in result ? (result as { message: string }).message : "Invalid range.",
+  );
 }
 
 import { generateAnnotationId as generateId } from "../../shared/utils.js";
 export { generateId };
 
-/** Create an annotation and store it in the Y.Map. Returns the annotation ID. */
+/** Create an annotation from an anchored range result and store it in the Y.Map. Returns the annotation ID. */
 export function createAnnotation(
   map: Y.Map<unknown>,
   type: AnnotationType,
-  from: number,
-  to: number,
+  anchored: {
+    range: { from: number; to: number };
+    relRange?: { fromRel: unknown; toRel: unknown };
+  },
   content: string,
   extras?: Partial<Annotation>,
-  ydoc?: Y.Doc,
 ): string {
   const id = generateId();
-
-  // Compute CRDT-anchored positions when Y.Doc is available
-  let relRange: Annotation["relRange"];
-  if (ydoc) {
-    const fromRel = flatOffsetToRelPos(ydoc, from, 0); // assoc 0: stick right
-    const toRel = flatOffsetToRelPos(ydoc, to, -1); // assoc -1: stick left
-    if (fromRel && toRel) {
-      relRange = { fromRel, toRel };
-    }
-  }
 
   const annotation: Annotation = {
     id,
     author: "claude",
     type,
-    range: { from, to },
-    ...(relRange ? { relRange } : {}),
+    range: anchored.range,
+    ...(anchored.relRange ? { relRange: anchored.relRange } : {}),
     content,
     status: "pending",
     timestamp: Date.now(),
@@ -91,47 +86,8 @@ export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
   return result;
 }
 
-/**
- * Refresh an annotation's flat offsets from its relRange, or lazily attach
- * relRange if missing. Returns the (possibly updated) annotation.
- * If `map` is provided, persists changes back to the Y.Map.
- */
-export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>): Annotation {
-  if (!ann.relRange) {
-    // Lazy attachment: compute relRange from current flat offsets
-    const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
-    const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
-    if (!fromRel || !toRel) return ann;
-    const updated = { ...ann, relRange: { fromRel, toRel } };
-    if (map) map.set(ann.id, updated);
-    return updated;
-  }
-
-  // Resolve relRange to current flat offsets
-  const newFrom = relPosToFlatOffset(ydoc, ann.relRange.fromRel);
-  const newTo = relPosToFlatOffset(ydoc, ann.relRange.toRel);
-  if (newFrom === null || newTo === null) return ann; // deleted content, keep old range
-  if (newFrom === ann.range.from && newTo === ann.range.to) return ann; // unchanged
-
-  const updated = { ...ann, range: { from: newFrom, to: newTo } };
-  if (map) map.set(ann.id, updated);
-  return updated;
-}
-
-/** Refresh all annotations in a batch, wrapping Y.Map writes in a transaction. */
-function refreshAllRanges(
-  annotations: Annotation[],
-  ydoc: Y.Doc,
-  map: Y.Map<unknown>,
-): Annotation[] {
-  const results: Annotation[] = [];
-  ydoc.transact(() => {
-    for (const ann of annotations) {
-      results.push(refreshRange(ann, ydoc, map));
-    }
-  });
-  return results;
-}
+// Re-export from positions module for backward compatibility
+export { refreshRange, refreshAllRanges } from "../positions.js";
 
 export function registerAnnotationTools(server: McpServer): void {
   server.tool(
@@ -161,17 +117,12 @@ export function registerAnnotationTools(server: McpServer): void {
       async ({ from, to, color, note, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
-        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-        if (staleError) return staleError;
-        const id = createAnnotation(
-          da.map,
-          "highlight",
-          from,
-          to,
-          note || "",
-          { color: color as HighlightColor, ...(priority ? { priority } : {}) },
-          da.ydoc,
-        );
+        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
+        if (!result.ok) return rangeFailureToError(result);
+        const id = createAnnotation(da.map, "highlight", result, note || "", {
+          color: color as HighlightColor,
+          ...(priority ? { priority } : {}),
+        });
         return mcpSuccess({ annotationId: id });
       },
     ),
@@ -203,17 +154,9 @@ export function registerAnnotationTools(server: McpServer): void {
       async ({ from, to, text, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
-        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-        if (staleError) return staleError;
-        const id = createAnnotation(
-          da.map,
-          "comment",
-          from,
-          to,
-          text,
-          priority ? { priority } : {},
-          da.ydoc,
-        );
+        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
+        if (!result.ok) return rangeFailureToError(result);
+        const id = createAnnotation(da.map, "comment", result, text, priority ? { priority } : {});
         return mcpSuccess({ annotationId: id });
       },
     ),
@@ -246,16 +189,14 @@ export function registerAnnotationTools(server: McpServer): void {
       async ({ from, to, newText, reason, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
-        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-        if (staleError) return staleError;
+        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
+        if (!result.ok) return rangeFailureToError(result);
         const id = createAnnotation(
           da.map,
           "suggestion",
-          from,
-          to,
+          result,
           JSON.stringify({ newText, reason: reason || "" }),
           priority ? { priority } : {},
-          da.ydoc,
         );
         return mcpSuccess({ annotationId: id });
       },
@@ -288,16 +229,14 @@ export function registerAnnotationTools(server: McpServer): void {
       async ({ from, to, note, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
-        const staleError = checkRangeStale(da.ydoc, from, to, textSnapshot);
-        if (staleError) return staleError;
+        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
+        if (!result.ok) return rangeFailureToError(result);
         const id = createAnnotation(
           da.map,
           "flag",
-          from,
-          to,
+          result,
           note || "",
           priority ? { priority } : {},
-          da.ydoc,
         );
         return mcpSuccess({ annotationId: id });
       },
