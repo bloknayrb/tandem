@@ -144,7 +144,7 @@ export function getHeadingPrefixLength(node: Y.XmlElement): number {
   return 0;
 }
 
-// -- RANGE_STALE detection ---------------------------------------------------
+// -- Range staleness detection ------------------------------------------------
 
 export type RangeVerifyResult =
   | { valid: true }

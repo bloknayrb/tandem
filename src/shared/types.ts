@@ -24,7 +24,8 @@ export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
 export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
 export const ToolErrorCodeSchema = z.enum([
-  "RANGE_STALE",
+  "RANGE_GONE",
+  "RANGE_MOVED",
   "FILE_LOCKED",
   "FILE_NOT_FOUND",
   "NO_DOCUMENT",
