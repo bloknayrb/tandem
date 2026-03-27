@@ -1,5 +1,11 @@
 import React, { useState, useRef, useCallback } from "react";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload";
+import {
+  addRecentFile,
+  clearRecentFiles,
+  loadRecentFiles,
+  saveRecentFiles,
+} from "../utils/recentFiles";
 
 interface FileOpenDialogProps {
   onClose: () => void;
@@ -14,36 +20,59 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
   const [loading, setLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [recentFiles, setRecentFiles] = useState<string[]>(loadRecentFiles);
 
-  const handlePathSubmit = useCallback(async () => {
-    if (!filePath.trim() || loading) return;
-    setError(null);
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/open`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: filePath.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.message ?? "Failed to open file");
-        return;
+  const pushRecent = useCallback((path: string) => {
+    setRecentFiles((prev) => {
+      const updated = addRecentFile(prev, path);
+      saveRecentFiles(updated);
+      return updated;
+    });
+  }, []);
+
+  const handleClearRecent = useCallback(() => {
+    clearRecentFiles();
+    setRecentFiles([]);
+  }, []);
+
+  const openByPath = useCallback(
+    async (pathToOpen: string) => {
+      if (loading) return;
+      setError(null);
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/open`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filePath: pathToOpen }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.message ?? "Failed to open file");
+          return;
+        }
+        pushRecent(pathToOpen);
+        onClose();
+      } catch (err) {
+        console.error("FileOpenDialog: path open failed", err);
+        if (err instanceof SyntaxError) {
+          setError("Server returned an unexpected response");
+        } else if (err instanceof TypeError) {
+          setError("Unexpected response format");
+        } else {
+          setError("Cannot reach server. Is it running?");
+        }
+      } finally {
+        setLoading(false);
       }
-      onClose();
-    } catch (err) {
-      console.error("FileOpenDialog: path open failed", err);
-      if (err instanceof SyntaxError) {
-        setError("Server returned an unexpected response");
-      } else if (err instanceof TypeError) {
-        setError("Unexpected response format");
-      } else {
-        setError("Cannot reach server. Is it running?");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [filePath, loading, onClose]);
+    },
+    [loading, onClose, pushRecent],
+  );
+
+  const handlePathSubmit = useCallback(() => {
+    if (!filePath.trim()) return;
+    openByPath(filePath.trim());
+  }, [filePath, openByPath]);
 
   const uploadFile = useCallback(
     async (file: File) => {
@@ -219,6 +248,104 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
             >
               {loading ? "Opening..." : "Open"}
             </button>
+
+            {/* Recent files */}
+            {recentFiles.length > 0 && (
+              <div data-testid="recent-files-list" style={{ marginTop: "14px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "6px",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#9ca3af",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                    }}
+                  >
+                    Recent
+                  </span>
+                  <button
+                    data-testid="clear-recent-files"
+                    onClick={handleClearRecent}
+                    type="button"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#9ca3af",
+                      fontSize: "11px",
+                      cursor: "pointer",
+                      padding: 0,
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <div
+                  style={{
+                    maxHeight: "150px",
+                    overflowY: "auto",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "2px",
+                  }}
+                >
+                  {recentFiles.map((p, i) => {
+                    const parts = p.split(/[/\\]/);
+                    const filename = parts.pop() ?? p;
+                    const dir = parts.join("/") || "/";
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        data-testid={`recent-file-${i}`}
+                        onClick={() => {
+                          setFilePath(p);
+                          openByPath(p);
+                        }}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: "6px 8px",
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "1px",
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6";
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                        }}
+                      >
+                        <span style={{ fontSize: "13px", color: "#111827" }}>{filename}</span>
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            color: "#9ca3af",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            maxWidth: "380px",
+                          }}
+                        >
+                          {dir}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div
