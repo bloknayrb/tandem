@@ -1,3 +1,9 @@
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AWARENESS,
+  Y_MAP_CHAT,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
 import { describe, it, expect, beforeEach } from "vitest";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -78,7 +84,7 @@ describe("isUserActive", () => {
 describe("processInboxAnnotations", () => {
   it("buckets user annotations into userActions", () => {
     const ydoc = setupDoc("inbox-1", "Hello world test");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user", color: "yellow" });
     createAnnotation(map, "comment", rangeOf(6, 11), "Nice", { author: "user" });
 
@@ -94,7 +100,7 @@ describe("processInboxAnnotations", () => {
 
   it("buckets resolved Claude annotations into userResponses", () => {
     const ydoc = setupDoc("inbox-2", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "suggestion", rangeOf(0, 5), '{"newText":"Hi","reason":""}');
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
@@ -110,7 +116,7 @@ describe("processInboxAnnotations", () => {
 
   it("ignores pending Claude annotations", () => {
     const ydoc = setupDoc("inbox-3", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "comment", rangeOf(0, 5), "A comment"); // author=claude, status=pending
 
     const allAnns = collectAnnotations(map);
@@ -124,7 +130,7 @@ describe("processInboxAnnotations", () => {
 
   it("deduplicates via surfacedIds — second call returns empty", () => {
     const ydoc = setupDoc("inbox-4", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user" });
 
     const allAnns = collectAnnotations(map);
@@ -140,7 +146,7 @@ describe("processInboxAnnotations", () => {
 
   it("calls refreshFn on each unsurfaced annotation", () => {
     const ydoc = setupDoc("inbox-5", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user" });
 
     const allAnns = collectAnnotations(map);
@@ -157,7 +163,7 @@ describe("processInboxAnnotations", () => {
 
   it("includes text snippets from annotation ranges", () => {
     const ydoc = setupDoc("inbox-6", "The quick brown fox");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "comment", rangeOf(4, 9), "Note", { author: "user" });
 
     const allAnns = collectAnnotations(map);
@@ -172,7 +178,7 @@ describe("processInboxAnnotations", () => {
 describe("checkInbox — chat messages (real Y.Map operations)", () => {
   it("reads unread chat messages from CTRL_ROOM", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_inbox_chat_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     const msg: ChatMessage = {
       id: generateMessageId(),
@@ -203,7 +209,7 @@ describe("checkInbox — chat messages (real Y.Map operations)", () => {
 
   it("ignores Claude messages in inbox", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_inbox_chat_2__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     chatMap.set("msg_claude_only", {
       id: "msg_claude_only",
@@ -225,7 +231,7 @@ describe("checkInbox — chat messages (real Y.Map operations)", () => {
 describe("tandem_reply — real Y.Map operations", () => {
   it("stores a Claude reply in CTRL_ROOM", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_reply_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     const id = generateMessageId();
     const msg: ChatMessage = {
@@ -244,7 +250,7 @@ describe("tandem_reply — real Y.Map operations", () => {
 
   it("supports replyTo for threading", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_reply_2__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     const replyId = generateMessageId();
     const reply: ChatMessage = {
@@ -265,7 +271,7 @@ describe("tandem_reply — real Y.Map operations", () => {
 describe("tandem_setStatus — real Y.Map operations", () => {
   it("writes Claude status to awareness map", () => {
     const ydoc = setupDoc("status-1", "Hello world");
-    const awarenessMap = ydoc.getMap("awareness");
+    const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
 
     awarenessMap.set("claude", {
       status: "Reviewing section 3...",
@@ -288,13 +294,13 @@ describe("tandem_setStatus — real Y.Map operations", () => {
 describe("tandem_getSelections — real Y.Map operations", () => {
   it("returns empty when no selection exists", () => {
     const ydoc = setupDoc("sel-1", "Hello world");
-    const userAwareness = ydoc.getMap("userAwareness");
+    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
     expect(userAwareness.get("selection")).toBeUndefined();
   });
 
   it("detects no selection when from === to", () => {
     const ydoc = setupDoc("sel-2", "Hello world");
-    const userAwareness = ydoc.getMap("userAwareness");
+    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
     userAwareness.set("selection", { from: 3, to: 3, timestamp: Date.now() });
 
     const selection = userAwareness.get("selection") as { from: number; to: number };

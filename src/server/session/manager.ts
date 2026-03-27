@@ -4,7 +4,7 @@ import * as Y from "yjs";
 import type { SessionData } from "../../shared/types.js";
 import { SESSION_DIR } from "../platform.js";
 
-import { SESSION_MAX_AGE, CTRL_ROOM } from "../../shared/constants.js";
+import { SESSION_MAX_AGE, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
 let sessionDirReady = false;
@@ -107,7 +107,7 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
   }
 
   // Prune chat to newest 200 messages before saving
-  const chatMap = doc.getMap("chat");
+  const chatMap = doc.getMap(Y_MAP_CHAT);
   const entries: Array<{ id: string; timestamp: number }> = [];
   chatMap.forEach((value, key) => {
     const msg = value as { timestamp: number };

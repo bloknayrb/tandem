@@ -1,3 +1,4 @@
+import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -23,7 +24,7 @@ function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<un
   const doc = getCurrentDoc(documentId);
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
-  return { ydoc, map: ydoc.getMap("annotations") };
+  return { ydoc, map: ydoc.getMap(Y_MAP_ANNOTATIONS) };
 }
 
 /** Convert an anchoredRange validation failure to an MCP error response. */

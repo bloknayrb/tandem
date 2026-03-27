@@ -6,7 +6,7 @@ import {
   removeDocument,
   setShouldKeepDocument,
 } from "../../src/server/yjs/provider.js";
-import { CTRL_ROOM } from "../../src/shared/constants.js";
+import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 import { writeGenerationId } from "../../src/server/mcp/document-service.js";
 
 describe("Y.Doc lifecycle (provider)", () => {
@@ -87,7 +87,7 @@ describe("writeGenerationId", () => {
   it("writes a generationId to the CTRL_ROOM documentMeta", () => {
     writeGenerationId();
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const meta = ctrlDoc.getMap("documentMeta");
+    const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
     const genId = meta.get("generationId") as string;
     expect(genId).toBeDefined();
     expect(typeof genId).toBe("string");
@@ -97,7 +97,7 @@ describe("writeGenerationId", () => {
   it("produces a different generationId on each call", () => {
     writeGenerationId();
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const meta = ctrlDoc.getMap("documentMeta");
+    const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
     const first = meta.get("generationId") as string;
 
     writeGenerationId();

@@ -10,6 +10,7 @@ import {
   LARGE_FILE_PAGE_THRESHOLD,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   SUPPORTED_EXTENSIONS,
+  Y_MAP_DOCUMENT_META,
 } from "../../shared/constants.js";
 import { getAdapter } from "../file-io/index.js";
 import {
@@ -200,7 +201,7 @@ function writeDocMeta(
   format: string,
   readOnly: boolean,
 ): void {
-  const meta = doc.getMap("documentMeta");
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   meta.set("readOnly", readOnly);
   meta.set("format", format);
   meta.set("documentId", id);

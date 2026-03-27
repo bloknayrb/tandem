@@ -1,3 +1,4 @@
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import * as Y from "yjs";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
@@ -29,7 +30,7 @@ export function makeMarkdownDoc(md: string): Y.Doc {
 
 /** Shortcut to get the 'annotations' Y.Map */
 export function getAnnotationsMap(doc: Y.Doc): Y.Map<unknown> {
-  return doc.getMap("annotations");
+  return doc.getMap(Y_MAP_ANNOTATIONS);
 }
 
 /** Create an anchored range (flat + CRDT) for annotation creation in tests. */

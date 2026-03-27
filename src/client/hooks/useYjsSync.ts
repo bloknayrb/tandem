@@ -1,7 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
-import { DEFAULT_WS_PORT, CTRL_ROOM } from "../../shared/constants";
+import {
+  DEFAULT_WS_PORT,
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AWARENESS,
+  Y_MAP_DOCUMENT_META,
+} from "../../shared/constants";
 import type { Annotation } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
 
@@ -68,7 +74,7 @@ export function useYjsSync(): YjsSyncResult {
   const setupTabObservers = useCallback((tab: OpenTab) => {
     const { ydoc } = tab;
 
-    const annotationsMap = ydoc.getMap("annotations");
+    const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annotationObserver = () => {
       const anns: Annotation[] = [];
       annotationsMap.forEach((value) => {
@@ -79,7 +85,7 @@ export function useYjsSync(): YjsSyncResult {
     annotationsMap.observe(annotationObserver);
     annotationObserver();
 
-    const awarenessMap = ydoc.getMap("awareness");
+    const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
     let prevStatus: string | null = null;
     let prevActive = false;
     const awarenessObserver = () => {
@@ -100,7 +106,7 @@ export function useYjsSync(): YjsSyncResult {
     awarenessMap.observe(awarenessObserver);
     awarenessObserver();
 
-    const documentMetaMap = ydoc.getMap("documentMeta");
+    const documentMetaMap = ydoc.getMap(Y_MAP_DOCUMENT_META);
     let prevReadOnly = false;
     const documentMetaObserver = () => {
       const ro = (documentMetaMap.get("readOnly") as boolean | undefined) === true;
@@ -151,7 +157,7 @@ export function useYjsSync(): YjsSyncResult {
       });
       pendingProvidersRef.current.set(doc.id, { ydoc, provider });
 
-      const meta = ydoc.getMap("documentMeta");
+      const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
       const metaObserver = () => {
         const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
         const active = meta.get("activeDocumentId") as string | null | undefined;
@@ -217,7 +223,7 @@ export function useYjsSync(): YjsSyncResult {
   // (effects run in declaration order within a component/hook).
   useEffect(() => {
     if (!bootstrapRef.current) return;
-    const meta = bootstrapRef.current.ydoc.getMap("documentMeta");
+    const meta = bootstrapRef.current.ydoc.getMap(Y_MAP_DOCUMENT_META);
     const observer = () => {
       // Detect server restart via generationId change
       const newGenId = meta.get("generationId") as string | undefined;

@@ -3,7 +3,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
-import { TYPING_DEBOUNCE } from "../../../shared/constants";
+import { TYPING_DEBOUNCE, Y_MAP_AWARENESS, Y_MAP_USER_AWARENESS } from "../../../shared/constants";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { pmSelectionToFlat } from "../../positions";
 
@@ -53,8 +53,8 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     const ydoc = this.options.ydoc;
     if (!ydoc) return [];
 
-    const awarenessMap = ydoc.getMap("awareness");
-    const userAwareness = ydoc.getMap("userAwareness");
+    const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
+    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
 
     return [
       // Plugin 1: Claude presence rendering
@@ -170,7 +170,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
  * Used by StatusBar component.
  */
 export function getClaudeStatus(ydoc: Y.Doc): ClaudeAwareness | null {
-  const awarenessMap = ydoc.getMap("awareness");
+  const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
   const claude = awarenessMap.get("claude") as ClaudeAwareness | undefined;
   return claude ?? null;
 }

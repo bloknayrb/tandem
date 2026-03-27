@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
 import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/types";
-import { HIGHLIGHT_COLORS } from "../../shared/constants";
+import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { annotationToPmRange } from "../positions";
 
 interface SidePanelProps {
@@ -95,7 +95,7 @@ export function SidePanel({
   function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
     const y = ydocRef.current;
     if (!y) return;
-    const map = y.getMap("annotations");
+    const map = y.getMap(Y_MAP_ANNOTATIONS);
     const ann = map.get(id) as Annotation | undefined;
     if (!ann) return;
     map.set(id, { ...ann, status });

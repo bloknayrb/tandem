@@ -1,3 +1,4 @@
+import { Y_MAP_ANNOTATIONS, Y_MAP_CHAT, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as Y from "yjs";
 import fs from "fs/promises";
@@ -27,7 +28,7 @@ describe("Session persistence", () => {
     fragment.insert(0, [p]);
 
     // Add an annotation
-    const annotations = doc.getMap("annotations");
+    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
     annotations.set("ann_test_1", {
       id: "ann_test_1",
       author: "claude",
@@ -108,7 +109,7 @@ describe("Session persistence", () => {
       restoreYDoc(restored, session!);
 
       // Check annotations survived
-      const annotations = restored.getMap("annotations");
+      const annotations = restored.getMap(Y_MAP_ANNOTATIONS);
       const ann = annotations.get("ann_test_1") as any;
       expect(ann).toBeTruthy();
       expect(ann.id).toBe("ann_test_1");
@@ -148,11 +149,11 @@ describe("Session persistence", () => {
     it("preserves chat but clears openDocuments and activeDocumentId", async () => {
       // Build a ctrl doc with both chat history and stale document metadata
       const ctrlDoc = new Y.Doc();
-      const chat = ctrlDoc.getMap("chat");
+      const chat = ctrlDoc.getMap(Y_MAP_CHAT);
       chat.set("msg1", { id: "msg1", author: "user", text: "hello", timestamp: Date.now() });
       chat.set("msg2", { id: "msg2", author: "claude", text: "hi back", timestamp: Date.now() });
 
-      const meta = ctrlDoc.getMap("documentMeta");
+      const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
       meta.set("openDocuments", [
         {
           id: "stale-doc-1",
@@ -174,12 +175,12 @@ describe("Session persistence", () => {
       restoreCtrlDoc(restored, savedState!);
 
       // Simulate the clear that restoreCtrlSession() now does
-      const restoredMeta = restored.getMap("documentMeta");
+      const restoredMeta = restored.getMap(Y_MAP_DOCUMENT_META);
       restoredMeta.delete("openDocuments");
       restoredMeta.delete("activeDocumentId");
 
       // Chat should survive
-      const restoredChat = restored.getMap("chat");
+      const restoredChat = restored.getMap(Y_MAP_CHAT);
       expect(restoredChat.get("msg1")).toBeTruthy();
       expect(restoredChat.get("msg2")).toBeTruthy();
       expect((restoredChat.get("msg1") as any).text).toBe("hello");
@@ -191,7 +192,7 @@ describe("Session persistence", () => {
 
     it("round-trips ctrl doc with only chat (no stale metadata)", async () => {
       const ctrlDoc = new Y.Doc();
-      const chat = ctrlDoc.getMap("chat");
+      const chat = ctrlDoc.getMap(Y_MAP_CHAT);
       chat.set("msg1", { id: "msg1", author: "user", text: "test", timestamp: 12345 });
 
       await saveCtrlSession(ctrlDoc);
@@ -201,7 +202,7 @@ describe("Session persistence", () => {
       expect(savedState).not.toBeNull();
       restoreCtrlDoc(restored, savedState!);
 
-      const restoredChat = restored.getMap("chat");
+      const restoredChat = restored.getMap(Y_MAP_CHAT);
       expect((restoredChat.get("msg1") as any).text).toBe("test");
     });
   });

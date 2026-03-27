@@ -1,3 +1,4 @@
+import { Y_MAP_CHAT } from "../../shared/constants";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import ReactMarkdown from "react-markdown";
@@ -27,7 +28,7 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
   // Observe Y.Map('chat') for changes
   useEffect(() => {
     if (!ctrlYdoc) return;
-    const chatMap = ctrlYdoc.getMap("chat");
+    const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
 
     const observer = () => {
       const msgs: ChatMessage[] = [];
@@ -68,7 +69,7 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
 
   const sendMessage = useCallback(() => {
     if (!ctrlYdoc || !inputText.trim()) return;
-    const chatMap = ctrlYdoc.getMap("chat");
+    const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
 
     const msg: ChatMessage = {
       id: generateMessageId(),
