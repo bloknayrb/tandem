@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { CLAUDE_PRESENCE_COLOR } from '../../shared/constants';
-import type { InterruptionMode } from '../../shared/types';
+import React, { useEffect, useRef, useState } from "react";
+import { CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
+import type { InterruptionMode } from "../../shared/types";
 
 interface StatusBarProps {
   connected: boolean;
@@ -14,9 +14,13 @@ interface StatusBarProps {
 }
 
 const MODES: { value: InterruptionMode; label: string; title: string }[] = [
-  { value: 'all', label: 'All', title: 'Show all annotations immediately' },
-  { value: 'urgent-only', label: 'Urgent', title: 'Only show urgent annotations' },
-  { value: 'paused', label: 'Paused', title: 'Hold all new annotations' },
+  { value: "all", label: "All", title: "Show all annotations immediately" },
+  {
+    value: "urgent-only",
+    label: "Urgent",
+    title: "Show flags, questions, and explicitly urgent annotations",
+  },
+  { value: "paused", label: "Paused", title: "Hold all new annotations" },
 ];
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -55,61 +59,90 @@ export function StatusBar({
   }, [connected]);
 
   const isReconnecting = !connected && disconnectedAt.current !== null;
-  const dotColor = connected ? '#22c55e' : isReconnecting ? '#eab308' : '#ef4444';
-  const connLabel = showReconnectedFlash ? 'Reconnected' : connected ? 'Connected' : isReconnecting ? 'Reconnecting\u2026' : 'Disconnected';
+  const dotColor = connected ? "#22c55e" : isReconnecting ? "#eab308" : "#ef4444";
+  const connLabel = showReconnectedFlash
+    ? "Reconnected"
+    : connected
+      ? "Connected"
+      : isReconnecting
+        ? "Reconnecting\u2026"
+        : "Disconnected";
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '4px 16px',
-      height: '28px',
-      borderTop: '1px solid #e5e7eb',
-      background: '#fafafa',
-      fontSize: '12px',
-      color: '#6b7280',
-      userSelect: 'none',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{
-          width: '8px', height: '8px', borderRadius: '50%',
-          background: dotColor, display: 'inline-block',
-          animation: isReconnecting ? 'tandem-reconnect-pulse 1.2s ease-in-out infinite' : 'none',
-        }} />
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "4px 16px",
+        height: "28px",
+        borderTop: "1px solid #e5e7eb",
+        background: "#fafafa",
+        fontSize: "12px",
+        color: "#6b7280",
+        userSelect: "none",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span
+          style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            background: dotColor,
+            display: "inline-block",
+            animation: isReconnecting ? "tandem-reconnect-pulse 1.2s ease-in-out infinite" : "none",
+          }}
+        />
         <span>{connLabel}</span>
         {showServerBanner && !connected && (
-          <span style={{ color: '#eab308', fontWeight: 500 }}>— check server</span>
+          <span style={{ color: "#eab308", fontWeight: 500 }}>— check server</span>
         )}
         {documentCount > 0 && (
-          <span style={{ color: '#9ca3af' }}>
-            {documentCount} doc{documentCount !== 1 ? 's' : ''} open
+          <span style={{ color: "#9ca3af" }}>
+            {documentCount} doc{documentCount !== 1 ? "s" : ""} open
           </span>
         )}
       </div>
 
       {/* Mode switcher */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
         {heldCount > 0 && (
-          <span style={{
-            padding: '1px 6px', fontSize: '10px', fontWeight: 600,
-            color: '#92400e', background: '#fef3c7', borderRadius: '9999px',
-          }}>
+          <span
+            style={{
+              padding: "1px 6px",
+              fontSize: "10px",
+              fontWeight: 600,
+              color: "#92400e",
+              background: "#fef3c7",
+              borderRadius: "9999px",
+            }}
+          >
             {heldCount} held
           </span>
         )}
-        <div style={{ display: 'flex', border: '1px solid #d1d5db', borderRadius: '4px', overflow: 'hidden' }}>
+        <div
+          style={{
+            display: "flex",
+            border: "1px solid #d1d5db",
+            borderRadius: "4px",
+            overflow: "hidden",
+          }}
+        >
           {MODES.map(({ value, label, title }) => (
             <button
               key={value}
               title={title}
               onClick={() => onModeChange(value)}
               style={{
-                padding: '1px 8px', fontSize: '11px', border: 'none', cursor: 'pointer',
-                background: interruptionMode === value ? '#6366f1' : 'transparent',
-                color: interruptionMode === value ? '#fff' : '#6b7280',
+                padding: "1px 8px",
+                fontSize: "11px",
+                border: "none",
+                cursor: "pointer",
+                background: interruptionMode === value ? "#6366f1" : "transparent",
+                color: interruptionMode === value ? "#fff" : "#6b7280",
                 fontWeight: interruptionMode === value ? 600 : 400,
-                borderRight: value !== 'paused' ? '1px solid #d1d5db' : 'none',
+                borderRight: value !== "paused" ? "1px solid #d1d5db" : "none",
               }}
             >
               {label}
@@ -119,22 +152,37 @@ export function StatusBar({
       </div>
 
       {readOnly && (
-        <span style={{
-          padding: '1px 8px', fontSize: '11px', fontWeight: 600,
-          color: '#92400e', background: '#fef3c7', borderRadius: '9999px', border: '1px solid #fde68a',
-        }}>
+        <span
+          style={{
+            padding: "1px 8px",
+            fontSize: "11px",
+            fontWeight: 600,
+            color: "#92400e",
+            background: "#fef3c7",
+            borderRadius: "9999px",
+            border: "1px solid #fde68a",
+          }}
+        >
           Review Only
         </span>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{
-          width: '8px', height: '8px', borderRadius: '50%',
-          background: CLAUDE_PRESENCE_COLOR, opacity: claudeActive ? 1 : 0.4,
-          display: 'inline-block', transition: 'opacity 0.3s ease',
-          animation: claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none',
-        }} />
-        <span style={{ transition: 'color 0.3s ease', color: claudeActive ? '#4b5563' : '#9ca3af' }}>
-          {claudeStatus ? `Claude -- ${claudeStatus}` : 'Claude -- idle'}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span
+          style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            background: CLAUDE_PRESENCE_COLOR,
+            opacity: claudeActive ? 1 : 0.4,
+            display: "inline-block",
+            transition: "opacity 0.3s ease",
+            animation: claudeActive ? "tandem-status-pulse 1.5s ease-in-out infinite" : "none",
+          }}
+        />
+        <span
+          style={{ transition: "color 0.3s ease", color: claudeActive ? "#4b5563" : "#9ca3af" }}
+        >
+          {claudeStatus ? `Claude -- ${claudeStatus}` : "Claude -- idle"}
         </span>
       </div>
       <style>{`

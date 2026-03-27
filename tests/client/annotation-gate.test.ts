@@ -54,13 +54,39 @@ describe("shouldShow", () => {
   });
 
   describe('mode = "urgent-only"', () => {
-    it("hides pending normal-priority annotations", () => {
-      expect(shouldShow(makeAnnotation({ status: "pending" }), "urgent-only")).toBe(false);
+    it("hides pending comment annotations without priority", () => {
+      expect(
+        shouldShow(makeAnnotation({ status: "pending", type: "comment" }), "urgent-only"),
+      ).toBe(false);
+    });
+
+    it("hides pending highlight annotations without priority", () => {
+      expect(
+        shouldShow(makeAnnotation({ status: "pending", type: "highlight" }), "urgent-only"),
+      ).toBe(false);
+    });
+
+    it("hides pending suggestion annotations without priority", () => {
+      expect(
+        shouldShow(makeAnnotation({ status: "pending", type: "suggestion" }), "urgent-only"),
+      ).toBe(false);
     });
 
     it("shows pending urgent-priority annotations", () => {
       expect(
         shouldShow(makeAnnotation({ status: "pending", priority: "urgent" }), "urgent-only"),
+      ).toBe(true);
+    });
+
+    it("shows pending flag annotations (implicitly urgent)", () => {
+      expect(shouldShow(makeAnnotation({ status: "pending", type: "flag" }), "urgent-only")).toBe(
+        true,
+      );
+    });
+
+    it("shows pending question annotations (implicitly urgent)", () => {
+      expect(
+        shouldShow(makeAnnotation({ status: "pending", type: "question" }), "urgent-only"),
       ).toBe(true);
     });
 
@@ -104,9 +130,8 @@ describe("shouldShow", () => {
   });
 
   describe("edge cases", () => {
-    it("annotations without explicit priority are treated as normal", () => {
-      const ann = makeAnnotation({ status: "pending" });
-      // No priority field set → should be hidden in urgent-only
+    it("comment annotations without explicit priority are hidden in urgent-only", () => {
+      const ann = makeAnnotation({ status: "pending", type: "comment" });
       expect(shouldShow(ann, "urgent-only")).toBe(false);
     });
 
@@ -133,13 +158,25 @@ describe("gateAnnotations (useAnnotationGate hook logic)", () => {
 
   it("holds non-urgent pending in 'urgent-only' mode", () => {
     const anns = [
-      makeAnnotation({ id: "a1", status: "pending" }), // normal → held
-      makeAnnotation({ id: "a2", status: "pending", priority: "urgent" }), // urgent → visible
+      makeAnnotation({ id: "a1", status: "pending", type: "comment" }), // comment → held
+      makeAnnotation({ id: "a2", status: "pending", priority: "urgent" }), // explicit urgent → visible
       makeAnnotation({ id: "a3", status: "accepted" }), // resolved → visible
     ];
     const result = gateAnnotations(anns, "urgent-only");
     expect(result.visibleAnnotations).toHaveLength(2);
     expect(result.heldCount).toBe(1);
+  });
+
+  it("shows flags and questions in 'urgent-only' mode (implicitly urgent)", () => {
+    const anns = [
+      makeAnnotation({ id: "a1", status: "pending", type: "flag" }), // flag → visible
+      makeAnnotation({ id: "a2", status: "pending", type: "question" }), // question → visible
+      makeAnnotation({ id: "a3", status: "pending", type: "comment" }), // comment → held
+      makeAnnotation({ id: "a4", status: "pending", type: "highlight" }), // highlight → held
+    ];
+    const result = gateAnnotations(anns, "urgent-only");
+    expect(result.visibleAnnotations).toHaveLength(2);
+    expect(result.heldCount).toBe(2);
   });
 
   it("holds all pending in 'paused' mode", () => {

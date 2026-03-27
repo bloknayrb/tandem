@@ -98,7 +98,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
       priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority — urgent bypasses the Hold interruption mode",
+        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
       ),
       textSnapshot: z
         .string()
@@ -135,7 +135,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
       priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority — urgent bypasses the Hold interruption mode",
+        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
       ),
       textSnapshot: z
         .string()
@@ -170,7 +170,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
       priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority — urgent bypasses the Hold interruption mode",
+        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
       ),
       textSnapshot: z
         .string()
@@ -210,7 +210,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
       priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority — urgent bypasses the Hold interruption mode",
+        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
       ),
       textSnapshot: z
         .string()
