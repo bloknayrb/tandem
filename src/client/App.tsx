@@ -7,6 +7,7 @@ import { StatusBar } from "./status/StatusBar";
 import { Toolbar } from "./editor/toolbar/Toolbar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
 import { ReviewSummary } from "./panels/ReviewSummary";
+import { HelpModal } from "./components/HelpModal";
 import {
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
@@ -61,6 +62,7 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [fileDragOver, setFileDragOver] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const editorRef = useRef<TiptapEditor | null>(null);
   const prevPendingRef = useRef<number>(0);
 
@@ -143,6 +145,18 @@ export default function App() {
   const exitReviewMode = useCallback(() => {
     setReviewMode(false);
     setShowBanner(false);
+  }, []);
+
+  // Toggle help modal with '?' — skip when focus is in a text input
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "?") return;
+      const el = e.target as HTMLElement;
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+      setShowHelp((prev) => !prev);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
@@ -365,6 +379,7 @@ export default function App() {
           onDismiss={() => setShowReviewSummary(false)}
         />
       )}
+      <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
 }

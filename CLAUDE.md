@@ -31,6 +31,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - `DocListEntry` and `OpenTab` types live in `src/client/types.ts`
 - DocumentTabs shows tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount)
 - FileOpenDialog (src/client/components/) provides path input and drag-and-drop upload for opening files without Claude
+- HelpModal (src/client/components/) shows keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)
 - Annotations observed from Y.Map('annotations') on the active tab's Y.Doc
 - AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
 - AwarenessExtension renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
