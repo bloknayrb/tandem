@@ -8,6 +8,7 @@ import { Toolbar } from "./editor/toolbar/Toolbar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
 import { ReviewSummary } from "./panels/ReviewSummary";
 import { HelpModal } from "./components/HelpModal";
+import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import {
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
@@ -263,6 +264,9 @@ export default function App() {
           onDragLeave={handleEditorDragLeave}
           onDrop={handleEditorDrop}
         >
+          <ReviewOnlyBanner
+            visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+          />
           {activeTab ? (
             <Editor
               key={activeTab.id}
