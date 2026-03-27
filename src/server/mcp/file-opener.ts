@@ -11,7 +11,6 @@ import {
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   SUPPORTED_EXTENSIONS,
   Y_MAP_DOCUMENT_META,
-  Y_MAP_CONTENT_VERSION,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
 import { getAdapter } from "../file-io/index.js";
@@ -130,7 +129,7 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
   addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
-  attachVersionTracking(doc);
+  initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -181,7 +180,7 @@ export async function openFileFromContent(
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
-  attachVersionTracking(doc);
+  initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -198,29 +197,10 @@ export async function openFileFromContent(
 
 // --- Private helpers ---
 
-/**
- * Attach a content-version observer to track unsaved changes.
- * Observes only the XmlFragment (not the whole Y.Doc) so annotation/metadata
- * changes don't mark the document as dirty.
- */
-function attachVersionTracking(doc: Y.Doc): void {
+/** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
+function initSavedBaseline(doc: Y.Doc): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  // Guard: skip if already tracking (handles re-open of same Y.Doc instance)
-  if (meta.get(Y_MAP_CONTENT_VERSION) !== undefined) return;
-  let contentVersion = 0;
-  meta.set(Y_MAP_CONTENT_VERSION, contentVersion);
-  meta.set(Y_MAP_SAVED_AT_VERSION, contentVersion);
-
-  const fragment = doc.getXmlFragment("default");
-  fragment.observeDeep(() => {
-    contentVersion++;
-    meta.set(Y_MAP_CONTENT_VERSION, contentVersion);
-  });
-
-  // Baseline: after all initial load/restore changes settle, mark as clean.
-  queueMicrotask(() => {
-    meta.set(Y_MAP_SAVED_AT_VERSION, meta.get(Y_MAP_CONTENT_VERSION) as number);
-  });
+  meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
 }
 
 function writeDocMeta(
