@@ -138,16 +138,18 @@ test("tab switching shows different documents", async ({ page }) => {
   await expect(tabs.nth(0)).toContainText("sample", { timeout: 5_000 });
   await expect(tabs.nth(1)).toContainText("sample", { timeout: 5_000 });
 
-  // Click a non-active tab and verify the editor content changes.
-  // Determine which tab is currently active (has the document title showing).
-  const initialText = await editor.textContent({ timeout: 5_000 });
-  const hasFirstDoc = initialText?.includes(TITLE_TEXT);
+  // Wait for either document to fully sync before interacting
+  await expect(editor).toContainText(/Test Document|Second Document/, { timeout: 10_000 });
 
-  // Click the OTHER tab.
+  // Now safely determine which document is showing
+  const initialText = await editor.textContent();
+  const hasFirstDoc = initialText?.includes(TITLE_TEXT) ?? false;
+
+  // Click the OTHER tab
   const otherTab = hasFirstDoc ? tabs.nth(1) : tabs.nth(0);
   await otherTab.click();
 
-  // The editor should eventually show different content.
+  // The editor should show the other document's content
   const expectedText = hasFirstDoc ? "Second Document" : TITLE_TEXT;
   await expect(editor).toContainText(expectedText, { timeout: 15_000 });
 });

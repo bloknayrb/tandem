@@ -34,6 +34,7 @@ function TabItem({
   return (
     <div
       data-testid={`tab-${tab.id}`}
+      data-active={isActive}
       onClick={() => onSwitch(tab.id)}
       style={{
         display: "flex",
