@@ -46,3 +46,6 @@ export const SERVER_INFO_FILE = ".tandem/.server-info";
 
 export const RECENT_FILES_KEY = "tandem:recentFiles";
 export const RECENT_FILES_CAP = 20;
+
+export const USER_NAME_KEY = "tandem:userName";
+export const USER_NAME_DEFAULT = "You";

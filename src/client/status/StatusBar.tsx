@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
+import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
 import type { InterruptionMode } from "../../shared/types";
 
 interface StatusBarProps {
@@ -36,6 +36,16 @@ export function StatusBar({
   onModeChange,
   heldCount,
 }: StatusBarProps) {
+  const [userName, setUserName] = useState(
+    () => localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT,
+  );
+  const [nameInput, setNameInput] = useState(userName);
+  const commitName = () => {
+    const trimmed = nameInput.trim() || USER_NAME_DEFAULT;
+    setUserName(trimmed);
+    setNameInput(trimmed);
+    localStorage.setItem(USER_NAME_KEY, trimmed);
+  };
   const [showReconnectedFlash, setShowReconnectedFlash] = useState(false);
   const [showServerBanner, setShowServerBanner] = useState(false);
   const prevConnected = useRef(connected);
@@ -151,6 +161,44 @@ export function StatusBar({
         </div>
       </div>
 
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "4px",
+          fontSize: "11px",
+          color: "#9ca3af",
+        }}
+      >
+        <span>You:</span>
+        <input
+          data-testid="user-name-input"
+          type="text"
+          value={nameInput}
+          onChange={(e) => setNameInput(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Escape") {
+              setNameInput(userName);
+              e.currentTarget.blur();
+            }
+          }}
+          aria-label="Display name"
+          title="Your display name (updates on next tab switch or refresh)"
+          maxLength={40}
+          style={{
+            background: "transparent",
+            border: "none",
+            borderBottom: "1px solid #e5e7eb",
+            color: "#6b7280",
+            fontSize: "11px",
+            width: "80px",
+            outline: "none",
+            padding: "0 2px",
+          }}
+        />
+      </div>
       {readOnly && (
         <span
           style={{
