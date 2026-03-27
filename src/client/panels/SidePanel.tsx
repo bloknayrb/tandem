@@ -603,6 +603,25 @@ function AnnotationCard({
           {annotation.author === "claude" ? "Claude" : "You"}
         </span>
       </div>
+      {annotation.textSnapshot && (
+        <div
+          data-testid={`annotation-snippet-${annotation.id}`}
+          style={{
+            padding: "4px 8px",
+            marginBottom: "6px",
+            borderLeft: "3px solid #d1d5db",
+            color: "#6b7280",
+            fontSize: "12px",
+            fontStyle: "italic",
+            backgroundColor: "#f9fafb",
+            borderRadius: "2px",
+          }}
+        >
+          {annotation.textSnapshot.length > 80
+            ? annotation.textSnapshot.slice(0, 77) + "..."
+            : annotation.textSnapshot}
+        </div>
+      )}
       <p style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
         {annotation.type === "suggestion"
           ? (() => {

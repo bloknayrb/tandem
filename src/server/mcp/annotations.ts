@@ -49,6 +49,13 @@ function rangeFailureToError(result: Extract<RangeValidation, { ok: false }>) {
 }
 
 import { generateAnnotationId as generateId } from "../../shared/utils.js";
+
+const SNAPSHOT_CAP = 200;
+/** Capture a text snapshot from the document at the given range, truncated to SNAPSHOT_CAP chars. */
+function captureSnapshot(ydoc: Y.Doc, from: number, to: number): string {
+  const text = extractText(ydoc).slice(from, to);
+  return text.length > SNAPSHOT_CAP ? text.slice(0, SNAPSHOT_CAP - 3) + "..." : text;
+}
 export { generateId };
 
 /** Create an annotation from an anchored range result and store it in the Y.Map. Returns the annotation ID. */
@@ -115,9 +122,11 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
+        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, "highlight", result, note || "", {
           color: color as HighlightColor,
           ...(priority ? { priority } : {}),
+          textSnapshot: snap,
         });
         return mcpSuccess({ annotationId: id });
       },
@@ -152,7 +161,11 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
-        const id = createAnnotation(da.map, "comment", result, text, priority ? { priority } : {});
+        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
+        const id = createAnnotation(da.map, "comment", result, text, {
+          ...(priority ? { priority } : {}),
+          textSnapshot: snap,
+        });
         return mcpSuccess({ annotationId: id });
       },
     ),
@@ -187,12 +200,13 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
+        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(
           da.map,
           "suggestion",
           result,
           JSON.stringify({ newText, reason: reason || "" }),
-          priority ? { priority } : {},
+          { ...(priority ? { priority } : {}), textSnapshot: snap },
         );
         return mcpSuccess({ annotationId: id });
       },
@@ -227,13 +241,11 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
-        const id = createAnnotation(
-          da.map,
-          "flag",
-          result,
-          note || "",
-          priority ? { priority } : {},
-        );
+        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
+        const id = createAnnotation(da.map, "flag", result, note || "", {
+          ...(priority ? { priority } : {}),
+          textSnapshot: snap,
+        });
         return mcpSuccess({ annotationId: id });
       },
     ),
