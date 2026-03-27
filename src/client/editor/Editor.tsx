@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -56,7 +57,10 @@ export function Editor({
         }),
         CollaborationCursor.configure({
           provider: provider,
-          user: { name: "Bryan", color: "#f59e0b" },
+          user: {
+            name: localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT,
+            color: "#f59e0b",
+          },
         }),
         AnnotationExtension.configure({ ydoc }),
         AwarenessExtension.configure({ ydoc }),
