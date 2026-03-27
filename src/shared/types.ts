@@ -57,6 +57,8 @@ export interface Annotation {
   timestamp: number;
   color?: HighlightColor;
   priority?: AnnotationPriority;
+  /** Snapshot of the annotated document text at creation time. Truncated to 200 chars. */
+  textSnapshot?: string;
 }
 
 export interface AnchoredRange {
