@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import type { OpenTab } from "../types";
 import { FileOpenDialog } from "../components/FileOpenDialog";
+import { useTabDirty } from "../hooks/useTabDirty";
 
 interface DocumentTabsProps {
   tabs: OpenTab[];
@@ -15,6 +16,99 @@ const FORMAT_ICONS: Record<string, string> = {
   html: "H",
   docx: "W",
 };
+
+/** Extracted so useTabDirty can be called per-tab (hooks can't run in loops). */
+function TabItem({
+  tab,
+  isActive,
+  onSwitch,
+  onClose,
+}: {
+  tab: OpenTab;
+  isActive: boolean;
+  onSwitch: (id: string) => void;
+  onClose: (id: string) => void;
+}) {
+  const isDirty = useTabDirty(tab);
+
+  return (
+    <div
+      data-testid={`tab-${tab.id}`}
+      onClick={() => onSwitch(tab.id)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "4px 12px",
+        fontSize: "13px",
+        cursor: "pointer",
+        background: isActive ? "#fff" : "transparent",
+        color: isActive ? "#111827" : "#6b7280",
+        borderTop: isActive ? "2px solid #6366f1" : "2px solid transparent",
+        borderBottom: isActive ? "1px solid #fff" : "1px solid transparent",
+        marginBottom: "-1px",
+        userSelect: "none",
+        whiteSpace: "nowrap",
+        transition: "background 0.15s, color 0.15s",
+      }}
+    >
+      {isDirty && (
+        <span
+          data-testid={`unsaved-indicator-${tab.id}`}
+          style={{ color: "#f59e0b", fontSize: "10px" }}
+        >
+          ●
+        </span>
+      )}
+      <span
+        style={{
+          fontSize: "10px",
+          fontWeight: 700,
+          color: isActive ? "#6366f1" : "#9ca3af",
+          width: "14px",
+          textAlign: "center",
+        }}
+      >
+        {FORMAT_ICONS[tab.format] || "?"}
+      </span>
+      <span style={{ fontWeight: isActive ? 500 : 400 }}>{tab.fileName}</span>
+      {tab.readOnly && (
+        <span
+          style={{
+            fontSize: "9px",
+            color: "#92400e",
+            background: "#fef3c7",
+            padding: "0 3px",
+            borderRadius: "2px",
+          }}
+        >
+          RO
+        </span>
+      )}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose(tab.id);
+        }}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          fontSize: "14px",
+          lineHeight: 1,
+          color: "#9ca3af",
+          padding: "0 2px",
+          borderRadius: "2px",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
+        onMouseLeave={(e) => (e.currentTarget.style.color = "#9ca3af")}
+        title="Close document"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
 
 export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: DocumentTabsProps) {
   const [showDialog, setShowDialog] = useState(false);
@@ -32,79 +126,15 @@ export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: Doc
         overflow: "hidden",
       }}
     >
-      {tabs.map((tab) => {
-        const isActive = tab.id === activeTabId;
-        return (
-          <div
-            key={tab.id}
-            data-testid={`tab-${tab.id}`}
-            onClick={() => onTabSwitch(tab.id)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "4px 12px",
-              fontSize: "13px",
-              cursor: "pointer",
-              background: isActive ? "#fff" : "transparent",
-              color: isActive ? "#111827" : "#6b7280",
-              borderTop: isActive ? "2px solid #6366f1" : "2px solid transparent",
-              borderBottom: isActive ? "1px solid #fff" : "1px solid transparent",
-              marginBottom: "-1px",
-              userSelect: "none",
-              whiteSpace: "nowrap",
-              transition: "background 0.15s, color 0.15s",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "10px",
-                fontWeight: 700,
-                color: isActive ? "#6366f1" : "#9ca3af",
-                width: "14px",
-                textAlign: "center",
-              }}
-            >
-              {FORMAT_ICONS[tab.format] || "?"}
-            </span>
-            <span style={{ fontWeight: isActive ? 500 : 400 }}>{tab.fileName}</span>
-            {tab.readOnly && (
-              <span
-                style={{
-                  fontSize: "9px",
-                  color: "#92400e",
-                  background: "#fef3c7",
-                  padding: "0 3px",
-                  borderRadius: "2px",
-                }}
-              >
-                RO
-              </span>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onTabClose(tab.id);
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                fontSize: "14px",
-                lineHeight: 1,
-                color: "#9ca3af",
-                padding: "0 2px",
-                borderRadius: "2px",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
-              onMouseLeave={(e) => (e.currentTarget.style.color = "#9ca3af")}
-              title="Close document"
-            >
-              ×
-            </button>
-          </div>
-        );
-      })}
+      {tabs.map((tab) => (
+        <TabItem
+          key={tab.id}
+          tab={tab}
+          isActive={tab.id === activeTabId}
+          onSwitch={onTabSwitch}
+          onClose={onTabClose}
+        />
+      ))}
       <button
         onClick={() => setShowDialog(true)}
         data-testid="open-file-btn"

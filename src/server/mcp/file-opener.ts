@@ -11,6 +11,7 @@ import {
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   SUPPORTED_EXTENSIONS,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
 import { getAdapter } from "../file-io/index.js";
 import {
@@ -128,6 +129,7 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
   addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
+  initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -178,6 +180,7 @@ export async function openFileFromContent(
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
+  initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -193,6 +196,12 @@ export async function openFileFromContent(
 }
 
 // --- Private helpers ---
+
+/** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
+function initSavedBaseline(doc: Y.Doc): void {
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+}
 
 function writeDocMeta(
   doc: Y.Doc,
