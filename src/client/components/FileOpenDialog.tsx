@@ -22,50 +22,57 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [recentFiles, setRecentFiles] = useState<string[]>(loadRecentFiles);
 
-  const pushRecent = useCallback(
-    (path: string) => {
-      const updated = addRecentFile(recentFiles, path);
-      setRecentFiles(updated);
+  const pushRecent = useCallback((path: string) => {
+    setRecentFiles((prev) => {
+      const updated = addRecentFile(prev, path);
       saveRecentFiles(updated);
-    },
-    [recentFiles],
-  );
+      return updated;
+    });
+  }, []);
 
   const handleClearRecent = useCallback(() => {
     clearRecentFiles();
     setRecentFiles([]);
   }, []);
 
-  const handlePathSubmit = useCallback(async () => {
-    if (!filePath.trim() || loading) return;
-    setError(null);
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/open`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: filePath.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.message ?? "Failed to open file");
-        return;
+  const openByPath = useCallback(
+    async (pathToOpen: string) => {
+      if (loading) return;
+      setError(null);
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/open`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filePath: pathToOpen }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.message ?? "Failed to open file");
+          return;
+        }
+        pushRecent(pathToOpen);
+        onClose();
+      } catch (err) {
+        console.error("FileOpenDialog: path open failed", err);
+        if (err instanceof SyntaxError) {
+          setError("Server returned an unexpected response");
+        } else if (err instanceof TypeError) {
+          setError("Unexpected response format");
+        } else {
+          setError("Cannot reach server. Is it running?");
+        }
+      } finally {
+        setLoading(false);
       }
-      pushRecent(filePath.trim());
-      onClose();
-    } catch (err) {
-      console.error("FileOpenDialog: path open failed", err);
-      if (err instanceof SyntaxError) {
-        setError("Server returned an unexpected response");
-      } else if (err instanceof TypeError) {
-        setError("Unexpected response format");
-      } else {
-        setError("Cannot reach server. Is it running?");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [filePath, loading, onClose, pushRecent]);
+    },
+    [loading, onClose, pushRecent],
+  );
+
+  const handlePathSubmit = useCallback(() => {
+    if (!filePath.trim()) return;
+    openByPath(filePath.trim());
+  }, [filePath, openByPath]);
 
   const uploadFile = useCallback(
     async (file: File) => {
@@ -300,25 +307,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                         data-testid={`recent-file-${i}`}
                         onClick={() => {
                           setFilePath(p);
-                          pushRecent(p);
-                          // Trigger open
-                          setError(null);
-                          setLoading(true);
-                          fetch(`${API_BASE}/open`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ filePath: p }),
-                          })
-                            .then((res) => res.json().then((data) => ({ res, data })))
-                            .then(({ res, data }) => {
-                              if (!res.ok) {
-                                setError(data.message ?? "Failed to open file");
-                              } else {
-                                onClose();
-                              }
-                            })
-                            .catch(() => setError("Cannot reach server. Is it running?"))
-                            .finally(() => setLoading(false));
+                          openByPath(p);
                         }}
                         style={{
                           background: "none",

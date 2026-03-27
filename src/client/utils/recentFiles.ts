@@ -9,7 +9,10 @@ export function addRecentFile(list: string[], path: string, cap = RECENT_FILES_C
 export function loadRecentFiles(): string[] {
   try {
     const raw = localStorage.getItem(RECENT_FILES_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x): x is string => typeof x === "string");
   } catch {
     return [];
   }
