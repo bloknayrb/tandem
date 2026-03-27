@@ -10,6 +10,7 @@ let tmpDir: string;
 const TITLE_FROM = 2;
 const TITLE_TO = 15;
 const TITLE_TEXT = "Test Document";
+const SECOND_DOC_TITLE = "Second Document";
 
 /** Open sample.md and optionally add a comment on the title. */
 async function openWithComment(dir: string, content?: string): Promise<void> {
@@ -138,19 +139,17 @@ test("tab switching shows different documents", async ({ page }) => {
   await expect(tabs.nth(0)).toContainText("sample", { timeout: 5_000 });
   await expect(tabs.nth(1)).toContainText("sample", { timeout: 5_000 });
 
-  // Wait for either document to fully sync before interacting
-  await expect(editor).toContainText(/Test Document|Second Document/, { timeout: 10_000 });
+  // Wait for Yjs provider to sync before reading content
+  const titlePattern = new RegExp(`${TITLE_TEXT}|${SECOND_DOC_TITLE}`);
+  await expect(editor).toContainText(titlePattern, { timeout: 10_000 });
 
-  // Now safely determine which document is showing
   const initialText = await editor.textContent();
   const hasFirstDoc = initialText?.includes(TITLE_TEXT) ?? false;
 
-  // Click the OTHER tab
   const otherTab = hasFirstDoc ? tabs.nth(1) : tabs.nth(0);
   await otherTab.click();
 
-  // The editor should show the other document's content
-  const expectedText = hasFirstDoc ? "Second Document" : TITLE_TEXT;
+  const expectedText = hasFirstDoc ? SECOND_DOC_TITLE : TITLE_TEXT;
   await expect(editor).toContainText(expectedText, { timeout: 15_000 });
 });
 
