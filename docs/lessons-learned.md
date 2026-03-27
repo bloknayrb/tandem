@@ -156,3 +156,9 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 3. **Temp fixture dirs** per test via `fs.mkdtemp()` — each test gets unique file paths, preventing session restore interference from previous runs.
 
 **Also:** `workers: 1` is essential — the MCP server supports one session at a time. Parallel tests would fight over the transport. And flat-text offsets in test fixtures must account for heading prefixes (`# ` = 2 chars) — offset 0 is the `#`, not the text content.
+
+## 19. Centralize Y.Map Key Strings as Constants
+
+**Problem:** Y.Map key strings like `"annotations"`, `"awareness"`, `"chat"` appeared as raw string literals across 20+ files. A typo in any one of them creates a silently disconnected map — the writer pushes to one key while the reader observes another, with no runtime error or type error.
+
+**Solution:** Define all Y.Map keys as named exports in `shared/constants.ts` (`Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, `Y_MAP_USER_AWARENESS`, `Y_MAP_CHAT`, `Y_MAP_DOCUMENT_META`). Import the constant everywhere. TypeScript catches misspelled import names at compile time.

@@ -59,6 +59,8 @@ graph LR
     StatusBar -.->|observes| YDoc
 ```
 
+**Note:** Y.Map key strings (`'annotations'`, `'awareness'`, `'userAwareness'`, `'chat'`, `'documentMeta'`) are defined as named constants in `src/shared/constants.ts` (e.g., `Y_MAP_ANNOTATIONS`). All source code uses these constants — never raw strings.
+
 ## Data Flows
 
 ### Claude Edits the Document

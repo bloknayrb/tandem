@@ -15,7 +15,7 @@ import {
   broadcastOpenDocs,
 } from "../../src/server/mcp/document-service.js";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
-import { CTRL_ROOM } from "../../src/shared/constants.js";
+import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
 function makeOpenDoc(id: string, filePath = `/tmp/${id}.md`): OpenDoc {
   return { id, filePath, format: "md", readOnly: false, source: "file" };
@@ -184,7 +184,7 @@ describe("broadcastOpenDocs", () => {
     broadcastOpenDocs();
 
     const ctrl = getOrCreateDocument(CTRL_ROOM);
-    const meta = ctrl.getMap("documentMeta");
+    const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     const docs = meta.get("openDocuments") as any[];
     const activeId = meta.get("activeDocumentId");
 
@@ -202,12 +202,12 @@ describe("broadcastOpenDocs", () => {
     broadcastOpenDocs();
 
     const docA = getOrCreateDocument("room-a");
-    const metaA = docA.getMap("documentMeta");
+    const metaA = docA.getMap(Y_MAP_DOCUMENT_META);
     const docsA = metaA.get("openDocuments") as any[];
     expect(docsA).toHaveLength(2);
 
     const docB = getOrCreateDocument("room-b");
-    const metaB = docB.getMap("documentMeta");
+    const metaB = docB.getMap(Y_MAP_DOCUMENT_META);
     const docsB = metaB.get("openDocuments") as any[];
     expect(docsB).toHaveLength(2);
   });
@@ -216,7 +216,7 @@ describe("broadcastOpenDocs", () => {
     broadcastOpenDocs();
 
     const ctrl = getOrCreateDocument(CTRL_ROOM);
-    const meta = ctrl.getMap("documentMeta");
+    const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     const docs = meta.get("openDocuments") as any[];
     expect(docs).toEqual([]);
     expect(meta.get("activeDocumentId")).toBeNull();

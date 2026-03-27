@@ -7,7 +7,7 @@ import {
   loadCtrlSession,
   restoreCtrlDoc,
 } from "../session/manager.js";
-import { CTRL_ROOM } from "../../shared/constants.js";
+import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../shared/constants.js";
 import { randomUUID } from "node:crypto";
 
 // --- Multi-document state ---
@@ -103,7 +103,7 @@ export function broadcastOpenDocs(): void {
     const id = activeDocId;
 
     const ctrl = getOrCreateDocument(CTRL_ROOM);
-    const ctrlMeta = ctrl.getMap("documentMeta");
+    const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     ctrlMeta.set("openDocuments", docList);
     ctrlMeta.set("activeDocumentId", id);
 
@@ -112,7 +112,7 @@ export function broadcastOpenDocs(): void {
     // could fire the client's metaObserver and incorrectly remove tabs.
     for (const [docId] of openDocs) {
       const ydoc = getOrCreateDocument(docId);
-      const meta = ydoc.getMap("documentMeta");
+      const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
       meta.set("openDocuments", docList);
       meta.set("activeDocumentId", id);
     }
@@ -140,7 +140,7 @@ export async function restoreCtrlSession(): Promise<void> {
 
     // Clear stale document tracking — no docs are actually open after a restart.
     // Chat history is preserved; only the document list is wiped.
-    const meta = ctrlDoc.getMap("documentMeta");
+    const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
     meta.delete("openDocuments");
     meta.delete("activeDocumentId");
 
@@ -151,7 +151,7 @@ export async function restoreCtrlSession(): Promise<void> {
 /** Write a unique generationId to the ctrl doc so clients can detect server restarts. */
 export function writeGenerationId(): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const meta = ctrlDoc.getMap("documentMeta");
+  const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
   const generationId = randomUUID();
   meta.set("generationId", generationId);
   console.error(`[Tandem] Server generationId: ${generationId}`);

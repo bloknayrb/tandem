@@ -33,5 +33,12 @@ export const CLAUDE_FOCUS_OPACITY = 0.1;
 
 export const CTRL_ROOM = "__tandem_ctrl__";
 
+/** Y.Map key constants — centralized to prevent silent bugs from string typos. */
+export const Y_MAP_ANNOTATIONS = "annotations";
+export const Y_MAP_AWARENESS = "awareness";
+export const Y_MAP_USER_AWARENESS = "userAwareness";
+export const Y_MAP_CHAT = "chat";
+export const Y_MAP_DOCUMENT_META = "documentMeta";
+
 export const SERVER_INFO_DIR = ".tandem";
 export const SERVER_INFO_FILE = ".tandem/.server-info";

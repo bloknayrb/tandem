@@ -48,7 +48,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ## Key Patterns
 - All document mutations go through the server's Y.Doc
 - Claude's MCP tools mutate Y.Doc directly -> changes sync to browser via Hocuspocus
-- Annotations stored in Y.Map('annotations'), not in the document content
+- Annotations stored in Y.Map('annotations'), not in the document content. Y.Map key strings are centralized in `shared/constants.ts` (`Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, etc.) — never use raw string literals for Y.Map keys.
 - Claude's status stored in Y.Map('awareness') key 'claude'; user's selection in Y.Map('userAwareness')
 - Server logs use console.error (stdout reserved for MCP protocol in stdio mode; defense-in-depth in HTTP mode)
 - Ranges use `validateRange()` and `anchoredRange()` for safe targeting (not raw offsets)

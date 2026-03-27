@@ -3,7 +3,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
-import { HIGHLIGHT_COLORS } from "../../../shared/constants";
+import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";
 
@@ -114,7 +114,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     const ydoc = this.options.ydoc;
     if (!ydoc) return [];
 
-    const annotationsMap = ydoc.getMap("annotations");
+    const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     return [
       new Plugin({

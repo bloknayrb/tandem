@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
 import { pmPosToFlatOffset } from "../../positions";
 import { generateAnnotationId } from "../../../shared/utils";
-import { HIGHLIGHT_COLORS } from "../../../shared/constants";
+import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
@@ -107,7 +107,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       ...(color ? { color } : {}),
     };
 
-    ydoc.getMap("annotations").set(id, annotation);
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
     capturedRangeRef.current = null;
   }
 

@@ -1,3 +1,4 @@
+import { Y_MAP_AWARENESS } from "../../shared/constants.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -145,7 +146,7 @@ export function registerNavigationTools(server: McpServer): void {
         });
       }
       const doc = getOrCreateDocument(current.docName);
-      const awarenessMap = doc.getMap("awareness");
+      const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
       awarenessMap.set("claude", {
         status: text,
         timestamp: Date.now(),

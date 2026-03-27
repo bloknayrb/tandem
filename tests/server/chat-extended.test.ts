@@ -1,3 +1,4 @@
+import { Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { describe, it, expect } from "vitest";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { generateMessageId } from "../../src/shared/utils.js";
@@ -6,7 +7,7 @@ import type { ChatMessage } from "../../src/shared/types.js";
 describe("chat message pruning logic", () => {
   it("prunes old messages keeping newest 200", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_prune_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     // Add 250 messages
     for (let i = 0; i < 250; i++) {
@@ -49,7 +50,7 @@ describe("chat message pruning logic", () => {
 
   it("does not prune when under 200 messages", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_prune_2__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     for (let i = 0; i < 50; i++) {
       const id = `msg_small_${i}`;
@@ -74,7 +75,7 @@ describe("chat message pruning logic", () => {
 describe("chat message ordering", () => {
   it("messages can be sorted by timestamp", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_order_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     // Add messages out of order
     chatMap.set("msg_3", {
@@ -112,7 +113,7 @@ describe("chat message ordering", () => {
 describe("chat message document context", () => {
   it("messages can reference a specific document", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_docctx_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     const msg: ChatMessage = {
       id: generateMessageId(),
@@ -130,7 +131,7 @@ describe("chat message document context", () => {
 
   it("messages can include text anchors", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_anchor_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     const msg: ChatMessage = {
       id: generateMessageId(),
@@ -153,7 +154,7 @@ describe("chat message document context", () => {
 describe("chat message reply threading", () => {
   it("builds a conversation thread via replyTo", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_thread_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     const msg1: ChatMessage = {
       id: "msg_thread_1",
@@ -195,7 +196,7 @@ describe("chat message reply threading", () => {
 describe("chat mixed author messages", () => {
   it("separates user and claude messages in inbox", () => {
     const ctrlDoc = getOrCreateDocument("__tandem_ctrl_mixed_1__");
-    const chatMap = ctrlDoc.getMap("chat");
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
     chatMap.set("u1", {
       id: "u1",

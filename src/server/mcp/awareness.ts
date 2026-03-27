@@ -6,7 +6,12 @@ import { collectAnnotations, refreshRange } from "./annotations.js";
 import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 import type { Annotation, ChatMessage } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
-import { CTRL_ROOM } from "../../shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
+  Y_MAP_USER_AWARENESS,
+} from "../../shared/constants.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox
 const surfacedIds = new Set<string>();
@@ -31,7 +36,7 @@ export function registerAwarenessTools(server: McpServer): void {
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap("userAwareness");
+      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       const selection = userAwareness.get("selection") as
         | { from: number; to: number; timestamp: number }
         | undefined;
@@ -61,7 +66,7 @@ export function registerAwarenessTools(server: McpServer): void {
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap("userAwareness");
+      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       const activity = userAwareness.get("activity") as
         | {
             isTyping: boolean;
@@ -105,7 +110,7 @@ export function registerAwarenessTools(server: McpServer): void {
       if (!current) return noDocumentError();
 
       const doc = getOrCreateDocument(current.docName);
-      const annotationsMap = doc.getMap("annotations");
+      const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
       const allAnnotations = collectAnnotations(annotationsMap);
       const fullText = extractText(doc);
 
@@ -137,7 +142,7 @@ export function registerAwarenessTools(server: McpServer): void {
 
       // Bucket 3: unread chat messages from CTRL_ROOM
       const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-      const chatMap = ctrlDoc.getMap("chat");
+      const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
       const chatMessages: Array<Omit<ChatMessage, "read" | "author">> = [];
 
       chatMap.forEach((value) => {
@@ -157,7 +162,7 @@ export function registerAwarenessTools(server: McpServer): void {
       });
 
       // Current user activity
-      const userAwareness = doc.getMap("userAwareness");
+      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       const selection = userAwareness.get("selection") as
         | { from: number; to: number; timestamp: number }
         | undefined;
@@ -231,7 +236,7 @@ export function registerAwarenessTools(server: McpServer): void {
     },
     withErrorBoundary("tandem_reply", async ({ text, replyTo, documentId }) => {
       const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-      const chatMap = ctrlDoc.getMap("chat");
+      const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
       const id = generateMessageId();
       const current = getCurrentDoc(documentId);

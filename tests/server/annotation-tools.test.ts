@@ -1,3 +1,4 @@
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { describe, it, expect, beforeEach } from "vitest";
 import * as Y from "yjs";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -33,7 +34,7 @@ beforeEach(() => {
 describe("tandem_highlight tool logic", () => {
   it("creates highlight annotation with color", () => {
     const ydoc = setupDoc("hl-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "highlight", rangeOf(0, 5, ydoc), "", { color: "yellow" });
 
     const stored = map.get(id) as Annotation;
@@ -45,7 +46,7 @@ describe("tandem_highlight tool logic", () => {
 
   it("supports all highlight colors", () => {
     const ydoc = setupDoc("hl-2", "Hello world test content here");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     for (const color of ["yellow", "red", "green", "blue", "purple"] as const) {
       const id = createAnnotation(map, "highlight", rangeOf(0, 5, ydoc), "", { color });
@@ -56,7 +57,7 @@ describe("tandem_highlight tool logic", () => {
 
   it("supports priority field", () => {
     const ydoc = setupDoc("hl-3", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "highlight", rangeOf(0, 5, ydoc), "", { priority: "urgent" });
 
     const stored = map.get(id) as Annotation;
@@ -67,7 +68,7 @@ describe("tandem_highlight tool logic", () => {
 describe("tandem_comment tool logic", () => {
   it("creates comment with text content", () => {
     const ydoc = setupDoc("cm-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "comment", rangeOf(0, 5, ydoc), "This needs revision");
 
     const stored = map.get(id) as Annotation;
@@ -79,7 +80,7 @@ describe("tandem_comment tool logic", () => {
 describe("tandem_suggest tool logic", () => {
   it("creates suggestion with JSON content", () => {
     const ydoc = setupDoc("sg-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const content = JSON.stringify({ newText: "Hi", reason: "more concise" });
     const id = createAnnotation(map, "suggestion", rangeOf(0, 5, ydoc), content);
 
@@ -92,7 +93,7 @@ describe("tandem_suggest tool logic", () => {
 
   it("handles empty reason", () => {
     const ydoc = setupDoc("sg-2", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const content = JSON.stringify({ newText: "Hi", reason: "" });
     const id = createAnnotation(map, "suggestion", rangeOf(0, 5, ydoc), content);
 
@@ -105,7 +106,7 @@ describe("tandem_suggest tool logic", () => {
 describe("tandem_flag tool logic", () => {
   it("creates flag annotation", () => {
     const ydoc = setupDoc("fl-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "flag", rangeOf(0, 5, ydoc), "Needs review");
 
     const stored = map.get(id) as Annotation;
@@ -115,7 +116,7 @@ describe("tandem_flag tool logic", () => {
 
   it("flag with no note has empty content", () => {
     const ydoc = setupDoc("fl-2", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "flag", rangeOf(0, 5, ydoc), "");
 
     const stored = map.get(id) as Annotation;
@@ -125,7 +126,7 @@ describe("tandem_flag tool logic", () => {
 
 describe("tandem_getAnnotations tool logic", () => {
   function populateAnnotations(ydoc: Y.Doc) {
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "comment", rangeOf(0, 5, ydoc), "comment 1", { author: "claude" });
     createAnnotation(map, "highlight", rangeOf(0, 5), "", { author: "user", color: "yellow" });
     createAnnotation(
@@ -191,7 +192,7 @@ describe("tandem_getAnnotations tool logic", () => {
 describe("tandem_resolveAnnotation tool logic", () => {
   it("accepts an annotation", () => {
     const ydoc = setupDoc("ra-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "comment", rangeOf(0, 5), "review me");
 
     const ann = map.get(id) as Annotation;
@@ -203,7 +204,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
 
   it("dismisses an annotation", () => {
     const ydoc = setupDoc("ra-2", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "comment", rangeOf(0, 5), "review me");
 
     const ann = map.get(id) as Annotation;
@@ -215,7 +216,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
 
   it("returns error for non-existent annotation ID", () => {
     const ydoc = setupDoc("ra-3", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const ann = map.get("fake_id") as Annotation | undefined;
     expect(ann).toBeUndefined();
   });
@@ -224,7 +225,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
 describe("tandem_removeAnnotation tool logic", () => {
   it("removes annotation from map", () => {
     const ydoc = setupDoc("rm-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "comment", rangeOf(0, 5), "to remove");
 
     expect(map.has(id)).toBe(true);
@@ -234,7 +235,7 @@ describe("tandem_removeAnnotation tool logic", () => {
 
   it("returns false for non-existent annotation", () => {
     const ydoc = setupDoc("rm-2", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     expect(map.has("nonexistent")).toBe(false);
   });
 });
@@ -242,7 +243,7 @@ describe("tandem_removeAnnotation tool logic", () => {
 describe("tandem_exportAnnotations tool logic", () => {
   it("exports markdown summary", () => {
     const ydoc = setupDoc("ex-1", "Hello world test content");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "comment", rangeOf(0, 5, ydoc), "Nice intro");
     createAnnotation(map, "highlight", rangeOf(6, 11, ydoc), "", { color: "yellow" });
     createAnnotation(
@@ -269,7 +270,7 @@ describe("tandem_exportAnnotations tool logic", () => {
 
   it("exports JSON format with text snippets", () => {
     const ydoc = setupDoc("ex-3", "Hello world test content");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, "comment", rangeOf(0, 5, ydoc), "Note");
 
     const annotations = collectAnnotations(map);
@@ -322,7 +323,7 @@ describe("annotation stale range detection", () => {
 describe("annotation CRDT-anchored positions", () => {
   it("annotations with relRange survive edits", () => {
     const ydoc = setupDoc("crdt-1", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "comment", rangeOf(6, 11, ydoc), "note on world");
 
     const ann = map.get(id) as Annotation;
@@ -342,7 +343,7 @@ describe("annotation CRDT-anchored positions", () => {
 
   it("annotations without relRange get it lazily attached", () => {
     const ydoc = setupDoc("crdt-2", "Hello world");
-    const map = ydoc.getMap("annotations");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, "comment", rangeOf(0, 5), "note"); // no ydoc
 
     const ann = map.get(id) as Annotation;
@@ -358,8 +359,8 @@ describe("annotation on multi-document", () => {
     const ydoc1 = setupDoc("md-1", "Doc one");
     const ydoc2 = setupDoc("md-2", "Doc two");
 
-    const map1 = ydoc1.getMap("annotations");
-    const map2 = ydoc2.getMap("annotations");
+    const map1 = ydoc1.getMap(Y_MAP_ANNOTATIONS);
+    const map2 = ydoc2.getMap(Y_MAP_ANNOTATIONS);
 
     createAnnotation(map1, "comment", rangeOf(0, 3), "on doc 1");
     createAnnotation(map2, "highlight", rangeOf(0, 3), "", { color: "red" });
