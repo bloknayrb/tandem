@@ -13,6 +13,11 @@ import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
 import { saveSession, stopAutoSave } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
+import {
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_CONTENT_VERSION,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../shared/constants.js";
 
 // Document model (pure logic)
 import {
@@ -411,6 +416,14 @@ export function registerDocumentTools(server: McpServer): void {
         const output = adapter.save(r.doc)!;
         await atomicWrite(r.filePath, output);
         await saveSession(r.filePath, format, r.doc);
+
+        // Mark document clean: savedAtVersion catches up to contentVersion
+        const meta = r.doc.getMap(Y_MAP_DOCUMENT_META);
+        const currentVersion = meta.get(Y_MAP_CONTENT_VERSION);
+        if (currentVersion !== undefined) {
+          meta.set(Y_MAP_SAVED_AT_VERSION, currentVersion);
+        }
+
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
         const errCode = (err as NodeJS.ErrnoException).code;
