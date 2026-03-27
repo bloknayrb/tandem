@@ -42,3 +42,6 @@ export const Y_MAP_DOCUMENT_META = "documentMeta";
 
 export const SERVER_INFO_DIR = ".tandem";
 export const SERVER_INFO_FILE = ".tandem/.server-info";
+
+export const RECENT_FILES_KEY = "tandem:recentFiles";
+export const RECENT_FILES_CAP = 20;
