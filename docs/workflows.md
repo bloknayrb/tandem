@@ -217,6 +217,16 @@ When all annotations are resolved, a **Review Summary** overlay appears showing:
 
 For bulk operations, use **Accept All** or **Dismiss All** buttons in the side panel header.
 
+### Interruption Modes
+
+The status bar includes an interruption mode selector with three settings:
+
+- **All** — Show all annotations immediately (default)
+- **Urgent** — Only show flags, questions, and annotations with `priority: 'urgent'`. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
+- **Paused** — Hold all new pending annotations. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+
+This lets Bryan control how aggressively Claude's annotations interrupt the editing flow. During focused writing, switch to Paused; when ready to review, switch back to All.
+
 ## Session Handoff
 
 **What persists** across server restarts (via session persistence):

@@ -35,6 +35,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
 - AwarenessExtension renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
 - SidePanel: annotation filtering (type/author/status), bulk accept/dismiss, keyboard review mode (Tab/Y/N)
+- StatusBar: connection status, Claude activity, interruption mode selector (All/Urgent/Paused). Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions.
 - ReviewSummary overlay shown when all pending annotations are resolved
 
 ### Shared (src/shared/)

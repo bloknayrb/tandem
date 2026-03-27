@@ -1,14 +1,16 @@
-import { useMemo } from 'react';
-import type { Annotation, InterruptionMode } from '../../shared/types';
+import { useMemo } from "react";
+import type { Annotation, InterruptionMode } from "../../shared/types";
 
 /**
  * Pure function: should an annotation be shown given the current mode?
  * Resolved annotations are always visible.
  */
 export function shouldShow(ann: Annotation, mode: InterruptionMode): boolean {
-  if (ann.status !== 'pending') return true;
-  if (mode === 'all') return true;
-  if (mode === 'urgent-only') return ann.priority === 'urgent';
+  if (ann.status !== "pending") return true;
+  if (mode === "all") return true;
+  if (mode === "urgent-only") {
+    return ann.priority === "urgent" || ann.type === "flag" || ann.type === "question";
+  }
   return false; // paused
 }
 
@@ -19,7 +21,7 @@ export function useAnnotationGate(annotations: Annotation[], mode: InterruptionM
     for (const a of annotations) {
       if (shouldShow(a, mode)) {
         visibleAnnotations.push(a);
-      } else if (a.status === 'pending') {
+      } else if (a.status === "pending") {
         heldCount++;
       }
     }

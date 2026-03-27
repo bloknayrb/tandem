@@ -392,7 +392,7 @@ Flag a text range for attention (e.g., issues, concerns, or items needing review
 | `to` | number | Yes | End position (character offset) |
 | `note` | string | No | Reason for flagging |
 | `documentId` | string | No | Target document ID (defaults to active document) |
-| `priority` | `'normal'` \| `'urgent'` | No | Annotation priority — urgent bypasses Hold mode |
+| `priority` | `'normal'` \| `'urgent'` | No | Annotation priority. Set to 'urgent' for critical issues visible in urgent-only mode. Flags and questions are implicitly urgent. |
 | `textSnapshot` | string | No | Expected text at range — returns RANGE_STALE if moved |
 
 **Returns:** `{ annotationId: string }`
