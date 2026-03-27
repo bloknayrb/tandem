@@ -5,6 +5,7 @@ import type { SessionData } from "../../shared/types.js";
 import { SESSION_DIR } from "../platform.js";
 
 import { SESSION_MAX_AGE, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
 let sessionDirReady = false;
@@ -116,9 +117,11 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
   if (entries.length > 200) {
     entries.sort((a, b) => a.timestamp - b.timestamp);
     const toDelete = entries.slice(0, entries.length - 200);
-    for (const entry of toDelete) {
-      chatMap.delete(entry.id);
-    }
+    doc.transact(() => {
+      for (const entry of toDelete) {
+        chatMap.delete(entry.id);
+      }
+    }, MCP_ORIGIN);
   }
 
   const state = Y.encodeStateAsUpdate(doc);

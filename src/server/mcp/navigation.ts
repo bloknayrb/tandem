@@ -1,4 +1,5 @@
 import { Y_MAP_AWARENESS } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -147,12 +148,16 @@ export function registerNavigationTools(server: McpServer): void {
       }
       const doc = getOrCreateDocument(current.docName);
       const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-      awarenessMap.set("claude", {
-        status: text,
-        timestamp: Date.now(),
-        active: true,
-        focusParagraph: focusParagraph ?? null,
-      });
+      doc.transact(
+        () =>
+          awarenessMap.set("claude", {
+            status: text,
+            timestamp: Date.now(),
+            active: true,
+            focusParagraph: focusParagraph ?? null,
+          }),
+        MCP_ORIGIN,
+      );
       return mcpSuccess({ status: text });
     }),
   );

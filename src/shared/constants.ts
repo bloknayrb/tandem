@@ -49,3 +49,10 @@ export const RECENT_FILES_CAP = 20;
 
 export const USER_NAME_KEY = "tandem:userName";
 export const USER_NAME_DEFAULT = "You";
+
+// Channel / event queue
+export const CHANNEL_EVENT_BUFFER_SIZE = 200;
+export const CHANNEL_EVENT_BUFFER_AGE_MS = 60_000; // 60 seconds
+export const CHANNEL_SSE_KEEPALIVE_MS = 15_000; // 15 seconds
+export const CHANNEL_MAX_RETRIES = 5;
+export const CHANNEL_RETRY_DELAY_MS = 2_000;

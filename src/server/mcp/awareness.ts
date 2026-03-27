@@ -12,6 +12,7 @@ import {
   Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox
 const surfacedIds = new Set<string>();
@@ -126,7 +127,7 @@ export function registerAwarenessTools(server: McpServer): void {
           if (surfacedIds.has(raw.id)) continue;
           unsurfaced.push(refreshRange(raw, doc, annotationsMap));
         }
-      });
+      }, MCP_ORIGIN);
 
       for (const ann of unsurfaced) {
         const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
@@ -157,7 +158,7 @@ export function registerAwarenessTools(server: McpServer): void {
             ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
           });
           // Mark as read
-          chatMap.set(msg.id, { ...msg, read: true });
+          ctrlDoc.transact(() => chatMap.set(msg.id, { ...msg, read: true }), MCP_ORIGIN);
         }
       });
 
@@ -252,7 +253,7 @@ export function registerAwarenessTools(server: McpServer): void {
         read: true,
       };
 
-      chatMap.set(id, msg);
+      ctrlDoc.transact(() => chatMap.set(id, msg), MCP_ORIGIN);
 
       return mcpSuccess({ sent: true, messageId: id });
     }),

@@ -13,6 +13,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 import { getAdapter } from "../file-io/index.js";
 import {
   saveSession,
@@ -200,7 +201,7 @@ export async function openFileFromContent(
 /** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
 function initSavedBaseline(doc: Y.Doc): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
 }
 
 function writeDocMeta(
@@ -211,10 +212,12 @@ function writeDocMeta(
   readOnly: boolean,
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  meta.set("readOnly", readOnly);
-  meta.set("format", format);
-  meta.set("documentId", id);
-  meta.set("fileName", fileName);
+  doc.transact(() => {
+    meta.set("readOnly", readOnly);
+    meta.set("format", format);
+    meta.set("documentId", id);
+    meta.set("fileName", fileName);
+  }, MCP_ORIGIN);
 }
 
 function buildResult(

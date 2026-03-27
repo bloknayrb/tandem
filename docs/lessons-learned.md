@@ -162,3 +162,27 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 **Problem:** Y.Map key strings like `"annotations"`, `"awareness"`, `"chat"` appeared as raw string literals across 20+ files. A typo in any one of them creates a silently disconnected map — the writer pushes to one key while the reader observes another, with no runtime error or type error.
 
 **Solution:** Define all Y.Map keys as named exports in `shared/constants.ts` (`Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, `Y_MAP_USER_AWARENESS`, `Y_MAP_CHAT`, `Y_MAP_DOCUMENT_META`). Import the constant everywhere. TypeScript catches misspelled import names at compile time.
+
+## 20. Y.Map Origin Tagging for Echo Prevention
+
+**Problem:** When the channel shim forwards real-time events to Claude Code, Claude must not receive notifications for its own tool calls. Without filtering, a `tandem_comment` call would trigger an `annotation:created` event that the shim would push back to Claude, creating confusion and wasted tokens.
+
+**Solution:** All MCP-initiated Y.Map writes wrap mutations in `doc.transact(() => { ... }, 'mcp')`. Y.Map observers in the event queue check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions. The `MCP_ORIGIN` constant is exported from `events/queue.ts` and imported at all ~15 callsites across 9 files.
+
+**Impact:** Critical for channel correctness. Browser-originated changes use Hocuspocus Connection objects as the transaction origin, which are always distinct from the `'mcp'` string.
+
+## 21. Hocuspocus Session Restore Creates "add" Not "update" Events
+
+**Problem:** During testing, Y.Map observers on the annotations map saw `change.action === "add"` for annotations that were already accepted/dismissed. The observer only emits `annotation:accepted`/`annotation:dismissed` events for `change.action === "update"` (which fires when a browser user changes an existing annotation's status). On server restart, session restore replays the entire Y.Doc state — all annotations appear as fresh `"add"` events, not `"update"` events, even if their status is already `"accepted"`.
+
+**Solution:** This is correct and intentional. The event queue should not replay old accept/dismiss decisions on server restart — those were already delivered to Claude in the previous session. Only live user actions (real-time `"update"` changes) should trigger push events.
+
+**Impact:** Low — this is working as designed. But it's surprising during manual testing if you expect to see events for previously-resolved annotations after a server restart.
+
+## 22. Channels API Meta Keys Must Use Underscores
+
+**Problem:** The Claude Code Channels API silently drops meta keys containing hyphens. Event metadata like `{ "document-id": "..." }` arrives at Claude Code as an empty object.
+
+**Solution:** Use underscores in all meta keys: `document_id`, `annotation_id`, `event_type`, `message_id`. The `formatEventMeta()` function in `events/types.ts` enforces this convention.
+
+**Impact:** Subtle — the meta appears to be set correctly on the server side, but Claude Code never receives it. No error is reported. Discovered during initial channel integration testing.

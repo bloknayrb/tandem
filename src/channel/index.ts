@@ -1,0 +1,148 @@
+#!/usr/bin/env node
+/**
+ * Tandem Channel Shim — Claude Code spawns this as a subprocess.
+ *
+ * Bridges Tandem's SSE event stream → Claude Code channel notifications,
+ * and exposes a `tandem_reply` tool for Claude to respond to chat messages.
+ *
+ * Uses the low-level MCP `Server` class (not `McpServer`) as required by
+ * the Channels API spec.
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
+import { startEventBridge } from "./event-bridge.js";
+
+// stdout is the MCP wire — redirect console.log to stderr
+console.log = console.error;
+console.warn = console.error;
+console.info = console.error;
+
+const TANDEM_URL = process.env.TANDEM_URL || "http://localhost:3479";
+
+// --- MCP Server setup ---
+
+const mcp = new Server(
+  { name: "tandem-channel", version: "0.1.0" },
+  {
+    capabilities: {
+      experimental: {
+        "claude/channel": {},
+        "claude/channel/permission": {},
+      },
+      tools: {},
+    },
+    instructions: [
+      'Events from Tandem arrive as <channel source="tandem-channel" event_type="..." document_id="...">.',
+      "These are real-time push notifications of user actions in the collaborative document editor.",
+      "Event types: annotation_created, annotation_accepted, annotation_dismissed,",
+      "chat_message, selection_changed, document_opened, document_closed, document_switched.",
+      "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_highlight, etc.) to act on them.",
+      "Reply to chat messages using tandem_reply. Pass document_id from the tag attributes.",
+      "Do not reply to non-chat events — just act on them using tools.",
+      "If you haven't received channel notifications recently, call tandem_checkInbox as a fallback.",
+    ].join(" "),
+  },
+);
+
+// --- Tool: tandem_reply (forwarded to Tandem HTTP server) ---
+
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "tandem_reply",
+      description: "Reply to a chat message in Tandem",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          text: { type: "string", description: "The reply message" },
+          documentId: {
+            type: "string",
+            description: "Document ID from the channel event (optional)",
+          },
+          replyTo: {
+            type: "string",
+            description: "Message ID being replied to (optional)",
+          },
+        },
+        required: ["text"],
+      },
+    },
+  ],
+}));
+
+mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  if (req.params.name === "tandem_reply") {
+    const args = req.params.arguments as Record<string, unknown>;
+    try {
+      const res = await fetch(`${TANDEM_URL}/api/channel-reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to send reply: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  throw new Error(`Unknown tool: ${req.params.name}`);
+});
+
+// --- Permission relay: forward Claude Code's tool approval prompts to Tandem browser ---
+
+const PermissionRequestSchema = z.object({
+  method: z.literal("notifications/claude/channel/permission_request"),
+  params: z.object({
+    request_id: z.string(),
+    tool_name: z.string(),
+    description: z.string(),
+    input_preview: z.string(),
+  }),
+});
+
+mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
+  try {
+    await fetch(`${TANDEM_URL}/api/channel-permission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId: params.request_id,
+        toolName: params.tool_name,
+        description: params.description,
+        inputPreview: params.input_preview,
+      }),
+    });
+  } catch (err) {
+    console.error("[Channel] Failed to forward permission request:", err);
+  }
+});
+
+// --- Connect and start ---
+
+async function main() {
+  console.error(`[Channel] Tandem channel shim starting (server: ${TANDEM_URL})`);
+
+  // Connect to Claude Code over stdio
+  const transport = new StdioServerTransport();
+  await mcp.connect(transport);
+  console.error("[Channel] Connected to Claude Code via stdio");
+
+  // Start the SSE event bridge (runs until disconnected or max retries)
+  startEventBridge(mcp, TANDEM_URL);
+}
+
+main().catch((err) => {
+  console.error("[Channel] Fatal error:", err);
+  process.exit(1);
+});

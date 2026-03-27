@@ -18,6 +18,7 @@
 
 import * as Y from "yjs";
 import type { Annotation } from "../shared/types.js";
+import { MCP_ORIGIN } from "./events/queue.js";
 import type {
   DocumentRange,
   RelativeRange,
@@ -311,6 +312,6 @@ export function refreshAllRanges(
     for (const ann of annotations) {
       results.push(refreshRange(ann, ydoc, map));
     }
-  });
+  }, MCP_ORIGIN);
   return results;
 }

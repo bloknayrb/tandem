@@ -13,6 +13,8 @@
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit",
     "server": "tsx src/server/index.ts",
     "start:server": "node dist/server/index.js",
+    "channel": "tsx src/channel/index.ts",
+    "start:channel": "node dist/channel/index.js",
     "test": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

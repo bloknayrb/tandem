@@ -11,7 +11,7 @@ describe("annotation textSnapshot", () => {
   it("stores textSnapshot when provided via extras", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, "comment", makeResult(0, 10), "Nice paragraph", {
+    const id = createAnnotation(map, ydoc, "comment", makeResult(0, 10), "Nice paragraph", {
       textSnapshot: "hello worl",
     });
     const annotations = collectAnnotations(map);
@@ -23,7 +23,7 @@ describe("annotation textSnapshot", () => {
   it("works without textSnapshot (legacy compatibility)", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, "highlight", makeResult(0, 5), "Looks good");
+    const id = createAnnotation(map, ydoc, "highlight", makeResult(0, 5), "Looks good");
     const annotations = collectAnnotations(map);
     const stored = annotations.find((a) => a.id === id);
     expect(stored).toBeDefined();
@@ -33,7 +33,7 @@ describe("annotation textSnapshot", () => {
   it("stores textSnapshot alongside priority", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, "flag", makeResult(5, 20), "Needs review", {
+    const id = createAnnotation(map, ydoc, "flag", makeResult(5, 20), "Needs review", {
       priority: "urgent",
       textSnapshot: "flagged text",
     });
