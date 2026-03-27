@@ -205,6 +205,8 @@ export async function openFileFromContent(
  */
 function attachVersionTracking(doc: Y.Doc): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  // Guard: skip if already tracking (handles re-open of same Y.Doc instance)
+  if (meta.get(Y_MAP_CONTENT_VERSION) !== undefined) return;
   let contentVersion = 0;
   meta.set(Y_MAP_CONTENT_VERSION, contentVersion);
   meta.set(Y_MAP_SAVED_AT_VERSION, contentVersion);
