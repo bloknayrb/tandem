@@ -27,6 +27,14 @@ function buildDecorations(
 
     const resolved = annotationToPmRange(ann, doc, ydoc);
     if (!resolved) return;
+
+    if (ann.relRange && resolved.method === "flat") {
+      console.warn(
+        "[annotation] relRange-equipped annotation %s fell back to flat offsets",
+        ann.id,
+      );
+    }
+
     const { from, to } = resolved;
 
     // Skip invalid ranges
