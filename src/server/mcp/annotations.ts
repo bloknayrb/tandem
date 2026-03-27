@@ -1,4 +1,5 @@
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -58,9 +59,11 @@ function captureSnapshot(ydoc: Y.Doc, from: number, to: number): string {
 }
 export { generateId };
 
-/** Create an annotation from an anchored range result and store it in the Y.Map. Returns the annotation ID. */
+/** Create an annotation from an anchored range result and store it in the Y.Map.
+ *  The ydoc parameter is required for origin-tagged transactions (prevents channel echo). */
 export function createAnnotation(
   map: Y.Map<unknown>,
+  ydoc: Y.Doc,
   type: AnnotationType,
   anchored: AnchoredRangeResult,
   content: string,
@@ -79,7 +82,7 @@ export function createAnnotation(
     timestamp: Date.now(),
     ...extras,
   };
-  map.set(id, annotation);
+  ydoc.transact(() => map.set(id, annotation), MCP_ORIGIN);
   return id;
 }
 
@@ -123,7 +126,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, "highlight", result, note || "", {
+        const id = createAnnotation(da.map, da.ydoc, "highlight", result, note || "", {
           color: color as HighlightColor,
           ...(priority ? { priority } : {}),
           textSnapshot: snap,
@@ -162,7 +165,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, "comment", result, text, {
+        const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
           ...(priority ? { priority } : {}),
           textSnapshot: snap,
         });
@@ -203,6 +206,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(
           da.map,
+          da.ydoc,
           "suggestion",
           result,
           JSON.stringify({ newText, reason: reason || "" }),
@@ -242,7 +246,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) return rangeFailureToError(result);
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, "flag", result, note || "", {
+        const id = createAnnotation(da.map, da.ydoc, "flag", result, note || "", {
           ...(priority ? { priority } : {}),
           textSnapshot: snap,
         });
@@ -298,7 +302,7 @@ export function registerAnnotationTools(server: McpServer): void {
         ...ann,
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
       };
-      da.map.set(id, updated);
+      da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
       return mcpSuccess({ id, status: updated.status });
     }),
   );
@@ -317,7 +321,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
       if (!da.map.has(id)) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
-      da.map.delete(id);
+      da.ydoc.transact(() => da.map.delete(id), MCP_ORIGIN);
       return mcpSuccess({ removed: true, id });
     }),
   );

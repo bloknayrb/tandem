@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 26 tools via MCP (Model Context Protocol) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 26 tools via MCP HTTP (Model Context Protocol) plus 1 tool via the channel shim (`tandem_reply`) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -733,4 +733,107 @@ Uploaded files are always read-only — there is no disk path to save to. The sy
 
 ### CORS
 
-Both `/api/*` endpoints include CORS headers for `http://localhost:5173` (the Vite dev server). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
+Both `/api/*` endpoints include CORS headers reflecting any `http://localhost:*` origin (dynamic, not hardcoded port). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
+
+---
+
+## Channel API (Real-Time Push)
+
+The channel API endpoints support the Tandem channel shim, which pushes real-time events from the browser to Claude Code via the Channels API. These are NOT MCP tools — they are HTTP endpoints on port 3479.
+
+### GET /api/events
+
+SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`.
+
+**Headers:**
+- `Accept: text/event-stream`
+- `Last-Event-ID` (optional) — for reconnection replay
+
+**Stream format:**
+```
+: connected
+
+id: evt_1710936000000_a1b2c3
+data: {"id":"evt_1710936000000_a1b2c3","type":"chat:message","timestamp":1710936000000,"documentId":"report-a1b2c3","payload":{"messageId":"msg_...","text":"Hello"}}
+
+: keepalive
+```
+
+Events are only emitted for browser-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.
+
+### POST /api/channel-awareness
+
+Channel shim reports Claude's current processing status for the browser StatusBar.
+
+**Request:**
+```json
+{ "status": "processing: chat:message", "documentId": "report-a1b2c3", "active": true }
+```
+
+**Response:** `{ "ok": true }`
+
+### POST /api/channel-reply
+
+Channel shim forwards Claude's chat reply to the Y.Map('chat') on `__tandem_ctrl__`.
+
+**Request:**
+```json
+{ "text": "I'll review that section.", "documentId": "report-a1b2c3", "replyTo": "msg_..." }
+```
+
+**Response:** `{ "sent": true, "messageId": "msg_1710936000000_x1y2z3" }`
+
+### POST /api/channel-error
+
+Channel shim reports connection errors.
+
+**Request:**
+```json
+{ "error": "CHANNEL_CONNECT_FAILED", "message": "Lost connection after 5 retries" }
+```
+
+**Response:** `{ "ok": true }`
+
+### POST /api/channel-permission
+
+Channel shim forwards Claude Code's tool approval prompt for browser-side permission UI.
+
+**Request:**
+```json
+{ "requestId": "req_1", "toolName": "tandem_edit", "description": "Edit paragraph 1", "inputPreview": "..." }
+```
+
+**Response:** `{ "ok": true }`
+
+### GET /api/channel-permission
+
+Poll pending permission requests (for browser UI).
+
+**Response:**
+```json
+{ "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
+```
+
+Stale requests (>30s) are evicted automatically.
+
+### POST /api/channel-permission-verdict
+
+Browser submits allow/deny verdict for a permission request.
+
+**Request:**
+```json
+{ "requestId": "req_1", "approved": true }
+```
+
+**Response:** `{ "ok": true, "requestId": "req_1", "behavior": "allow" }`
+
+### POST /api/launch-claude
+
+Spawn a Claude Code process with the channel shim connected.
+
+**Request:**
+```json
+{ "prompt": "Review this document" }
+```
+
+**Response:** `{ "ok": true, "pid": 12345 }`

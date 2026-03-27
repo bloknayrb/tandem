@@ -18,10 +18,15 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ### Server (src/server/)
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (Express app with MCP routes + REST API)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (Express app with MCP routes + REST API + channel endpoints), `launcher.ts` (Claude Code spawner)
+- `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx), `atomicWrite` helper
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\
+
+### Channel Shim (src/channel/)
+- `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
+- `event-bridge.ts` -- SSE client that connects to `GET /api/events` on the Tandem server, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back.
 
 ### Client (src/client/)
 - `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
@@ -56,6 +61,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Annotation ranges use Yjs RelativePosition (`relRange` field) for CRDT-anchored positions. `anchoredRange()` creates both flat + rel in one call. `refreshRange()` resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it. `annotationToPmRange()` resolves to PM positions with a `method` diagnostic ('rel' | 'flat').
 - tandem_edit rejects ranges that overlap heading markup (e.g., "## ") — target text content only
 - User→Claude communication via `tandem_checkInbox` (annotation actions, responses, and chat messages) and `tandem_reply` (Claude's chat responses). Chat sidebar provides freeform conversation alongside annotation-based review. Call `tandem_checkInbox` between tasks.
+- **Channel push (Issue #106):** The Tandem channel shim (`src/channel/`) pushes real-time events to Claude Code via `notifications/claude/channel`, replacing polling. Y.Map observers in `events/queue.ts` detect browser-originated changes (origin !== 'mcp') and stream them via SSE to the shim. All MCP-initiated Y.Map writes are tagged with `doc.transact(() => { ... }, 'mcp')` to prevent echo. The channel coexists with the HTTP MCP server — Claude Code has both connections simultaneously.
+- **Channel API endpoints:** `GET /api/events` (SSE stream), `POST /api/channel-awareness` (shim→StatusBar), `POST /api/channel-error`, `POST /api/channel-reply`, `POST /api/channel-permission`, `POST /api/channel-permission-verdict`, `POST /api/launch-claude`.
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
 - Server broadcasts `openDocuments` list via Y.Map('documentMeta') on each doc's Y.Doc. Client listens and syncs tabs.
 - Files can be opened from the browser via HTTP API (`POST /api/open` for path, `POST /api/upload` for content) or via MCP `tandem_open`. Both paths converge in `file-opener.ts`. Uploaded files get synthetic `upload://` paths and are read-only (no disk path to save to).
@@ -104,6 +111,9 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] refactor: data-testid attributes on SidePanel and DocumentTabs for E2E selectors
 - [x] refactor: unify position/coordinate system into deep modules (Issue #68)
 
+**Done (Channel push — Issue #106):**
+- [x] Claude Code Channel (Issue #106): channel shim (`src/channel/`), SSE event bridge, origin-tagged Y.Map writes (~15 callsites), permission relay, Claude launcher, awareness endpoints, 8 event types, two tsup bundles
+
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
 - [ ] Phase 3: .docx comments export — Word-native `<w:comment>` elements via JSZip
@@ -118,12 +128,12 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:server` first.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 26 MCP tools + HTTP API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 26 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-017)
-- [Lessons Learned](docs/lessons-learned.md) -- 18 lessons including E2E testing gotchas
+- [Design Decisions](docs/decisions.md) -- ADRs (001-019)
+- [Lessons Learned](docs/lessons-learned.md) -- 22 lessons including E2E testing gotchas
 
 ## Gotchas (save yourself time)
 - **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
@@ -138,6 +148,9 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save for these. `sourceFileChanged()` returns false (no disk file to check). Sessions still persist normally — the synthetic path is the session key.
 - **E2E tests require no running dev server.** `npm run test:e2e` starts both servers via Playwright's `webServer` config. `freePort()` will kill any existing server on :3478/:3479. Running E2E alongside `dev:server` will terminate your dev server.
 - **`data-testid` naming convention:** kebab-case, descriptive. Examples: `accept-btn`, `dismiss-btn`, `review-mode-btn`, `annotation-card-{id}`, `tab-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`.
+- **MCP Y.Map writes must be origin-tagged.** All server-side writes to observed Y.Maps (`annotations`, `chat`, `userAwareness`, `documentMeta`) must use `doc.transact(() => { ... }, 'mcp')`. This prevents the event queue from emitting echo events when Claude's own tool calls modify Y.Maps. If you add a new MCP tool that writes to any Y.Map, tag it.
+- **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` — not `document-id`.
+- **Channel shim uses low-level `Server`, not `McpServer`.** The Channels spec requires `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` with explicit `setRequestHandler()` calls. The existing HTTP MCP server uses the high-level `McpServer` wrapper. These are separate processes with different SDK classes.
 
 ## Security
 - Server binds to 127.0.0.1 only

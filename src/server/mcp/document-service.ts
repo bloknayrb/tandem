@@ -8,6 +8,7 @@ import {
   restoreCtrlDoc,
 } from "../session/manager.js";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 import { randomUUID } from "node:crypto";
 
 // --- Multi-document state ---
@@ -104,8 +105,10 @@ export function broadcastOpenDocs(): void {
 
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
-    ctrlMeta.set("openDocuments", docList);
-    ctrlMeta.set("activeDocumentId", id);
+    ctrl.transact(() => {
+      ctrlMeta.set("openDocuments", docList);
+      ctrlMeta.set("activeDocumentId", id);
+    }, MCP_ORIGIN);
 
     // Update ALL open doc rooms so no per-doc Y.Doc ever has a stale list.
     // If only the active doc were updated, a previously active doc's stale list
@@ -113,8 +116,10 @@ export function broadcastOpenDocs(): void {
     for (const [docId] of openDocs) {
       const ydoc = getOrCreateDocument(docId);
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
-      meta.set("openDocuments", docList);
-      meta.set("activeDocumentId", id);
+      ydoc.transact(() => {
+        meta.set("openDocuments", docList);
+        meta.set("activeDocumentId", id);
+      }, MCP_ORIGIN);
     }
   } catch (err) {
     console.error("[Tandem] broadcastOpenDocs error:", err);
@@ -141,8 +146,10 @@ export async function restoreCtrlSession(): Promise<void> {
     // Clear stale document tracking — no docs are actually open after a restart.
     // Chat history is preserved; only the document list is wiped.
     const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-    meta.delete("openDocuments");
-    meta.delete("activeDocumentId");
+    ctrlDoc.transact(() => {
+      meta.delete("openDocuments");
+      meta.delete("activeDocumentId");
+    }, MCP_ORIGIN);
 
     console.error("[Tandem] Restored chat history from session (cleared stale doc list)");
   }
@@ -153,6 +160,6 @@ export function writeGenerationId(): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
   const generationId = randomUUID();
-  meta.set("generationId", generationId);
+  ctrlDoc.transact(() => meta.set("generationId", generationId), MCP_ORIGIN);
   console.error(`[Tandem] Server generationId: ${generationId}`);
 }

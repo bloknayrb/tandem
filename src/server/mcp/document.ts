@@ -14,6 +14,7 @@ import { getAdapter, atomicWrite } from "../file-io/index.js";
 import { saveSession, stopAutoSave } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 
 // Document model (pure logic)
 import {
@@ -348,7 +349,7 @@ export function registerDocumentTools(server: McpServer): void {
           fragment.delete(startPos.elementIndex + 1, 1);
 
           startText.insert(startPos.textOffset, newText);
-        });
+        }, MCP_ORIGIN);
       } else {
         r.doc.transact(() => {
           const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
@@ -360,7 +361,7 @@ export function registerDocumentTools(server: McpServer): void {
           if (newText.length > 0) {
             textNode.insert(startPos.textOffset, newText);
           }
-        });
+        }, MCP_ORIGIN);
       }
 
       return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
@@ -415,7 +416,7 @@ export function registerDocumentTools(server: McpServer): void {
 
         // Mark document clean: bump savedAtVersion so client resets dirty flag
         const meta = r.doc.getMap(Y_MAP_DOCUMENT_META);
-        meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+        r.doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
 
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {

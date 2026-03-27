@@ -6,6 +6,14 @@ import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
 import { freePort } from "./platform.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
+import {
+  attachCtrlObservers,
+  reattachObservers,
+  reattachCtrlObservers,
+  detachObservers,
+} from "./events/queue.js";
+import { setDocLifecycleCallbacks } from "./yjs/provider.js";
+import { CTRL_ROOM } from "../shared/constants.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -94,6 +102,24 @@ async function main() {
 
   // Write a unique ID so clients can detect when the server process has restarted
   writeGenerationId();
+
+  // Attach event queue observers to CTRL_ROOM for channel push notifications
+  attachCtrlObservers();
+
+  // Register doc lifecycle callbacks so the event queue reattaches observers
+  // when Hocuspocus swaps Y.Doc instances (avoids circular import).
+  setDocLifecycleCallbacks(
+    (docName, newDoc) => {
+      if (docName === CTRL_ROOM) {
+        reattachCtrlObservers();
+      } else {
+        reattachObservers(docName, newDoc);
+      }
+    },
+    (docName) => {
+      detachObservers(docName);
+    },
+  );
 
   if (transportMode === "http") {
     // HTTP mode: no startup-order constraint — start both concurrently

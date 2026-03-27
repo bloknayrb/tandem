@@ -11,6 +11,8 @@ graph LR
     Browser["Browser<br/>Tiptap Editor"] <-->|WebSocket| Server["Tandem Server<br/>Node.js"]
     Server <-->|MCP HTTP| Claude["Claude Code"]
     Server <-->|File I/O| Files[".md .txt .docx"]
+    Server -->|SSE events| Shim["Channel Shim"]
+    Shim -->|push notifications| Claude
 ```
 
 ## Quickstart
@@ -35,7 +37,7 @@ Then from Claude Code:
 
 ## MCP Configuration
 
-Tandem uses HTTP transport. Add to your project's `.mcp.json`:
+Tandem uses two MCP connections: HTTP for document tools, and a channel shim for real-time push notifications. Add both to your project's `.mcp.json`:
 
 ```json
 {
@@ -43,12 +45,16 @@ Tandem uses HTTP transport. Add to your project's `.mcp.json`:
     "tandem": {
       "type": "http",
       "url": "http://localhost:3479/mcp"
+    },
+    "tandem-channel": {
+      "command": "node",
+      "args": ["dist/channel/index.js"]
     }
   }
 }
 ```
 
-The server must be running before Claude Code connects (`npm run dev:server`). Claude Code does not auto-start HTTP-based MCP servers.
+The server must be running before Claude Code connects (`npm run dev:server`). The channel shim is optional — without it, Claude relies on polling via `tandem_checkInbox` instead of receiving real-time push events.
 
 ## Features
 
@@ -85,7 +91,9 @@ The status bar shows real-time connection state, open document count, and Claude
 - **Markdown round-trip** -- lossless MDAST-based conversion preserves formatting through load/save cycles
 - **.docx review-only mode** -- open Word documents for annotation without modifying the original
 - **Session persistence** -- Y.Doc state and annotations survive server restarts
-- **User→Claude inbox** -- highlights, comments, and questions you add are surfaced to Claude via `tandem_checkInbox`
+- **Real-time channel push** -- annotation accepts/dismisses, chat messages, and document switches push to Claude instantly via the Channels API (no polling)
+- **User→Claude inbox** -- highlights, comments, and questions you add are surfaced to Claude via push events or `tandem_checkInbox` fallback
+- **Chat sidebar** -- freeform conversation alongside annotation-based review, with `tandem_reply` for Claude responses
 - **E2E tested** -- 8 Playwright tests cover the annotation lifecycle end-to-end
 - **Atomic file saves** -- write to temp, then rename, preventing partial writes
 
@@ -97,19 +105,19 @@ The status bar shows real-time connection state, open document count, and Claude
 | `npm run dev:client` | Frontend: Vite dev server (:5173) |
 | `npm run dev:standalone` | Both frontend + backend (via concurrently) |
 | `npm run dev` | Alias for `vite` (frontend only) |
-| `npm run build` | Production build |
+| `npm run build` | Production build (two bundles: `dist/server/index.js` + `dist/channel/index.js`) |
 | `npm test` | Run vitest (unit tests) |
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Playwright UI mode |
 
 ## Documentation
 
-- [MCP Tool Reference](docs/mcp-tools.md) -- 26 MCP tools + HTTP API endpoints
-- [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems
+- [MCP Tool Reference](docs/mcp-tools.md) -- 26 MCP tools + channel API endpoints
+- [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-017
-- [Lessons Learned](docs/lessons-learned.md) -- 18 implementation lessons
+- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-019
+- [Lessons Learned](docs/lessons-learned.md) -- 22 implementation lessons
 
 ## Tech Stack
 

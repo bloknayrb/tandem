@@ -7,17 +7,23 @@ graph TB
     User["Bryan (Browser)"]
     Claude["Claude Code (CLI)"]
     Tandem["Tandem Server"]
+    Shim["Channel Shim<br/>(stdio subprocess)"]
 
     User <-->|WebSocket<br/>Tiptap + Yjs| Tandem
     Claude <-->|MCP HTTP :3479<br/>tool calls| Tandem
+    Claude <-->|stdio<br/>channel notifications| Shim
+    Shim <-->|SSE + HTTP<br/>events + replies| Tandem
     Tandem -->|fs read/write| Files["Local Files<br/>.md .txt .html"]
 ```
 
-Tandem is a single Node.js process that serves two roles simultaneously:
+Tandem is a single Node.js process that serves three roles simultaneously:
 1. **MCP server** (HTTP on port 3479) -- Claude Code connects here for tool discovery and execution via Streamable HTTP transport
 2. **Hocuspocus WebSocket server** (port 3478) -- Browser connects here for real-time Yjs sync
+3. **Channel event source** (SSE on port 3479) -- The channel shim connects here to receive real-time push events
 
-Both sides share the same `Y.Doc` instance. Edits from either side propagate to the other in real-time.
+A separate **channel shim** process (`dist/channel/index.js`) bridges the Tandem server and Claude Code's Channels API. Claude Code spawns it as a stdio subprocess. The shim connects to the server's SSE endpoint and forwards events as `notifications/claude/channel` to Claude Code, enabling push-based communication instead of polling.
+
+Both the MCP server and browser share the same `Y.Doc` instance. Edits from either side propagate to the other in real-time.
 
 ## Container Diagram
 
@@ -36,13 +42,21 @@ graph LR
         HP["Hocuspocus<br/>WebSocket :3478"]
         MCP["MCP Server<br/>HTTP :3479"]
         API["REST API<br/>/api/open, /api/upload"]
+        ChannelAPI["Channel API<br/>/api/events, /api/channel-*"]
+        EventQueue["Event Queue<br/>(Y.Map observers)"]
         FO["file-opener.ts<br/>(shared open logic)"]
         YDoc["Y.Doc per room<br/>(one per open document)"]
         FileIO["File I/O<br/>markdown, txt, docx"]
     end
 
+    subgraph "Channel Shim (subprocess)"
+        Bridge["event-bridge.ts<br/>(SSE → notifications)"]
+        Reply["tandem_reply tool"]
+    end
+
     subgraph "Claude Code"
         Tools["MCP Tool Calls"]
+        Channel["Channel Notifications"]
     end
 
     Tiptap <-->|@hocuspocus/provider| HP
@@ -57,6 +71,12 @@ graph LR
     AwExt -.->|observes| YDoc
     SidePanel -.->|observes| YDoc
     StatusBar -.->|observes| YDoc
+    YDoc -.->|change events| EventQueue
+    EventQueue -->|SSE| ChannelAPI
+    ChannelAPI -->|SSE stream| Bridge
+    Bridge -->|notifications/claude/channel| Channel
+    Reply -->|POST /api/channel-reply| ChannelAPI
+    ChannelAPI -->|awareness POST| StatusBar
 ```
 
 **Note:** Y.Map key strings (`'annotations'`, `'awareness'`, `'userAwareness'`, `'chat'`, `'documentMeta'`) are defined as named constants in `src/shared/constants.ts` (e.g., `Y_MAP_ANNOTATIONS`). All source code uses these constants — never raw strings.
@@ -188,6 +208,56 @@ Claude calls tandem_reply({ text: "...", replyTo: "msg_..." })
 ### Session Persistence
 
 Chat state persists across server restarts via the same `saveCtrlSession` / `restoreCtrlSession` lifecycle used for the control channel. The `__tandem_ctrl__` Y.Doc (including `Y.Map('chat')`) is saved to `%LOCALAPPDATA%\tandem\sessions\` and restored on next startup.
+
+## Channel Push (Real-Time Events)
+
+The channel replaces polling for user actions. Instead of Claude calling `tandem_checkInbox` repeatedly, the channel shim pushes events to Claude Code as they happen.
+
+### Event Flow
+
+```
+User accepts annotation in browser
+    → Browser writes { ...ann, status: "accepted" } to Y.Map('annotations')
+    → Hocuspocus syncs update to server Y.Doc (origin = Connection object)
+    → Y.Map observer in event queue fires (origin !== 'mcp', so not filtered)
+    → pushEvent() adds TandemEvent to circular buffer + notifies SSE subscribers
+    → SSE endpoint writes event frame to connected channel shim
+    → Channel shim parses SSE, calls mcp.notification({ method: "notifications/claude/channel" })
+    → Claude Code receives <channel source="tandem-channel" event_type="annotation_accepted">
+    → Shim posts awareness update to /api/channel-awareness
+    → Browser StatusBar shows "Claude -- processing: annotation:accepted"
+```
+
+### Origin Tagging (Echo Prevention)
+
+All MCP-initiated Y.Map writes use `doc.transact(() => { ... }, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions. This prevents Claude from seeing its own tool calls echoed back as channel notifications.
+
+### Event Types
+
+| Event Type | Trigger | Payload |
+|---|---|---|
+| `annotation:created` | User creates highlight/comment/question | `annotationId`, `annotationType`, `content`, `textSnippet` |
+| `annotation:accepted` | User accepts Claude's annotation | `annotationId`, `textSnippet` |
+| `annotation:dismissed` | User dismisses Claude's annotation | `annotationId`, `textSnippet` |
+| `chat:message` | User sends chat message | `messageId`, `text`, `replyTo`, `anchor` |
+| `selection:changed` | User selects text | `from`, `to`, `selectedText` |
+| `document:opened` | New document opened in browser | `fileName`, `format` |
+| `document:closed` | Document closed | `fileName` |
+| `document:switched` | User switches tabs | `fileName` |
+
+### Channel Shim Architecture
+
+The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claude Code as a stdio subprocess. It uses the low-level MCP `Server` class (not `McpServer`) as required by the Channels API. It declares `claude/channel` and `claude/channel/permission` capabilities.
+
+Components:
+- **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
+- **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms)
+
+The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 26 document tools, stdio for channel push + reply).
+
+### Permission Relay
+
+When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server. The browser can display permission prompts and submit verdicts via `POST /api/channel-permission-verdict`.
 
 ---
 

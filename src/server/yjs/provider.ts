@@ -9,6 +9,18 @@ const documents = new Map<string, Y.Doc>();
 // to avoid a circular import (provider -> document-service -> provider).
 let shouldKeepDocument: ((name: string) => boolean) | null = null;
 
+// Callback for event queue observer lifecycle (registered by events/queue.ts to avoid circular import).
+let onDocSwapped: ((docName: string, newDoc: Y.Doc) => void) | null = null;
+let onDocUnloaded: ((docName: string) => void) | null = null;
+
+export function setDocLifecycleCallbacks(
+  swapped: (docName: string, newDoc: Y.Doc) => void,
+  unloaded: (docName: string) => void,
+): void {
+  onDocSwapped = swapped;
+  onDocUnloaded = unloaded;
+}
+
 /** Register a predicate that prevents afterUnloadDocument from evicting docs
  *  that MCP (or the bootstrap channel) still needs. */
 export function setShouldKeepDocument(fn: (name: string) => boolean): void {
@@ -83,6 +95,10 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
 
       // The Hocuspocus-provided doc is now the authoritative instance
       documents.set(documentName, document);
+
+      // Notify event queue to reattach observers to the new doc instance
+      onDocSwapped?.(documentName, document);
+
       return document;
     },
 
@@ -92,6 +108,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
         return;
       }
       if (documents.has(documentName)) {
+        onDocUnloaded?.(documentName);
         documents.delete(documentName);
         console.error(`[Hocuspocus] Unloaded document from map: ${documentName}`);
       }

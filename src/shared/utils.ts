@@ -1,9 +1,15 @@
-/** Generate a unique annotation ID. Used by both server and client. */
-export function generateAnnotationId(): string {
-  return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+function generateId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Generate a unique chat message ID. */
+export function generateAnnotationId(): string {
+  return generateId("ann");
+}
+
 export function generateMessageId(): string {
-  return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return generateId("msg");
+}
+
+export function generateEventId(): string {
+  return generateId("evt");
 }

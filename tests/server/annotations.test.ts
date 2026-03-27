@@ -33,7 +33,7 @@ describe("createAnnotation", () => {
   it("stores annotation with correct default fields", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 4), "nice text");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "nice text");
 
     const stored = map.get(id) as Annotation;
     expect(stored.id).toBe(id);
@@ -48,7 +48,7 @@ describe("createAnnotation", () => {
   it("extras override defaults", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "highlight", rangeOf(0, 4), "", { color: "red" });
+    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "red" });
 
     const stored = map.get(id) as Annotation;
     expect(stored.color).toBe("red");
@@ -65,8 +65,8 @@ describe("collectAnnotations", () => {
   it("returns all stored annotations", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    createAnnotation(map, "comment", rangeOf(0, 2), "first");
-    createAnnotation(map, "highlight", rangeOf(2, 4), "second");
+    createAnnotation(map, doc, "comment", rangeOf(0, 2), "first");
+    createAnnotation(map, doc, "highlight", rangeOf(2, 4), "second");
 
     const all = collectAnnotations(map);
     expect(all).toHaveLength(2);
@@ -75,9 +75,9 @@ describe("collectAnnotations", () => {
   it("returns annotations of different types", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    createAnnotation(map, "comment", rangeOf(0, 2), "c");
-    createAnnotation(map, "highlight", rangeOf(0, 2), "h");
-    createAnnotation(map, "suggestion", rangeOf(0, 2), "{}");
+    createAnnotation(map, doc, "comment", rangeOf(0, 2), "c");
+    createAnnotation(map, doc, "highlight", rangeOf(0, 2), "h");
+    createAnnotation(map, doc, "suggestion", rangeOf(0, 2), "{}");
 
     const types = collectAnnotations(map).map((a) => a.type);
     expect(types).toContain("comment");
@@ -90,10 +90,11 @@ describe("filter logic", () => {
   function setupAnnotations() {
     doc = makeDoc("test content here");
     const map = getAnnotationsMap(doc);
-    createAnnotation(map, "comment", rangeOf(0, 4), "a comment");
-    createAnnotation(map, "highlight", rangeOf(0, 4), "", { color: "yellow" });
+    createAnnotation(map, doc, "comment", rangeOf(0, 4), "a comment");
+    createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "yellow" });
     createAnnotation(
       map,
+      doc,
       "suggestion",
       rangeOf(5, 12),
       JSON.stringify({ newText: "stuff", reason: "clarity" }),
@@ -137,6 +138,7 @@ describe("suggestion JSON contract", () => {
     const map = getAnnotationsMap(doc);
     const id = createAnnotation(
       map,
+      doc,
       "suggestion",
       rangeOf(0, 4),
       JSON.stringify({ newText: "replacement", reason: "better wording" }),
@@ -153,6 +155,7 @@ describe("suggestion JSON contract", () => {
     const map = getAnnotationsMap(doc);
     const id = createAnnotation(
       map,
+      doc,
       "suggestion",
       rangeOf(0, 4),
       JSON.stringify({ newText: "x", reason: "" }),
@@ -168,7 +171,7 @@ describe("resolve and remove", () => {
   it("resolve changes status to accepted", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 4), "text");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "text");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
@@ -180,7 +183,7 @@ describe("resolve and remove", () => {
   it("resolve changes status to dismissed", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 4), "text");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "text");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "dismissed" as const });
@@ -192,7 +195,7 @@ describe("resolve and remove", () => {
   it("remove deletes from map", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 4), "text");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "text");
     expect(map.has(id)).toBe(true);
 
     map.delete(id);
@@ -210,7 +213,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
   it("stores relRange when ydoc is provided", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 5, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeDefined();
@@ -221,7 +224,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
   it("omits relRange when ydoc is not provided", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 5), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5), "note");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeUndefined();
@@ -231,7 +234,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
     doc = makeDoc("## Title");
     const map = getAnnotationsMap(doc);
     // from=0 is inside "## " prefix → anchoredRange still succeeds but relRange is undefined
-    const id = createAnnotation(map, "highlight", rangeOf(0, 3, doc), "");
+    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 3, doc), "");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeUndefined();
@@ -242,7 +245,7 @@ describe("refreshRange", () => {
   it("lazily attaches relRange to annotations missing it", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 5), "note"); // no ydoc → no relRange
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5), "note"); // no ydoc → no relRange
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeUndefined();
@@ -260,7 +263,7 @@ describe("refreshRange", () => {
   it("updates stale flat offsets from relRange", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(6, 11, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(6, 11, doc), "note");
 
     // Verify initial range
     const ann = map.get(id) as Annotation;
@@ -287,7 +290,7 @@ describe("refreshRange", () => {
   it("returns original annotation when offsets are unchanged", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(0, 5, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
 
     const ann = map.get(id) as Annotation;
     const refreshed = refreshRange(ann, doc);
@@ -298,7 +301,7 @@ describe("refreshRange", () => {
   it("returns original when relRange resolves to null (deleted content)", () => {
     doc = makeDoc("first\nsecond");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, "comment", rangeOf(6, 12, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(6, 12, doc), "note");
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeDefined();

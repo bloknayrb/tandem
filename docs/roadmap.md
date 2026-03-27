@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -189,6 +189,26 @@ Playwright E2E tests cover the critical annotation lifecycle path. Infrastructur
 - **8 tests**: document load, annotation decoration, annotation card, accept, dismiss, suggestion apply, tab switching, review mode keyboard
 
 Run: `npm run test:e2e` (auto-starts servers) or `npm run test:e2e:ui` (Playwright UI mode)
+
+---
+
+## Channel Push (Issue #106) — DONE
+
+**Files:** `src/channel/index.ts`, `src/channel/event-bridge.ts`, `src/server/events/queue.ts`, `src/server/events/sse.ts`, `src/server/events/types.ts`
+
+Real-time push notifications from browser to Claude Code via the Channels API, replacing polling.
+
+- **Channel shim** (`src/channel/`): Separate stdio subprocess spawned by Claude Code. Low-level MCP `Server` class (not `McpServer`) with `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
+- **Event queue** (`src/server/events/queue.ts`): Y.Map observers on annotations, chat, user awareness, and document metadata. Circular buffer (200 events / 60s). Origin tagging filters MCP-initiated changes.
+- **SSE endpoint** (`GET /api/events`): Server-Sent Events stream with `Last-Event-ID` reconnection replay and 15s keepalive.
+- **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `/api/launch-claude`
+- **Build**: tsup produces two bundles — `dist/server/index.js` + `dist/channel/index.js`
+- **8 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `chat:message`, `selection:changed`, `document:opened`, `document:closed`, `document:switched`
+
+### Known Issues from Channel Implementation
+
+- **E2E tab switching test flaky:** The "tab switching shows different documents" E2E test fails intermittently on both master and the channel branch. The test expects to see "Test Document" after switching tabs, but sometimes sees the second document's content instead. This is a pre-existing timing issue with Yjs sync in E2E, not caused by the channel changes.
+- **`dev:standalone` server startup:** The `concurrently` command in `npm run dev:standalone` sometimes fails to start the server component reliably (tsx stderr output not captured by concurrently). Workaround: start `npm run dev:server` and `npm run dev:client` in separate terminals. This affects E2E tests that rely on `webServer: { command: "npm run dev:standalone" }` — pre-starting the servers and relying on `reuseExistingServer` is more reliable for local dev.
 
 ---
 
