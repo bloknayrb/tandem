@@ -6,29 +6,111 @@
  * `notifications/claude/channel` messages.
  */
 
-export type TandemEventType =
-  | "annotation:created"
-  | "annotation:accepted"
-  | "annotation:dismissed"
-  | "chat:message"
-  | "selection:changed"
-  | "document:opened"
-  | "document:closed"
-  | "document:switched";
+// --- Per-event payload interfaces ---
 
-export interface TandemEvent {
+export interface AnnotationCreatedPayload {
+  annotationId: string;
+  annotationType: string;
+  content: string;
+  textSnippet: string;
+}
+
+export interface AnnotationAcceptedPayload {
+  annotationId: string;
+  textSnippet: string;
+}
+
+export interface AnnotationDismissedPayload {
+  annotationId: string;
+  textSnippet: string;
+}
+
+export interface ChatMessagePayload {
+  messageId: string;
+  text: string;
+  replyTo: string | null;
+  anchor: { from: number; to: number; textSnapshot: string } | null;
+}
+
+export interface SelectionChangedPayload {
+  from: number;
+  to: number;
+  selectedText: string;
+}
+
+export interface DocumentOpenedPayload {
+  fileName: string;
+  format: string;
+}
+
+export interface DocumentClosedPayload {
+  fileName: string;
+}
+
+export interface DocumentSwitchedPayload {
+  fileName: string;
+}
+
+// --- Discriminated union ---
+
+interface TandemEventBase {
   /** Monotonic ID for SSE `Last-Event-ID` reconnection. Format: `evt_<timestamp>_<rand>` */
   id: string;
-  type: TandemEventType;
   timestamp: number;
   /** Which document this event relates to (absent for global events). */
   documentId?: string;
-  /** Type-specific payload — kept as a flat record for SSE serialization. */
-  payload: Record<string, unknown>;
 }
+
+export type TandemEvent =
+  | (TandemEventBase & { type: "annotation:created"; payload: AnnotationCreatedPayload })
+  | (TandemEventBase & { type: "annotation:accepted"; payload: AnnotationAcceptedPayload })
+  | (TandemEventBase & { type: "annotation:dismissed"; payload: AnnotationDismissedPayload })
+  | (TandemEventBase & { type: "chat:message"; payload: ChatMessagePayload })
+  | (TandemEventBase & { type: "selection:changed"; payload: SelectionChangedPayload })
+  | (TandemEventBase & { type: "document:opened"; payload: DocumentOpenedPayload })
+  | (TandemEventBase & { type: "document:closed"; payload: DocumentClosedPayload })
+  | (TandemEventBase & { type: "document:switched"; payload: DocumentSwitchedPayload });
+
+/** Union of all event type discriminants. */
+export type TandemEventType = TandemEvent["type"];
 
 // Re-export from shared utils (single ID generation pattern)
 export { generateEventId } from "../../shared/utils.js";
+
+// --- Parse guard for SSE consumers ---
+
+const VALID_EVENT_TYPES = new Set<TandemEventType>([
+  "annotation:created",
+  "annotation:accepted",
+  "annotation:dismissed",
+  "chat:message",
+  "selection:changed",
+  "document:opened",
+  "document:closed",
+  "document:switched",
+]);
+
+/**
+ * Validate a JSON-parsed value as a TandemEvent.
+ * Used by the event-bridge to safely consume SSE data.
+ */
+export function parseTandemEvent(raw: unknown): TandemEvent | null {
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    !("id" in raw) ||
+    typeof (raw as Record<string, unknown>).id !== "string" ||
+    !("type" in raw) ||
+    !VALID_EVENT_TYPES.has((raw as Record<string, unknown>).type as TandemEventType) ||
+    !("timestamp" in raw) ||
+    typeof (raw as Record<string, unknown>).timestamp !== "number" ||
+    !("payload" in raw) ||
+    typeof (raw as Record<string, unknown>).payload !== "object"
+  ) {
+    return null;
+  }
+  return raw as TandemEvent;
+}
 
 /**
  * Convert a TandemEvent into a human-readable string for the channel `content` field.
@@ -73,6 +155,10 @@ export function formatEventContent(event: TandemEvent): string {
       const { fileName } = event.payload;
       return `User switched to document: ${fileName}${doc}`;
     }
+    default: {
+      const _exhaustive: never = event;
+      return `Unknown event${doc}`;
+    }
   }
 }
 
@@ -85,7 +171,17 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
     event_type: event.type,
   };
   if (event.documentId) meta.document_id = event.documentId;
-  if (event.payload.annotationId) meta.annotation_id = String(event.payload.annotationId);
-  if (event.payload.messageId) meta.message_id = String(event.payload.messageId);
+
+  switch (event.type) {
+    case "annotation:created":
+    case "annotation:accepted":
+    case "annotation:dismissed":
+      meta.annotation_id = event.payload.annotationId;
+      break;
+    case "chat:message":
+      meta.message_id = event.payload.messageId;
+      break;
+  }
+
   return meta;
 }

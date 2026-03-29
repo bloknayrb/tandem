@@ -35,18 +35,27 @@ const emittedPayloadIds = new Set<string>();
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
 
+function getTrackableId(event: TandemEvent): string | undefined {
+  switch (event.type) {
+    case "annotation:created":
+    case "annotation:accepted":
+    case "annotation:dismissed":
+      return event.payload.annotationId;
+    case "chat:message":
+      return event.payload.messageId;
+    default:
+      return undefined;
+  }
+}
+
 function trackPayloadId(event: TandemEvent): void {
-  const annId = event.payload.annotationId as string | undefined;
-  const msgId = event.payload.messageId as string | undefined;
-  if (annId) emittedPayloadIds.add(annId);
-  if (msgId) emittedPayloadIds.add(msgId);
+  const id = getTrackableId(event);
+  if (id) emittedPayloadIds.add(id);
 }
 
 function untrackPayloadId(event: TandemEvent): void {
-  const annId = event.payload.annotationId as string | undefined;
-  const msgId = event.payload.messageId as string | undefined;
-  if (annId) emittedPayloadIds.delete(annId);
-  if (msgId) emittedPayloadIds.delete(msgId);
+  const id = getTrackableId(event);
+  if (id) emittedPayloadIds.delete(id);
 }
 
 function pushEvent(event: TandemEvent): void {
@@ -173,10 +182,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
         payload: {
           from: selection?.from ?? 0,
           to: selection?.to ?? 0,
-          selectedText:
-            selection?.from !== selection?.to
-              ? ((selection as Record<string, unknown>)?.selectedText ?? "")
-              : "",
+          selectedText: selection?.from !== selection?.to ? (selection?.selectedText ?? "") : "",
         },
       });
     }

@@ -5,7 +5,7 @@
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { TandemEvent } from "../server/events/types.js";
-import { formatEventContent, formatEventMeta } from "../server/events/types.js";
+import { formatEventContent, formatEventMeta, parseTandemEvent } from "../server/events/types.js";
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
@@ -115,7 +115,11 @@ async function connectAndStream(
       if (!data) continue;
 
       try {
-        const event: TandemEvent = JSON.parse(data);
+        const event = parseTandemEvent(JSON.parse(data));
+        if (!event) {
+          console.error("[Channel] Received malformed SSE event, skipping");
+          continue;
+        }
         if (eventId) onEventId(eventId);
 
         await mcp.notification({
