@@ -195,14 +195,12 @@ export default function App() {
         </div>
       )}
       <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
-      {tabs.length > 0 && (
-        <DocumentTabs
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onTabSwitch={setActiveTabId}
-          onTabClose={handleTabClose}
-        />
-      )}
+      <DocumentTabs
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onTabSwitch={setActiveTabId}
+        onTabClose={handleTabClose}
+      />
       {showBanner && !reviewMode && (
         <div
           style={{

@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { DEFAULT_MCP_PORT } from "./src/shared/constants";
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -11,7 +12,7 @@ export default defineConfig({
   },
   webServer: {
     command: "npm run dev:standalone",
-    url: "http://localhost:5173",
+    url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },
