@@ -829,11 +829,6 @@ Browser submits allow/deny verdict for a permission request.
 
 ### POST /api/launch-claude
 
-Spawn a Claude Code process with the channel shim connected.
+Spawn a Claude Code process with the channel shim connected. No request body required.
 
-**Request:**
-```json
-{ "prompt": "Review this document" }
-```
-
-**Response:** `{ "ok": true, "pid": 12345 }`
+**Response:** `{ "status": "launched", "pid": 12345 }` or `{ "status": "already_running", "pid": 12345 }`

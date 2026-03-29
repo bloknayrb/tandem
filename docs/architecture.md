@@ -76,7 +76,7 @@ graph LR
     ChannelAPI -->|SSE stream| Bridge
     Bridge -->|notifications/claude/channel| Channel
     Reply -->|POST /api/channel-reply| ChannelAPI
-    ChannelAPI -->|awareness POST| StatusBar
+    ChannelAPI -->|awareness POST → Y.Doc| StatusBar
 ```
 
 **Note:** Y.Map key strings (`'annotations'`, `'awareness'`, `'userAwareness'`, `'chat'`, `'documentMeta'`) are defined as named constants in `src/shared/constants.ts` (e.g., `Y_MAP_ANNOTATIONS`). All source code uses these constants — never raw strings.

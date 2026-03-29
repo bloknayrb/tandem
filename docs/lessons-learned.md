@@ -167,7 +167,7 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 
 **Problem:** When the channel shim forwards real-time events to Claude Code, Claude must not receive notifications for its own tool calls. Without filtering, a `tandem_comment` call would trigger an `annotation:created` event that the shim would push back to Claude, creating confusion and wasted tokens.
 
-**Solution:** All MCP-initiated Y.Map writes wrap mutations in `doc.transact(() => { ... }, 'mcp')`. Y.Map observers in the event queue check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions. The `MCP_ORIGIN` constant is exported from `events/queue.ts` and imported at all ~15 callsites across 9 files.
+**Solution:** All MCP-initiated Y.Map writes wrap mutations in `doc.transact(() => { ... }, 'mcp')`. Y.Map observers in the event queue check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions. The `MCP_ORIGIN` constant is exported from `events/queue.ts` and imported at all 10 callsites across 6 files.
 
 **Impact:** Critical for channel correctness. Browser-originated changes use Hocuspocus Connection objects as the transaction origin, which are always distinct from the `'mcp'` string.
 

@@ -38,8 +38,11 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
               message: `Channel shim lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
             }),
           });
-        } catch {
-          // Can't reach server
+        } catch (reportErr) {
+          console.error(
+            "[Channel] Could not report failure to server:",
+            reportErr instanceof Error ? reportErr.message : reportErr,
+          );
         }
         process.exit(1);
       }
@@ -82,7 +85,9 @@ async function connectAndStream(
         status: `processing: ${event.type}`,
         active: true,
       }),
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error("[Channel] Awareness update failed:", err instanceof Error ? err.message : err);
+    });
   }
 
   function scheduleAwareness(event: TandemEvent) {
@@ -114,14 +119,21 @@ async function connectAndStream(
 
       if (!data) continue;
 
+      let event: TandemEvent | null;
       try {
-        const event = parseTandemEvent(JSON.parse(data));
-        if (!event) {
-          console.error("[Channel] Received malformed SSE event, skipping");
-          continue;
-        }
-        if (eventId) onEventId(eventId);
+        event = parseTandemEvent(JSON.parse(data));
+      } catch {
+        console.error("[Channel] Malformed SSE event data (skipping):", data.slice(0, 200));
+        continue;
+      }
+      if (!event) {
+        console.error("[Channel] Received invalid SSE event, skipping");
+        continue;
+      }
 
+      if (eventId) onEventId(eventId);
+
+      try {
         await mcp.notification({
           method: "notifications/claude/channel",
           params: {
@@ -129,11 +141,12 @@ async function connectAndStream(
             meta: formatEventMeta(event),
           },
         });
-
-        scheduleAwareness(event);
       } catch (err) {
-        console.error("[Channel] Failed to process SSE event:", err);
+        console.error("[Channel] MCP notification failed (transport broken?):", err);
+        throw err;
       }
+
+      scheduleAwareness(event);
     }
   }
 }
