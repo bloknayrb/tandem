@@ -29,7 +29,7 @@ export interface ChatMessagePayload {
   messageId: string;
   text: string;
   replyTo: string | null;
-  anchor: string | null;
+  anchor: { from: number; to: number; textSnapshot: string } | null;
 }
 
 export interface SelectionChangedPayload {
