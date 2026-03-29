@@ -62,9 +62,15 @@ The server must be running before Claude Code connects (`npm run dev:server`). T
 
 Claude adds highlights, comments, suggestions, and flags directly in the document. Each annotation type has distinct styling -- colored backgrounds for highlights, dashed underlines for comments, wavy underlines for suggestions -- so you can scan at a glance.
 
-![Side panel showing annotation cards with accept/dismiss buttons, filtering, and bulk actions](docs/screenshots/03-side-panel.png)
+![Side panel showing annotation cards with text excerpts, accept/dismiss buttons, filtering, and bulk actions](docs/screenshots/03-side-panel.png)
 
-The side panel lists all annotations with filtering by type, author, and status. Bulk accept/dismiss buttons appear when multiple annotations are pending.
+The side panel lists all annotations with filtering by type, author, and status. Each card shows a preview of the annotated text. Bulk accept/dismiss buttons appear when multiple annotations are pending.
+
+### Chat Sidebar
+
+![Chat sidebar showing a conversation with user and Claude messages, panel toggle tabs, and an anchor quote](docs/screenshots/02-chat-sidebar.png)
+
+The right sidebar toggles between **Annotations** and **Chat** views. In chat mode, send freeform messages to Claude alongside annotation review. If you have text selected when you hit Send, it is attached as a clickable anchor -- clicking it later scrolls the editor back to that passage. Claude's responses are rendered as Markdown. An unread badge on the Chat tab appears when Claude has replied while you were in the Annotations view.
 
 ### Toolbar
 
@@ -87,14 +93,17 @@ The status bar shows real-time connection state, open document count, and Claude
 ### More
 
 - **Multi-document tabs** -- open `.md`, `.txt`, `.docx` files side by side, each in its own Y.Doc room
-- **Browser file open** -- click "+" in the tab bar or drag-and-drop a file onto the editor (no Claude needed)
+- **Browser file open** -- click "+" in the tab bar or drag-and-drop a file onto the editor (no Claude needed); recent files remembered
 - **Markdown round-trip** -- lossless MDAST-based conversion preserves formatting through load/save cycles
-- **.docx review-only mode** -- open Word documents for annotation without modifying the original
+- **.docx review-only mode** -- open Word documents for annotation; a banner makes clear edits aren't saved back to the original
 - **Session persistence** -- Y.Doc state and annotations survive server restarts
 - **Real-time channel push** -- annotation accepts/dismisses, chat messages, and document switches push to Claude instantly via the Channels API (no polling)
 - **User→Claude inbox** -- highlights, comments, and questions you add are surfaced to Claude via push events or `tandem_checkInbox` fallback
-- **Chat sidebar** -- freeform conversation alongside annotation-based review, with `tandem_reply` for Claude responses
-- **E2E tested** -- 8 Playwright tests cover the annotation lifecycle end-to-end
+- **Unsaved-changes indicator** -- dot on the tab title when a document has pending edits
+- **Configurable display name** -- set your name so Claude knows who's reviewing
+- **Annotation text preview** -- each card in the side panel shows an excerpt of the annotated text
+- **Keyboard shortcuts reference** -- press `?` to open the in-app shortcut reference
+- **E2E tested** -- Playwright tests cover the annotation lifecycle end-to-end
 - **Atomic file saves** -- write to temp, then rename, preventing partial writes
 
 ## Scripts

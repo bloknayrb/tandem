@@ -4,12 +4,8 @@
  * Called by `POST /api/launch-claude` when the user clicks "Launch Claude" in the browser.
  */
 
-import { spawn, type ChildProcess } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
+import { type ChildProcess, spawn } from "child_process";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let claudeProcess: ChildProcess | null = null;
 
@@ -47,10 +43,17 @@ export function launchClaude(): { status: string; pid?: number } {
   });
 
   // Feed initial prompt via stdin
-  claudeProcess.stdin?.write(
-    "A document has been opened in Tandem for review. " +
-      "Call tandem_checkInbox to see what needs attention, then begin reviewing.\n",
-  );
+  if (claudeProcess.stdin?.writable) {
+    claudeProcess.stdin.write(
+      "A document has been opened in Tandem for review. " +
+        "Call tandem_checkInbox to see what needs attention, then begin reviewing.\n",
+      (err) => {
+        if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
+      },
+    );
+  } else {
+    console.error("[Launcher] Claude process has no writable stdin — initial prompt not delivered");
+  }
 
   const pid = claudeProcess.pid;
 
@@ -87,8 +90,11 @@ export function killClaude(): void {
     console.error(`[Launcher] Killing Claude Code (pid: ${claudeProcess.pid})`);
     try {
       claudeProcess.kill("SIGTERM");
-    } catch {
-      // Process may already be dead
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH") {
+        console.error("[Launcher] Failed to kill Claude process:", err);
+      }
     }
     claudeProcess = null;
   }

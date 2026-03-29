@@ -7,20 +7,20 @@
  */
 
 import * as Y from "yjs";
-import type { Annotation, ChatMessage } from "../../shared/types.js";
 import {
+  CHANNEL_EVENT_BUFFER_AGE_MS,
+  CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
-  Y_MAP_USER_AWARENESS,
   Y_MAP_DOCUMENT_META,
-  CHANNEL_EVENT_BUFFER_SIZE,
-  CHANNEL_EVENT_BUFFER_AGE_MS,
+  Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import type { Annotation, ChatMessage } from "../../shared/types.js";
+import { getOpenDocs } from "../mcp/document-service.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 import type { TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
-import { getOpenDocs } from "../mcp/document-service.js";
 
 /** Origin tag for all MCP-initiated Y.Map writes. Import and use this — never use raw "mcp" strings. */
 export const MCP_ORIGIN = "mcp";
@@ -29,8 +29,8 @@ type EventCallback = (event: TandemEvent) => void;
 
 const docObservers = new Map<string, Array<() => void>>();
 
-/** O(1) dedup: tracks annotation/message IDs that have been pushed via channel. */
-const emittedPayloadIds = new Set<string>();
+/** O(1) dedup: ref-counted annotation/message IDs that have been pushed via channel. */
+const emittedPayloadIds = new Map<string, number>();
 
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
@@ -50,12 +50,15 @@ function getTrackableId(event: TandemEvent): string | undefined {
 
 function trackPayloadId(event: TandemEvent): void {
   const id = getTrackableId(event);
-  if (id) emittedPayloadIds.add(id);
+  if (id) emittedPayloadIds.set(id, (emittedPayloadIds.get(id) ?? 0) + 1);
 }
 
 function untrackPayloadId(event: TandemEvent): void {
   const id = getTrackableId(event);
-  if (id) emittedPayloadIds.delete(id);
+  if (!id) return;
+  const count = emittedPayloadIds.get(id) ?? 0;
+  if (count <= 1) emittedPayloadIds.delete(id);
+  else emittedPayloadIds.set(id, count - 1);
 }
 
 function pushEvent(event: TandemEvent): void {
@@ -76,8 +79,8 @@ function pushEvent(event: TandemEvent): void {
   for (const cb of subscribers) {
     try {
       cb(event);
-    } catch {
-      // Don't let one bad subscriber break others
+    } catch (err) {
+      console.error("[EventQueue] Subscriber threw during event dispatch:", err);
     }
   }
 }
@@ -99,7 +102,7 @@ export function replaySince(lastEventId: string): TandemEvent[] {
   return buffer.slice(idx + 1);
 }
 
-/** O(1) check if an annotation/message was already pushed via channel. Used by checkInbox for dedup. */
+/** O(1) check if an annotation/message was already pushed via channel. Intended for checkInbox dedup (not yet wired). */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
 }
@@ -324,4 +327,17 @@ export function attachCtrlObservers(): void {
 /** Reattach CTRL_ROOM observers after doc replacement. */
 export function reattachCtrlObservers(): void {
   attachCtrlObservers();
+}
+
+/** Reset all module state. For tests only — do not call in production. */
+export function resetForTesting(): void {
+  buffer.length = 0;
+  subscribers.clear();
+  emittedPayloadIds.clear();
+  for (const cleanups of docObservers.values()) {
+    for (const cleanup of cleanups) cleanup();
+  }
+  docObservers.clear();
+  for (const cleanup of ctrlCleanups) cleanup();
+  ctrlCleanups = [];
 }

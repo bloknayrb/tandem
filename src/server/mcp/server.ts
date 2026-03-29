@@ -1,22 +1,22 @@
-import type { Server } from "http";
-import { randomUUID } from "crypto";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { registerDocumentTools } from "./document.js";
-import { registerAnnotationTools } from "./annotations.js";
-import { registerNavigationTools } from "./navigation.js";
-import { registerAwarenessTools } from "./awareness.js";
-import { openFileByPath, openFileFromContent } from "./file-opener.js";
-import { detectFormat } from "./document-model.js";
-import { sseHandler } from "../events/sse.js";
-import { MCP_ORIGIN } from "../events/queue.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { randomUUID } from "crypto";
+import type { Server } from "http";
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
-import { generateMessageId } from "../../shared/utils.js";
 import type { ClaudeAwareness } from "../../shared/types.js";
+import { generateMessageId } from "../../shared/utils.js";
+import { MCP_ORIGIN } from "../events/queue.js";
+import { sseHandler } from "../events/sse.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
+import { registerAnnotationTools } from "./annotations.js";
+import { registerAwarenessTools } from "./awareness.js";
+import { registerDocumentTools } from "./document.js";
+import { detectFormat } from "./document-model.js";
+import { openFileByPath, openFileFromContent } from "./file-opener.js";
+import { registerNavigationTools } from "./navigation.js";
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -355,7 +355,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
         };
         doc.transact(() => awarenessMap.set("claude", state), MCP_ORIGIN);
       }
-      res.json({ ok: true });
+      res.json({ ok: true, written: !!docId });
     },
   );
 

@@ -5,9 +5,9 @@
  */
 
 import type { Request, Response } from "express";
-import { subscribe, unsubscribe, replaySince } from "./queue.js";
-import type { TandemEvent } from "./types.js";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
+import { replaySince, subscribe, unsubscribe } from "./queue.js";
+import type { TandemEvent } from "./types.js";
 
 /** Express route handler for SSE event stream. */
 export function sseHandler(req: Request, res: Response): void {
@@ -30,14 +30,25 @@ export function sseHandler(req: Request, res: Response): void {
   // Immediate flush so the client knows the connection is alive
   res.write(": connected\n\n");
 
-  // Subscribe to new events
+  // keepalive must be declared before onEvent so the error handler can clear it
+  // eslint-disable-next-line prefer-const
+  let keepalive: ReturnType<typeof setInterval>;
   const onEvent = (event: TandemEvent) => {
-    writeEvent(res, event);
+    try {
+      writeEvent(res, event);
+    } catch (err) {
+      console.error(
+        "[SSE] Write failed, cleaning up subscriber:",
+        err instanceof Error ? err.message : err,
+      );
+      clearInterval(keepalive);
+      unsubscribe(onEvent);
+    }
   };
   subscribe(onEvent);
 
   // Keepalive to detect broken connections
-  const keepalive = setInterval(() => {
+  keepalive = setInterval(() => {
     res.write(": keepalive\n\n");
   }, CHANNEL_SSE_KEEPALIVE_MS);
 

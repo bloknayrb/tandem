@@ -112,7 +112,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] refactor: unify position/coordinate system into deep modules (Issue #68)
 
 **Done (Channel push — Issue #106):**
-- [x] Claude Code Channel (Issue #106): channel shim (`src/channel/`), SSE event bridge, origin-tagged Y.Map writes (~15 callsites), permission relay, Claude launcher, awareness endpoints, 8 event types, two tsup bundles
+- [x] Claude Code Channel (Issue #106): channel shim (`src/channel/`), SSE event bridge, origin-tagged Y.Map writes (10 callsites across 6 files), permission relay, Claude launcher, awareness endpoints, 8 event types, two tsup bundles
+- [x] Channel review fixes: ref-counted dedup, error handling across pipeline (subscriber dispatch, SSE write, MCP notification, permission relay), HTTP status checks, separated JSON parse vs transport errors, launcher cleanup, doc fixes, 35 new tests (676 total)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration

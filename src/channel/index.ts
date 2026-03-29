@@ -11,7 +11,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { startEventBridge } from "./event-bridge.js";
 
@@ -37,8 +37,8 @@ const mcp = new Server(
     instructions: [
       'Events from Tandem arrive as <channel source="tandem-channel" event_type="..." document_id="...">.',
       "These are real-time push notifications of user actions in the collaborative document editor.",
-      "Event types: annotation_created, annotation_accepted, annotation_dismissed,",
-      "chat_message, selection_changed, document_opened, document_closed, document_switched.",
+      "Event types: annotation:created, annotation:accepted, annotation:dismissed,",
+      "chat:message, selection:changed, document:opened, document:closed, document:switched.",
       "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_highlight, etc.) to act on them.",
       "Reply to chat messages using tandem_reply. Pass document_id from the tag attributes.",
       "Do not reply to non-chat events — just act on them using tools.",
@@ -82,7 +82,23 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(args),
       });
-      const data = await res.json();
+      let data: unknown;
+      try {
+        data = await res.json();
+      } catch {
+        data = { message: "Non-JSON response" };
+      }
+      if (!res.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Reply failed (${res.status}): ${JSON.stringify(data)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
       return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
     } catch (err) {
       return {
@@ -113,7 +129,7 @@ const PermissionRequestSchema = z.object({
 
 mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   try {
-    await fetch(`${TANDEM_URL}/api/channel-permission`, {
+    const res = await fetch(`${TANDEM_URL}/api/channel-permission`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -123,6 +139,11 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
         inputPreview: params.input_preview,
       }),
     });
+    if (!res.ok) {
+      console.error(
+        `[Channel] Permission relay got HTTP ${res.status} — browser may not see prompt`,
+      );
+    }
   } catch (err) {
     console.error("[Channel] Failed to forward permission request:", err);
   }
@@ -139,7 +160,10 @@ async function main() {
   console.error("[Channel] Connected to Claude Code via stdio");
 
   // Start the SSE event bridge (runs until disconnected or max retries)
-  startEventBridge(mcp, TANDEM_URL);
+  startEventBridge(mcp, TANDEM_URL).catch((err) => {
+    console.error("[Channel] Event bridge failed unexpectedly:", err);
+    process.exit(1);
+  });
 }
 
 main().catch((err) => {

@@ -54,7 +54,7 @@ export interface DocumentSwitchedPayload {
 // --- Discriminated union ---
 
 interface TandemEventBase {
-  /** Monotonic ID for SSE `Last-Event-ID` reconnection. Format: `evt_<timestamp>_<rand>` */
+  /** Timestamp-based unique ID for SSE `Last-Event-ID` reconnection. Format: `evt_<timestamp>_<rand>`. Roughly ordered but not strictly monotonic. */
   id: string;
   timestamp: number;
   /** Which document this event relates to (absent for global events). */
