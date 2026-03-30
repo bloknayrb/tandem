@@ -370,8 +370,15 @@ export default function App() {
               Chat
             </button>
           </div>
-          {/* Panel content */}
-          {showChat ? (
+          {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
+          <div
+            style={{
+              display: showChat ? "flex" : "none",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
             <ChatPanel
               ctrlYdoc={bootstrapYdoc}
               editor={editorRef.current}
@@ -380,7 +387,15 @@ export default function App() {
               claudeActive={claudeActive}
               claudeStatus={claudeStatus}
             />
-          ) : (
+          </div>
+          <div
+            style={{
+              display: showChat ? "none" : "flex",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
             <SidePanel
               annotations={visibleAnnotations}
               editor={editorRef.current}
@@ -394,7 +409,7 @@ export default function App() {
               activeAnnotationId={activeAnnotationId}
               onActiveAnnotationChange={setActiveAnnotationId}
             />
-          )}
+          </div>
         </div>
       </div>
       <StatusBar
