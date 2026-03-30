@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
 import { pmPosToFlatOffset } from "../../positions";
 import { generateAnnotationId } from "../../../shared/utils";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
+import { InputGroup } from "./InputGroup";
+import { ToolbarButton } from "./ToolbarButton";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
   { value: "yellow", label: "Yellow" },
@@ -13,6 +15,8 @@ const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> =
   { value: "blue", label: "Blue" },
   { value: "purple", label: "Purple" },
 ];
+
+type ToolbarMode = "idle" | "comment" | "suggest" | "askClaude";
 
 interface ToolbarProps {
   editor: TiptapEditor | null;
@@ -23,13 +27,9 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
   const [hasSelection, setHasSelection] = useState(false);
   const [highlightColor, setHighlightColor] = useState<HighlightColor>("yellow");
   const [showColorPicker, setShowColorPicker] = useState(false);
-  const [commentMode, setCommentMode] = useState(false);
-  const [commentText, setCommentText] = useState("");
-  const [suggestMode, setSuggestMode] = useState(false);
-  const [suggestText, setSuggestText] = useState("");
-  const [suggestReason, setSuggestReason] = useState("");
-  const [askClaudeMode, setAskClaudeMode] = useState(false);
-  const [askClaudeText, setAskClaudeText] = useState("");
+  const [mode, setMode] = useState<ToolbarMode>("idle");
+  const [modeText, setModeText] = useState("");
+  const [modeReason, setModeReason] = useState(""); // used by suggest mode only
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
   const suggestInputRef = useRef<HTMLInputElement>(null);
@@ -52,24 +52,18 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     };
   }, [editor]);
 
-  // Focus inputs when entering modes
   useEffect(() => {
-    if (commentMode && commentInputRef.current) {
-      commentInputRef.current.focus();
+    if (mode === "idle") return;
+    const refMap: Record<Exclude<ToolbarMode, "idle">, React.RefObject<HTMLInputElement | null>> = {
+      comment: commentInputRef,
+      suggest: suggestInputRef,
+      askClaude: askClaudeInputRef,
+    };
+    const ref = refMap[mode];
+    if (ref.current) {
+      ref.current.focus();
     }
-  }, [commentMode]);
-
-  useEffect(() => {
-    if (suggestMode && suggestInputRef.current) {
-      suggestInputRef.current.focus();
-    }
-  }, [suggestMode]);
-
-  useEffect(() => {
-    if (askClaudeMode && askClaudeInputRef.current) {
-      askClaudeInputRef.current.focus();
-    }
-  }, [askClaudeMode]);
+  }, [mode]);
 
   // Close color picker when clicking outside
   useEffect(() => {
@@ -122,7 +116,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     editor?.chain().focus().run();
   }
 
-  const inInputMode = commentMode || askClaudeMode || suggestMode;
+  const inInputMode = mode !== "idle";
 
   // -- Highlight --
 
@@ -141,79 +135,65 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     setShowColorPicker(false);
   }
 
-  // -- Comment mode --
+  // -- Consolidated mode handlers --
 
-  function handleCommentStart(e: React.MouseEvent) {
-    e.preventDefault();
-    captureSelectionRange();
-    setCommentMode(true);
-    setCommentText("");
-  }
+  const handleModeStart = useCallback(
+    (targetMode: ToolbarMode) => {
+      return (e: React.MouseEvent) => {
+        e.preventDefault();
+        captureSelectionRange();
+        setMode(targetMode);
+        setModeText("");
+        setModeReason("");
+      };
+    },
+    [editor],
+  );
 
-  function handleCommentSubmit() {
-    if (!commentText.trim()) {
-      handleCommentCancel();
-      return;
-    }
-    createAnnotation("comment", commentText.trim());
-    setCommentMode(false);
-    setCommentText("");
-    editor?.chain().focus().run();
-  }
+  const startComment = useMemo(() => handleModeStart("comment"), [handleModeStart]);
+  const startSuggest = useMemo(() => handleModeStart("suggest"), [handleModeStart]);
+  const startAskClaude = useMemo(() => handleModeStart("askClaude"), [handleModeStart]);
 
-  function handleCommentCancel() {
-    setCommentMode(false);
-    setCommentText("");
+  function handleModeCancel() {
+    setMode("idle");
+    setModeText("");
+    setModeReason("");
     resetAndFocusEditor();
   }
 
-  function handleCommentKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleCommentSubmit();
-    } else if (e.key === "Escape") {
-      handleCommentCancel();
-    }
-  }
-
-  // -- Suggest mode --
-
-  function handleSuggestStart(e: React.MouseEvent) {
-    e.preventDefault();
-    captureSelectionRange();
-    setSuggestMode(true);
-    setSuggestText("");
-    setSuggestReason("");
-  }
-
-  function handleSuggestSubmit() {
-    if (!suggestText.trim()) {
-      handleSuggestCancel();
+  function handleModeSubmit() {
+    if (!modeText.trim()) {
+      handleModeCancel();
       return;
     }
-    createAnnotation(
-      "suggestion",
-      JSON.stringify({ newText: suggestText.trim(), reason: suggestReason.trim() }),
-    );
-    setSuggestMode(false);
-    setSuggestText("");
-    setSuggestReason("");
+
+    switch (mode) {
+      case "comment":
+        createAnnotation("comment", modeText.trim());
+        break;
+      case "suggest":
+        createAnnotation(
+          "suggestion",
+          JSON.stringify({ newText: modeText.trim(), reason: modeReason.trim() }),
+        );
+        break;
+      case "askClaude":
+        createAnnotation("question", modeText.trim());
+        break;
+    }
+
+    setMode("idle");
+    setModeText("");
+    setModeReason("");
     editor?.chain().focus().run();
   }
 
-  function handleSuggestCancel() {
-    setSuggestMode(false);
-    setSuggestText("");
-    setSuggestReason("");
-    resetAndFocusEditor();
-  }
-
-  function handleSuggestKeyDown(e: React.KeyboardEvent) {
+  function handleModeKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter") {
       e.preventDefault();
-      handleSuggestSubmit();
+      handleModeSubmit();
     } else if (e.key === "Escape") {
-      handleSuggestCancel();
+      handleModeCancel();
     }
   }
 
@@ -222,41 +202,6 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
   function handleFlag(e: React.MouseEvent) {
     e.preventDefault();
     createAnnotation("flag", "");
-  }
-
-  // -- Ask Claude mode --
-
-  function handleAskClaudeStart(e: React.MouseEvent) {
-    e.preventDefault();
-    captureSelectionRange();
-    setAskClaudeMode(true);
-    setAskClaudeText("");
-  }
-
-  function handleAskClaudeSubmit() {
-    if (!askClaudeText.trim()) {
-      handleAskClaudeCancel();
-      return;
-    }
-    createAnnotation("question", askClaudeText.trim());
-    setAskClaudeMode(false);
-    setAskClaudeText("");
-    editor?.chain().focus().run();
-  }
-
-  function handleAskClaudeCancel() {
-    setAskClaudeMode(false);
-    setAskClaudeText("");
-    resetAndFocusEditor();
-  }
-
-  function handleAskClaudeKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleAskClaudeSubmit();
-    } else if (e.key === "Escape") {
-      handleAskClaudeCancel();
-    }
   }
 
   const canAnnotate = editor && ydoc && hasSelection;
@@ -356,46 +301,46 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       <ToolbarButton
         label="Comment"
         disabled={!canAnnotate || inInputMode}
-        onMouseDown={handleCommentStart}
+        onMouseDown={startComment}
       />
-      {commentMode && (
+      {mode === "comment" && (
         <InputGroup
           inputRef={commentInputRef}
-          value={commentText}
-          onChange={setCommentText}
-          onKeyDown={handleCommentKeyDown}
-          onSubmit={handleCommentSubmit}
-          onCancel={handleCommentCancel}
+          value={modeText}
+          onChange={setModeText}
+          onKeyDown={handleModeKeyDown}
+          onSubmit={handleModeSubmit}
+          onCancel={handleModeCancel}
           placeholder="Add a comment..."
           submitLabel="Add"
           borderColor="#3b82f6"
-          canSubmit={!!commentText.trim()}
+          canSubmit={!!modeText.trim()}
         />
       )}
 
       <ToolbarButton
         label="Suggest"
         disabled={!canAnnotate || inInputMode}
-        onMouseDown={handleSuggestStart}
+        onMouseDown={startSuggest}
       />
-      {suggestMode && (
+      {mode === "suggest" && (
         <InputGroup
           inputRef={suggestInputRef}
-          value={suggestText}
-          onChange={setSuggestText}
-          onKeyDown={handleSuggestKeyDown}
-          onSubmit={handleSuggestSubmit}
-          onCancel={handleSuggestCancel}
+          value={modeText}
+          onChange={setModeText}
+          onKeyDown={handleModeKeyDown}
+          onSubmit={handleModeSubmit}
+          onCancel={handleModeCancel}
           placeholder="Replacement text..."
           submitLabel="Suggest"
           borderColor="#8b5cf6"
-          canSubmit={!!suggestText.trim()}
+          canSubmit={!!modeText.trim()}
           secondaryInput={
             <input
               type="text"
-              value={suggestReason}
-              onChange={(e) => setSuggestReason(e.target.value)}
-              onKeyDown={handleSuggestKeyDown}
+              value={modeReason}
+              onChange={(e) => setModeReason(e.target.value)}
+              onKeyDown={handleModeKeyDown}
               placeholder="Reason (optional)"
               style={{
                 padding: "3px 8px",
@@ -416,113 +361,25 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
         label="Ask Claude"
         shortcut="Ctrl+Shift+A"
         disabled={!canAnnotate || inInputMode}
-        onMouseDown={handleAskClaudeStart}
+        onMouseDown={startAskClaude}
       />
-      {askClaudeMode && (
+      {mode === "askClaude" && (
         <InputGroup
           inputRef={askClaudeInputRef}
-          value={askClaudeText}
-          onChange={setAskClaudeText}
-          onKeyDown={handleAskClaudeKeyDown}
-          onSubmit={handleAskClaudeSubmit}
-          onCancel={handleAskClaudeCancel}
+          value={modeText}
+          onChange={setModeText}
+          onKeyDown={handleModeKeyDown}
+          onSubmit={handleModeSubmit}
+          onCancel={handleModeCancel}
           placeholder="Ask about this text..."
           submitLabel="Ask"
           borderColor="#6366f1"
-          canSubmit={!!askClaudeText.trim()}
+          canSubmit={!!modeText.trim()}
         />
       )}
 
       <div style={{ flex: 1 }} />
       <span style={{ fontSize: "12px", color: "#9ca3af" }}>Review Mode</span>
     </div>
-  );
-}
-
-/** Reusable inline input group for comment/question/suggest modes */
-function InputGroup({
-  inputRef,
-  value,
-  onChange,
-  onKeyDown,
-  onSubmit,
-  onCancel,
-  placeholder,
-  submitLabel,
-  borderColor,
-  canSubmit,
-  secondaryInput,
-}: {
-  inputRef: React.RefObject<HTMLInputElement | null>;
-  value: string;
-  onChange: (v: string) => void;
-  onKeyDown: (e: React.KeyboardEvent) => void;
-  onSubmit: () => void;
-  onCancel: () => void;
-  placeholder: string;
-  submitLabel: string;
-  borderColor: string;
-  canSubmit: boolean;
-  secondaryInput?: React.ReactNode;
-}) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-      <input
-        ref={inputRef}
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
-        style={{
-          padding: "3px 8px",
-          fontSize: "13px",
-          border: `1px solid ${borderColor}`,
-          borderRadius: "4px",
-          outline: "none",
-          width: "200px",
-        }}
-      />
-      {secondaryInput}
-      <ToolbarButton label={submitLabel} disabled={!canSubmit} onClick={onSubmit} />
-      <ToolbarButton label="Cancel" disabled={false} onClick={onCancel} />
-    </div>
-  );
-}
-
-function ToolbarButton({
-  label,
-  shortcut,
-  disabled,
-  onMouseDown,
-  onClick,
-  style,
-}: {
-  label: string;
-  shortcut?: string;
-  disabled?: boolean;
-  onMouseDown?: (e: React.MouseEvent) => void;
-  onClick?: () => void;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <button
-      disabled={disabled}
-      title={shortcut ? `${label} (${shortcut})` : label}
-      onMouseDown={onMouseDown}
-      onClick={onClick}
-      style={{
-        padding: "4px 10px",
-        fontSize: "13px",
-        border: "1px solid #e5e7eb",
-        borderRadius: "4px",
-        background: disabled ? "#f9fafb" : "#fff",
-        color: disabled ? "#9ca3af" : "#374151",
-        cursor: disabled ? "not-allowed" : "pointer",
-        ...style,
-      }}
-    >
-      {label}
-    </button>
   );
 }
