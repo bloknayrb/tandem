@@ -61,6 +61,8 @@ export function SidePanel({
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [reviewIndex, setReviewIndex] = useState(0);
   const reviewIndexRef = useRef(0);
+  const [bulkConfirm, setBulkConfirm] = useState<"accept" | "dismiss" | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
 
   // Stable refs for keyboard callbacks to avoid stale closures
   const ydocRef = useRef(ydoc);
@@ -113,11 +115,13 @@ export function SidePanel({
   }
 
   function handleBulkAccept() {
-    for (const ann of allPending) resolveAnnotation(ann.id, "accepted");
+    for (const ann of pending) resolveAnnotation(ann.id, "accepted");
+    setBulkConfirm(null);
   }
 
   function handleBulkDismiss() {
-    for (const ann of allPending) resolveAnnotation(ann.id, "dismissed");
+    for (const ann of pending) resolveAnnotation(ann.id, "dismissed");
+    setBulkConfirm(null);
   }
 
   // Scroll editor to an annotation's range
@@ -229,6 +233,23 @@ export function SidePanel({
     onToggleReviewMode,
     onExitReviewMode,
   ]);
+
+  // Focus confirm button when bulk confirmation appears; Escape dismisses
+  useEffect(() => {
+    if (bulkConfirm) {
+      confirmRef.current?.focus();
+      const handleEsc = (e: KeyboardEvent) => {
+        if (e.key === "Escape") setBulkConfirm(null);
+      };
+      window.addEventListener("keydown", handleEsc);
+      return () => window.removeEventListener("keydown", handleEsc);
+    }
+  }, [bulkConfirm]);
+
+  // Reset confirmation when pending annotations change
+  useEffect(() => {
+    setBulkConfirm(null);
+  }, [pending.length]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
@@ -420,43 +441,87 @@ export function SidePanel({
       </div>
 
       {/* Bulk actions */}
-      {allPending.length > 1 && (
+      {pending.length > 1 && (
         <div
           style={{
             padding: "6px 16px",
             borderBottom: "1px solid #e5e7eb",
             display: "flex",
             gap: "6px",
+            alignItems: "center",
           }}
         >
-          <button
-            onClick={handleBulkAccept}
-            style={{
-              padding: "2px 8px",
-              fontSize: "11px",
-              border: "1px solid #d1d5db",
-              borderRadius: "3px",
-              background: "#f0fdf4",
-              color: "#166534",
-              cursor: "pointer",
-            }}
-          >
-            Accept All ({allPending.length})
-          </button>
-          <button
-            onClick={handleBulkDismiss}
-            style={{
-              padding: "2px 8px",
-              fontSize: "11px",
-              border: "1px solid #d1d5db",
-              borderRadius: "3px",
-              background: "#fef2f2",
-              color: "#991b1b",
-              cursor: "pointer",
-            }}
-          >
-            Dismiss All
-          </button>
+          {bulkConfirm ? (
+            <>
+              <span style={{ fontSize: "11px", color: "#374151" }}>
+                {bulkConfirm === "accept" ? "Accept" : "Dismiss"}{" "}
+                {pending.length === allPending.length
+                  ? `${pending.length} annotations?`
+                  : `${pending.length} of ${allPending.length} pending?`}
+              </span>
+              <button
+                ref={confirmRef}
+                onClick={bulkConfirm === "accept" ? handleBulkAccept : handleBulkDismiss}
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "3px",
+                  background: bulkConfirm === "accept" ? "#f0fdf4" : "#fef2f2",
+                  color: bulkConfirm === "accept" ? "#166534" : "#991b1b",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => setBulkConfirm(null)}
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "3px",
+                  background: "#fff",
+                  color: "#6b7280",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => setBulkConfirm("accept")}
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "3px",
+                  background: "#f0fdf4",
+                  color: "#166534",
+                  cursor: "pointer",
+                }}
+              >
+                Accept All ({pending.length})
+              </button>
+              <button
+                onClick={() => setBulkConfirm("dismiss")}
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "3px",
+                  background: "#fef2f2",
+                  color: "#991b1b",
+                  cursor: "pointer",
+                }}
+              >
+                Dismiss All
+              </button>
+            </>
+          )}
         </div>
       )}
 
