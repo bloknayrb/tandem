@@ -215,7 +215,7 @@ The side panel shows progress: "Reviewing 3 / 15". Each accepted suggestion appl
 When all annotations are resolved, a **Review Summary** overlay appears showing:
 - Total reviewed, accepted count, dismissed count, accept rate
 
-For bulk operations, use **Accept All** or **Dismiss All** buttons in the side panel header.
+For bulk operations, use **Accept All** or **Dismiss All** buttons in the side panel header. These require a confirmation step before executing. When filters are active, bulk actions only affect the filtered annotations (e.g., "Accept 3 of 12 pending?").
 
 ### Interruption Modes
 

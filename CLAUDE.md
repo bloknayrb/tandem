@@ -40,7 +40,9 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Annotations observed from Y.Map('annotations') on the active tab's Y.Doc
 - AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
 - AwarenessExtension renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
-- SidePanel: annotation filtering (type/author/status), bulk accept/dismiss, keyboard review mode (Tab/Y/N)
+- SidePanel: annotation filtering (type/author/status), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N)
+- ChatPanel + SidePanel are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
+- ChatPanel shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
 - StatusBar: connection status, Claude activity, interruption mode selector (All/Urgent/Paused). Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions.
 - ReviewSummary overlay shown when all pending annotations are resolved
 
@@ -115,6 +117,11 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Claude Code Channel (Issue #106): channel shim (`src/channel/`), SSE event bridge, origin-tagged Y.Map writes (10 callsites across 6 files), permission relay, Claude launcher, awareness endpoints, 8 event types, two tsup bundles
 - [x] Channel review fixes: ref-counted dedup, error handling across pipeline (subscriber dispatch, SSE write, MCP notification, permission relay), HTTP status checks, separated JSON parse vs transport errors, launcher cleanup, doc fixes, 35 new tests (676 total)
 - [x] feat(server): force-reload open documents from disk via `force` param on `tandem_open` / `POST /api/open` (Issue #128, 684 tests)
+
+**Done (UI polish — 2026-03-29):**
+- [x] feat(client): Claude typing indicator in ChatPanel — animated dots + status text (Issue #90)
+- [x] feat(client): bulk accept/dismiss confirmation — inline confirm step, respects active filters (Issue #95)
+- [x] fix(client): persist annotation filters across panel toggle — CSS display toggling (Issue #94)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
