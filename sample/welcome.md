@@ -16,4 +16,4 @@ Both you and Claude can see and edit this document at the same time. Claude's cu
 
 The project launched in early 2025 with three core goals: simplify onboarding, reduce support tickets by 40%, and ship a self-service dashboard by Q3. The team completed the first two milestones ahead of schedule, but the dashboard timeline slipped due to an unexpected API redesign in May.
 
-> Claude has already reviewed this document and left a few suggestions. Look for the highlighted text in the side panel.
+> Once Claude connects, ask it to review this document -- you'll see highlights and suggestions appear in the side panel.

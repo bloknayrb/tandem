@@ -7,9 +7,6 @@ import { randomUUID } from "crypto";
 import type { Server } from "http";
 import { createRequire } from "module";
 
-const require = createRequire(import.meta.url);
-const { version: APP_VERSION } = require("../../../package.json") as { version: string };
-export { APP_VERSION };
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
@@ -22,6 +19,15 @@ import { registerDocumentTools } from "./document.js";
 import { detectFormat } from "./document-model.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
 import { registerNavigationTools } from "./navigation.js";
+
+const esmRequire = createRequire(import.meta.url);
+let APP_VERSION = "0.0.0-unknown";
+try {
+  APP_VERSION = (esmRequire("../../../package.json") as { version: string }).version;
+} catch {
+  console.error("[Tandem] Could not read version from package.json");
+}
+export { APP_VERSION };
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.

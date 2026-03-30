@@ -7,8 +7,8 @@ import {
   closeMcpSession,
   APP_VERSION,
 } from "./mcp/server.js";
-import { startHocuspocus } from "./yjs/provider.js";
-import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from "../shared/constants.js";
+import { startHocuspocus, setDocLifecycleCallbacks } from "./yjs/provider.js";
+import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT, CTRL_ROOM } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
 import { freePort } from "./platform.js";
@@ -19,8 +19,6 @@ import {
   reattachCtrlObservers,
   detachObservers,
 } from "./events/queue.js";
-import { setDocLifecycleCallbacks } from "./yjs/provider.js";
-import { CTRL_ROOM } from "../shared/constants.js";
 import { getOpenDocs } from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 
@@ -145,15 +143,16 @@ async function main() {
     ]);
     httpServer = srv;
 
-    // Auto-open sample/welcome.md on first run (no restored session, no docs open)
+    // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session)
     if (getOpenDocs().size === 0 && !process.env.TANDEM_NO_SAMPLE) {
       const samplePath = path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
         "../../sample/welcome.md",
       );
       openFileByPath(samplePath).catch((err) => {
-        // ENOENT is expected if user deleted the sample file — silently skip
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          console.error("[Tandem] Sample file not found (skipping):", samplePath);
+        } else {
           console.error("[Tandem] Failed to auto-open sample document:", err);
         }
       });
