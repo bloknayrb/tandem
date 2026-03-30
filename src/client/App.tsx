@@ -93,6 +93,7 @@ export default function App() {
   }, [interruptionMode]);
 
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
+  const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
   const [showReviewSummary, setShowReviewSummary] = useState(false);
   const [reviewSummaryData, setReviewSummaryData] = useState<{
@@ -383,9 +384,10 @@ export default function App() {
               ctrlYdoc={bootstrapYdoc}
               editor={editorRef.current}
               activeDocId={activeTabId}
-              openDocs={tabs.map((t) => ({ id: t.id, fileName: t.fileName }))}
+              openDocs={openDocs}
               claudeActive={claudeActive}
               claudeStatus={claudeStatus}
+              visible={showChat}
             />
           </div>
           <div

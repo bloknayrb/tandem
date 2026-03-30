@@ -23,6 +23,7 @@ interface ChatPanelProps {
   openDocs: Array<{ id: string; fileName: string }>;
   claudeActive?: boolean;
   claudeStatus?: string | null;
+  visible?: boolean;
 }
 
 export function ChatPanel({
@@ -32,6 +33,7 @@ export function ChatPanel({
   openDocs,
   claudeActive,
   claudeStatus,
+  visible,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
@@ -42,19 +44,6 @@ export function ChatPanel({
   } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  // Inject typing animation keyframes once
-  useEffect(() => {
-    const id = "tandem-typing-bounce-style";
-    if (document.getElementById(id)) return;
-    const style = document.createElement("style");
-    style.id = id;
-    style.textContent = `@keyframes tandem-typing-bounce {
-      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-      30% { transform: translateY(-4px); opacity: 1; }
-    }`;
-    document.head.appendChild(style);
-  }, []);
 
   // Observe Y.Map('chat') for changes
   useEffect(() => {
@@ -86,6 +75,13 @@ export function ChatPanel({
     prevClaudeActive.current = !!claudeActive;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, claudeActive]);
+
+  // Scroll to bottom when panel becomes visible (display toggle means scrollIntoView no-ops while hidden)
+  useEffect(() => {
+    if (visible) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [visible]);
 
   // Capture selection on mousedown of send button (before editor loses focus)
   const captureSelection = useCallback(() => {
@@ -390,6 +386,12 @@ export function ChatPanel({
           Send
         </button>
       </div>
+      <style>{`
+        @keyframes tandem-typing-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-4px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

@@ -19,6 +19,14 @@ interface SidePanelProps {
   onActiveAnnotationChange: (id: string | null) => void;
 }
 
+const SMALL_BTN: React.CSSProperties = {
+  padding: "2px 8px",
+  fontSize: "11px",
+  border: "1px solid #d1d5db",
+  borderRadius: "3px",
+  cursor: "pointer",
+};
+
 type FilterType = AnnotationType | "all";
 type FilterAuthor = "all" | "claude" | "user";
 type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
@@ -451,71 +459,48 @@ export function SidePanel({
           }}
         >
           {bulkConfirm ? (
-            <>
-              <span style={{ fontSize: "11px", color: "#374151" }}>
-                {bulkConfirm === "accept" ? "Accept" : "Dismiss"}{" "}
-                {pending.length === allPending.length
-                  ? `${pending.length} annotations?`
-                  : `${pending.length} of ${allPending.length} pending?`}
-              </span>
-              <button
-                ref={confirmRef}
-                onClick={bulkConfirm === "accept" ? handleBulkAccept : handleBulkDismiss}
-                style={{
-                  padding: "2px 8px",
-                  fontSize: "11px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: "3px",
-                  background: bulkConfirm === "accept" ? "#f0fdf4" : "#fef2f2",
-                  color: bulkConfirm === "accept" ? "#166534" : "#991b1b",
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                Confirm
-              </button>
-              <button
-                onClick={() => setBulkConfirm(null)}
-                style={{
-                  padding: "2px 8px",
-                  fontSize: "11px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: "3px",
-                  background: "#fff",
-                  color: "#6b7280",
-                  cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
-            </>
+            (() => {
+              const isAccept = bulkConfirm === "accept";
+              return (
+                <>
+                  <span style={{ fontSize: "11px", color: "#374151" }}>
+                    {isAccept ? "Accept" : "Dismiss"}{" "}
+                    {pending.length === allPending.length
+                      ? `${pending.length} annotations?`
+                      : `${pending.length} of ${allPending.length} pending?`}
+                  </span>
+                  <button
+                    ref={confirmRef}
+                    onClick={isAccept ? handleBulkAccept : handleBulkDismiss}
+                    style={{
+                      ...SMALL_BTN,
+                      background: isAccept ? "#f0fdf4" : "#fef2f2",
+                      color: isAccept ? "#166534" : "#991b1b",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setBulkConfirm(null)}
+                    style={{ ...SMALL_BTN, background: "#fff", color: "#6b7280" }}
+                  >
+                    Cancel
+                  </button>
+                </>
+              );
+            })()
           ) : (
             <>
               <button
                 onClick={() => setBulkConfirm("accept")}
-                style={{
-                  padding: "2px 8px",
-                  fontSize: "11px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: "3px",
-                  background: "#f0fdf4",
-                  color: "#166534",
-                  cursor: "pointer",
-                }}
+                style={{ ...SMALL_BTN, background: "#f0fdf4", color: "#166534" }}
               >
                 Accept All ({pending.length})
               </button>
               <button
                 onClick={() => setBulkConfirm("dismiss")}
-                style={{
-                  padding: "2px 8px",
-                  fontSize: "11px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: "3px",
-                  background: "#fef2f2",
-                  color: "#991b1b",
-                  cursor: "pointer",
-                }}
+                style={{ ...SMALL_BTN, background: "#fef2f2", color: "#991b1b" }}
               >
                 Dismiss All
               </button>
