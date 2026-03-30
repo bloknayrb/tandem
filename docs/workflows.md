@@ -259,9 +259,9 @@ This lets Bryan control how aggressively Claude's annotations interrupt the edit
 **If a file changed on disk while already open (git pull, external editor):**
 
 1. Call `tandem_open({ filePath: "...", force: true })` to reload from disk
-2. This tears down the in-memory Y.Doc, clears annotations and session, and disconnects all clients
-3. Clients automatically reconnect and get the fresh content -- no stale CRDT merge
-4. The `POST /api/open` endpoint also accepts `force: true` for browser-initiated reloads
+2. The browser updates to show the new content automatically
+3. Annotations and session state are cleared (they reference old positions)
+4. `POST /api/open` also accepts `force: true` for browser-initiated reloads
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
 
