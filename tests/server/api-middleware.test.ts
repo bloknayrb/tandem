@@ -3,8 +3,8 @@ import {
   isHostAllowed,
   isLocalhostOrigin,
   errorCodeToHttpStatus,
-  jsonrpcId,
-} from "../../src/server/mcp/server.js";
+} from "../../src/server/mcp/api-routes.js";
+import { jsonrpcId } from "../../src/server/mcp/server.js";
 
 describe("isHostAllowed (DNS rebinding protection)", () => {
   it("allows localhost", () => {
