@@ -9,7 +9,12 @@ import {
   refreshRange,
   refreshAllRanges,
 } from "../../src/server/positions.js";
-import { makeDoc, getAnnotationsMap, getFragment } from "../helpers/ydoc-factory.js";
+import {
+  makeDoc,
+  getAnnotationsMap,
+  getFragment,
+  makeAnnotation,
+} from "../helpers/ydoc-factory.js";
 import { getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 
@@ -235,22 +240,22 @@ describe("flatOffsetToRelPos / relPosToFlatOffset round-trip", () => {
 });
 
 describe("refreshRange (via positions module)", () => {
-  function makeAnnotation(map: Y.Map<unknown>, from: number, to: number, ydoc?: Y.Doc): Annotation {
+  function makeAnchoredAnnotation(
+    map: Y.Map<unknown>,
+    from: number,
+    to: number,
+    ydoc?: Y.Doc,
+  ): Annotation {
     const result = ydoc
       ? anchoredRange(ydoc, from, to)
       : { ok: true as const, range: { from, to } };
     if (!result.ok) throw new Error("Failed");
     const id = `ann_test_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const ann: Annotation = {
+    const ann = makeAnnotation({
       id,
-      author: "claude",
-      type: "comment",
       range: result.range,
       ...("relRange" in result && result.relRange ? { relRange: result.relRange } : {}),
-      content: "test",
-      status: "pending",
-      timestamp: Date.now(),
-    };
+    });
     map.set(id, ann);
     return ann;
   }
@@ -258,7 +263,7 @@ describe("refreshRange (via positions module)", () => {
   it("lazily attaches relRange", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const ann = makeAnnotation(map, 0, 5); // no ydoc → no relRange
+    const ann = makeAnchoredAnnotation(map, 0, 5); // no ydoc → no relRange
 
     expect(ann.relRange).toBeUndefined();
     const refreshed = refreshRange(ann, doc, map);
@@ -268,7 +273,7 @@ describe("refreshRange (via positions module)", () => {
   it("updates stale flat offsets after edit", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const ann = makeAnnotation(map, 6, 11, doc);
+    const ann = makeAnchoredAnnotation(map, 6, 11, doc);
 
     // Insert before annotation
     const fragment = getFragment(doc);
@@ -282,7 +287,7 @@ describe("refreshRange (via positions module)", () => {
   it("returns original annotation when CRDT resolves to inverted range", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const ann = makeAnnotation(map, 0, 5, doc); // "hello"
+    const ann = makeAnchoredAnnotation(map, 0, 5, doc); // "hello"
 
     // Manually craft an inverted relRange by swapping fromRel and toRel
     const invertedAnn: Annotation = {
