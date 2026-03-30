@@ -1,4 +1,4 @@
-import { Y_MAP_CHAT } from "../../shared/constants";
+import { Y_MAP_CHAT, CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import ReactMarkdown from "react-markdown";
@@ -7,14 +7,34 @@ import { pmPosToFlatOffset, flatOffsetToPmPos } from "../positions";
 import { generateMessageId } from "../../shared/utils";
 import type { ChatMessage } from "../../shared/types";
 
+const TYPING_DOT_STYLE: React.CSSProperties = {
+  width: "5px",
+  height: "5px",
+  borderRadius: "50%",
+  background: CLAUDE_PRESENCE_COLOR,
+};
+
+const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
+
 interface ChatPanelProps {
   ctrlYdoc: Y.Doc | null;
   editor: TiptapEditor | null;
   activeDocId: string | null;
   openDocs: Array<{ id: string; fileName: string }>;
+  claudeActive?: boolean;
+  claudeStatus?: string | null;
+  visible?: boolean;
 }
 
-export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanelProps) {
+export function ChatPanel({
+  ctrlYdoc,
+  editor,
+  activeDocId,
+  openDocs,
+  claudeActive,
+  claudeStatus,
+  visible,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [capturedAnchor, setCapturedAnchor] = useState<{
@@ -44,10 +64,24 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
     return () => chatMap.unobserve(observer);
   }, [ctrlYdoc]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or when typing indicator appears
+  const prevClaudeActive = useRef(false);
   useEffect(() => {
+    // Skip scroll when indicator disappears (claudeActive toggled false)
+    if (!claudeActive && prevClaudeActive.current) {
+      prevClaudeActive.current = false;
+      return;
+    }
+    prevClaudeActive.current = !!claudeActive;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, claudeActive]);
+
+  // Scroll to bottom when panel becomes visible (display toggle means scrollIntoView no-ops while hidden)
+  useEffect(() => {
+    if (visible) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [visible]);
 
   // Capture selection on mousedown of send button (before editor loses focus)
   const captureSelection = useCallback(() => {
@@ -244,6 +278,32 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
             )}
           </div>
         ))}
+        {claudeActive && (
+          <div
+            style={{
+              padding: "8px 12px",
+              marginBottom: "8px",
+              fontSize: "12px",
+              color: CLAUDE_PRESENCE_COLOR,
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <span style={{ display: "inline-flex", gap: "3px" }}>
+              {TYPING_DOT_DELAYS.map((delay) => (
+                <span
+                  key={delay}
+                  style={{
+                    ...TYPING_DOT_STYLE,
+                    animation: `tandem-typing-bounce 1.2s ease-in-out ${delay}s infinite`,
+                  }}
+                />
+              ))}
+            </span>
+            <span>{claudeStatus ?? "Claude is thinking..."}</span>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -326,6 +386,12 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
           Send
         </button>
       </div>
+      <style>{`
+        @keyframes tandem-typing-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-4px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

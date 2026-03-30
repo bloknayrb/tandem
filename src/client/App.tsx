@@ -93,6 +93,7 @@ export default function App() {
   }, [interruptionMode]);
 
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
+  const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
   const [showReviewSummary, setShowReviewSummary] = useState(false);
   const [reviewSummaryData, setReviewSummaryData] = useState<{
@@ -370,15 +371,33 @@ export default function App() {
               Chat
             </button>
           </div>
-          {/* Panel content */}
-          {showChat ? (
+          {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
+          <div
+            style={{
+              display: showChat ? "flex" : "none",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
             <ChatPanel
               ctrlYdoc={bootstrapYdoc}
               editor={editorRef.current}
               activeDocId={activeTabId}
-              openDocs={tabs.map((t) => ({ id: t.id, fileName: t.fileName }))}
+              openDocs={openDocs}
+              claudeActive={claudeActive}
+              claudeStatus={claudeStatus}
+              visible={showChat}
             />
-          ) : (
+          </div>
+          <div
+            style={{
+              display: showChat ? "none" : "flex",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
             <SidePanel
               annotations={visibleAnnotations}
               editor={editorRef.current}
@@ -392,7 +411,7 @@ export default function App() {
               activeAnnotationId={activeAnnotationId}
               onActiveAnnotationChange={setActiveAnnotationId}
             />
-          )}
+          </div>
         </div>
       </div>
       <StatusBar
