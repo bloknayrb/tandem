@@ -377,6 +377,8 @@ export default function App() {
               editor={editorRef.current}
               activeDocId={activeTabId}
               openDocs={tabs.map((t) => ({ id: t.id, fileName: t.fileName }))}
+              claudeActive={claudeActive}
+              claudeStatus={claudeStatus}
             />
           ) : (
             <SidePanel

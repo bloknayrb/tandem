@@ -12,9 +12,18 @@ interface ChatPanelProps {
   editor: TiptapEditor | null;
   activeDocId: string | null;
   openDocs: Array<{ id: string; fileName: string }>;
+  claudeActive?: boolean;
+  claudeStatus?: string | null;
 }
 
-export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanelProps) {
+export function ChatPanel({
+  ctrlYdoc,
+  editor,
+  activeDocId,
+  openDocs,
+  claudeActive,
+  claudeStatus,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [capturedAnchor, setCapturedAnchor] = useState<{
@@ -47,7 +56,7 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, claudeActive]);
 
   // Capture selection on mousedown of send button (before editor loses focus)
   const captureSelection = useCallback(() => {
@@ -129,6 +138,12 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
         minHeight: 0,
       }}
     >
+      <style>{`
+        @keyframes tandem-typing-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-4px); opacity: 1; }
+        }
+      `}</style>
       {/* Header */}
       <div
         style={{
@@ -244,6 +259,50 @@ export function ChatPanel({ ctrlYdoc, editor, activeDocId, openDocs }: ChatPanel
             )}
           </div>
         ))}
+        {claudeActive && (
+          <div
+            style={{
+              padding: "8px 12px",
+              marginBottom: "8px",
+              fontSize: "12px",
+              color: "#6366f1",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <span className="tandem-typing-dots" style={{ display: "inline-flex", gap: "3px" }}>
+              <span
+                style={{
+                  width: "5px",
+                  height: "5px",
+                  borderRadius: "50%",
+                  background: "#6366f1",
+                  animation: "tandem-typing-bounce 1.2s ease-in-out infinite",
+                }}
+              />
+              <span
+                style={{
+                  width: "5px",
+                  height: "5px",
+                  borderRadius: "50%",
+                  background: "#6366f1",
+                  animation: "tandem-typing-bounce 1.2s ease-in-out 0.2s infinite",
+                }}
+              />
+              <span
+                style={{
+                  width: "5px",
+                  height: "5px",
+                  borderRadius: "50%",
+                  background: "#6366f1",
+                  animation: "tandem-typing-bounce 1.2s ease-in-out 0.4s infinite",
+                }}
+              />
+            </span>
+            <span>{claudeStatus || "Claude is thinking..."}</span>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
