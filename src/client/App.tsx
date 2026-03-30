@@ -10,6 +10,7 @@ import { ReviewSummary } from "./panels/ReviewSummary";
 import { HelpModal } from "./components/HelpModal";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import {
+  DISCONNECT_DEBOUNCE_MS,
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
   REVIEW_BANNER_THRESHOLD,
@@ -22,6 +23,47 @@ import type { DocListEntry, OpenTab } from "./types";
 import { API_BASE, readFileForUpload } from "./utils/fileUpload";
 
 export type { DocListEntry, OpenTab };
+
+/** Connection-aware empty state shown when no document is open. */
+function EmptyState({ connected, claudeActive }: { connected: boolean; claudeActive: boolean }) {
+  const [showDisconnected, setShowDisconnected] = useState(false);
+
+  useEffect(() => {
+    if (connected) {
+      setShowDisconnected(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowDisconnected(true), DISCONNECT_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [connected]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100%",
+        color: "#9ca3af",
+        gap: "8px",
+      }}
+    >
+      {showDisconnected ? (
+        <span>Cannot reach the Tandem server. Is it running?</span>
+      ) : (
+        <>
+          <span>No document open. Click + in the tab bar or drop a file here.</span>
+          {connected && !claudeActive && (
+            <span style={{ fontSize: "0.85em", color: "#b0b8c4" }}>
+              Tip: open Claude Code in this directory to start collaborating
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const {
@@ -276,17 +318,7 @@ export default function App() {
               onEditorReady={handleEditorReady}
             />
           ) : (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: "#9ca3af",
-              }}
-            >
-              No document open. Click + in the tab bar or drop a file here.
-            </div>
+            <EmptyState connected={connected} claudeActive={claudeActive} />
           )}
         </div>
         <div

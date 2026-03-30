@@ -15,29 +15,52 @@ graph LR
     Shim -->|push notifications| Claude
 ```
 
-## Quickstart
+## Getting Started
+
+### Prerequisites
+
+- **Node.js 22+** ([download](https://nodejs.org))
+- **Claude Code** (`npm i -g @anthropic-ai/claude-code`)
+
+### Install
 
 ```bash
-# Prerequisites: Node.js 18+
+git clone https://github.com/bloknayrb/tandem.git
 cd tandem
 npm install
-npm run dev:server   # Starts MCP HTTP (:3479) + WebSocket (:3478)
-# In another terminal:
-npm run dev:client   # Starts Vite (:5173)
+npm run build     # builds server + channel shim into dist/
 ```
 
-Then from Claude Code:
+### Run
+
+```bash
+npm run dev:standalone   # starts server (:3478/:3479) + browser client (:5173)
+```
+
+Open http://localhost:5173 -- you'll see `sample/welcome.md` loaded automatically on first run.
+
+### Connect Claude Code
+
+Start Claude Code in the tandem directory. The `.mcp.json` in the repo tells Claude Code how to connect. Try:
 
 ```
-"Let's review report.md together"
-→ Claude calls tandem_open("C:\path\to\report.md")
-→ Browser shows the document
-→ Claude highlights, comments, suggests -- you see it live
+"Review the welcome document with me"
 ```
+
+Claude calls `tandem_open`, the document appears in the browser, and annotations start flowing.
+
+### Verify (if something seems wrong)
+
+```bash
+curl http://localhost:3479/health
+# → {"status":"ok","version":"0.1.0","transport":"http","hasSession":false}
+```
+
+`hasSession` becomes `true` once Claude Code connects.
 
 ## MCP Configuration
 
-Tandem uses two MCP connections: HTTP for document tools, and a channel shim for real-time push notifications. Add both to your project's `.mcp.json`:
+Tandem uses two MCP connections: **HTTP** for document tools (26 tools), and a **channel shim** for real-time push notifications. Both are configured in `.mcp.json`:
 
 ```json
 {
@@ -47,14 +70,58 @@ Tandem uses two MCP connections: HTTP for document tools, and a channel shim for
       "url": "http://localhost:3479/mcp"
     },
     "tandem-channel": {
-      "command": "node",
-      "args": ["dist/channel/index.js"]
+      "command": "cmd",
+      "args": ["/c", "npx", "tsx", "src/channel/index.ts"],
+      "env": { "TANDEM_URL": "http://localhost:3479" }
     }
   }
 }
 ```
 
-The server must be running before Claude Code connects (`npm run dev:server`). The channel shim is optional — without it, Claude relies on polling via `tandem_checkInbox` instead of receiving real-time push events.
+The `tandem` entry (HTTP) is platform-independent. The `tandem-channel` entry varies by platform:
+
+| Platform | `command` | `args` |
+|----------|-----------|--------|
+| **Windows** | `"cmd"` | `["/c", "npx", "tsx", "src/channel/index.ts"]` |
+| **macOS / Linux** | `"npx"` | `["tsx", "src/channel/index.ts"]` |
+| **Production** (any, requires `npm run build`) | `"node"` | `["dist/channel/index.js"]` |
+
+All channel entries need `"env": { "TANDEM_URL": "http://localhost:3479" }`.
+
+The channel shim is optional -- without it, Claude relies on polling via `tandem_checkInbox` instead of receiving real-time push events.
+
+**Important:** The server must be running before Claude Code connects.
+
+## Environment Variables
+
+All optional -- defaults work out of the box.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TANDEM_PORT` | `3478` | Hocuspocus WebSocket port |
+| `TANDEM_MCP_PORT` | `3479` | MCP HTTP + REST API port |
+| `TANDEM_URL` | `http://localhost:3479` | Channel shim server URL |
+| `TANDEM_TRANSPORT` | `http` | Transport mode (`http` or `stdio`) |
+| `TANDEM_NO_SAMPLE` | unset | Set to `1` to skip auto-opening `sample/welcome.md` |
+
+See `.env.example` for a copy-paste template.
+
+## Troubleshooting
+
+**Claude Code says "MCP failed to connect"**
+Start the server first (`npm run dev:standalone`), then open Claude Code. The server must be running before Claude Code probes the MCP URL. If you restart the server, run `/mcp` in Claude Code to reconnect.
+
+**Port already in use**
+Tandem kills stale processes on :3478/:3479 at startup. If another app uses those ports, set `TANDEM_PORT` / `TANDEM_MCP_PORT` to different values and update `TANDEM_URL` to match.
+
+**Channel shim fails to start**
+The `tandem-channel` entry spawns a subprocess. If you see `MODULE_NOT_FOUND`, run `npm run build` -- the production channel entry needs `dist/channel/index.js`. If on macOS/Linux, check the platform-specific `.mcp.json` examples above.
+
+**Browser shows "Cannot reach the Tandem server"**
+The Vite client connects to the server via WebSocket. Make sure `npm run dev:standalone` (or `npm run dev:server`) is running. The message appears after 3 seconds of failed connection.
+
+**Empty browser with no document**
+On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or deleted the sample file, click the **+** button in the tab bar or drop a file onto the editor.
 
 ## Features
 
@@ -110,11 +177,10 @@ The status bar shows real-time connection state, open document count, and Claude
 
 | Command | What it does |
 |---------|-------------|
-| `npm run dev:server` | Backend: Hocuspocus (:3478) + MCP HTTP (:3479) |
-| `npm run dev:client` | Frontend: Vite dev server (:5173) |
-| `npm run dev:standalone` | Both frontend + backend (via concurrently) |
-| `npm run dev` | Alias for `vite` (frontend only) |
-| `npm run build` | Production build (two bundles: `dist/server/index.js` + `dist/channel/index.js`) |
+| `npm run dev:standalone` | **Recommended** -- both frontend + backend (via concurrently) |
+| `npm run dev:server` | Backend only: Hocuspocus (:3478) + MCP HTTP (:3479) |
+| `npm run dev:client` | Frontend only: Vite dev server (:5173) |
+| `npm run build` | Production build (`dist/server/index.js` + `dist/channel/index.js`) |
 | `npm test` | Run vitest (unit tests) |
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Playwright UI mode |

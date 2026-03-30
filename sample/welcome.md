@@ -14,6 +14,6 @@ Both you and Claude can see and edit this document at the same time. Claude's cu
 
 ## Sample Content
 
-The quarterly toll revenue for Q3 2025 was $12.4 million, representing a 3.2% increase over Q2. The DRPA toll system processed approximately 45 million transactions during this period, with an electronic collection rate of 94.7%.
+The project launched in early 2025 with three core goals: simplify onboarding, reduce support tickets by 40%, and ship a self-service dashboard by Q3. The team completed the first two milestones ahead of schedule, but the dashboard timeline slipped due to an unexpected API redesign in May.
 
-> Claude has already reviewed this document and left a few suggestions. Look for the highlighted text in the side panel.
+> Once Claude connects, ask it to review this document -- you'll see highlights and suggestions appear in the side panel.

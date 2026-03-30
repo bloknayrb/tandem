@@ -5,8 +5,8 @@
       "url": "http://localhost:3479/mcp"
     },
     "tandem-channel": {
-      "command": "npx",
-      "args": ["tsx", "src/channel/index.ts"],
+      "command": "cmd",
+      "args": ["/c", "npx", "tsx", "src/channel/index.ts"],
       "env": {
         "TANDEM_URL": "http://localhost:3479"
       }

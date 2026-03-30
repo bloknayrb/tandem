@@ -1,7 +1,14 @@
 import type { Server } from "http";
-import { startMcpServerStdio, startMcpServerHttp, closeMcpSession } from "./mcp/server.js";
-import { startHocuspocus } from "./yjs/provider.js";
-import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from "../shared/constants.js";
+import path from "path";
+import { fileURLToPath } from "url";
+import {
+  startMcpServerStdio,
+  startMcpServerHttp,
+  closeMcpSession,
+  APP_VERSION,
+} from "./mcp/server.js";
+import { startHocuspocus, setDocLifecycleCallbacks } from "./yjs/provider.js";
+import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT, CTRL_ROOM } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
 import { freePort } from "./platform.js";
@@ -12,8 +19,8 @@ import {
   reattachCtrlObservers,
   detachObservers,
 } from "./events/queue.js";
-import { setDocLifecycleCallbacks } from "./yjs/provider.js";
-import { CTRL_ROOM } from "../shared/constants.js";
+import { getOpenDocs } from "./mcp/document-service.js";
+import { openFileByPath } from "./mcp/file-opener.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -135,6 +142,31 @@ async function main() {
       }),
     ]);
     httpServer = srv;
+
+    // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session)
+    if (getOpenDocs().size === 0 && !process.env.TANDEM_NO_SAMPLE) {
+      const samplePath = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../sample/welcome.md",
+      );
+      openFileByPath(samplePath).catch((err) => {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          console.error("[Tandem] Sample file not found (skipping):", samplePath);
+        } else {
+          console.error("[Tandem] Failed to auto-open sample document:", err);
+        }
+      });
+    }
+
+    console.error("");
+    console.error(`  Tandem v${APP_VERSION}`);
+    console.error("");
+    console.error(`  MCP HTTP:    http://localhost:${mcpPort}/mcp`);
+    console.error(`  WebSocket:   ws://localhost:${wsPort}`);
+    console.error(`  Health:      http://localhost:${mcpPort}/health`);
+    console.error("");
+    console.error("  Open Claude Code in this directory to connect.");
+    console.error("");
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
