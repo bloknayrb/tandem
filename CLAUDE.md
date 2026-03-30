@@ -114,6 +114,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 **Done (Channel push — Issue #106):**
 - [x] Claude Code Channel (Issue #106): channel shim (`src/channel/`), SSE event bridge, origin-tagged Y.Map writes (10 callsites across 6 files), permission relay, Claude launcher, awareness endpoints, 8 event types, two tsup bundles
 - [x] Channel review fixes: ref-counted dedup, error handling across pipeline (subscriber dispatch, SSE write, MCP notification, permission relay), HTTP status checks, separated JSON parse vs transport errors, launcher cleanup, doc fixes, 35 new tests (676 total)
+- [x] feat(server): force-reload open documents from disk via `force` param on `tandem_open` / `POST /api/open` (Issue #128, 684 tests)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -127,7 +128,6 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Y.js "Invalid access" warnings:** Harmless stderr noise during session restore. Data syncs correctly.
 - **Exception handler is narrowed, not blanket.** `uncaughtException` and `unhandledRejection` handlers in `index.ts` only swallow known Hocuspocus/ws protocol errors (via `isKnownHocuspocusError` in `error-filter.ts`). Unknown errors log full details and call `process.exit(1)`. If the server starts crashing on a new Hocuspocus error pattern, add the pattern to the discriminator.
 - **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:standalone` (or `npm run dev:server`) first.
-- **No force-reload for open documents (Issue #128).** Once a document is open in the server's Y.Doc, re-opening it returns the in-memory version even if the source file changed on disk. Restart the server with sessions cleared to pick up disk changes.
 
 ## Documentation
 - [MCP Tool Reference](docs/mcp-tools.md) -- All 26 MCP tools + channel API endpoints
@@ -135,7 +135,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-019)
-- [Lessons Learned](docs/lessons-learned.md) -- 22 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 23 lessons including E2E testing gotchas
 
 ## Gotchas (save yourself time)
 - **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
@@ -144,7 +144,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Start the server before connecting Claude Code.** `npm run dev:server` starts both Hocuspocus (:3478) and MCP HTTP (:3479). Claude Code connects via the `url` in `.mcp.json`. To test server changes, restart `dev:server` then `/mcp` in Claude Code. Vite hot-reloads client code automatically.
 - **Hocuspocus rooms = document IDs.** The room name IS the document ID from `docIdFromPath()`. `CTRL_ROOM` (exported from `shared/constants.ts`) is reserved for the bootstrap coordination channel. Never use it as a document ID.
 - **Session files live in a platform-appropriate directory** (via `env-paths`): `%LOCALAPPDATA%\tandem\Data\sessions\` on Windows, `~/Library/Application Support/tandem/sessions/` on macOS, `~/.local/share/tandem/sessions/` on Linux. Note the `Data` subdirectory on Windows — `env-paths` adds it. Keyed by URL-encoded file path. Delete them to force a fresh load (useful when debugging session restore issues). See `src/server/platform.ts`.
-- **Stale browser tabs merge old CRDT state back.** If you change a file on disk and restart the server, an already-open browser tab will sync its old Y.Doc state back on WebSocket reconnect, reverting your changes. Close all Tandem tabs before restarting when testing content changes. Issue #128 tracks adding force-reload.
+- **Stale browser tabs merge old CRDT state back.** If you change a file on disk and restart the server, an already-open browser tab will sync its old Y.Doc state back on WebSocket reconnect, reverting your changes. Use `force: true` to reload cleanly (see next), or close all Tandem tabs before restarting.
+- **Force-reload clears everything.** `tandem_open` with `force: true` reloads from disk, but also clears annotations, awareness, and session state. Don't use it mid-review — wait for Claude to finish active edits first.
 - **Auto-open `sample/welcome.md`** on first run (no restored session). Set `TANDEM_NO_SAMPLE=1` to disable. Uses `openFileByPath` from `file-opener.ts`.
 - **`APP_VERSION` is read from `package.json`** via `createRequire` in `src/server/mcp/server.ts`. Used in MCP server name, `/health` response, and startup banner. Don't hardcode version strings.
 - **The `freePort()` function kills stale processes on ports 3478 and 3479 at startup.** Cross-platform: `netstat`/`taskkill` on Windows, `lsof`/`process.kill` on macOS/Linux, `ss` fallback on Linux. Intentional — clears zombie instances from crashed servers. But it means you can't run two Tandem instances simultaneously.

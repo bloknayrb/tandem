@@ -155,20 +155,28 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_open",
-    "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser.",
-    { filePath: z.string().describe("Absolute path to the file to open") },
-    withErrorBoundary("tandem_open", async ({ filePath }) => {
+    "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser. Pass force=true to reload from disk if the file changed externally.",
+    {
+      filePath: z.string().describe("Absolute path to the file to open"),
+      force: z
+        .boolean()
+        .optional()
+        .describe("Force reload from disk even if already open. Clears annotations and session."),
+    },
+    withErrorBoundary("tandem_open", async ({ filePath, force }) => {
       try {
-        const result = await openFileByPath(filePath);
+        const result = await openFileByPath(filePath, { force });
         return mcpSuccess({
           ...result,
-          message: result.alreadyOpen
-            ? `Switched to already-open document: ${result.fileName}`
-            : result.restoredFromSession
-              ? `Session restored: ${result.fileName} (annotations preserved)`
-              : result.readOnly
-                ? `Document opened (review only): ${result.fileName}`
-                : `Document opened: ${result.fileName}`,
+          message: result.forceReloaded
+            ? `Force-reloaded from disk: ${result.fileName}`
+            : result.alreadyOpen
+              ? `Switched to already-open document: ${result.fileName}`
+              : result.restoredFromSession
+                ? `Session restored: ${result.fileName} (annotations preserved)`
+                : result.readOnly
+                  ? `Document opened (review only): ${result.fileName}`
+                  : `Document opened: ${result.fileName}`,
         });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;

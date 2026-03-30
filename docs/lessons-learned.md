@@ -186,3 +186,39 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 **Solution:** Use underscores in all meta keys: `document_id`, `annotation_id`, `event_type`, `message_id`. The `formatEventMeta()` function in `events/types.ts` enforces this convention.
 
 **Impact:** Subtle — the meta appears to be set correctly on the server side, but Claude Code never receives it. No error is reported. Discovered during initial channel integration testing.
+
+## 23. Hocuspocus Internal State for Force-Unload
+
+**Problem:** `Hocuspocus.unloadDocument(doc)` bails early if `doc.getConnectionsCount() > 0` (line 598 in `Hocuspocus.ts`). `closeConnections(docName)` is fire-and-forget — it returns `void`, not a `Promise`, because the actual close happens behind `lock.acquire('close', ...)` in `Connection.close()`. There's no way to await all connections being fully closed before calling `unloadDocument`.
+
+**Solution:** Bypass `unloadDocument` entirely and manipulate Hocuspocus's internal state directly:
+
+```typescript
+const hp = getHocuspocus();
+// 1. Force-close WebSocket connections (fire-and-forget safety net)
+hp.closeConnections(docName);
+// 2. Remove from Hocuspocus's internal Document map
+const hpDoc = hp.documents.get(docName);
+if (hpDoc) {
+  hp.documents.delete(docName);
+  hpDoc.destroy();
+}
+// 3. Clear in-flight load promises (prevents stale state on reconnect)
+hp.loadingDocuments.delete(docName);
+```
+
+The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look up the document name in `hp.documents` and find nothing. This is deterministic — no timing races.
+
+**Key internals** (Hocuspocus v2.15.3, `@hocuspocus/server`):
+
+| Property/Method | Type | Notes |
+|----------------|------|-------|
+| `hp.documents` | `Map<string, Document>` | Active documents, keyed by room name. Public but undocumented. |
+| `hp.loadingDocuments` | `Map<string, Promise<Document>>` | Guards against concurrent `createDocument` calls for the same room. |
+| `hp.closeConnections(name?)` | `void` | Gracefully closes all WebSocket connections for a room. Fire-and-forget. |
+| `hp.unloadDocument(doc)` | `Promise<any>` | Removes doc from map + fires `afterUnloadDocument` hook. **Bails if connections > 0.** |
+| `Document.destroy()` | `void` | Cleans up internal state. Called by Hocuspocus during unload. |
+| `Document.connections` | `Map<string, ...>` | Active WebSocket connections to this document. |
+| `Document.getConnectionsCount()` | `number` | Sum of WebSocket + direct connections. |
+
+**Impact:** These are public properties but not part of any documented/typed API. Brittle across Hocuspocus major upgrades — pin the version and grep for usage when upgrading.

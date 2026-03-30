@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -8,6 +8,8 @@ import {
   SUPPORTED_EXTENSIONS,
 } from "../../src/server/mcp/file-opener.js";
 import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
+import { extractText, docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
 import type { SessionData } from "../../src/shared/types.js";
 
@@ -19,9 +21,10 @@ async function makeTmpDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  // Clean up all opened docs
+  // Clean up all opened docs (service tracking + provider Y.Doc map)
   for (const id of getOpenDocs().keys()) {
     removeDoc(id);
+    removeDocument(id);
   }
   // Clean up temp directory
   if (tmpDir) {
@@ -74,6 +77,143 @@ describe("openFileByPath", () => {
     expect(first.alreadyOpen).toBe(false);
     expect(second.alreadyOpen).toBe(true);
     expect(second.documentId).toBe(first.documentId);
+  });
+
+  it("force=true re-reads from disk when file changed", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Original");
+
+    const first = await openFileByPath(filePath);
+    expect(first.alreadyOpen).toBe(false);
+
+    // Modify the file on disk
+    await fs.writeFile(filePath, "# Updated content\n\nNew paragraph");
+
+    const second = await openFileByPath(filePath, { force: true });
+
+    expect(second.forceReloaded).toBe(true);
+    expect(second.alreadyOpen).toBe(false);
+    expect(second.documentId).toBe(first.documentId);
+
+    // Verify actual document content reflects the disk change
+    const doc = getOrCreateDocument(second.documentId);
+    const text = extractText(doc);
+    expect(text).toContain("Updated content");
+    expect(text).toContain("New paragraph");
+    expect(text).not.toContain("Original");
+  });
+
+  it("force=true when file deleted from disk throws ENOENT without tearing down", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+    const id = docIdFromPath(filePath);
+
+    // Delete the file on disk
+    await fs.unlink(filePath);
+
+    // fs.stat runs before the force-close branch, so ENOENT is thrown
+    // without tearing down the in-memory doc
+    await expect(openFileByPath(filePath, { force: true })).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    // Doc should still be tracked — the error occurred before forceCloseDocument
+    expect(getOpenDocs().has(id)).toBe(true);
+  });
+
+  it("force=true on non-open doc behaves like normal open", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const result = await openFileByPath(filePath, { force: true });
+
+    expect(result.alreadyOpen).toBe(false);
+    expect(result.forceReloaded).toBe(false);
+    expect(result.fileName).toBe("test.md");
+  });
+
+  it("force=false preserves alreadyOpen behavior", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+    const second = await openFileByPath(filePath, { force: false });
+
+    expect(second.alreadyOpen).toBe(true);
+    expect(second.forceReloaded).toBe(false);
+  });
+
+  it("default (no options) preserves alreadyOpen behavior", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+    const second = await openFileByPath(filePath);
+
+    expect(second.alreadyOpen).toBe(true);
+    expect(second.forceReloaded).toBe(false);
+  });
+
+  it("force=true creates a new Y.Doc instance", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const first = await openFileByPath(filePath);
+    const docBefore = getOrCreateDocument(first.documentId);
+
+    await fs.writeFile(filePath, "# Changed");
+    await openFileByPath(filePath, { force: true });
+    const docAfter = getOrCreateDocument(first.documentId);
+
+    // Teardown destroys the old Y.Doc and re-open creates a fresh one
+    expect(docAfter).not.toBe(docBefore);
+  });
+
+  it("force=true twice in succession does not crash", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+
+    const second = await openFileByPath(filePath, { force: true });
+    expect(second.forceReloaded).toBe(true);
+
+    const third = await openFileByPath(filePath, { force: true });
+    expect(third.forceReloaded).toBe(true);
+    expect(third.documentId).toBe(second.documentId);
+  });
+
+  it("force=true succeeds even when deleteSession throws", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Original");
+
+    await openFileByPath(filePath);
+
+    // Mock deleteSession to throw — teardown should still complete
+    const sessionManager = await import("../../src/server/session/manager.js");
+    const spy = vi
+      .spyOn(sessionManager, "deleteSession")
+      .mockRejectedValueOnce(new Error("EPERM: permission denied"));
+
+    await fs.writeFile(filePath, "# After error");
+    const result = await openFileByPath(filePath, { force: true });
+
+    expect(result.forceReloaded).toBe(true);
+    const doc = getOrCreateDocument(result.documentId);
+    const text = extractText(doc);
+    expect(text).toContain("After error");
+
+    spy.mockRestore();
   });
 });
 

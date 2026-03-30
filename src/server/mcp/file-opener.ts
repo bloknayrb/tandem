@@ -3,7 +3,12 @@ import fsSync from "fs";
 import path from "path";
 import type * as Y from "yjs";
 import { randomUUID } from "node:crypto";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import {
+  getOrCreateDocument,
+  getDocument,
+  removeDocument,
+  getHocuspocus,
+} from "../yjs/provider.js";
 import {
   MAX_FILE_SIZE,
   CHARS_PER_PAGE,
@@ -13,18 +18,26 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
-import { MCP_ORIGIN } from "../events/queue.js";
+import { MCP_ORIGIN, detachObservers } from "../events/queue.js";
 import { getAdapter } from "../file-io/index.js";
 import {
   saveSession,
   loadSession,
   restoreYDoc,
   sourceFileChanged,
+  deleteSession,
   startAutoSave,
   isAutoSaveRunning,
 } from "../session/manager.js";
 import { extractText, detectFormat, docIdFromPath } from "./document-model.js";
-import { getOpenDocs, setActiveDocId, broadcastOpenDocs, addDoc } from "./document-service.js";
+import {
+  type OpenDoc,
+  getOpenDocs,
+  setActiveDocId,
+  broadcastOpenDocs,
+  addDoc,
+  removeDoc,
+} from "./document-service.js";
 
 export { SUPPORTED_EXTENSIONS };
 
@@ -39,14 +52,19 @@ export interface OpenFileResult {
   pageEstimate: number;
   restoredFromSession: boolean;
   alreadyOpen: boolean;
+  forceReloaded: boolean;
   warnings?: string[];
 }
 
 /**
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
+ * Pass `force: true` to reload from disk even if already open (clears all document state).
  */
-export async function openFileByPath(filePath: string): Promise<OpenFileResult> {
+export async function openFileByPath(
+  filePath: string,
+  options?: { force?: boolean },
+): Promise<OpenFileResult> {
   let resolved = path.resolve(filePath);
   try {
     resolved = fsSync.realpathSync(resolved);
@@ -81,9 +99,10 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
   const id = docIdFromPath(resolved);
   const openDocs = getOpenDocs();
 
-  // Already open — switch to it and return real token/page estimates from the live doc
+  // Already open — force-reload from disk or switch to it
   const existing = openDocs.get(id);
-  if (existing) {
+  const forceReload = existing && options?.force === true;
+  if (existing && !forceReload) {
     setActiveDocId(id);
     broadcastOpenDocs();
     const doc = getOrCreateDocument(id);
@@ -99,6 +118,10 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
       }),
       alreadyOpen: true,
     };
+  }
+
+  if (forceReload) {
+    await forceCloseDocument(id, existing);
   }
 
   const doc = getOrCreateDocument(id);
@@ -134,15 +157,18 @@ export async function openFileByPath(filePath: string): Promise<OpenFileResult> 
   broadcastOpenDocs();
   ensureAutoSave();
 
-  return buildResult(doc, {
-    documentId: id,
-    filePath: resolved,
-    fileName,
-    format,
-    readOnly,
-    source: "file",
-    restoredFromSession,
-  });
+  return {
+    ...buildResult(doc, {
+      documentId: id,
+      filePath: resolved,
+      fileName,
+      format,
+      readOnly,
+      source: "file",
+      restoredFromSession,
+    }),
+    forceReloaded: forceReload === true,
+  };
 }
 
 /**
@@ -198,6 +224,90 @@ export async function openFileFromContent(
 
 // --- Private helpers ---
 
+/**
+ * Tear down an open document so it can be re-opened fresh from disk.
+ * Clears all document state (content, annotations, awareness, session).
+ * Directly manipulates Hocuspocus internals to avoid the nondeterministic
+ * async timing of `unloadDocument()` (which bails if connections > 0).
+ * Best-effort: each step is wrapped in try-catch so a failure in one step
+ * doesn't prevent subsequent cleanup.
+ */
+async function forceCloseDocument(id: string, existing: OpenDoc): Promise<void> {
+  console.error(`[Tandem] forceCloseDocument: tearing down ${id}`);
+  let errors = 0;
+
+  // 1. Stop event queue observers for this document
+  try {
+    detachObservers(id);
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: detachObservers failed for ${id}:`, err);
+  }
+
+  // 2. Remove from open-docs tracking and broadcast removal to clients.
+  //    Clients see the doc disappear from openDocuments and destroy their provider+ydoc.
+  try {
+    removeDoc(id);
+    broadcastOpenDocs();
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: removeDoc/broadcast failed for ${id}:`, err);
+  }
+
+  // 3. Hocuspocus cleanup (may not be running in tests / MCP-only mode)
+  try {
+    const hp = getHocuspocus();
+    if (hp) {
+      // Force-close WebSocket connections so clients disconnect
+      hp.closeConnections(id);
+
+      // Delete from hp.documents so that any deferred unloadDocument calls
+      // (triggered by closeConnections settling) become no-ops
+      // (line 594 of src/Hocuspocus.ts: `if (!this.documents.has(documentName)) return`).
+      const hpDoc = hp.documents.get(id);
+      if (hpDoc) {
+        hp.documents.delete(id);
+        hpDoc.destroy();
+      }
+
+      // Clear any in-flight load promise to prevent stale state on reconnect
+      hp.loadingDocuments.delete(id);
+    }
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: Hocuspocus cleanup failed for ${id}:`, err);
+  }
+
+  // 4. Remove from Tandem's provider Y.Doc map (idempotent if afterUnloadDocument already ran)
+  try {
+    const oldDoc = getDocument(id);
+    if (oldDoc) {
+      oldDoc.destroy();
+      removeDocument(id);
+    }
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: Y.Doc removal failed for ${id}:`, err);
+  }
+
+  // 5. Delete session so it doesn't restore stale state
+  try {
+    await deleteSession(existing.filePath);
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: deleteSession failed for ${id}:`, err);
+  }
+
+  // 6. Best-effort delay so the removal broadcast propagates to clients before re-add.
+  //    Without this, React's automatic batching could merge remove+add into one render,
+  //    causing the stale provider to survive. 100ms is a heuristic, not a guarantee.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  console.error(
+    `[Tandem] forceCloseDocument: teardown complete for ${id}${errors > 0 ? ` with ${errors} error(s)` : ""}`,
+  );
+}
+
 /** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
 function initSavedBaseline(doc: Y.Doc): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
@@ -222,7 +332,10 @@ function writeDocMeta(
 
 function buildResult(
   doc: Y.Doc,
-  base: Omit<OpenFileResult, "tokenEstimate" | "pageEstimate" | "alreadyOpen" | "warnings">,
+  base: Omit<
+    OpenFileResult,
+    "tokenEstimate" | "pageEstimate" | "alreadyOpen" | "forceReloaded" | "warnings"
+  >,
 ): OpenFileResult {
   const textContent = extractText(doc);
   const textLen = textContent.length;
@@ -242,6 +355,7 @@ function buildResult(
     tokenEstimate: Math.ceil(textLen / 4),
     pageEstimate,
     alreadyOpen: false,
+    forceReloaded: false,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

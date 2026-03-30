@@ -296,13 +296,13 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     apiMiddleware,
     largeBody,
     async (req: import("express").Request, res: import("express").Response) => {
-      const { filePath } = (req.body ?? {}) as Record<string, unknown>;
+      const { filePath, force } = (req.body ?? {}) as Record<string, unknown>;
       if (!filePath || typeof filePath !== "string") {
         res.status(400).json({ error: "BAD_REQUEST", message: "filePath is required" });
         return;
       }
       try {
-        const result = await openFileByPath(filePath);
+        const result = await openFileByPath(filePath, { force: force === true });
         res.json({ data: result });
       } catch (err: unknown) {
         sendApiError(res, err);
