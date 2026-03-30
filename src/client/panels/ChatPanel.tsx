@@ -1,4 +1,4 @@
-import { Y_MAP_CHAT } from "../../shared/constants";
+import { Y_MAP_CHAT, CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import ReactMarkdown from "react-markdown";
@@ -6,6 +6,15 @@ import * as Y from "yjs";
 import { pmPosToFlatOffset, flatOffsetToPmPos } from "../positions";
 import { generateMessageId } from "../../shared/utils";
 import type { ChatMessage } from "../../shared/types";
+
+const TYPING_DOT_STYLE: React.CSSProperties = {
+  width: "5px",
+  height: "5px",
+  borderRadius: "50%",
+  background: CLAUDE_PRESENCE_COLOR,
+};
+
+const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
 interface ChatPanelProps {
   ctrlYdoc: Y.Doc | null;
@@ -34,6 +43,19 @@ export function ChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Inject typing animation keyframes once
+  useEffect(() => {
+    const id = "tandem-typing-bounce-style";
+    if (document.getElementById(id)) return;
+    const style = document.createElement("style");
+    style.id = id;
+    style.textContent = `@keyframes tandem-typing-bounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-4px); opacity: 1; }
+    }`;
+    document.head.appendChild(style);
+  }, []);
+
   // Observe Y.Map('chat') for changes
   useEffect(() => {
     if (!ctrlYdoc) return;
@@ -53,8 +75,15 @@ export function ChatPanel({
     return () => chatMap.unobserve(observer);
   }, [ctrlYdoc]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or when typing indicator appears
+  const prevClaudeActive = useRef(false);
   useEffect(() => {
+    // Skip scroll when indicator disappears (claudeActive toggled false)
+    if (!claudeActive && prevClaudeActive.current) {
+      prevClaudeActive.current = false;
+      return;
+    }
+    prevClaudeActive.current = !!claudeActive;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, claudeActive]);
 
@@ -138,12 +167,6 @@ export function ChatPanel({
         minHeight: 0,
       }}
     >
-      <style>{`
-        @keyframes tandem-typing-bounce {
-          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-          30% { transform: translateY(-4px); opacity: 1; }
-        }
-      `}</style>
       {/* Header */}
       <div
         style={{
@@ -265,42 +288,24 @@ export function ChatPanel({
               padding: "8px 12px",
               marginBottom: "8px",
               fontSize: "12px",
-              color: "#6366f1",
+              color: CLAUDE_PRESENCE_COLOR,
               display: "flex",
               alignItems: "center",
               gap: "8px",
             }}
           >
-            <span className="tandem-typing-dots" style={{ display: "inline-flex", gap: "3px" }}>
-              <span
-                style={{
-                  width: "5px",
-                  height: "5px",
-                  borderRadius: "50%",
-                  background: "#6366f1",
-                  animation: "tandem-typing-bounce 1.2s ease-in-out infinite",
-                }}
-              />
-              <span
-                style={{
-                  width: "5px",
-                  height: "5px",
-                  borderRadius: "50%",
-                  background: "#6366f1",
-                  animation: "tandem-typing-bounce 1.2s ease-in-out 0.2s infinite",
-                }}
-              />
-              <span
-                style={{
-                  width: "5px",
-                  height: "5px",
-                  borderRadius: "50%",
-                  background: "#6366f1",
-                  animation: "tandem-typing-bounce 1.2s ease-in-out 0.4s infinite",
-                }}
-              />
+            <span style={{ display: "inline-flex", gap: "3px" }}>
+              {TYPING_DOT_DELAYS.map((delay) => (
+                <span
+                  key={delay}
+                  style={{
+                    ...TYPING_DOT_STYLE,
+                    animation: `tandem-typing-bounce 1.2s ease-in-out ${delay}s infinite`,
+                  }}
+                />
+              ))}
             </span>
-            <span>{claudeStatus || "Claude is thinking..."}</span>
+            <span>{claudeStatus ?? "Claude is thinking..."}</span>
           </div>
         )}
         <div ref={messagesEndRef} />

@@ -62,6 +62,8 @@ export function SidePanel({
   const [reviewIndex, setReviewIndex] = useState(0);
   const reviewIndexRef = useRef(0);
   const [bulkConfirm, setBulkConfirm] = useState<"accept" | "dismiss" | null>(null);
+  const bulkConfirmRef = useRef(bulkConfirm);
+  bulkConfirmRef.current = bulkConfirm;
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   // Stable refs for keyboard callbacks to avoid stale closures
@@ -218,7 +220,11 @@ export function SidePanel({
         if (ann) scrollToAnnotation(ann);
         onExitReviewMode();
       } else if (e.key === "Escape") {
-        onExitReviewMode();
+        if (bulkConfirmRef.current) {
+          setBulkConfirm(null);
+        } else {
+          onExitReviewMode();
+        }
       }
     }
 
@@ -234,22 +240,15 @@ export function SidePanel({
     onExitReviewMode,
   ]);
 
-  // Focus confirm button when bulk confirmation appears; Escape dismisses
+  // Focus confirm button when bulk confirmation appears
   useEffect(() => {
-    if (bulkConfirm) {
-      confirmRef.current?.focus();
-      const handleEsc = (e: KeyboardEvent) => {
-        if (e.key === "Escape") setBulkConfirm(null);
-      };
-      window.addEventListener("keydown", handleEsc);
-      return () => window.removeEventListener("keydown", handleEsc);
-    }
+    if (bulkConfirm) confirmRef.current?.focus();
   }, [bulkConfirm]);
 
-  // Reset confirmation when pending annotations change
+  // Reset confirmation when filtered pending set changes
   useEffect(() => {
     setBulkConfirm(null);
-  }, [pending.length]);
+  }, [pending]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
