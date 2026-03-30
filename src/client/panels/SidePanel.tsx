@@ -2,8 +2,11 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
 import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/types";
-import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { annotationToPmRange } from "../positions";
+import { AnnotationCard } from "./AnnotationCard";
+import { FilterSelect } from "./FilterSelect";
+import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 
 interface SidePanelProps {
   annotations: Annotation[];
@@ -197,56 +200,43 @@ export function SidePanel({
     }
   }, [reviewMode, reviewIndex, reviewTargets, onActiveAnnotationChange]);
 
-  // Keyboard shortcuts — stable deps via refs
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && e.shiftKey && e.key === "R") {
-        e.preventDefault();
-        onToggleReviewMode();
-        return;
-      }
+  const scrollToCurrentAndExit = useCallback(() => {
+    const targets = reviewTargetsRef.current;
+    const ann = targets[reviewIndexRef.current];
+    if (ann) scrollToAnnotation(ann);
+    onExitReviewMode();
+  }, [scrollToAnnotation, onExitReviewMode]);
 
-      if (!reviewMode) return;
-
-      if (e.key === "Tab" && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        navigateReview(e.shiftKey ? "prev" : "next");
-      } else if (e.key === "y" || e.key === "Y") {
-        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-        e.preventDefault();
-        acceptCurrent();
-      } else if (e.key === "n" || e.key === "N") {
-        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-        e.preventDefault();
-        dismissCurrent();
-      } else if (e.key === "e" || e.key === "E") {
-        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-        e.preventDefault();
-        // Scroll to current annotation and exit review mode without resolving
-        const targets = reviewTargetsRef.current;
-        const ann = targets[reviewIndexRef.current];
-        if (ann) scrollToAnnotation(ann);
-        onExitReviewMode();
-      } else if (e.key === "Escape") {
-        if (bulkConfirmRef.current) {
-          setBulkConfirm(null);
-        } else {
-          onExitReviewMode();
-        }
-      }
+  const cancelBulkOrExit = useCallback(() => {
+    if (bulkConfirmRef.current) {
+      setBulkConfirm(null);
+    } else {
+      onExitReviewMode();
     }
+  }, [onExitReviewMode]);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [
-    reviewMode,
-    navigateReview,
-    acceptCurrent,
-    dismissCurrent,
-    scrollToAnnotation,
-    onToggleReviewMode,
-    onExitReviewMode,
-  ]);
+  const reviewCallbacks = useMemo(
+    () => ({
+      onToggleReviewMode,
+      onExitReviewMode,
+      navigateReview,
+      acceptCurrent,
+      dismissCurrent,
+      scrollToCurrentAndExit,
+      cancelBulkOrExit,
+    }),
+    [
+      onToggleReviewMode,
+      onExitReviewMode,
+      navigateReview,
+      acceptCurrent,
+      dismissCurrent,
+      scrollToCurrentAndExit,
+      cancelBulkOrExit,
+    ],
+  );
+
+  useReviewKeyboard(reviewMode, reviewCallbacks);
 
   // Focus confirm button when bulk confirmation appears
   useEffect(() => {
@@ -546,187 +536,6 @@ export function SidePanel({
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function FilterSelect({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: Array<{ value: string; label: string }>;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      style={{
-        padding: "2px 4px",
-        fontSize: "11px",
-        border: "1px solid #e5e7eb",
-        borderRadius: "3px",
-        background: "#fff",
-        color: "#374151",
-        cursor: "pointer",
-      }}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-interface AnnotationCardProps {
-  annotation: Annotation;
-  isReviewTarget?: boolean;
-  onAccept?: (id: string) => void;
-  onDismiss?: (id: string) => void;
-  onClick?: () => void;
-}
-
-const ANNOTATION_BORDER_COLORS: Record<string, string> = {
-  comment: "#3b82f6",
-  suggestion: "#8b5cf6",
-  question: "#6366f1",
-  flag: "#ef4444",
-};
-
-function getBorderColor(annotation: Annotation): string {
-  if (annotation.color) {
-    return HIGHLIGHT_COLORS[annotation.color] || "#e5e7eb";
-  }
-  return ANNOTATION_BORDER_COLORS[annotation.type] || "#e5e7eb";
-}
-
-function AnnotationCard({
-  annotation,
-  isReviewTarget,
-  onAccept,
-  onDismiss,
-  onClick,
-}: AnnotationCardProps) {
-  const borderColor = getBorderColor(annotation);
-
-  const isPending = annotation.status === "pending";
-
-  return (
-    <div
-      onClick={onClick}
-      data-testid={`annotation-card-${annotation.id}`}
-      style={{
-        padding: "8px 10px",
-        marginBottom: "6px",
-        borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget ? "#eef2ff" : "white",
-        borderRadius: "0 4px 4px 0",
-        fontSize: "13px",
-        opacity: isPending ? 1 : 0.6,
-        cursor: onClick ? "pointer" : "default",
-        outline: isReviewTarget ? "2px solid #6366f1" : "none",
-        transition: "background 0.15s, outline 0.15s",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-        <span style={{ fontWeight: 500, textTransform: "capitalize" }}>
-          {annotation.type}
-          {!isPending && (
-            <span
-              style={{
-                marginLeft: "6px",
-                fontSize: "10px",
-                color: annotation.status === "accepted" ? "#16a34a" : "#dc2626",
-                fontWeight: 600,
-              }}
-            >
-              {annotation.status}
-            </span>
-          )}
-        </span>
-        <span style={{ fontSize: "11px", color: "#9ca3af" }}>
-          {annotation.author === "claude" ? "Claude" : "You"}
-        </span>
-      </div>
-      {annotation.textSnapshot && (
-        <div
-          data-testid={`annotation-snippet-${annotation.id}`}
-          style={{
-            padding: "4px 8px",
-            marginBottom: "6px",
-            borderLeft: "3px solid #d1d5db",
-            color: "#6b7280",
-            fontSize: "12px",
-            fontStyle: "italic",
-            backgroundColor: "#f9fafb",
-            borderRadius: "2px",
-          }}
-        >
-          {annotation.textSnapshot.length > 80
-            ? annotation.textSnapshot.slice(0, 77) + "..."
-            : annotation.textSnapshot}
-        </div>
-      )}
-      <p style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
-        {annotation.type === "suggestion"
-          ? (() => {
-              try {
-                const parsed = JSON.parse(annotation.content);
-                return parsed.reason || parsed.newText;
-              } catch {
-                return annotation.content;
-              }
-            })()
-          : annotation.content || "(no note)"}
-      </p>
-      {isPending && (onAccept || onDismiss) && (
-        <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
-          {onAccept && (
-            <button
-              data-testid={`accept-btn-${annotation.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onAccept(annotation.id);
-              }}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: "1px solid #d1d5db",
-                borderRadius: "3px",
-                background: "#f0fdf4",
-                color: "#166534",
-                cursor: "pointer",
-              }}
-            >
-              Accept
-            </button>
-          )}
-          {onDismiss && (
-            <button
-              data-testid={`dismiss-btn-${annotation.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onDismiss(annotation.id);
-              }}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: "1px solid #d1d5db",
-                borderRadius: "3px",
-                background: "#fef2f2",
-                color: "#991b1b",
-                cursor: "pointer",
-              }}
-            >
-              Dismiss
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
