@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo, type DragEvent } from "react";
+import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { Editor } from "./editor/Editor";
 import { SidePanel } from "./panels/SidePanel";
@@ -18,9 +18,10 @@ import {
 import type { InterruptionMode } from "../shared/types";
 import { InterruptionModeSchema } from "../shared/types";
 import { useAnnotationGate } from "./hooks/useAnnotationGate";
+import { useFileDrop } from "./hooks/useFileDrop";
+import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useYjsSync } from "./hooks/useYjsSync";
 import type { DocListEntry, OpenTab } from "./types";
-import { API_BASE, readFileForUpload } from "./utils/fileUpload";
 
 export type { DocListEntry, OpenTab };
 
@@ -95,81 +96,21 @@ export default function App() {
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
-  const [showReviewSummary, setShowReviewSummary] = useState(false);
-  const [reviewSummaryData, setReviewSummaryData] = useState<{
-    accepted: number;
-    dismissed: number;
-    total: number;
-  } | null>(null);
+  const { fileDragOver, handleEditorDragOver, handleEditorDragLeave, handleEditorDrop } =
+    useFileDrop();
+  const { pendingCount, showReviewSummary, reviewSummaryData, dismissReviewSummary } =
+    useReviewCompletion(annotations);
+
   const [reviewMode, setReviewMode] = useState(false);
   const [showBanner, setShowBanner] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
-  const [fileDragOver, setFileDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const editorRef = useRef<TiptapEditor | null>(null);
-  const prevPendingRef = useRef<number>(0);
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
   }, []);
-
-  // File drag-and-drop on editor area
-  const handleEditorDragOver = useCallback((e: DragEvent) => {
-    // Only show drop indicator for file drops, not editor content drags
-    if (e.dataTransfer.types.includes("Files")) {
-      e.preventDefault();
-      setFileDragOver(true);
-    }
-  }, []);
-
-  const handleEditorDragLeave = useCallback((e: DragEvent) => {
-    // Only reset if leaving the wrapper (not entering a child)
-    if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
-      setFileDragOver(false);
-    }
-  }, []);
-
-  const handleEditorDrop = useCallback(async (e: DragEvent) => {
-    setFileDragOver(false);
-    if (!e.dataTransfer.files.length) return;
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    const content = await readFileForUpload(file);
-    try {
-      await fetch(`${API_BASE}/upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, content }),
-      });
-    } catch {
-      // Server unreachable — silently fail (user can use the dialog instead)
-    }
-  }, []);
-
-  // Detect review completion: all pending -> 0 while resolved > 0 (single pass)
-  useEffect(() => {
-    let pending = 0,
-      accepted = 0,
-      dismissed = 0;
-    for (const a of annotations) {
-      if (a.status === "pending") pending++;
-      else if (a.status === "accepted") accepted++;
-      else dismissed++;
-    }
-    const total = accepted + dismissed;
-
-    if (prevPendingRef.current > 0 && pending === 0 && total > 0) {
-      setReviewSummaryData({ accepted, dismissed, total });
-      setShowReviewSummary(true);
-    }
-    prevPendingRef.current = pending;
-  }, [annotations]);
-
-  const pendingCount = useMemo(
-    () => annotations.filter((a) => a.status === "pending").length,
-    [annotations],
-  );
 
   // Show banner when pending annotations exceed threshold
   useEffect(() => {
@@ -429,7 +370,7 @@ export default function App() {
           accepted={reviewSummaryData.accepted}
           dismissed={reviewSummaryData.dismissed}
           total={reviewSummaryData.total}
-          onDismiss={() => setShowReviewSummary(false)}
+          onDismiss={dismissReviewSummary}
         />
       )}
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
