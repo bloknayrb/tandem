@@ -1,8 +1,12 @@
 import type { Server } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import fsSync from "fs";
-import { startMcpServerStdio, startMcpServerHttp, closeMcpSession } from "./mcp/server.js";
+import {
+  startMcpServerStdio,
+  startMcpServerHttp,
+  closeMcpSession,
+  APP_VERSION,
+} from "./mcp/server.js";
 import { startHocuspocus } from "./yjs/provider.js";
 import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
@@ -147,15 +151,16 @@ async function main() {
         path.dirname(fileURLToPath(import.meta.url)),
         "../../sample/welcome.md",
       );
-      if (fsSync.existsSync(samplePath)) {
-        openFileByPath(samplePath).catch((err) => {
+      openFileByPath(samplePath).catch((err) => {
+        // ENOENT is expected if user deleted the sample file — silently skip
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
           console.error("[Tandem] Failed to auto-open sample document:", err);
-        });
-      }
+        }
+      });
     }
 
     console.error("");
-    console.error("  Tandem v0.1.0");
+    console.error(`  Tandem v${APP_VERSION}`);
     console.error("");
     console.error(`  MCP HTTP:    http://localhost:${mcpPort}/mcp`);
     console.error(`  WebSocket:   ws://localhost:${wsPort}`);

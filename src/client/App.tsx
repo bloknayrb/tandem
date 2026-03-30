@@ -10,6 +10,7 @@ import { ReviewSummary } from "./panels/ReviewSummary";
 import { HelpModal } from "./components/HelpModal";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import {
+  DISCONNECT_DEBOUNCE_MS,
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
   REVIEW_BANNER_THRESHOLD,
@@ -32,9 +33,7 @@ function EmptyState({ connected, claudeActive }: { connected: boolean; claudeAct
       setShowDisconnected(false);
       return;
     }
-    // Debounce: only show "server not reachable" after 3s of disconnection
-    // to avoid flash on normal WebSocket handshake during page load
-    const timer = setTimeout(() => setShowDisconnected(true), 3000);
+    const timer = setTimeout(() => setShowDisconnected(true), DISCONNECT_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [connected]);
 

@@ -5,6 +5,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version: APP_VERSION } = require("../../../package.json") as { version: string };
+export { APP_VERSION };
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
@@ -28,7 +33,7 @@ let connectingPromise: Promise<void> | null = null;
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "tandem",
-    version: "0.1.0",
+    version: APP_VERSION,
   });
 
   registerDocumentTools(server);
@@ -201,7 +206,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   app.get("/health", (_req: import("express").Request, res: import("express").Response) => {
     res.json({
       status: "ok",
-      version: "0.1.0",
+      version: APP_VERSION,
       transport: "http",
       hasSession: currentTransport !== null,
     });
