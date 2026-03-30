@@ -23,6 +23,49 @@ import { API_BASE, readFileForUpload } from "./utils/fileUpload";
 
 export type { DocListEntry, OpenTab };
 
+/** Connection-aware empty state shown when no document is open. */
+function EmptyState({ connected, claudeActive }: { connected: boolean; claudeActive: boolean }) {
+  const [showDisconnected, setShowDisconnected] = useState(false);
+
+  useEffect(() => {
+    if (connected) {
+      setShowDisconnected(false);
+      return;
+    }
+    // Debounce: only show "server not reachable" after 3s of disconnection
+    // to avoid flash on normal WebSocket handshake during page load
+    const timer = setTimeout(() => setShowDisconnected(true), 3000);
+    return () => clearTimeout(timer);
+  }, [connected]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100%",
+        color: "#9ca3af",
+        gap: "8px",
+      }}
+    >
+      {showDisconnected ? (
+        <span>Cannot reach the Tandem server. Is it running?</span>
+      ) : (
+        <>
+          <span>No document open. Click + in the tab bar or drop a file here.</span>
+          {connected && !claudeActive && (
+            <span style={{ fontSize: "0.85em", color: "#b0b8c4" }}>
+              Tip: open Claude Code in this directory to start collaborating
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const {
     tabs,
@@ -276,17 +319,7 @@ export default function App() {
               onEditorReady={handleEditorReady}
             />
           ) : (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: "#9ca3af",
-              }}
-            >
-              No document open. Click + in the tab bar or drop a file here.
-            </div>
+            <EmptyState connected={connected} claudeActive={claudeActive} />
           )}
         </div>
         <div

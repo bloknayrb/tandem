@@ -197,8 +197,14 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     currentTransport = null;
   });
 
-  mcpApp.get("/health", (_req: import("express").Request, res: import("express").Response) => {
-    res.json({ status: "ok", transport: "http", hasSession: currentTransport !== null });
+  // Health endpoint on outer app (bypasses SDK's DNS rebinding middleware)
+  app.get("/health", (_req: import("express").Request, res: import("express").Response) => {
+    res.json({
+      status: "ok",
+      version: "0.1.0",
+      transport: "http",
+      hasSession: currentTransport !== null,
+    });
   });
 
   // RFC 9728 Protected Resource Metadata — declares no auth required.
@@ -224,7 +230,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     },
   );
 
-  // Mount SDK app (handles /mcp, /health with 100kb body parser)
+  // Mount SDK app (handles /mcp with 100kb body parser + DNS rebinding)
   app.use(mcpApp);
 
   // --- REST API for browser-initiated file opening ---
