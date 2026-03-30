@@ -75,6 +75,62 @@ describe("openFileByPath", () => {
     expect(second.alreadyOpen).toBe(true);
     expect(second.documentId).toBe(first.documentId);
   });
+
+  it("force=true re-reads from disk when file changed", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Original");
+
+    const first = await openFileByPath(filePath);
+    expect(first.alreadyOpen).toBe(false);
+
+    // Modify the file on disk
+    await fs.writeFile(filePath, "# Updated content\n\nNew paragraph");
+
+    const second = await openFileByPath(filePath, { force: true });
+
+    expect(second.forceReloaded).toBe(true);
+    expect(second.alreadyOpen).toBe(false);
+    expect(second.documentId).toBe(first.documentId);
+    // Token estimate should reflect the larger updated content
+    expect(second.tokenEstimate).toBeGreaterThan(first.tokenEstimate);
+  });
+
+  it("force=true on non-open doc behaves like normal open", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const result = await openFileByPath(filePath, { force: true });
+
+    expect(result.alreadyOpen).toBe(false);
+    expect(result.forceReloaded).toBe(false);
+    expect(result.fileName).toBe("test.md");
+  });
+
+  it("force=false preserves alreadyOpen behavior", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+    const second = await openFileByPath(filePath, { force: false });
+
+    expect(second.alreadyOpen).toBe(true);
+    expect(second.forceReloaded).toBe(false);
+  });
+
+  it("default (no options) preserves alreadyOpen behavior", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+    const second = await openFileByPath(filePath);
+
+    expect(second.alreadyOpen).toBe(true);
+    expect(second.forceReloaded).toBe(false);
+  });
 });
 
 describe("openFileFromContent", () => {

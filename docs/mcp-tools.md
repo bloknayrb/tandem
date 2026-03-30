@@ -59,6 +59,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file to open |
+| `force` | boolean | no | Force reload from disk even if already open. Clears annotations and session. |
 
 **Returns:**
 ```json
@@ -71,6 +72,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
   "tokenEstimate": 1250,
   "pageEstimate": 2,
   "restoredFromSession": false,
+  "forceReloaded": false,
   "message": "Document opened: report.md"
 }
 ```
@@ -80,12 +82,14 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 **Example:**
 ```
 tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
+tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md", force: true })
 ```
 
 **Notes:**
 - Supported formats: `.md`, `.txt`, `.html`, `.docx` (review-only).
 - Browser opens automatically to `http://localhost:5173` on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
+- Pass `force: true` to reload from disk when the file changed externally. This tears down the in-memory Y.Doc, clears annotations and session state, and disconnects all clients so they reconnect with fresh content. Returns `forceReloaded: true`.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
 
@@ -701,8 +705,13 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 
 **Request:**
 ```json
-{ "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
+{ "filePath": "C:\\Users\\bkolb\\docs\\report.md", "force": false }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filePath` | string | yes | Absolute path to the file |
+| `force` | boolean | no | Force reload from disk (clears annotations + session) |
 
 **Response (200):**
 ```json
