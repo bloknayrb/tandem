@@ -8,6 +8,8 @@ import {
   SUPPORTED_EXTENSIONS,
 } from "../../src/server/mcp/file-opener.js";
 import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
+import { extractText, docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
 import type { SessionData } from "../../src/shared/types.js";
 
@@ -19,9 +21,10 @@ async function makeTmpDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  // Clean up all opened docs
+  // Clean up all opened docs (service tracking + provider Y.Doc map)
   for (const id of getOpenDocs().keys()) {
     removeDoc(id);
+    removeDocument(id);
   }
   // Clean up temp directory
   if (tmpDir) {
@@ -92,8 +95,34 @@ describe("openFileByPath", () => {
     expect(second.forceReloaded).toBe(true);
     expect(second.alreadyOpen).toBe(false);
     expect(second.documentId).toBe(first.documentId);
-    // Token estimate should reflect the larger updated content
-    expect(second.tokenEstimate).toBeGreaterThan(first.tokenEstimate);
+
+    // Verify actual document content reflects the disk change
+    const doc = getOrCreateDocument(second.documentId);
+    const text = extractText(doc);
+    expect(text).toContain("Updated content");
+    expect(text).toContain("New paragraph");
+    expect(text).not.toContain("Original");
+  });
+
+  it("force=true when file deleted from disk throws ENOENT without tearing down", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+    const id = docIdFromPath(filePath);
+
+    // Delete the file on disk
+    await fs.unlink(filePath);
+
+    // fs.stat runs before the force-close branch, so ENOENT is thrown
+    // without tearing down the in-memory doc
+    await expect(openFileByPath(filePath, { force: true })).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    // Doc should still be tracked — the error occurred before forceCloseDocument
+    expect(getOpenDocs().has(id)).toBe(true);
   });
 
   it("force=true on non-open doc behaves like normal open", async () => {

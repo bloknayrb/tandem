@@ -244,7 +244,11 @@ async function forceCloseDocument(id: string, existing: OpenDoc): Promise<void> 
     // Force-close WebSocket connections so clients disconnect
     hp.closeConnections(id);
 
-    // Remove from Hocuspocus's internal Document map and destroy it
+    // Remove from Hocuspocus's internal Document map and destroy it.
+    // This must happen before closeConnections settles — Hocuspocus skips
+    // afterUnloadDocument when the doc is already absent from hp.documents
+    // (line 594 of Hocuspocus.ts: `if (!this.documents.has(documentName)) return`),
+    // so our later getOrCreateDocument call won't be clobbered.
     const hpDoc = hp.documents.get(id);
     if (hpDoc) {
       hp.documents.delete(id);
@@ -265,9 +269,9 @@ async function forceCloseDocument(id: string, existing: OpenDoc): Promise<void> 
   // 5. Delete session so it doesn't restore stale state
   await deleteSession(existing.filePath);
 
-  // 6. Brief delay so the removal broadcast propagates to clients before re-add.
-  //    Without this, React could batch remove+add into one render and never destroy
-  //    the stale provider.
+  // 6. Best-effort delay so the removal broadcast propagates to clients before re-add.
+  //    Without this, React's automatic batching could merge remove+add into one render,
+  //    causing the stale provider to survive. 100ms is a heuristic, not a guarantee.
   await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
