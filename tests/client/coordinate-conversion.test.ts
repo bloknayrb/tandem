@@ -5,9 +5,8 @@ import {
   annotationToPmRange,
   relRangeToPmPositions,
 } from "../../src/client/positions";
-import { makeDoc, getFragment } from "../helpers/ydoc-factory";
+import { makeDoc, getFragment, makeAnnotation } from "../helpers/ydoc-factory";
 import { flatOffsetToRelPos } from "../../src/server/positions";
-import type { Annotation } from "../../src/shared/types";
 
 // Minimal ProseMirror-compatible mock. Assumes single flat text run per block
 // (no inline marks). nodeSize = 1 (open) + text.length + 1 (close).
@@ -148,25 +147,6 @@ describe("round-trip: pmPosToFlatOffset(flatOffsetToPmPos(offset)) === offset", 
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// Helper: create a test annotation with optional relRange from a Y.Doc
-// ---------------------------------------------------------------------------
-
-function makeAnnotation(
-  overrides: Partial<Annotation> & { range?: { from: number; to: number } },
-): Annotation {
-  return {
-    id: "test-1",
-    author: "claude",
-    type: "comment",
-    range: { from: 0, to: 5 },
-    content: "test",
-    status: "pending",
-    timestamp: Date.now(),
-    ...overrides,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // annotationToPmRange

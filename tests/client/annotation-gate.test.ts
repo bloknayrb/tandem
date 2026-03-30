@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { shouldShow } from "../../src/client/hooks/useAnnotationGate.js";
 import type { Annotation, InterruptionMode } from "../../src/shared/types.js";
+import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
 /**
  * Inline implementation of the useAnnotationGate hook logic (without React useMemo).
@@ -17,19 +18,6 @@ function gateAnnotations(annotations: Annotation[], mode: InterruptionMode) {
     }
   }
   return { visibleAnnotations, heldCount };
-}
-
-function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
-  return {
-    id: "ann_test_001",
-    author: "claude",
-    type: "comment",
-    range: { from: 0, to: 5 },
-    content: "test",
-    status: "pending",
-    timestamp: Date.now(),
-    ...overrides,
-  };
 }
 
 describe("shouldShow", () => {
