@@ -248,7 +248,7 @@ export function SidePanel({
   // Reset confirmation when filtered pending set changes
   useEffect(() => {
     setBulkConfirm(null);
-  }, [pending]);
+  }, [pending.length]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
