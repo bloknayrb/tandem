@@ -18,10 +18,10 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ### Server (src/server/)
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (Express app with MCP routes + REST API + channel endpoints), `launcher.ts` (Claude Code spawner)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
-- `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx), `atomicWrite` helper
+- `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html), `atomicWrite` helper
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\
 
 ### Channel Shim (src/channel/)

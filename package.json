@@ -28,7 +28,7 @@
       "eslint --fix",
       "biome format --write"
     ],
-    "*.json": [
+    "*.json !package-lock.json": [
       "biome format --write"
     ]
   },
