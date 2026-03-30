@@ -91,8 +91,11 @@ export async function deleteSession(filePath: string): Promise<void> {
   const sessionPath = path.join(SESSION_DIR, `${key}.json`);
   try {
     await fs.unlink(sessionPath);
-  } catch {
-    // Already gone
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      console.error(`[Tandem] deleteSession: failed to delete ${sessionPath}:`, err);
+    }
   }
 }
 

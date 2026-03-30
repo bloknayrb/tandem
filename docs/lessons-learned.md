@@ -209,7 +209,7 @@ hp.loadingDocuments.delete(docName);
 
 The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look up the document name in `hp.documents` and find nothing. This is deterministic — no timing races.
 
-**Key internals** (Hocuspocus v2.13, `@hocuspocus/server`):
+**Key internals** (Hocuspocus v2.15.3, `@hocuspocus/server`):
 
 | Property/Method | Type | Notes |
 |----------------|------|-------|

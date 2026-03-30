@@ -59,7 +59,7 @@ export interface OpenFileResult {
 /**
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
- * Pass `force: true` to reload from disk even if already open (clears annotations + session).
+ * Pass `force: true` to reload from disk even if already open (clears all document state).
  */
 export async function openFileByPath(
   filePath: string,
@@ -226,53 +226,86 @@ export async function openFileFromContent(
 
 /**
  * Tear down an open document so it can be re-opened fresh from disk.
+ * Clears all document state (content, annotations, awareness, session).
  * Directly manipulates Hocuspocus internals to avoid the nondeterministic
  * async timing of `unloadDocument()` (which bails if connections > 0).
+ * Best-effort: each step is wrapped in try-catch so a failure in one step
+ * doesn't prevent subsequent cleanup.
  */
 async function forceCloseDocument(id: string, existing: OpenDoc): Promise<void> {
+  console.error(`[Tandem] forceCloseDocument: tearing down ${id}`);
+  let errors = 0;
+
   // 1. Stop event queue observers for this document
-  detachObservers(id);
+  try {
+    detachObservers(id);
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: detachObservers failed for ${id}:`, err);
+  }
 
   // 2. Remove from open-docs tracking and broadcast removal to clients.
   //    Clients see the doc disappear from openDocuments and destroy their provider+ydoc.
-  removeDoc(id);
-  broadcastOpenDocs();
+  try {
+    removeDoc(id);
+    broadcastOpenDocs();
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: removeDoc/broadcast failed for ${id}:`, err);
+  }
 
   // 3. Hocuspocus cleanup (may not be running in tests / MCP-only mode)
-  const hp = getHocuspocus();
-  if (hp) {
-    // Force-close WebSocket connections so clients disconnect
-    hp.closeConnections(id);
+  try {
+    const hp = getHocuspocus();
+    if (hp) {
+      // Force-close WebSocket connections so clients disconnect
+      hp.closeConnections(id);
 
-    // Remove from Hocuspocus's internal Document map and destroy it.
-    // This must happen before closeConnections settles — Hocuspocus skips
-    // afterUnloadDocument when the doc is already absent from hp.documents
-    // (line 594 of Hocuspocus.ts: `if (!this.documents.has(documentName)) return`),
-    // so our later getOrCreateDocument call won't be clobbered.
-    const hpDoc = hp.documents.get(id);
-    if (hpDoc) {
-      hp.documents.delete(id);
-      hpDoc.destroy();
+      // Delete from hp.documents so that any deferred unloadDocument calls
+      // (triggered by closeConnections settling) become no-ops
+      // (line 594 of src/Hocuspocus.ts: `if (!this.documents.has(documentName)) return`).
+      const hpDoc = hp.documents.get(id);
+      if (hpDoc) {
+        hp.documents.delete(id);
+        hpDoc.destroy();
+      }
+
+      // Clear any in-flight load promise to prevent stale state on reconnect
+      hp.loadingDocuments.delete(id);
     }
-
-    // Clear any in-flight load promise to prevent stale state on reconnect
-    hp.loadingDocuments.delete(id);
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: Hocuspocus cleanup failed for ${id}:`, err);
   }
 
   // 4. Remove from Tandem's provider Y.Doc map (idempotent if afterUnloadDocument already ran)
-  const oldDoc = getDocument(id);
-  if (oldDoc) {
-    oldDoc.destroy();
-    removeDocument(id);
+  try {
+    const oldDoc = getDocument(id);
+    if (oldDoc) {
+      oldDoc.destroy();
+      removeDocument(id);
+    }
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: Y.Doc removal failed for ${id}:`, err);
   }
 
   // 5. Delete session so it doesn't restore stale state
-  await deleteSession(existing.filePath);
+  try {
+    await deleteSession(existing.filePath);
+  } catch (err) {
+    errors++;
+    console.error(`[Tandem] forceCloseDocument: deleteSession failed for ${id}:`, err);
+  }
 
   // 6. Best-effort delay so the removal broadcast propagates to clients before re-add.
   //    Without this, React's automatic batching could merge remove+add into one render,
   //    causing the stale provider to survive. 100ms is a heuristic, not a guarantee.
   await new Promise((resolve) => setTimeout(resolve, 100));
+
+  console.error(
+    `[Tandem] forceCloseDocument: teardown complete for ${id}${errors > 0 ? ` with ${errors} error(s)` : ""}`,
+  );
 }
 
 /** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */

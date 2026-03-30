@@ -69,9 +69,11 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
   "fileName": "report.md",
   "format": "md",
   "readOnly": false,
+  "source": "file",
   "tokenEstimate": 1250,
   "pageEstimate": 2,
   "restoredFromSession": false,
+  "alreadyOpen": false,
   "forceReloaded": false,
   "message": "Document opened: report.md"
 }

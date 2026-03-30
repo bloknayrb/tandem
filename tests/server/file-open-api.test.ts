@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -159,6 +159,61 @@ describe("openFileByPath", () => {
 
     expect(second.alreadyOpen).toBe(true);
     expect(second.forceReloaded).toBe(false);
+  });
+
+  it("force=true creates a new Y.Doc instance", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const first = await openFileByPath(filePath);
+    const docBefore = getOrCreateDocument(first.documentId);
+
+    await fs.writeFile(filePath, "# Changed");
+    await openFileByPath(filePath, { force: true });
+    const docAfter = getOrCreateDocument(first.documentId);
+
+    // Teardown destroys the old Y.Doc and re-open creates a fresh one
+    expect(docAfter).not.toBe(docBefore);
+  });
+
+  it("force=true twice in succession does not crash", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    await openFileByPath(filePath);
+
+    const second = await openFileByPath(filePath, { force: true });
+    expect(second.forceReloaded).toBe(true);
+
+    const third = await openFileByPath(filePath, { force: true });
+    expect(third.forceReloaded).toBe(true);
+    expect(third.documentId).toBe(second.documentId);
+  });
+
+  it("force=true succeeds even when deleteSession throws", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Original");
+
+    await openFileByPath(filePath);
+
+    // Mock deleteSession to throw — teardown should still complete
+    const sessionManager = await import("../../src/server/session/manager.js");
+    const spy = vi
+      .spyOn(sessionManager, "deleteSession")
+      .mockRejectedValueOnce(new Error("EPERM: permission denied"));
+
+    await fs.writeFile(filePath, "# After error");
+    const result = await openFileByPath(filePath, { force: true });
+
+    expect(result.forceReloaded).toBe(true);
+    const doc = getOrCreateDocument(result.documentId);
+    const text = extractText(doc);
+    expect(text).toContain("After error");
+
+    spy.mockRestore();
   });
 });
 
