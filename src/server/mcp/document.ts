@@ -81,6 +81,7 @@ export {
   toDocListEntry,
   saveCurrentSession,
   restoreCtrlSession,
+  restoreOpenDocuments,
   writeGenerationId,
   addDoc,
   removeDoc,

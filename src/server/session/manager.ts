@@ -160,6 +160,41 @@ export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   Y.applyUpdate(doc, new Uint8Array(state));
 }
 
+/**
+ * Scan the session directory for document sessions that can be restored.
+ * Skips the ctrl session, upload:// paths, and corrupt files.
+ * Returns file paths sorted by most recently accessed first.
+ */
+export async function listSessionFilePaths(): Promise<
+  Array<{ filePath: string; lastAccessed: number }>
+> {
+  try {
+    await fs.mkdir(SESSION_DIR, { recursive: true });
+    const files = await fs.readdir(SESSION_DIR);
+    const results: Array<{ filePath: string; lastAccessed: number }> = [];
+
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      // Skip ctrl session (key is the CTRL_ROOM name)
+      if (file === `${encodeURIComponent(CTRL_ROOM)}.json`) continue;
+
+      try {
+        const raw = await fs.readFile(path.join(SESSION_DIR, file), "utf-8");
+        const data = JSON.parse(raw) as SessionData;
+        if (!data.filePath || data.filePath.startsWith("upload://")) continue;
+        results.push({ filePath: data.filePath, lastAccessed: data.lastAccessed ?? 0 });
+      } catch {
+        // Corrupt file — skip
+      }
+    }
+
+    results.sort((a, b) => b.lastAccessed - a.lastAccessed);
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 /** Delete sessions older than 30 days */
 export async function cleanupSessions(): Promise<number> {
   let cleaned = 0;
