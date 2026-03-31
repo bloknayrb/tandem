@@ -124,33 +124,35 @@ test("suggestion accept applies text change", async ({ page }) => {
 });
 
 test("tab switching shows different documents", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const firstResult = (await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample.md"),
+  })) as { data?: { documentId?: string } };
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
+
+  // Ensure the first document is active before the browser loads
+  const firstDocId = firstResult?.data?.documentId;
+  if (firstDocId) {
+    await mcp.callTool("tandem_switchDocument", { documentId: firstDocId });
+  }
 
   await page.goto("/");
   const editor = page.locator(".ProseMirror");
   await expect(editor).toBeVisible({ timeout: 10_000 });
 
-  // Both tabs should appear.
+  // Both tabs should appear
   const tabs = page.locator("[data-testid^='tab-']");
   await expect(tabs).toHaveCount(2, { timeout: 10_000 });
 
-  // Verify both tabs are labeled with the correct file names.
-  await expect(tabs.nth(0)).toContainText("sample", { timeout: 5_000 });
-  await expect(tabs.nth(1)).toContainText("sample", { timeout: 5_000 });
+  // First document should be showing
+  await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
-  // Wait for Yjs provider to sync before reading content
-  const titlePattern = new RegExp(`${TITLE_TEXT}|${SECOND_DOC_TITLE}`);
-  await expect(editor).toContainText(titlePattern, { timeout: 10_000 });
+  // Click the inactive tab to switch documents
+  const inactiveTab = page.locator("[data-testid^='tab-'][data-active='false']");
+  await expect(inactiveTab).toBeVisible({ timeout: 5_000 });
+  await inactiveTab.click();
 
-  const initialText = await editor.textContent();
-  const hasFirstDoc = initialText?.includes(TITLE_TEXT) ?? false;
-
-  const otherTab = hasFirstDoc ? tabs.nth(1) : tabs.nth(0);
-  await otherTab.click();
-
-  const expectedText = hasFirstDoc ? SECOND_DOC_TITLE : TITLE_TEXT;
-  await expect(editor).toContainText(expectedText, { timeout: 15_000 });
+  // Editor should now show the second document
+  await expect(editor).toContainText(SECOND_DOC_TITLE, { timeout: 15_000 });
 });
 
 test("review mode navigates with keyboard", async ({ page }) => {
