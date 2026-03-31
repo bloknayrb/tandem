@@ -59,6 +59,8 @@ export interface Annotation {
   priority?: AnnotationPriority;
   /** Snapshot of the annotated document text at creation time. Truncated to 200 chars. */
   textSnapshot?: string;
+  /** Timestamp of last edit to the annotation content. */
+  editedAt?: number;
 }
 
 export interface AnchoredRange {
