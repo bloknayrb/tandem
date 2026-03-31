@@ -20,7 +20,7 @@ graph LR
 ### Prerequisites
 
 - **Node.js 22+** ([download](https://nodejs.org))
-- **Claude Code** (`npm i -g @anthropic-ai/claude-code`)
+- **Claude Code** (`irm https://claude.ai/install.ps1 | iex`)
 
 ### Install
 
