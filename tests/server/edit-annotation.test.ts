@@ -1,7 +1,14 @@
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+/**
+ * Tests for tandem_editAnnotation MCP tool.
+ * Uses in-memory MCP client to exercise the actual tool handler.
+ */
 import { describe, it, expect, beforeEach } from "vitest";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { createAnnotation } from "../../src/server/mcp/annotations.js";
+import { registerAnnotationTools, createAnnotation } from "../../src/server/mcp/annotations.js";
 import {
   addDoc,
   removeDoc,
@@ -13,6 +20,24 @@ import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
+let client: Client;
+
+async function setupMcpClient(): Promise<Client> {
+  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
+  registerAnnotationTools(server);
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
+  await server.connect(serverTransport);
+  await mcpClient.connect(clientTransport);
+  return mcpClient;
+}
+
+function parseResult(result: { content: Array<{ type: string; text?: string }> }) {
+  const textContent = result.content.find((c) => c.type === "text");
+  return textContent?.text ? JSON.parse(textContent.text) : null;
+}
+
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
   populateYDoc(ydoc, text);
@@ -21,74 +46,71 @@ function setupDoc(id: string, text: string) {
   return ydoc;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
+  client = await setupMcpClient();
 });
 
-describe("tandem_editAnnotation logic", () => {
-  it("edits a comment's content", () => {
+describe("tandem_editAnnotation", () => {
+  it("edits a comment's content", async () => {
     const ydoc = setupDoc("edit-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original comment");
 
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, content: "Updated comment" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.id).toBe(id);
+    expect(parsed.data.content).toBe("Updated comment");
+    expect(parsed.data.editedAt).toBeDefined();
+
     const ann = map.get(id) as Annotation;
-    expect(ann.content).toBe("Original comment");
-    expect(ann.editedAt).toBeUndefined();
-
-    // Simulate edit
-    const updated = { ...ann, content: "Updated comment", editedAt: Date.now() };
-    ydoc.transact(() => map.set(id, updated), MCP_ORIGIN);
-
-    const result = map.get(id) as Annotation;
-    expect(result.content).toBe("Updated comment");
-    expect(result.editedAt).toBeDefined();
-    expect(typeof result.editedAt).toBe("number");
+    expect(ann.content).toBe("Updated comment");
+    expect(ann.editedAt).toBeDefined();
   });
 
-  it("edits a suggestion's newText and reason", () => {
+  it("edits a suggestion's newText, preserving reason", async () => {
     const ydoc = setupDoc("edit-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const originalContent = JSON.stringify({ newText: "Hi", reason: "brevity" });
     const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), originalContent);
 
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, newText: "Hey" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.content).toContain("Hey");
+
     const ann = map.get(id) as Annotation;
-    const parsed = JSON.parse(ann.content);
-    expect(parsed.newText).toBe("Hi");
-    expect(parsed.reason).toBe("brevity");
-
-    // Edit only newText, keep reason
-    const existing = JSON.parse(ann.content);
-    const newContent = JSON.stringify({ newText: "Hey", reason: existing.reason });
-    const updated = { ...ann, content: newContent, editedAt: Date.now() };
-    ydoc.transact(() => map.set(id, updated), MCP_ORIGIN);
-
-    const result = map.get(id) as Annotation;
-    const resultParsed = JSON.parse(result.content);
-    expect(resultParsed.newText).toBe("Hey");
-    expect(resultParsed.reason).toBe("brevity");
-    expect(result.editedAt).toBeDefined();
+    const content = JSON.parse(ann.content);
+    expect(content.newText).toBe("Hey");
+    expect(content.reason).toBe("brevity"); // preserved
   });
 
-  it("edits a suggestion's reason only", () => {
+  it("edits a suggestion's reason only", async () => {
     const ydoc = setupDoc("edit-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const originalContent = JSON.stringify({ newText: "Hi", reason: "brevity" });
     const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), originalContent);
 
-    const ann = map.get(id) as Annotation;
-    const existing = JSON.parse(ann.content);
-    const newContent = JSON.stringify({ newText: existing.newText, reason: "more concise" });
-    const updated = { ...ann, content: newContent, editedAt: Date.now() };
-    ydoc.transact(() => map.set(id, updated), MCP_ORIGIN);
+    await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, reason: "more concise" },
+    });
 
-    const result = map.get(id) as Annotation;
-    const resultParsed = JSON.parse(result.content);
-    expect(resultParsed.newText).toBe("Hi");
-    expect(resultParsed.reason).toBe("more concise");
+    const ann = map.get(id) as Annotation;
+    const content = JSON.parse(ann.content);
+    expect(content.newText).toBe("Hi"); // preserved
+    expect(content.reason).toBe("more concise");
   });
 
-  it("cannot edit a resolved annotation", () => {
+  it("rejects edit on a resolved annotation", async () => {
     const ydoc = setupDoc("edit-4", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
@@ -97,46 +119,85 @@ describe("tandem_editAnnotation logic", () => {
     const ann = map.get(id) as Annotation;
     ydoc.transact(() => map.set(id, { ...ann, status: "accepted" as const }), MCP_ORIGIN);
 
-    const accepted = map.get(id) as Annotation;
-    expect(accepted.status).toBe("accepted");
-    // In the real MCP tool, this would return an error — here we just verify status
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, content: "New text" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.message).toContain("Cannot edit");
+
+    // Content should be unchanged
+    const after = map.get(id) as Annotation;
+    expect(after.content).toBe("Original");
   });
 
-  it("preserves other annotation fields when editing content", () => {
+  it("rejects when no editable fields provided for non-suggestion", async () => {
     const ydoc = setupDoc("edit-5", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+
+    const result = await client.callTool({ name: "tandem_editAnnotation", arguments: { id } });
+    const parsed = parseResult(result as any);
+    expect(parsed.message).toContain("No editable fields");
+  });
+
+  it("rejects when no editable fields provided for suggestion", async () => {
+    const ydoc = setupDoc("edit-6", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const originalContent = JSON.stringify({ newText: "Hi", reason: "brevity" });
+    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), originalContent);
+
+    const result = await client.callTool({ name: "tandem_editAnnotation", arguments: { id } });
+    const parsed = parseResult(result as any);
+    expect(parsed.message).toContain("No editable fields");
+  });
+
+  it("returns error for nonexistent annotation ID", async () => {
+    setupDoc("edit-7", "Hello world");
+
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id: "fake-id", content: "x" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.message).toContain("not found");
+  });
+
+  it("preserves immutable fields when editing", async () => {
+    const ydoc = setupDoc("edit-8", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original", {
       priority: "urgent",
       textSnapshot: "Hello",
     });
 
-    const ann = map.get(id) as Annotation;
-    const updated = { ...ann, content: "Edited", editedAt: Date.now() };
-    ydoc.transact(() => map.set(id, updated), MCP_ORIGIN);
+    await client.callTool({ name: "tandem_editAnnotation", arguments: { id, content: "Edited" } });
 
-    const result = map.get(id) as Annotation;
-    expect(result.content).toBe("Edited");
-    expect(result.priority).toBe("urgent");
-    expect(result.textSnapshot).toBe("Hello");
-    expect(result.range).toEqual(ann.range);
-    expect(result.type).toBe("comment");
-    expect(result.author).toBe("claude");
-    expect(result.status).toBe("pending");
+    const ann = map.get(id) as Annotation;
+    expect(ann.content).toBe("Edited");
+    expect(ann.priority).toBe("urgent");
+    expect(ann.textSnapshot).toBe("Hello");
+    expect(ann.type).toBe("comment");
+    expect(ann.author).toBe("claude");
+    expect(ann.status).toBe("pending");
+    expect(ann.editedAt).toBeDefined();
   });
 
-  it("editedAt is a recent timestamp", () => {
-    const ydoc = setupDoc("edit-6", "Hello world");
+  it("returns error on malformed suggestion content when merging fields", async () => {
+    const ydoc = setupDoc("edit-9", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "flag", rangeOf(0, 5, ydoc), "Check this");
+    // Create suggestion with malformed content
+    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), "not-json");
 
-    const before = Date.now();
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, newText: "Hi" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.message).toContain("malformed content");
+
+    // Content should be unchanged
     const ann = map.get(id) as Annotation;
-    const updated = { ...ann, content: "Rechecked", editedAt: Date.now() };
-    ydoc.transact(() => map.set(id, updated), MCP_ORIGIN);
-    const after = Date.now();
-
-    const result = map.get(id) as Annotation;
-    expect(result.editedAt).toBeGreaterThanOrEqual(before);
-    expect(result.editedAt).toBeLessThanOrEqual(after);
+    expect(ann.content).toBe("not-json");
   });
 });

@@ -398,11 +398,17 @@ export function registerAnnotationTools(server: McpServer): void {
             updatedContent = content;
           } else if (newText !== undefined || reason !== undefined) {
             // Merge with existing suggestion fields
-            let existing = { newText: "", reason: "" };
+            let existing: { newText: string; reason: string };
             try {
               existing = JSON.parse(ann.content);
             } catch {
-              // malformed existing content
+              console.error(
+                `[tandem_editAnnotation] Malformed existing content for suggestion ${id}`,
+              );
+              return mcpError(
+                "INVALID_RANGE",
+                `Suggestion ${id} has malformed content — cannot merge fields. Use 'content' to replace entirely.`,
+              );
             }
             updatedContent = JSON.stringify({
               newText: newText !== undefined ? newText : existing.newText,

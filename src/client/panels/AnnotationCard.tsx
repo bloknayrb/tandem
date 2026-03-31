@@ -78,11 +78,10 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   }
 
   function handleSave() {
-    if (!onEdit) return;
     const newContent = isSuggestion
       ? JSON.stringify({ newText: editNewText, reason: editReason })
       : editText;
-    onEdit(annotation.id, newContent);
+    onEdit?.(annotation.id, newContent);
     setIsEditing(false);
   }
 
