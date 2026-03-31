@@ -10,7 +10,12 @@ import {
 import { startHocuspocus, setDocLifecycleCallbacks } from "./yjs/provider.js";
 import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT, CTRL_ROOM } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
-import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
+import {
+  saveCurrentSession,
+  restoreCtrlSession,
+  restoreOpenDocuments,
+  writeGenerationId,
+} from "./mcp/document.js";
 import { freePort, waitForPort } from "./platform.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
@@ -103,8 +108,14 @@ async function main() {
     });
 
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
-  await restoreCtrlSession().catch((err) => {
+  const previousActiveDocId = await restoreCtrlSession().catch((err) => {
     console.error("[Tandem] Failed to restore chat history:", err);
+    return null;
+  });
+
+  // Re-open documents from previous session before Hocuspocus starts
+  await restoreOpenDocuments(previousActiveDocId).catch((err) => {
+    console.error("[Tandem] Failed to restore open documents:", err);
   });
 
   // Write a unique ID so clients can detect when the server process has restarted
