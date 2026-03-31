@@ -77,6 +77,11 @@ export function SidePanel({
   bulkConfirmRef.current = bulkConfirm;
   const confirmRef = useRef<HTMLButtonElement>(null);
 
+  // Track recently resolved annotations for timed undo (10s window)
+  const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
+  // Track the last resolved annotation ID for keyboard undo (Z key)
+  const lastResolvedRef = useRef<string | null>(null);
+
   // Stable refs for keyboard callbacks to avoid stale closures
   const ydocRef = useRef(ydoc);
   const editorRef = useRef(editor);
@@ -117,6 +122,66 @@ export function SidePanel({
     if (status === "accepted" && editorRef.current) {
       applySuggestion(ann, editorRef.current, ydocRef.current);
     }
+
+    // Track for timed undo
+    lastResolvedRef.current = id;
+    setRecentlyResolved((prev) => new Set(prev).add(id));
+    setTimeout(() => {
+      setRecentlyResolved((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      if (lastResolvedRef.current === id) {
+        lastResolvedRef.current = null;
+      }
+    }, 10_000);
+  }
+
+  /** Revert a resolved annotation back to pending, undoing text changes for accepted suggestions */
+  function undoResolveAnnotation(id: string) {
+    const y = ydocRef.current;
+    if (!y) return;
+    const map = y.getMap(Y_MAP_ANNOTATIONS);
+    const ann = map.get(id) as Annotation | undefined;
+    if (!ann || ann.status === "pending") return;
+
+    // If it was an accepted suggestion, revert the text edit
+    if (ann.status === "accepted" && ann.type === "suggestion" && editorRef.current) {
+      try {
+        const { newText } = JSON.parse(ann.content);
+        const oldText = ann.textSnapshot;
+        if (typeof newText === "string" && typeof oldText === "string") {
+          const resolved = annotationToPmRange(ann, editorRef.current.state.doc, y);
+          if (resolved) {
+            const currentText = editorRef.current.state.doc.textBetween(resolved.from, resolved.to);
+            if (currentText === newText) {
+              editorRef.current
+                .chain()
+                .focus()
+                .deleteRange({ from: resolved.from, to: resolved.to })
+                .insertContentAt(resolved.from, oldText)
+                .run();
+            }
+          }
+        }
+      } catch {
+        // Malformed suggestion content — just revert status
+      }
+    }
+
+    // Revert status to pending
+    map.set(id, { ...ann, status: "pending" as const });
+
+    // Remove from recently resolved
+    setRecentlyResolved((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    if (lastResolvedRef.current === id) {
+      lastResolvedRef.current = null;
+    }
   }
 
   function handleAccept(id: string) {
@@ -125,6 +190,10 @@ export function SidePanel({
 
   function handleDismiss(id: string) {
     resolveAnnotation(id, "dismissed");
+  }
+
+  function handleUndo(id: string) {
+    undoResolveAnnotation(id);
   }
 
   function handleBulkAccept() {
@@ -207,6 +276,11 @@ export function SidePanel({
     onExitReviewMode();
   }, [scrollToAnnotation, onExitReviewMode]);
 
+  const undoLast = useCallback(() => {
+    const id = lastResolvedRef.current;
+    if (id) undoResolveAnnotation(id);
+  }, []);
+
   const cancelBulkOrExit = useCallback(() => {
     if (bulkConfirmRef.current) {
       setBulkConfirm(null);
@@ -224,6 +298,7 @@ export function SidePanel({
       dismissCurrent,
       scrollToCurrentAndExit,
       cancelBulkOrExit,
+      undoLast,
     }),
     [
       onToggleReviewMode,
@@ -233,6 +308,7 @@ export function SidePanel({
       dismissCurrent,
       scrollToCurrentAndExit,
       cancelBulkOrExit,
+      undoLast,
     ],
   );
 
@@ -369,7 +445,7 @@ export function SidePanel({
             Reviewing {reviewIndex + 1} / {reviewTargets.length}
           </div>
           <div style={{ color: "#6366f1" }}>
-            Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · E: examine · Esc: exit
+            Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · Z: undo · E: examine · Esc: exit
           </div>
         </div>
       )}
@@ -528,6 +604,8 @@ export function SidePanel({
                   <AnnotationCard
                     key={ann.id}
                     annotation={ann}
+                    onUndo={handleUndo}
+                    undoable={recentlyResolved.has(ann.id)}
                     onClick={() => scrollToAnnotation(ann)}
                   />
                 ))}

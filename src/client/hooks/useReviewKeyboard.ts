@@ -16,6 +16,7 @@ export function useReviewKeyboard(
     dismissCurrent: () => void;
     scrollToCurrentAndExit: () => void;
     cancelBulkOrExit: () => void;
+    undoLast: () => void;
   },
 ): void {
   useEffect(() => {
@@ -39,6 +40,10 @@ export function useReviewKeyboard(
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         e.preventDefault();
         callbacks.dismissCurrent();
+      } else if (e.key === "z" || e.key === "Z") {
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+        e.preventDefault();
+        callbacks.undoLast();
       } else if (e.key === "e" || e.key === "E") {
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         e.preventDefault();
