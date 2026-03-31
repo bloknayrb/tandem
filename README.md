@@ -135,13 +135,13 @@ The side panel lists all annotations with filtering by type, author, and status.
 
 ### Chat Sidebar
 
-![Chat sidebar showing a conversation with user and Claude messages, panel toggle tabs, and an anchor quote](docs/screenshots/02-chat-sidebar.png)
+![Chat sidebar showing Claude review messages, typing indicator, and panel toggle tabs](docs/screenshots/02-chat-sidebar.png)
 
 The right sidebar toggles between **Annotations** and **Chat** views. In chat mode, send freeform messages to Claude alongside annotation review. If you have text selected when you hit Send, it is attached as a clickable anchor -- clicking it later scrolls the editor back to that passage. Claude's responses are rendered as Markdown. An unread badge on the Chat tab appears when Claude has replied while you were in the Annotations view.
 
 ### Toolbar
 
-![Toolbar with annotation buttons, document tab, and pending review banner](docs/screenshots/04-toolbar-actions.png)
+![Toolbar with annotation buttons, multiple document tabs with format indicators, and side panel header](docs/screenshots/04-toolbar-actions.png)
 
 Select text in the editor to activate the toolbar buttons: Highlight (with color picker), Comment, Suggest, Flag, and Ask Claude. The tab bar shows open documents with format indicators (M for Markdown, W for Word, T for Text). Tabs scroll horizontally when they overflow, and can be reordered via drag-and-drop or Alt+Left/Right.
 
@@ -155,7 +155,19 @@ Press **Ctrl+Shift+R** or click "Review in sequence" to enter review mode. The e
 
 ![Status bar showing connection state, document count, interruption mode, and Claude's current activity](docs/screenshots/06-claude-presence.png)
 
-The status bar shows real-time connection state with reconnect attempt count and elapsed time, open document count, and Claude's current activity. A prominent banner appears after 30 seconds of continuous disconnect with actionable guidance. Claude's focus paragraph gets a subtle blue highlight in the editor. Interruption modes (All / Urgent / Paused) control which annotations surface immediately vs. get held for later. Toast notifications surface annotation failures and save errors directly in the browser.
+The status bar shows real-time connection state with reconnect attempt count and elapsed time, open document count, and Claude's current activity. A prominent banner appears after 30 seconds of continuous disconnect with actionable guidance. Claude's focus paragraph gets a subtle blue highlight in the editor. Interruption modes (All / Urgent / Paused) control which annotations surface immediately vs. get held for later.
+
+### Toast Notifications
+
+![Toast notification showing an annotation failure message with dismiss button](docs/screenshots/07-toast-notification.png)
+
+Annotation failures and save errors surface as dismissible toast notifications. Toasts auto-dismiss by severity (errors linger longest) and deduplicate with a count badge when the same message repeats.
+
+### Onboarding Tutorial
+
+![Onboarding tutorial card showing step 1 of 3 with progress dots and skip button](docs/screenshots/08-onboarding-tutorial.png)
+
+On first launch, a 3-step guided walkthrough appears over the welcome document. Pre-placed annotations let you practice reviewing, asking Claude a question, and editing -- then the tutorial dismisses itself. Progress persists in localStorage so it only shows once.
 
 ### More
 
@@ -170,8 +182,6 @@ The status bar shows real-time connection state with reconnect attempt count and
 - **Configurable display name** -- set your name so Claude knows who's reviewing
 - **Annotation text preview** -- each card in the side panel shows an excerpt of the annotated text
 - **Keyboard shortcuts reference** -- press `?` to open the in-app shortcut reference
-- **Onboarding tutorial** -- 3-step guided walkthrough on first launch with pre-placed annotations
-- **Toast notifications** -- annotation failures and save errors surface as dismissible toasts
 - **E2E tested** -- Playwright tests cover the annotation lifecycle end-to-end
 - **Atomic file saves** -- write to temp, then rename, preventing partial writes
 
@@ -189,7 +199,7 @@ The status bar shows real-time connection state with reconnect attempt count and
 
 ## Documentation
 
-- [MCP Tool Reference](docs/mcp-tools.md) -- 26 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- 27 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
