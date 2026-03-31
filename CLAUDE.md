@@ -8,6 +8,7 @@
 - `npm run build:server` -- Bundle server via tsup → `dist/server/index.js`
 - `npm run start:server` -- Run bundled server (`node dist/server/index.js`)
 - `npm run typecheck` -- Type-check server + client without emitting
+- `npm run doctor` -- Diagnose setup issues (Node version, .mcp.json, server health, ports)
 - `npm test` -- Run vitest (unit tests)
 - `npm run test:e2e` -- Run Playwright E2E tests (requires server running or auto-starts via webServer)
 - `npm run test:e2e:ui` -- Playwright UI mode for interactive E2E debugging

@@ -9,10 +9,12 @@
  * the Channels API spec.
  */
 
+import { createConnection } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { startEventBridge } from "./event-bridge.js";
 
 // stdout is the MCP wire — redirect console.log to stderr
@@ -21,6 +23,28 @@ console.warn = console.error;
 console.info = console.error;
 
 const TANDEM_URL = process.env.TANDEM_URL || "http://localhost:3479";
+
+// --- Pre-flight: verify Tandem server is reachable before MCP handshake ---
+
+async function checkServerReachable(url: string, timeoutMs = 2000): Promise<boolean> {
+  const parsed = new URL(url);
+  const port = parseInt(parsed.port || String(DEFAULT_MCP_PORT), 10);
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: parsed.hostname }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.setTimeout(timeoutMs);
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
 
 // --- MCP Server setup ---
 
@@ -153,6 +177,13 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 
 async function main() {
   console.error(`[Channel] Tandem channel shim starting (server: ${TANDEM_URL})`);
+
+  const reachable = await checkServerReachable(TANDEM_URL);
+  if (!reachable) {
+    console.error(`[Channel] Cannot reach Tandem server at ${TANDEM_URL}`);
+    console.error("[Channel] Start it with: npm run dev:standalone");
+    // Continue anyway — the event bridge will retry, and the server may start later
+  }
 
   // Connect to Claude Code over stdio
   const transport = new StdioServerTransport();

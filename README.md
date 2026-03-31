@@ -28,7 +28,6 @@ graph LR
 git clone https://github.com/bloknayrb/tandem.git
 cd tandem
 npm install
-npm run build     # builds server + channel shim into dist/
 ```
 
 ### Run
@@ -52,6 +51,12 @@ Claude calls `tandem_open`, the document appears in the browser, and annotations
 ### Verify (if something seems wrong)
 
 ```bash
+npm run doctor
+```
+
+This checks Node.js version, `.mcp.json` configuration, server health, and port status with actionable fix suggestions. You can also check the raw health endpoint:
+
+```bash
 curl http://localhost:3479/health
 # → {"status":"ok","version":"0.1.0","transport":"http","hasSession":false}
 ```
@@ -70,23 +75,15 @@ Tandem uses two MCP connections: **HTTP** for document tools (27 tools including
       "url": "http://localhost:3479/mcp"
     },
     "tandem-channel": {
-      "command": "cmd",
-      "args": ["/c", "npx", "tsx", "src/channel/index.ts"],
+      "command": "npx",
+      "args": ["tsx", "src/channel/index.ts"],
       "env": { "TANDEM_URL": "http://localhost:3479" }
     }
   }
 }
 ```
 
-The `tandem` entry (HTTP) is platform-independent. The `tandem-channel` entry varies by platform:
-
-| Platform | `command` | `args` |
-|----------|-----------|--------|
-| **Windows** | `"cmd"` | `["/c", "npx", "tsx", "src/channel/index.ts"]` |
-| **macOS / Linux** | `"npx"` | `["tsx", "src/channel/index.ts"]` |
-| **Production** (any, requires `npm run build`) | `"node"` | `["dist/channel/index.js"]` |
-
-All channel entries need `"env": { "TANDEM_URL": "http://localhost:3479" }`.
+Both entries are cross-platform -- no platform-specific configuration needed. For production deployments (after `npm run build`), you can use `"command": "node", "args": ["dist/channel/index.js"]` instead for faster startup.
 
 The channel shim is optional -- without it, Claude relies on polling via `tandem_checkInbox` instead of receiving real-time push events.
 
@@ -108,6 +105,8 @@ See `.env.example` for a copy-paste template.
 
 ## Troubleshooting
 
+Run `npm run doctor` for a quick diagnostic of your setup. It checks Node.js version, `.mcp.json` config, server health, and port status.
+
 **Claude Code says "MCP failed to connect"**
 Start the server first (`npm run dev:standalone`), then open Claude Code. The server must be running before Claude Code probes the MCP URL. If you restart the server, run `/mcp` in Claude Code to reconnect.
 
@@ -115,7 +114,7 @@ Start the server first (`npm run dev:standalone`), then open Claude Code. The se
 Tandem kills stale processes on :3478/:3479 at startup. If another app uses those ports, set `TANDEM_PORT` / `TANDEM_MCP_PORT` to different values and update `TANDEM_URL` to match.
 
 **Channel shim fails to start**
-The `tandem-channel` entry spawns a subprocess. If you see `MODULE_NOT_FOUND`, run `npm run build` -- the production channel entry needs `dist/channel/index.js`. If on macOS/Linux, check the platform-specific `.mcp.json` examples above.
+The `tandem-channel` entry spawns a subprocess. If you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
 
 **Browser shows "Cannot reach the Tandem server"**
 The Vite client connects to the server via WebSocket. Make sure `npm run dev:standalone` (or `npm run dev:server`) is running. The message appears after 3 seconds of failed connection.
