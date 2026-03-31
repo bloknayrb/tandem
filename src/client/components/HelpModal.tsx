@@ -28,6 +28,8 @@ const SECTIONS: ShortcutSection[] = [
       { keys: ["Shift", "Tab"], description: "Previous annotation" },
       { keys: ["Y"], description: "Accept annotation" },
       { keys: ["N"], description: "Dismiss annotation" },
+      { keys: ["Z"], description: "Undo last accept/dismiss" },
+      { keys: ["E"], description: "Examine (scroll & exit)" },
       { keys: ["Escape"], description: "Exit review mode" },
     ],
   },

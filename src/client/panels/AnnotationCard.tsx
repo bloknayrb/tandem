@@ -7,6 +7,9 @@ export interface AnnotationCardProps {
   isReviewTarget?: boolean;
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
+  onUndo?: (id: string) => void;
+  /** Whether this annotation was recently resolved and can be undone */
+  undoable?: boolean;
   onClick?: () => void;
 }
 
@@ -29,6 +32,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   isReviewTarget,
   onAccept,
   onDismiss,
+  onUndo,
+  undoable,
   onClick,
 }: AnnotationCardProps) {
   const borderColor = getBorderColor(annotation);
@@ -145,6 +150,28 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               Dismiss
             </button>
           )}
+        </div>
+      )}
+      {!isPending && undoable && onUndo && (
+        <div style={{ marginTop: "4px" }}>
+          <button
+            data-testid="undo-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUndo(annotation.id);
+            }}
+            style={{
+              padding: "1px 6px",
+              fontSize: "11px",
+              border: "none",
+              background: "none",
+              color: "#6366f1",
+              cursor: "pointer",
+              textDecoration: "underline",
+            }}
+          >
+            Undo
+          </button>
         </div>
       )}
     </div>
