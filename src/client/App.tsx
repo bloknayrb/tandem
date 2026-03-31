@@ -95,12 +95,12 @@ export default function App() {
   }, [interruptionMode]);
 
   // Broadcast interruption mode to Y.Map so the server (and Claude) can see it
+  const activeYdoc = tabs.find((t) => t.id === activeTabId)?.ydoc;
   useEffect(() => {
-    const activeTab = tabs.find((t) => t.id === activeTabId);
-    if (!activeTab?.ydoc) return;
-    const awareness = activeTab.ydoc.getMap(Y_MAP_USER_AWARENESS);
+    if (!activeYdoc) return;
+    const awareness = activeYdoc.getMap(Y_MAP_USER_AWARENESS);
     awareness.set("interruptionMode", interruptionMode);
-  }, [interruptionMode, activeTabId, tabs]);
+  }, [interruptionMode, activeYdoc]);
 
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
