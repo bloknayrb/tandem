@@ -42,11 +42,16 @@ export async function waitForPort(port: number, timeoutMs = 5000): Promise<void>
 
 /** Attempt to bind a port and immediately release it. Returns true if available. */
 function tryBind(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const srv = net.createServer();
-    srv.once("error", () => {
-      srv.close();
-      resolve(false);
+    srv.once("error", (err: NodeJS.ErrnoException) => {
+      srv.close(() => {
+        if (err.code === "EADDRINUSE") {
+          resolve(false);
+        } else {
+          reject(err); // EACCES, etc. — don't mask as "port in use"
+        }
+      });
     });
     srv.listen(port, "127.0.0.1", () => {
       srv.close(() => resolve(true));

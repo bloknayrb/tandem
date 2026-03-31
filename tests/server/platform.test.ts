@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import net from "net";
 import path from "path";
 import {
@@ -108,9 +108,12 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       holdServer = net.createServer();
       await new Promise<void>((resolve) => holdServer!.listen(49172, "127.0.0.1", resolve));
 
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
       const start = Date.now();
       await waitForPort(49172, 500);
       expect(Date.now() - start).toBeGreaterThanOrEqual(400);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("port 49172 still not available"));
+      spy.mockRestore();
     });
   });
 });
