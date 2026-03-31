@@ -54,14 +54,16 @@ describe("applyReorder", () => {
     expect(result.indexOf("b")).toBeLessThan(result.indexOf("c"));
   });
 
-  it("returns original array if fromId is missing", () => {
+  it("returns filtered array if fromId is missing", () => {
     const original = ["a", "b", "c"];
-    expect(applyReorder(original, "x", "b", ids)).toBe(original);
+    const result = applyReorder(original, "x", "b", ids);
+    expect(result).toEqual(["a", "b", "c"]);
   });
 
-  it("returns original array if toId is missing", () => {
+  it("returns filtered array if toId is missing", () => {
     const original = ["a", "b", "c"];
-    expect(applyReorder(original, "a", "x", ids)).toBe(original);
+    const result = applyReorder(original, "a", "x", ids);
+    expect(result).toEqual(["a", "b", "c"]);
   });
 
   it("filters invalid IDs from order before reordering", () => {
@@ -74,8 +76,28 @@ describe("applyReorder", () => {
     expect(applyReorder(["a", "b", "c"], "b", "a", ids)).toEqual(["b", "a", "c"]);
   });
 
-  it("moves to last position by targeting last element", () => {
+  it("moves before target by default (side=left)", () => {
     // Moving "a" before "c" puts it just before c
     expect(applyReorder(["a", "b", "c"], "a", "c", ids)).toEqual(["b", "a", "c"]);
+  });
+
+  it("moves after target with side=right", () => {
+    // Moving "a" after "c" puts it to the absolute last position
+    expect(applyReorder(["a", "b", "c"], "a", "c", ids, "right")).toEqual(["b", "c", "a"]);
+  });
+
+  it("moves to absolute last position via side=right on last element", () => {
+    expect(applyReorder(["a", "b", "c", "d"], "b", "d", ids, "right")).toEqual([
+      "a",
+      "c",
+      "d",
+      "b",
+    ]);
+  });
+
+  it("is a no-op when fromId equals toId (handled by caller)", () => {
+    // applyReorder itself still processes it — the useTabOrder hook guards this
+    const result = applyReorder(["a", "b", "c"], "b", "b", ids);
+    expect(result).toEqual(["a", "b", "c"]);
   });
 });

@@ -1,9 +1,9 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import type { OpenTab } from "../types";
 
 export interface UseTabOrderResult {
   orderedTabs: OpenTab[];
-  reorder: (fromId: string, toId: string) => void;
+  reorder: (fromId: string, toId: string, side?: "left" | "right") => void;
 }
 
 /**
@@ -19,23 +19,27 @@ export function reconcileOrder(localOrder: string[], tabIds: string[]): string[]
 }
 
 /**
- * Move `fromId` so it appears immediately before `toId` in the order.
- * Returns a new array, or the original if either ID is missing.
+ * Move `fromId` relative to `toId` in the order.
+ * When `side` is 'left' (default), inserts before `toId`.
+ * When `side` is 'right', inserts after `toId`.
+ * Returns a new array, or the filtered current array if either ID is missing.
  */
 export function applyReorder(
   order: string[],
   fromId: string,
   toId: string,
   validIds: Set<string>,
+  side: "left" | "right" = "left",
 ): string[] {
   const current = order.filter((id) => validIds.has(id));
   const fromIdx = current.indexOf(fromId);
   const toIdx = current.indexOf(toId);
-  if (fromIdx === -1 || toIdx === -1) return order;
+  if (fromIdx === -1 || toIdx === -1) return current;
 
   const next = [...current];
   next.splice(fromIdx, 1);
-  const insertIdx = next.indexOf(toId);
+  const targetIdx = next.indexOf(toId);
+  const insertIdx = side === "right" ? targetIdx + 1 : targetIdx;
   next.splice(insertIdx, 0, fromId);
   return next;
 }
@@ -56,27 +60,25 @@ export function useTabOrder(tabs: OpenTab[]): UseTabOrderResult {
   }, [tabs, localOrder]);
 
   // Sync localOrder when tabs change (additions/removals from server).
-  // Uses functional setState to avoid a render-time setState warning.
   const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
-  if (needsReconcile(localOrder, tabIds)) {
-    setLocalOrder(reconcileOrder(localOrder, tabIds));
-  }
+  useEffect(() => {
+    setLocalOrder((prev) => {
+      const reconciled = reconcileOrder(prev, tabIds);
+      if (prev.length === reconciled.length && prev.every((id, i) => id === reconciled[i])) {
+        return prev;
+      }
+      return reconciled;
+    });
+  }, [tabIds]);
 
   const reorder = useCallback(
-    function reorder(fromId: string, toId: string) {
+    function reorder(fromId: string, toId: string, side: "left" | "right" = "left") {
       if (fromId === toId) return;
       const validIds = new Set(tabIds);
-      setLocalOrder((prev) => applyReorder(prev, fromId, toId, validIds));
+      setLocalOrder((prev) => applyReorder(prev, fromId, toId, validIds, side));
     },
     [tabIds],
   );
 
   return { orderedTabs, reorder };
-}
-
-/** True when localOrder doesn't match the current tab set. */
-function needsReconcile(localOrder: string[], tabIds: string[]): boolean {
-  if (localOrder.length !== tabIds.length) return true;
-  const idSet = new Set(tabIds);
-  return localOrder.some((id) => !idSet.has(id));
 }

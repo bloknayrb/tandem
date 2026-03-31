@@ -8,7 +8,7 @@ interface DocumentTabsProps {
   activeTabId: string | null;
   onTabSwitch: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
-  reorder?: (fromId: string, toId: string) => void;
+  reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
 }
 
 const FORMAT_ICONS: Record<string, string> = {
@@ -290,7 +290,11 @@ export function DocumentTabs({
       e.preventDefault();
       const fromId = e.dataTransfer.getData("text/plain");
       if (fromId && fromId !== targetId && reorder) {
-        reorder(fromId, targetId);
+        // Use the drop indicator side to determine insert position
+        const rect = e.currentTarget.getBoundingClientRect();
+        const midX = rect.left + rect.width / 2;
+        const side = e.clientX < midX ? "left" : "right";
+        reorder(fromId, targetId, side);
       }
       clearDragState();
     },
