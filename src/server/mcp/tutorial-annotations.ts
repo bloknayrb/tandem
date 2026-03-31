@@ -31,8 +31,11 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}suggest-1`,
     type: "suggestion",
-    targetText: "simplify",
-    content: JSON.stringify({ newText: "streamline", reason: "More precise verb choice" }),
+    targetText: "simplify onboarding",
+    content: JSON.stringify({
+      newText: "streamline onboarding",
+      reason: "More precise verb choice",
+    }),
   },
 ];
 
@@ -43,7 +46,12 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
   if (map.has(`${TUTORIAL_ANNOTATION_PREFIX}highlight-1`)) return;
 
   const fullText = extractText(doc);
+  if (!fullText) {
+    console.error("[tutorial] Y.Doc has no text content — cannot inject tutorial annotations");
+    return;
+  }
 
+  let injected = 0;
   doc.transact(() => {
     for (const def of TUTORIAL_ANNOTATIONS) {
       const idx = fullText.indexOf(def.targetText);
@@ -74,8 +82,11 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
       };
 
       map.set(def.id, annotation);
+      injected++;
     }
   }, MCP_ORIGIN);
 
-  console.error(`[tutorial] Injected ${TUTORIAL_ANNOTATIONS.length} tutorial annotations`);
+  console.error(
+    `[tutorial] Injected ${injected}/${TUTORIAL_ANNOTATIONS.length} tutorial annotations`,
+  );
 }
