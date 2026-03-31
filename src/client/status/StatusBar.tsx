@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
 import type { InterruptionMode } from "../../shared/types";
+import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
   connected: boolean;
+  connectionStatus: ConnectionStatus;
+  reconnectAttempts: number;
+  disconnectedSince: number | null;
   claudeStatus: string | null;
   claudeActive: boolean;
   readOnly?: boolean;
@@ -24,10 +28,12 @@ const MODES: { value: InterruptionMode; label: string; title: string }[] = [
 ];
 
 const RECONNECTED_FLASH_MS = 2_000;
-const SERVER_CHECK_MS = 30_000;
 
 export function StatusBar({
   connected,
+  connectionStatus,
+  reconnectAttempts,
+  disconnectedSince,
   claudeStatus,
   claudeActive,
   readOnly,
@@ -47,36 +53,53 @@ export function StatusBar({
     localStorage.setItem(USER_NAME_KEY, trimmed);
   };
   const [showReconnectedFlash, setShowReconnectedFlash] = useState(false);
-  const [showServerBanner, setShowServerBanner] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const prevConnected = useRef(connected);
-  const disconnectedAt = useRef<number | null>(null);
 
   useEffect(() => {
     const was = prevConnected.current;
     prevConnected.current = connected;
-    if (!connected) {
-      if (disconnectedAt.current === null) disconnectedAt.current = Date.now();
-      const timer = setTimeout(() => setShowServerBanner(true), SERVER_CHECK_MS);
-      return () => clearTimeout(timer);
-    }
-    disconnectedAt.current = null;
-    setShowServerBanner(false);
-    if (!was) {
+    if (connected && !was) {
       setShowReconnectedFlash(true);
       const timer = setTimeout(() => setShowReconnectedFlash(false), RECONNECTED_FLASH_MS);
       return () => clearTimeout(timer);
     }
   }, [connected]);
 
-  const isReconnecting = !connected && disconnectedAt.current !== null;
+  // Tick elapsed time while disconnected
+  useEffect(() => {
+    if (disconnectedSince == null) {
+      setElapsedSeconds(0);
+      return;
+    }
+    // Set initial value immediately
+    setElapsedSeconds(Math.floor((Date.now() - disconnectedSince) / 1000));
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - disconnectedSince) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [disconnectedSince]);
+
+  const isReconnecting = connectionStatus === "connecting";
   const dotColor = connected ? "#22c55e" : isReconnecting ? "#eab308" : "#ef4444";
-  const connLabel = showReconnectedFlash
-    ? "Reconnected"
-    : connected
-      ? "Connected"
-      : isReconnecting
-        ? "Reconnecting\u2026"
-        : "Disconnected";
+
+  let connLabel: string;
+  if (showReconnectedFlash) {
+    connLabel = "Reconnected";
+  } else if (connectionStatus === "connected") {
+    connLabel = "Connected";
+  } else if (connectionStatus === "connecting") {
+    const parts = ["Reconnecting\u2026"];
+    if (reconnectAttempts > 0 || elapsedSeconds > 0) {
+      const details: string[] = [];
+      if (reconnectAttempts > 0) details.push(`attempt ${reconnectAttempts}`);
+      if (elapsedSeconds > 0) details.push(`${elapsedSeconds}s`);
+      parts.push(`(${details.join(", ")})`);
+    }
+    connLabel = parts.join(" ");
+  } else {
+    connLabel = "Disconnected \u2014 check that the server is running";
+  }
 
   return (
     <div
@@ -105,9 +128,6 @@ export function StatusBar({
           }}
         />
         <span>{connLabel}</span>
-        {showServerBanner && !connected && (
-          <span style={{ color: "#eab308", fontWeight: 500 }}>— check server</span>
-        )}
         {documentCount > 0 && (
           <span style={{ color: "#9ca3af" }}>
             {documentCount} doc{documentCount !== 1 ? "s" : ""} open

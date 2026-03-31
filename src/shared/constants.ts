@@ -10,6 +10,7 @@ export const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const TYPING_DEBOUNCE = 3000; // 3 seconds
 export const DISCONNECT_DEBOUNCE_MS = 3000; // 3 seconds before showing "server not reachable"
+export const PROLONGED_DISCONNECT_MS = 30_000; // 30 seconds before showing App-level disconnect banner
 export const OVERLAY_STALE_DEBOUNCE = 200; // 200ms
 export const REVIEW_BANNER_THRESHOLD = 5;
 
