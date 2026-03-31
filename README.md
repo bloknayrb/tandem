@@ -60,7 +60,7 @@ curl http://localhost:3479/health
 
 ## MCP Configuration
 
-Tandem uses two MCP connections: **HTTP** for document tools (26 tools), and a **channel shim** for real-time push notifications. Both are configured in `.mcp.json`:
+Tandem uses two MCP connections: **HTTP** for document tools (27 tools including annotation editing), and a **channel shim** for real-time push notifications. Both are configured in `.mcp.json`:
 
 ```json
 {
@@ -131,7 +131,7 @@ Claude adds highlights, comments, suggestions, and flags directly in the documen
 
 ![Side panel showing annotation cards with text excerpts, accept/dismiss buttons, filtering, and bulk actions](docs/screenshots/03-side-panel.png)
 
-The side panel lists all annotations with filtering by type, author, and status. Each card shows a preview of the annotated text. Bulk accept/dismiss buttons appear when multiple annotations are pending.
+The side panel lists all annotations with filtering by type, author, and status. Each card shows a preview of the annotated text. Bulk accept/dismiss buttons appear when multiple annotations are pending. Annotations can be edited after creation via the pencil button -- typos in comments or suggestions no longer require deleting and recreating.
 
 ### Chat Sidebar
 
@@ -143,7 +143,7 @@ The right sidebar toggles between **Annotations** and **Chat** views. In chat mo
 
 ![Toolbar with annotation buttons, document tab, and pending review banner](docs/screenshots/04-toolbar-actions.png)
 
-Select text in the editor to activate the toolbar buttons: Highlight (with color picker), Comment, Suggest, Flag, and Ask Claude. The tab bar shows open documents with format indicators (M for Markdown, W for Word, T for Text).
+Select text in the editor to activate the toolbar buttons: Highlight (with color picker), Comment, Suggest, Flag, and Ask Claude. The tab bar shows open documents with format indicators (M for Markdown, W for Word, T for Text). Tabs scroll horizontally when they overflow, and can be reordered via drag-and-drop or Alt+Left/Right.
 
 ### Keyboard Review Mode
 
@@ -155,7 +155,7 @@ Press **Ctrl+Shift+R** or click "Review in sequence" to enter review mode. The e
 
 ![Status bar showing connection state, document count, interruption mode, and Claude's current activity](docs/screenshots/06-claude-presence.png)
 
-The status bar shows real-time connection state, open document count, and Claude's current activity. Claude's focus paragraph gets a subtle blue highlight in the editor. Interruption modes (All / Urgent / Paused) control which annotations surface immediately vs. get held for later.
+The status bar shows real-time connection state with reconnect attempt count and elapsed time, open document count, and Claude's current activity. A prominent banner appears after 30 seconds of continuous disconnect with actionable guidance. Claude's focus paragraph gets a subtle blue highlight in the editor. Interruption modes (All / Urgent / Paused) control which annotations surface immediately vs. get held for later. Toast notifications surface annotation failures and save errors directly in the browser.
 
 ### More
 
@@ -170,6 +170,8 @@ The status bar shows real-time connection state, open document count, and Claude
 - **Configurable display name** -- set your name so Claude knows who's reviewing
 - **Annotation text preview** -- each card in the side panel shows an excerpt of the annotated text
 - **Keyboard shortcuts reference** -- press `?` to open the in-app shortcut reference
+- **Onboarding tutorial** -- 3-step guided walkthrough on first launch with pre-placed annotations
+- **Toast notifications** -- annotation failures and save errors surface as dismissible toasts
 - **E2E tested** -- Playwright tests cover the annotation lifecycle end-to-end
 - **Atomic file saves** -- write to temp, then rename, preventing partial writes
 
@@ -191,8 +193,8 @@ The status bar shows real-time connection state, open document count, and Claude
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-019
-- [Lessons Learned](docs/lessons-learned.md) -- 22 implementation lessons
+- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-020
+- [Lessons Learned](docs/lessons-learned.md) -- 30 implementation lessons
 
 ## Tech Stack
 
