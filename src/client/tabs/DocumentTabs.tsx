@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import type { OpenTab } from "../types";
 import { FileOpenDialog } from "../components/FileOpenDialog";
 import { useTabDirty } from "../hooks/useTabDirty";
@@ -8,6 +8,7 @@ interface DocumentTabsProps {
   activeTabId: string | null;
   onTabSwitch: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
+  reorder?: (fromId: string, toId: string) => void;
 }
 
 const FORMAT_ICONS: Record<string, string> = {
@@ -17,18 +18,36 @@ const FORMAT_ICONS: Record<string, string> = {
   docx: "W",
 };
 
+interface TabItemProps {
+  tab: OpenTab;
+  isActive: boolean;
+  onSwitch: (id: string) => void;
+  onClose: (id: string) => void;
+  draggable: boolean;
+  onDragStart: (e: React.DragEvent, id: string) => void;
+  onDragOver: (e: React.DragEvent, id: string) => void;
+  onDrop: (e: React.DragEvent, id: string) => void;
+  onDragEnd: () => void;
+  onDragLeave: () => void;
+  dropIndicator: "left" | "right" | null;
+  onKeyDown: (e: React.KeyboardEvent, id: string) => void;
+}
+
 /** Extracted so useTabDirty can be called per-tab (hooks can't run in loops). */
 function TabItem({
   tab,
   isActive,
   onSwitch,
   onClose,
-}: {
-  tab: OpenTab;
-  isActive: boolean;
-  onSwitch: (id: string) => void;
-  onClose: (id: string) => void;
-}) {
+  draggable,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onDragLeave,
+  dropIndicator,
+  onKeyDown,
+}: TabItemProps) {
   const isDirty = useTabDirty(tab);
 
   return (
@@ -36,6 +55,14 @@ function TabItem({
       data-testid={`tab-${tab.id}`}
       data-active={isActive}
       onClick={() => onSwitch(tab.id)}
+      draggable={draggable}
+      tabIndex={0}
+      onDragStart={(e) => onDragStart(e, tab.id)}
+      onDragOver={(e) => onDragOver(e, tab.id)}
+      onDrop={(e) => onDrop(e, tab.id)}
+      onDragEnd={onDragEnd}
+      onDragLeave={onDragLeave}
+      onKeyDown={(e) => onKeyDown(e, tab.id)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -47,10 +74,13 @@ function TabItem({
         color: isActive ? "#111827" : "#6b7280",
         borderTop: isActive ? "2px solid #6366f1" : "2px solid transparent",
         borderBottom: isActive ? "1px solid #fff" : "1px solid transparent",
+        borderLeft: dropIndicator === "left" ? "2px solid #6366f1" : "2px solid transparent",
+        borderRight: dropIndicator === "right" ? "2px solid #6366f1" : "2px solid transparent",
         marginBottom: "-1px",
         userSelect: "none",
         whiteSpace: "nowrap",
         transition: "background 0.15s, color 0.15s",
+        flexShrink: 0,
       }}
     >
       {isDirty && (
@@ -72,7 +102,19 @@ function TabItem({
       >
         {FORMAT_ICONS[tab.format] || "?"}
       </span>
-      <span style={{ fontWeight: isActive ? 500 : 400 }}>{tab.fileName}</span>
+      <span
+        data-testid={`tab-name-${tab.id}`}
+        title={tab.filePath}
+        style={{
+          fontWeight: isActive ? 500 : 400,
+          maxWidth: "160px",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {tab.fileName}
+      </span>
       {tab.readOnly && (
         <span
           style={{
@@ -90,6 +132,14 @@ function TabItem({
         onClick={(e) => {
           e.stopPropagation();
           onClose(tab.id);
+        }}
+        onDragOver={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        onDrop={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
         }}
         style={{
           background: "none",
@@ -111,31 +161,244 @@ function TabItem({
   );
 }
 
-export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: DocumentTabsProps) {
+/** Scrollbar-hiding style tag — injected once. */
+const SCROLLBAR_HIDE_CLASS = "tandem-tab-scroll-hide";
+function ScrollbarHideStyle() {
+  return (
+    <style>{`
+      .${SCROLLBAR_HIDE_CLASS} {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      .${SCROLLBAR_HIDE_CLASS}::-webkit-scrollbar {
+        display: none;
+      }
+    `}</style>
+  );
+}
+
+const ARROW_BTN_STYLE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "28px",
+  minWidth: "28px",
+  background: "linear-gradient(to right, #f3f4f6 70%, transparent)",
+  border: "none",
+  cursor: "pointer",
+  fontSize: "12px",
+  color: "#6b7280",
+  padding: 0,
+  zIndex: 1,
+};
+
+const ARROW_BTN_RIGHT_STYLE: React.CSSProperties = {
+  ...ARROW_BTN_STYLE,
+  background: "linear-gradient(to left, #f3f4f6 70%, transparent)",
+};
+
+export function DocumentTabs({
+  tabs,
+  activeTabId,
+  onTabSwitch,
+  onTabClose,
+  reorder,
+}: DocumentTabsProps) {
   const [showDialog, setShowDialog] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    side: "left" | "right";
+  } | null>(null);
+
+  function clearDragState(): void {
+    setDraggedId(null);
+    setDropTarget(null);
+  }
+
+  // Overflow detection
+  const updateScrollState = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateScrollState();
+    el.addEventListener("scroll", updateScrollState, { passive: true });
+    const observer = new ResizeObserver(updateScrollState);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", updateScrollState);
+      observer.disconnect();
+    };
+  }, [updateScrollState]);
+
+  // Re-check overflow when tabs change
+  useEffect(() => {
+    updateScrollState();
+  }, [tabs.length, updateScrollState]);
+
+  // Auto-scroll active tab into view
+  useEffect(() => {
+    if (!activeTabId || !scrollRef.current) return;
+    const el = scrollRef.current.querySelector(`[data-testid="tab-${activeTabId}"]`);
+    if (el) {
+      (el as HTMLElement).scrollIntoView({
+        inline: "nearest",
+        block: "nearest",
+        behavior: "smooth",
+      });
+    }
+  }, [activeTabId]);
+
+  // Clear drag state when tab list changes mid-drag
+  useEffect(() => {
+    clearDragState();
+  }, [tabs.length]);
+
+  // DnD handlers
+  const handleDragStart = useCallback((e: React.DragEvent, id: string) => {
+    setDraggedId(id);
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "move";
+  }, []);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent, id: string) => {
+      e.preventDefault();
+      if (!draggedId || draggedId === id) {
+        setDropTarget(null);
+        return;
+      }
+      const rect = e.currentTarget.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      const side = e.clientX < midX ? "left" : "right";
+      setDropTarget({ id, side });
+    },
+    [draggedId],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent, targetId: string) => {
+      e.preventDefault();
+      const fromId = e.dataTransfer.getData("text/plain");
+      if (fromId && fromId !== targetId && reorder) {
+        reorder(fromId, targetId);
+      }
+      clearDragState();
+    },
+    [reorder],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    clearDragState();
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDropTarget(null);
+  }, []);
+
+  // Keyboard reordering (Alt+Arrow swaps with neighbor)
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent, id: string) => {
+      if (!e.altKey || !reorder) return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+
+      const idx = tabs.findIndex((t) => t.id === id);
+      if (idx === -1) return;
+
+      if (e.key === "ArrowLeft" && idx > 0) {
+        // Place this tab before the one to its left
+        reorder(id, tabs[idx - 1].id);
+      } else if (e.key === "ArrowRight" && idx < tabs.length - 1) {
+        // Place the neighbor before this tab (effectively swapping right)
+        reorder(tabs[idx + 1].id, id);
+      }
+    },
+    [tabs, reorder],
+  );
+
+  const scrollLeft = useCallback(() => {
+    scrollRef.current?.scrollBy({ left: -150, behavior: "smooth" });
+  }, []);
+
+  const scrollRight = useCallback(() => {
+    scrollRef.current?.scrollBy({ left: 150, behavior: "smooth" });
+  }, []);
+
+  const singleTab = tabs.length <= 1;
 
   return (
     <div
       style={{
+        position: "relative",
         display: "flex",
         alignItems: "center",
-        gap: "1px",
-        padding: "0 8px",
         background: "#f3f4f6",
         borderBottom: "1px solid #e5e7eb",
         minHeight: "32px",
-        overflow: "hidden",
       }}
     >
-      {tabs.map((tab) => (
-        <TabItem
-          key={tab.id}
-          tab={tab}
-          isActive={tab.id === activeTabId}
-          onSwitch={onTabSwitch}
-          onClose={onTabClose}
-        />
-      ))}
+      <ScrollbarHideStyle />
+      {canScrollLeft && (
+        <button
+          data-testid="tab-scroll-left"
+          onClick={scrollLeft}
+          style={ARROW_BTN_STYLE}
+          title="Scroll tabs left"
+        >
+          ◀
+        </button>
+      )}
+      <div
+        ref={scrollRef}
+        data-testid="tab-scroll-container"
+        className={SCROLLBAR_HIDE_CLASS}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "1px",
+          flex: 1,
+          overflowX: "auto",
+          padding: "0 4px",
+        }}
+      >
+        {tabs.map((tab) => (
+          <TabItem
+            key={tab.id}
+            tab={tab}
+            isActive={tab.id === activeTabId}
+            onSwitch={onTabSwitch}
+            onClose={onTabClose}
+            draggable={!singleTab}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onDragEnd={handleDragEnd}
+            onDragLeave={handleDragLeave}
+            dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
+            onKeyDown={handleKeyDown}
+          />
+        ))}
+      </div>
+      {canScrollRight && (
+        <button
+          data-testid="tab-scroll-right"
+          onClick={scrollRight}
+          style={ARROW_BTN_RIGHT_STYLE}
+          title="Scroll tabs right"
+        >
+          ▶
+        </button>
+      )}
       <button
         onClick={() => setShowDialog(true)}
         data-testid="open-file-btn"
@@ -150,6 +413,8 @@ export function DocumentTabs({ tabs, activeTabId, onTabSwitch, onTabClose }: Doc
           color: "#6b7280",
           padding: "2px 8px",
           marginLeft: "4px",
+          marginRight: "8px",
+          flexShrink: 0,
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.color = "#6366f1";

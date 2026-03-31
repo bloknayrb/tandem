@@ -21,6 +21,7 @@ import { InterruptionModeSchema } from "../shared/types";
 import { useAnnotationGate } from "./hooks/useAnnotationGate";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
+import { useTabOrder } from "./hooks/useTabOrder";
 import { useYjsSync } from "./hooks/useYjsSync";
 import type { DocListEntry, OpenTab } from "./types";
 
@@ -82,6 +83,8 @@ export default function App() {
     ready,
     serverRestarted,
   } = useYjsSync();
+
+  const { orderedTabs, reorder } = useTabOrder(tabs);
 
   // Interruption mode — persisted to localStorage
   const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
@@ -189,10 +192,11 @@ export default function App() {
       )}
       <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
       <DocumentTabs
-        tabs={tabs}
+        tabs={orderedTabs}
         activeTabId={activeTabId}
         onTabSwitch={setActiveTabId}
         onTabClose={handleTabClose}
+        reorder={reorder}
       />
       {showBanner && !reviewMode && (
         <div
