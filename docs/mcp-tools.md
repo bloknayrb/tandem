@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 26 tools via MCP HTTP (Model Context Protocol) plus 1 tool via the channel shim (`tandem_reply`) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 27 tools via MCP HTTP (Model Context Protocol) plus 1 tool via the channel shim (`tandem_reply`) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -477,6 +477,41 @@ Delete an annotation permanently.
 
 ---
 
+### tandem_editAnnotation
+
+Edit the content of an existing annotation. Only pending annotations can be edited.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | yes | Annotation ID |
+| `content` | string | no | New comment/note text (for highlights, comments, flags) |
+| `newText` | string | no | New suggested replacement text (for suggestions only) |
+| `reason` | string | no | New reason text (for suggestions only) |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "id": "ann_1710936000000_a1b2c3", "edited": true, "editedAt": 1710936500000 }
+```
+
+**Errors:** `NO_DOCUMENT` (document not found), error if annotation not found or not pending.
+
+**Example:**
+```
+tandem_editAnnotation({
+  id: "ann_1710936000000_a1b2c3",
+  content: "Updated: This figure is actually correct per the latest revision"
+})
+```
+
+**Notes:**
+- At least one of `content`, `newText`, or `reason` must be provided.
+- Only pending annotations can be edited — accepted or dismissed annotations return an error.
+- Sets `editedAt` timestamp on the annotation. The browser shows an "(edited)" indicator.
+- For suggestions, `newText` updates the proposed replacement and `reason` updates the justification. For other types, use `content`.
+
+---
+
 ### tandem_exportAnnotations
 
 Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.
@@ -842,6 +877,24 @@ Browser submits allow/deny verdict for a permission request.
 ```
 
 **Response:** `{ "ok": true, "requestId": "req_1", "behavior": "allow" }`
+
+### GET /api/notify-stream
+
+SSE (Server-Sent Events) stream of toast notifications for the browser. Separate from `GET /api/events` (which pushes Y.Map events to the channel shim). Used for ephemeral notifications like annotation range failures and save errors.
+
+**Headers:**
+- `Accept: text/event-stream`
+
+**Stream format:**
+```
+data: {"type":"error","title":"Range Error","message":"Annotation target text has moved","timestamp":1710936000000}
+
+data: {"type":"warning","title":"Save Warning","message":"File is read-only","timestamp":1710936001000}
+```
+
+**Notification types:** `error` (auto-dismiss 8s), `warning` (auto-dismiss 6s), `info` (auto-dismiss 4s). The ring buffer holds up to 50 notifications. Duplicate notifications within a short window are deduplicated with a count badge in the browser.
+
+---
 
 ### POST /api/launch-claude
 

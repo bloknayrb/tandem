@@ -262,6 +262,61 @@ Claude: tandem_flag({
 
 Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. He can accept/dismiss both types using the same review workflow (Tab/Y/N/Z keys).
 
+## Onboarding Tutorial (First Run)
+
+**Setup:** First-time user launches Tandem with no restored sessions.
+
+The server auto-opens `sample/welcome.md` and injects 3 tutorial annotations:
+1. A **highlight** on the welcome heading — demonstrates visual markers
+2. A **comment** on a paragraph — shows the annotation side panel
+3. A **suggestion** with replacement text — introduces accept/reject workflow
+
+A floating tutorial card appears at the bottom-left of the editor with three steps:
+
+**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or using Y/N in keyboard review mode) completes this step.
+
+**Step 2: Ask Claude a question.** The card prompts the user to select text and create an annotation (highlight, comment, or Ask Claude via Ctrl+Shift+A). Creating any user annotation completes this step.
+
+**Step 3: Try editing.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
+
+After all three steps, the tutorial card disappears and doesn't return (persisted to localStorage). The tutorial is suppressed entirely if the user opened a different document or has completed it before.
+
+## Editing Annotations After Creation
+
+**Setup:** Claude left annotations during review, and the user (or Claude) wants to refine one without deleting and recreating it.
+
+### Browser-Side Editing
+
+Each pending annotation card shows a pencil (edit) button. Clicking it enters inline edit mode:
+
+- **For highlights, comments, and flags:** A single textarea appears with the current note/text content.
+- **For suggestions:** Two textareas appear — one for `newText` (the proposed replacement) and one for `reason` (the justification).
+
+Click "Save" to apply the edit or "Cancel" to discard. The annotation card shows "(edited)" after saving, with the `editedAt` timestamp.
+
+### Claude-Side Editing via MCP
+
+Claude can edit its own annotations programmatically:
+
+```
+Claude: tandem_editAnnotation({
+  id: "ann_1710936000000_a1b2c3",
+  content: "Updated observation: This figure is correct per the March revision"
+})
+```
+
+For suggestions, Claude can update the proposed text and reason separately:
+
+```
+Claude: tandem_editAnnotation({
+  id: "ann_1710936000000_g7h8i9",
+  newText: "$14.2 million",
+  reason: "Corrected per Q4 financial report (was using Q3 figure)"
+})
+```
+
+Only pending annotations can be edited — accepted or dismissed annotations are immutable.
+
 ## Session Handoff
 
 **What persists** across server restarts (via session persistence):

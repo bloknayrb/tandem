@@ -36,6 +36,8 @@ graph LR
         AwExt["AwarenessExtension<br/>(ProseMirror Plugin)"]
         SidePanel["Side Panel<br/>(React)"]
         StatusBar["Status Bar<br/>(React)"]
+        Toasts["ToastContainer<br/>(React)"]
+        Tutorial["OnboardingTutorial<br/>(React)"]
     end
 
     subgraph "Tandem Server (Node.js)"
@@ -44,6 +46,7 @@ graph LR
         API["REST API<br/>/api/open, /api/upload"]
         ChannelAPI["Channel API<br/>/api/events, /api/channel-*"]
         EventQueue["Event Queue<br/>(Y.Map observers)"]
+        Notify["notifications.ts<br/>(ring buffer + SSE)"]
         FO["file-opener.ts<br/>(shared open logic)"]
         YDoc["Y.Doc per room<br/>(one per open document)"]
         FileIO["File I/O<br/>markdown, txt, docx"]
@@ -77,6 +80,7 @@ graph LR
     Bridge -->|notifications/claude/channel| Channel
     Reply -->|POST /api/channel-reply| ChannelAPI
     ChannelAPI -->|awareness POST → Y.Doc| StatusBar
+    Notify -->|SSE /api/notify-stream| Toasts
 ```
 
 **Note:** Y.Map key strings (`'annotations'`, `'awareness'`, `'userAwareness'`, `'chat'`, `'documentMeta'`) are defined as named constants in `src/shared/constants.ts` (e.g., `Y_MAP_ANNOTATIONS`). All source code uses these constants — never raw strings.
@@ -270,7 +274,7 @@ Components:
 - **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
 - **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms)
 
-The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 26 document tools, stdio for channel push + reply).
+The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 27 document tools, stdio for channel push + reply).
 
 ### Permission Relay
 
@@ -383,6 +387,62 @@ interface Annotation {
 
 **Client rendering:** `annotationToPmRange()` prefers relRange resolution (bypassing flat-offset-to-PM conversion and its heading-prefix math). Falls back to `flatOffsetToPmPos()` when `relRange` is absent or can't resolve. The `method` field in the result indicates which path was used — useful for debugging annotation placement issues. When an annotation *has* `relRange` but still resolves via flat offsets, `buildDecorations()` emits a `console.warn` to surface the CRDT degradation in the browser devtools.
 
+## Toast Notification Pipeline
+
+Toast notifications are ephemeral, browser-only messages (annotation range failures, save errors). They use a dedicated SSE endpoint separate from the channel event stream because they don't need CRDT persistence or delivery to Claude.
+
+```
+Server detects error (e.g., annotation range resolution failure)
+    → pushNotification({ type: 'error', title: '...', message: '...' })
+    → Ring buffer stores notification (max 50, no persistence)
+    → SSE subscriber receives data frame on GET /api/notify-stream
+    → Browser's useNotifications hook parses the event
+    → ToastContainer renders toast with type-appropriate styling
+    → Auto-dismiss after timeout (error 8s, warning 6s, info 4s)
+    → Duplicate messages within the window get a count badge instead of new toasts
+```
+
+This is intentionally separate from `GET /api/events` (channel push) which delivers Y.Map changes to Claude Code via the channel shim. The two SSE endpoints serve different consumers (browser vs. channel shim) with different data models.
+
+## Tab Overflow and Reorder
+
+When many documents are open, the tab bar overflows horizontally. Arrow buttons appear at the edges to scroll through tabs. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder.
+
+```
+User drags tab to new position
+    → HTML5 DragEvent fires on DocumentTabs
+    → useTabOrder hook recomputes tab order array
+    → Tab bar re-renders with new order
+    → Order persists for the session (not saved to disk)
+
+User presses Alt+Right on active tab
+    → useTabOrder hook swaps tab with its right neighbor
+    → Tab bar re-renders
+```
+
+The `useTabOrder` hook manages the tab ordering state. Tab overflow scroll uses `scrollIntoView` to keep the active tab visible when switching.
+
+## Onboarding Tutorial
+
+First-time users see a 3-step tutorial on `sample/welcome.md`:
+
+```
+Server opens sample/welcome.md (first run, no restored sessions)
+    → injectTutorialAnnotations() creates 3 pre-placed annotations:
+        1. Highlight on "Welcome" heading
+        2. Comment on a paragraph
+        3. Suggestion with replacement text
+    → Injection is idempotent (checks for existing IDs)
+
+Browser renders OnboardingTutorial floating card (bottom-left)
+    → Step 1: "Review an annotation" — detected when user accepts/dismisses any annotation
+    → Step 2: "Ask Claude a question" — detected when user creates an annotation
+    → Step 3: "Try editing" — detected when editor receives focus for typing
+    → useTutorial hook tracks completion via annotation status observers + editor events
+    → Progress persisted to localStorage (try-catch guarded)
+    → Card disappears after all 3 steps complete
+```
+
 ## Security
 
 - Server binds to `127.0.0.1` only -- not accessible from network
@@ -395,7 +455,7 @@ interface Annotation {
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-018), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-020), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket

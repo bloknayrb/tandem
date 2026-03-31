@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -126,21 +126,27 @@ First-run experience, error handling, and UX refinements.
 - Browser auto-open (removed — `open` package wrote to stdout, corrupting the MCP wire; user opens http://localhost:5173 manually)
 - ~~Browser file open~~ — implemented: "+" button in tab bar opens FileOpenDialog (path input or drag-and-drop upload), HTTP API endpoints (`/api/open`, `/api/upload`)
 
-### 8b: Onboarding
+### 8b: Onboarding — DONE
 
-- Pre-loaded sample document (`sample/welcome.md`) with existing Claude annotations
-- Claude sends one message on first launch: "I've left a few suggestions on this document. Try accepting one."
-- Three interactions: (1) accept an annotation, (2) select text and Ask Claude, (3) make an edit
-- Target: 90 seconds
+**Files:** `src/server/file-io/tutorial.ts`, `src/client/hooks/useTutorial.ts`, `src/client/components/OnboardingTutorial.tsx`
+
+Implemented in PR #147:
+
+- Pre-loaded sample document (`sample/welcome.md`) with 3 pre-placed tutorial annotations (highlight, comment, suggestion) via `injectTutorialAnnotations()`
+- `OnboardingTutorial` floating card at bottom-left with 3-step progression
+- Three interactions: (1) accept/dismiss an annotation, (2) create a user annotation, (3) focus editor and type
+- `useTutorial` hook detects step completion via annotation status observers + editor focus events
+- Progress persisted to localStorage (try-catch guarded for incognito/restricted browsers)
+- Idempotent injection — safe across server restarts with session restore
+- Tutorial only activates on `sample/welcome.md`, suppressed for other documents
 
 ### 8c: Review Mode — PARTIALLY DONE
 
-Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo.
+Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool (27 tools total).
 
 Remaining:
 - Configurable threshold banner ("Claude has 14 suggestions. Review in sequence or filter by type.")
 - Document dimming in review mode
-- E (edit) keyboard shortcut
 
 ### 8d: Interruption Model — PARTIALLY DONE
 
@@ -150,11 +156,15 @@ Remaining:
 - Queued annotations delivered on pause via side panel badge
 - High-priority findings (factual errors) use distinct yellow caution indicator
 
-### 8e: Error Handling
+### 8e: Error Handling — PARTIALLY DONE
 
-- `RANGE_STALE` error: auto-retry with re-resolved range (currently documented but not implemented)
+- Toast notifications (Issue #101): SSE-based notification system via `GET /api/notify-stream`. Server pushes annotation range failures, save errors. Browser renders via `ToastContainer` with type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible.
+- Connection error messages (Issue #105): Three-state `ConnectionStatus` (connected/connecting/disconnected), reconnect attempt count + elapsed time in StatusBar, 30s prolonged disconnect banner (dismissible, auto-clears on reconnect).
 - File lock detection: clear message telling user to close Word
 - WebSocket reconnection: automatic, no data loss (Yjs handles this)
+
+Remaining:
+- `RANGE_STALE` error: auto-retry with re-resolved range (currently documented but not implemented)
 - Large file warnings: alert at 50+ pages about potential slowness
 
 ### 8f: Toolbar Enhancements — PARTIALLY DONE
@@ -167,6 +177,7 @@ Remaining:
 - ~~Accept All / Dismiss All buttons~~ — implemented in SidePanel
 - ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
 - ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
+- ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, HTML5 drag-and-drop reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
 - Highlight color picker (5 colors available server-side, UI picker not yet built)
 
 ### Verification
@@ -187,7 +198,7 @@ Playwright E2E tests cover the critical annotation lifecycle path. Infrastructur
 - **Fixture management**: `createFixtureDir()` copies sample files to a temp dir per test, `cleanupFixtureDir()` removes it
 - **Config**: `workers: 1` (server supports one MCP session), `webServer` starts `dev:standalone`, `reuseExistingServer` for local dev
 - **CI**: Playwright Chromium install + E2E step after build, report artifact uploaded on failure
-- **8 tests**: document load, annotation decoration, annotation card, accept, dismiss, suggestion apply, tab switching, review mode keyboard
+- **13+ tests**: document load, annotation decoration, annotation card, accept, dismiss, suggestion apply, tab switching, review mode keyboard, tab overflow, tab reorder, tab scroll
 
 Run: `npm run test:e2e` (auto-starts servers) or `npm run test:e2e:ui` (Playwright UI mode)
 

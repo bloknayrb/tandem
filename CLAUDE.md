@@ -18,7 +18,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ### Server (src/server/)
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
+- `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
@@ -35,20 +36,22 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Connects to Hocuspocus via WebSocket (@hocuspocus/provider)
 - App.tsx is layout + UI state only; `useYjsSync` hook (src/client/hooks/) manages OpenTab objects (one per open document), each with its own Y.Doc + provider
 - `DocListEntry` and `OpenTab` types live in `src/client/types.ts`
-- DocumentTabs shows tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount)
+- DocumentTabs shows tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
+- ToastContainer (src/client/components/) renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
+- OnboardingTutorial (src/client/components/) floating card at bottom-left, 3-step progression (review → ask → edit). `useTutorial` hook detects step completion via annotation status, user annotation creation, and editor focus. localStorage persistence, suppressed after completion.
 - FileOpenDialog (src/client/components/) provides path input and drag-and-drop upload for opening files without Claude
 - HelpModal (src/client/components/) shows keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)
 - Annotations observed from Y.Map('annotations') on the active tab's Y.Doc
 - AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
 - AwarenessExtension renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
-- SidePanel: annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss
+- SidePanel: annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
 - ChatPanel + SidePanel are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - ChatPanel shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
-- StatusBar: connection status, Claude activity, interruption mode selector (All/Urgent/Paused). Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions. Client broadcasts `interruptionMode` to Y.Map('userAwareness').
+- StatusBar: connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time), Claude activity, interruption mode selector (All/Urgent/Paused). Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions. Client broadcasts `interruptionMode` to Y.Map('userAwareness').
 - ReviewSummary overlay shown when all pending annotations are resolved
 
 ### Shared (src/shared/)
-- `types.ts` -- TypeScript interfaces shared between server and client
+- `types.ts` -- TypeScript interfaces shared between server and client (includes `editedAt` on Annotation, `ConnectionStatus` enum, `NotificationPayload`)
 - `constants.ts` -- Colors, annotation types, defaults, ports, `SUPPORTED_EXTENSIONS`
 - `offsets.ts` -- Flat-text format contract: `headingPrefixLength`, `FLAT_SEPARATOR`
 - `positions/` -- Shared position types: `RangeValidation`, `AnchoredRangeResult`, `PmRangeResult`, `ElementPosition`
@@ -66,12 +69,13 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - User→Claude communication via `tandem_checkInbox` (annotation actions, responses, and chat messages) and `tandem_reply` (Claude's chat responses). Chat sidebar provides freeform conversation alongside annotation-based review. Call `tandem_checkInbox` between tasks.
 - **Channel push (Issue #106):** The Tandem channel shim (`src/channel/`) pushes real-time events to Claude Code via `notifications/claude/channel`, replacing polling. Y.Map observers in `events/queue.ts` detect browser-originated changes (origin !== 'mcp') and stream them via SSE to the shim. All MCP-initiated Y.Map writes are tagged with `doc.transact(() => { ... }, 'mcp')` to prevent echo. The channel coexists with the HTTP MCP server — Claude Code has both connections simultaneously.
 - **Channel API endpoints:** `GET /api/events` (SSE stream), `POST /api/channel-awareness` (shim→StatusBar), `POST /api/channel-error`, `POST /api/channel-reply`, `POST /api/channel-permission`, `POST /api/channel-permission-verdict`, `POST /api/launch-claude`.
+- **Toast notifications use SSE, not Y.Map.** Ephemeral notifications (annotation range failures, save errors) are pushed via `GET /api/notify-stream` SSE endpoint from `src/server/notifications.ts`. This avoids polluting the CRDT with transient data that doesn't need conflict resolution or persistence. The browser's `useNotifications` hook connects via EventSource.
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
 - Server broadcasts `openDocuments` list via Y.Map('documentMeta') on each doc's Y.Doc. Client listens and syncs tabs.
 - Files can be opened from the browser via HTTP API (`POST /api/open` for path, `POST /api/upload` for content) or via MCP `tandem_open`. Both paths converge in `file-opener.ts`. Uploaded files get synthetic `upload://` paths and are read-only (no disk path to save to).
-- E2E tests use `data-testid` attributes (kebab-case, e.g. `data-testid="accept-btn"`). Key elements: annotation cards, accept/dismiss buttons, review mode button, tab items.
+- E2E tests use `data-testid` attributes (kebab-case, e.g. `data-testid="accept-btn"`). Key elements: annotation cards, accept/dismiss buttons, review mode button, tab items, edit button.
 
-## Implementation Status (as of 2026-03-30)
+## Implementation Status (as of 2026-03-31)
 
 **Done (Steps 0-6 + Phase 1 + Sprint 5):**
 - [x] Step 0: Repo scaffolding, npm install, TypeScript compiles, Vite builds
@@ -84,11 +88,11 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Step 6: Session persistence — save/resume Y.Doc + annotations across server restarts
 - [x] Phase 1 - Document Groups: multi-document tabs, per-doc rooms, documentId on all tools, tab bar UI
 - [x] Phase 1 - Polish: keyboard review mode (Tab/Y/N), annotation filtering, bulk accept/dismiss, review summary
-- [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument, tandem_flag (26 total MCP tools)
+- [x] Phase 1 - New tools: tandem_listDocuments, tandem_switchDocument, tandem_flag
 - [x] Phase 1.5 - Chat Sidebar: session-scoped chat via Y.Map('chat'), tandem_reply tool, ChatPanel UI
 - [x] Phase 1.5 - Edit sync fix: afterUnloadDocument hook cleans up stale Y.Doc references
 - [x] Browser file open: "+" button in tab bar, path input + upload dialog, drag-and-drop on editor, HTTP API (`/api/open`, `/api/upload`)
-- [x] Playwright E2E test suite: 8 tests (7 passing, 1 skipped pending decoration fix), McpTestClient helper, data-testid attrs, CI integration
+- [x] Playwright E2E test suite: 13+ tests, McpTestClient helper, data-testid attrs, CI integration
 
 **Infrastructure fixes (2026-03-20 — 2026-03-24):**
 - [x] Switch browser provider from `y-websocket` → `@hocuspocus/provider` (protocol-incompatible with Hocuspocus v2)
@@ -125,12 +129,19 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] feat(server): auto-reopen documents on server restart via `listSessionFilePaths()` + `restoreOpenDocuments()` (Issue #102)
 - [x] feat(ui): undo accept/dismiss on annotations — 10s undo window, "Undo" link, Z key in review mode, atomic suggestion revert (Issue #88)
 - [x] feat(mcp): expose `interruptionMode` to Claude via `tandem_status` and `tandem_checkInbox` responses (Issue #98)
-- [x] feat(file-io): import Word comments (`<w:comment>`) as Tandem annotations on .docx open, `author: "import"`, "Imported" filter (Issue #85, 721 tests)
+- [x] feat(file-io): import Word comments (`<w:comment>`) as Tandem annotations on .docx open, `author: "import"`, "Imported" filter (Issue #85)
 
 **Done (UI polish — 2026-03-29):**
 - [x] feat(client): Claude typing indicator in ChatPanel — animated dots + status text (Issue #90)
 - [x] feat(client): bulk accept/dismiss confirmation — inline confirm step, respects active filters (Issue #95)
 - [x] fix(client): persist annotation filters across panel toggle — CSS display toggling (Issue #94)
+
+**Done (UX + Annotation Editing — 2026-03-30):**
+- [x] feat(ui): tab overflow scroll, drag-and-drop reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip, useTabOrder hook (Issue #99, 19 new tests + 5 E2E)
+- [x] feat(ui): toast notifications via SSE — `notifications.ts` ring buffer, `GET /api/notify-stream`, `useNotifications` hook, `ToastContainer`, type-differentiated auto-dismiss, dedup with count badge (Issue #101, 7 new tests)
+- [x] feat(ui): connection error messages — three-state ConnectionStatus, reconnect attempt count + elapsed time in StatusBar, 30s prolonged disconnect banner (Issue #105)
+- [x] feat(ui): inline annotation editing — pencil button, two textareas for suggestions, `tandem_editAnnotation` MCP tool (27 total), `editedAt` timestamp, "(edited)" indicator (Issue #97, 9 new tests)
+- [x] feat(ui): onboarding tutorial — `injectTutorialAnnotations` (3 pre-placed on welcome.md), `useTutorial` hook (3-step progression), `OnboardingTutorial` floating card, localStorage persistence (Issue #86)
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
@@ -146,12 +157,12 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:standalone` (or `npm run dev:server`) first. Port availability is verified via `waitForPort()` polling (no more fixed-sleep race conditions).
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 26 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 27 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-019)
-- [Lessons Learned](docs/lessons-learned.md) -- 26 lessons including E2E testing gotchas
+- [Design Decisions](docs/decisions.md) -- ADRs (001-020)
+- [Lessons Learned](docs/lessons-learned.md) -- 30 lessons including E2E testing gotchas
 
 ## Gotchas (save yourself time)
 - **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
@@ -169,7 +180,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **CRDT fallback logging.** `buildDecorations()` emits `console.warn('[annotation] relRange-equipped annotation <id> fell back to flat offsets')` when an annotation has `relRange` but resolved via flat offsets. Check the browser console for these — they indicate CRDT degradation (e.g., mid-sync or after content mismatch).
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save for these. `sourceFileChanged()` returns false (no disk file to check). Sessions still persist normally — the synthetic path is the session key.
 - **E2E tests require no running dev server.** `npm run test:e2e` starts both servers via Playwright's `webServer` config. `freePort()` will kill any existing server on :3478/:3479. Running E2E alongside `dev:server` will terminate your dev server.
-- **`data-testid` naming convention:** kebab-case, descriptive. Examples: `accept-btn`, `dismiss-btn`, `review-mode-btn`, `annotation-card-{id}`, `tab-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`.
+- **`data-testid` naming convention:** kebab-case, descriptive. Examples: `accept-btn`, `dismiss-btn`, `edit-btn`, `review-mode-btn`, `annotation-card-{id}`, `tab-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`, `toast-container`.
 - **MCP Y.Map writes must be origin-tagged.** All server-side writes to observed Y.Maps (`annotations`, `chat`, `userAwareness`, `documentMeta`) must use `doc.transact(() => { ... }, 'mcp')`. This prevents the event queue from emitting echo events when Claude's own tool calls modify Y.Maps. If you add a new MCP tool that writes to any Y.Map, tag it.
 - **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` — not `document-id`.
 - **Channel shim uses low-level `Server`, not `McpServer`.** The Channels spec requires `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` with explicit `setRequestHandler()` calls. The existing HTTP MCP server uses the high-level `McpServer` wrapper. These are separate processes with different SDK classes.
@@ -177,6 +188,10 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Undo timer cleanup on unmount.** The 10-second undo window for accept/dismiss uses `setTimeout`. All pending timers are cleared on component unmount to prevent state updates on unmounted components. The Z key in review mode undoes the most recent resolution.
 - **`waitForPort()` timeout defaults to 5 seconds.** If Hocuspocus fails to bind within this window (e.g., another process holds the port), startup fails with a clear error instead of silently racing. The polling interval is 100ms.
 - **Session auto-restore on startup.** `restoreOpenDocuments()` scans the session directory and reopens all previously-open files. Stale sessions (file deleted from disk) are cleaned up with ENOENT handling. The `sample/welcome.md` fallback only fires if zero sessions were restored.
+- **Toast notifications use SSE, not Y.Map.** `GET /api/notify-stream` pushes ephemeral notifications (annotation range failures, save errors) via Server-Sent Events. This is intentionally separate from the channel SSE (`GET /api/events`) which pushes Y.Map-based events to Claude. Toast SSE is browser-only. Don't route toast data through Y.Map — it would pollute the CRDT with transient state.
+- **Tutorial annotations are injected idempotently.** `injectTutorialAnnotations()` checks for existing tutorial annotation IDs before inserting. Safe to call multiple times (e.g., on server restart with session restore). The tutorial only activates on `sample/welcome.md` — other documents skip injection.
+- **localStorage access needs try-catch.** The `useTutorial` hook wraps all `localStorage.getItem`/`setItem` calls in try-catch blocks. Some browsers (incognito, storage-disabled) throw on access. Without the guard, the tutorial component crashes the entire app.
+- **`tandem_editAnnotation` only works on pending annotations.** Attempting to edit an accepted or dismissed annotation returns an error. The `editedAt` timestamp is set on the annotation to track modification time.
 
 ## Security
 - Server binds to 127.0.0.1 only

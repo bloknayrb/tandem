@@ -246,3 +246,35 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 **Solution:** Use `tandem_switchDocument` (an MCP tool call) to set the active document server-side before asserting on browser state. Combined with `data-active='false'` attribute selectors to wait for the inactive tab to appear, this makes the test deterministic — the server state is the source of truth, and the browser catches up via Playwright's auto-waiting.
 
 **Impact:** General pattern: when E2E tests need specific server state, set it via MCP tools rather than simulating browser interactions. MCP calls are synchronous (request/response), while browser interactions trigger async multi-hop sync chains.
+
+## 27. SSE for Ephemeral Data Instead of CRDT
+
+**Problem:** Toast notifications (annotation range failures, save errors) needed to reach the browser but didn't fit the Y.Map pattern — they're transient, don't need conflict resolution, and shouldn't persist across sessions.
+
+**Solution:** A dedicated SSE endpoint (`GET /api/notify-stream`) with a server-side ring buffer. The browser connects via native `EventSource` in the `useNotifications` hook. Separate from the channel SSE (`GET /api/events`) which serves Claude Code.
+
+**Impact:** Clean architectural boundary — persistent shared state goes through Y.Map/CRDT, ephemeral notifications go through SSE. Adding a Y.Map for notifications would have introduced CRDT state bloat (Y.Map entries persist in the internal state vector even after deletion) for data that's fundamentally fire-and-forget.
+
+## 28. React Ref Identity in useEffect Dependencies
+
+**Problem:** The `useTabOrder` hook initially used a derived array as a `useEffect` dependency. Even when the array contents were identical, React's reference equality check saw a new array on every render, causing the effect to fire on every render cycle — leading to unnecessary re-renders and potential infinite loops.
+
+**Solution:** Use scalar values (e.g., `.length`, a hash, or specific primitive fields) as `useEffect` dependencies instead of derived objects or arrays. When watching an array for changes, use its `.length` or a serialized representation, not the array reference itself.
+
+**Impact:** Subtle performance bug — the component appears to work correctly but re-renders orders of magnitude more often than necessary. Visible in React DevTools Profiler or by adding a `console.log` inside the effect.
+
+## 29. localStorage Access Needs try-catch in Client Code
+
+**Problem:** The `useTutorial` hook stores completion state in `localStorage`. Some browsers (incognito mode in certain configurations, enterprise browsers with storage policies, or when quota is exceeded) throw exceptions on `localStorage.getItem()` or `setItem()` calls. Without a guard, this crashes the entire React component tree.
+
+**Solution:** Wrap all `localStorage` access in try-catch blocks. On read failure, return a sensible default (e.g., tutorial not completed). On write failure, silently continue — the tutorial will re-show next time, which is a better failure mode than crashing the app.
+
+**Impact:** Without this, a small percentage of users in restricted browser environments would see a white screen instead of the editor. The tutorial is a nice-to-have; the editor is essential.
+
+## 30. Ambiguous indexOf Targeting for Annotation Range Resolution
+
+**Problem:** When resolving annotation ranges for imported Word comments, using `indexOf` to find the target text can match the wrong occurrence if the text appears multiple times in the document. The first match wins, which may not be the correct location for the annotation.
+
+**Solution:** Use context-aware targeting — resolve the range using both the target text and surrounding context (nearby heading, paragraph position). The `anchoredRange()` function creates CRDT-anchored positions at resolution time, so even if the flat offset drifts later, the relative position stays correct. For tutorial annotations, use specific unique text snippets that only appear once in the welcome document.
+
+**Impact:** Annotations appearing at the wrong location are confusing for users and can lead to incorrect accept/dismiss decisions. Always prefer unique text patterns or occurrence-indexed matching over bare `indexOf`.
