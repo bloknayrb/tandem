@@ -21,7 +21,11 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "biome format --write .",
+    "doctor": "node scripts/doctor.mjs",
     "prepare": "husky"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
