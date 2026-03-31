@@ -365,6 +365,79 @@ export function registerAnnotationTools(server: McpServer): void {
   );
 
   server.tool(
+    "tandem_editAnnotation",
+    "Edit the content of an existing annotation. For suggestions, use newText/reason params; for other types, use content.",
+    {
+      id: z.string().describe("Annotation ID"),
+      content: z.string().optional().describe("New text for non-suggestion annotations"),
+      newText: z.string().optional().describe("For suggestions: new replacement text"),
+      reason: z.string().optional().describe("For suggestions: new reason"),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
+    },
+    withErrorBoundary(
+      "tandem_editAnnotation",
+      async ({ id, content, newText, reason, documentId }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
+
+        const ann = da.map.get(id) as Annotation | undefined;
+        if (!ann) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+
+        if (ann.status !== "pending") {
+          return mcpError("INVALID_RANGE", `Cannot edit a ${ann.status} annotation`);
+        }
+
+        let updatedContent: string;
+
+        if (ann.type === "suggestion") {
+          if (content !== undefined && newText === undefined && reason === undefined) {
+            // Allow raw content override for suggestions too
+            updatedContent = content;
+          } else if (newText !== undefined || reason !== undefined) {
+            // Merge with existing suggestion fields
+            let existing: { newText: string; reason: string };
+            try {
+              existing = JSON.parse(ann.content);
+            } catch {
+              console.error(
+                `[tandem_editAnnotation] Malformed existing content for suggestion ${id}`,
+              );
+              return mcpError(
+                "INVALID_RANGE",
+                `Suggestion ${id} has malformed content — cannot merge fields. Use 'content' to replace entirely.`,
+              );
+            }
+            updatedContent = JSON.stringify({
+              newText: newText !== undefined ? newText : existing.newText,
+              reason: reason !== undefined ? reason : existing.reason,
+            });
+          } else {
+            return mcpError(
+              "INVALID_RANGE",
+              "No editable fields provided. Use newText/reason for suggestions, or content.",
+            );
+          }
+        } else {
+          if (content === undefined) {
+            return mcpError(
+              "INVALID_RANGE",
+              "No editable fields provided. Use content for non-suggestion annotations.",
+            );
+          }
+          updatedContent = content;
+        }
+
+        const updated = { ...ann, content: updatedContent, editedAt: Date.now() };
+        da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
+        return mcpSuccess({ id, content: updatedContent, editedAt: updated.editedAt });
+      },
+    ),
+  );
+
+  server.tool(
     "tandem_exportAnnotations",
     "Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.",
     {

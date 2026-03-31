@@ -219,6 +219,15 @@ export function SidePanel({
     undoResolveAnnotation(id);
   }
 
+  function handleEdit(id: string, newContent: string) {
+    const y = ydocRef.current;
+    if (!y) return;
+    const map = y.getMap(Y_MAP_ANNOTATIONS);
+    const ann = map.get(id) as Annotation | undefined;
+    if (!ann) return;
+    map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
+  }
+
   function handleBulkAccept() {
     for (const ann of pending) resolveAnnotation(ann.id, "accepted");
     setBulkConfirm(null);
@@ -616,6 +625,7 @@ export function SidePanel({
                 isReviewTarget={activeReviewAnn?.id === ann.id}
                 onAccept={handleAccept}
                 onDismiss={handleDismiss}
+                onEdit={handleEdit}
                 onClick={() => scrollToAnnotation(ann)}
               />
             ))}
