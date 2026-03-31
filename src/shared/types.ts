@@ -176,3 +176,16 @@ export interface ChatMessage {
   replyTo?: string;
   read: boolean;
 }
+
+/** Server-to-client ephemeral notification (toast). Not persisted via CRDT. */
+export interface TandemNotification {
+  id: string;
+  type: "annotation-error" | "save-error" | "session-restored" | "general-error";
+  severity: "info" | "warning" | "error";
+  message: string;
+  documentId?: string;
+  dedupKey?: string;
+  timestamp: number;
+  toolName?: string;
+  errorCode?: string;
+}
