@@ -81,6 +81,14 @@ export function SidePanel({
   const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
   // Track the last resolved annotation ID for keyboard undo (Z key)
   const lastResolvedRef = useRef<string | null>(null);
+  // Timer IDs for undo window expiry — cancel on undo or unmount
+  const undoTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const timers = undoTimersRef.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+    };
+  }, []);
 
   // Stable refs for keyboard callbacks to avoid stale closures
   const ydocRef = useRef(ydoc);
@@ -126,7 +134,10 @@ export function SidePanel({
     // Track for timed undo
     lastResolvedRef.current = id;
     setRecentlyResolved((prev) => new Set(prev).add(id));
-    setTimeout(() => {
+    const existingTimer = undoTimersRef.current.get(id);
+    if (existingTimer) clearTimeout(existingTimer);
+    const timerId = setTimeout(() => {
+      undoTimersRef.current.delete(id);
       setRecentlyResolved((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -136,6 +147,7 @@ export function SidePanel({
         lastResolvedRef.current = null;
       }
     }, 10_000);
+    undoTimersRef.current.set(id, timerId);
   }
 
   /** Revert a resolved annotation back to pending, undoing text changes for accepted suggestions */
@@ -146,34 +158,45 @@ export function SidePanel({
     const ann = map.get(id) as Annotation | undefined;
     if (!ann || ann.status === "pending") return;
 
-    // If it was an accepted suggestion, revert the text edit
+    // If it was an accepted suggestion, revert the text edit first.
+    // If text revert fails, don't revert status — half-undo is worse than no undo.
     if (ann.status === "accepted" && ann.type === "suggestion" && editorRef.current) {
       try {
         const { newText } = JSON.parse(ann.content);
         const oldText = ann.textSnapshot;
         if (typeof newText === "string" && typeof oldText === "string") {
           const resolved = annotationToPmRange(ann, editorRef.current.state.doc, y);
-          if (resolved) {
-            const currentText = editorRef.current.state.doc.textBetween(resolved.from, resolved.to);
-            if (currentText === newText) {
-              editorRef.current
-                .chain()
-                .focus()
-                .deleteRange({ from: resolved.from, to: resolved.to })
-                .insertContentAt(resolved.from, oldText)
-                .run();
-            }
+          if (!resolved) {
+            console.warn(`[undo] Cannot resolve range for annotation ${id}, skipping`);
+            return;
           }
+          const currentText = editorRef.current.state.doc.textBetween(resolved.from, resolved.to);
+          if (currentText !== newText) {
+            console.warn(`[undo] Text changed since accept for annotation ${id}, skipping`);
+            return;
+          }
+          editorRef.current
+            .chain()
+            .focus()
+            .deleteRange({ from: resolved.from, to: resolved.to })
+            .insertContentAt(resolved.from, oldText)
+            .run();
         }
-      } catch {
-        // Malformed suggestion content — just revert status
+      } catch (err) {
+        console.warn(`[undo] Failed to revert text for annotation ${id}:`, err);
+        return;
       }
     }
 
     // Revert status to pending
     map.set(id, { ...ann, status: "pending" as const });
 
-    // Remove from recently resolved
+    // Clean up undo tracking
+    const timer = undoTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      undoTimersRef.current.delete(id);
+    }
     setRecentlyResolved((prev) => {
       const next = new Set(prev);
       next.delete(id);
