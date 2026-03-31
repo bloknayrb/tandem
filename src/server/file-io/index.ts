@@ -3,6 +3,7 @@ import path from "path";
 import type { FormatAdapter } from "./types.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import { htmlToYDoc, loadDocx } from "./docx.js";
+import { extractDocxComments, injectCommentsAsAnnotations } from "./docx-comments.js";
 import { populateYDoc, extractText } from "../mcp/document-model.js";
 
 export type { FormatAdapter } from "./types.js";
@@ -32,8 +33,12 @@ const plaintextAdapter: FormatAdapter = {
 const docxAdapter: FormatAdapter = {
   canSave: false,
   async load(doc, content) {
-    const html = await loadDocx(content as Buffer);
+    const buffer = content as Buffer;
+    const [html, comments] = await Promise.all([loadDocx(buffer), extractDocxComments(buffer)]);
     htmlToYDoc(doc, html);
+    if (comments.length > 0) {
+      injectCommentsAsAnnotations(doc, comments);
+    }
   },
   save() {
     return null;

@@ -19,7 +19,7 @@ export const AnnotationPrioritySchema = z.enum(["normal", "urgent"]);
 export const InterruptionModeSchema = z.enum(["all", "urgent-only", "paused"]);
 export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
-export const AuthorSchema = z.enum(["user", "claude"]);
+export const AuthorSchema = z.enum(["user", "claude", "import"]);
 export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
 export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
@@ -47,7 +47,7 @@ export type Severity = z.infer<typeof SeveritySchema>;
 
 export interface Annotation {
   id: string;
-  author: "user" | "claude";
+  author: "user" | "claude" | "import";
   type: AnnotationType;
   range: DocumentRange;
   /** CRDT-anchored range that survives edits. Falls back to `range` if absent. */

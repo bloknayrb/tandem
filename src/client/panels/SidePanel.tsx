@@ -31,7 +31,7 @@ const SMALL_BTN: React.CSSProperties = {
 };
 
 type FilterType = AnnotationType | "all";
-type FilterAuthor = "all" | "claude" | "user";
+type FilterAuthor = "all" | "claude" | "user" | "import";
 type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
 
 /** Apply a suggestion annotation's text replacement in the editor */
@@ -503,6 +503,7 @@ export function SidePanel({
             { value: "all", label: "Anyone" },
             { value: "claude", label: "Claude" },
             { value: "user", label: "You" },
+            { value: "import", label: "Imported" },
           ]}
         />
         <FilterSelect
