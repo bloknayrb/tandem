@@ -7,7 +7,7 @@ import {
   closeMcpSession,
   APP_VERSION,
 } from "./mcp/server.js";
-import { startHocuspocus, setDocLifecycleCallbacks } from "./yjs/provider.js";
+import { startHocuspocus, setDocLifecycleCallbacks, getOrCreateDocument } from "./yjs/provider.js";
 import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT, CTRL_ROOM } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import {
@@ -26,6 +26,8 @@ import {
 } from "./events/queue.js";
 import { getOpenDocs } from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
+import { docIdFromPath } from "./mcp/document-model.js";
+import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -159,13 +161,18 @@ async function main() {
         path.dirname(fileURLToPath(import.meta.url)),
         "../../sample/welcome.md",
       );
-      openFileByPath(samplePath).catch((err) => {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          console.error("[Tandem] Sample file not found (skipping):", samplePath);
-        } else {
-          console.error("[Tandem] Failed to auto-open sample document:", err);
-        }
-      });
+      openFileByPath(samplePath)
+        .then(() => {
+          const doc = getOrCreateDocument(docIdFromPath(samplePath));
+          injectTutorialAnnotations(doc);
+        })
+        .catch((err) => {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            console.error("[Tandem] Sample file not found (skipping):", samplePath);
+          } else {
+            console.error("[Tandem] Failed to auto-open sample document:", err);
+          }
+        });
     }
 
     console.error("");
