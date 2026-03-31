@@ -9,6 +9,8 @@ import {
   getErrorMessage,
   withErrorBoundary,
 } from "./response.js";
+import { pushNotification } from "../notifications.js";
+import { generateNotificationId } from "../../shared/utils.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
 import { saveSession, stopAutoSave } from "../session/manager.js";
@@ -435,10 +437,22 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpSuccess({ saved: true, filePath: r.filePath });
       } catch (err: unknown) {
         const errCode = (err as NodeJS.ErrnoException).code;
+        const msg = getErrorMessage(err);
+        pushNotification({
+          id: generateNotificationId(),
+          type: "save-error",
+          severity: "error",
+          message: `Save failed: ${msg}`,
+          toolName: "tandem_save",
+          errorCode: errCode ?? "UNKNOWN",
+          documentId: r.docId,
+          dedupKey: `save:${r.docId}`,
+          timestamp: Date.now(),
+        });
         if (errCode === "EACCES" || errCode === "EPERM") {
-          return mcpError("FILE_LOCKED", getErrorMessage(err));
+          return mcpError("FILE_LOCKED", msg);
         }
-        return mcpError("FORMAT_ERROR", `Save failed: ${getErrorMessage(err)}`);
+        return mcpError("FORMAT_ERROR", `Save failed: ${msg}`);
       }
     }),
   );

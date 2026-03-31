@@ -51,6 +51,11 @@ export const RECENT_FILES_CAP = 20;
 export const USER_NAME_KEY = "tandem:userName";
 export const USER_NAME_DEFAULT = "You";
 
+// Toast notifications
+export const TOAST_DISMISS_MS = { error: 8000, warning: 6000, info: 4000 } as const;
+export const MAX_VISIBLE_TOASTS = 5;
+export const NOTIFICATION_BUFFER_SIZE = 50;
+
 // Channel / event queue
 export const CHANNEL_EVENT_BUFFER_SIZE = 200;
 export const CHANNEL_EVENT_BUFFER_AGE_MS = 60_000; // 60 seconds

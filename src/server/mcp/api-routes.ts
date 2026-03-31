@@ -1,7 +1,10 @@
 import type { Express, Request, Response, NextFunction } from "express";
 
+import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
+import type { TandemNotification } from "../../shared/types.js";
 import { detectFormat } from "./document-model.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
+import { subscribe as subscribeNotifications } from "../notifications.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
@@ -47,7 +50,7 @@ export function apiMiddleware(req: Request, res: Response, next: NextFunction): 
   }
   const origin = req.headers.origin as string | undefined;
   res.header("Access-Control-Allow-Origin", isLocalhostOrigin(origin) ? origin! : "null");
-  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -90,8 +93,49 @@ function sendApiError(res: Response, err: unknown): void {
   res.status(status).json({ error: label, message: msg });
 }
 
-/** Register /api/open and /api/upload routes on the Express app. */
+/** SSE endpoint for streaming notifications to the browser. */
+function notifyStreamHandler(req: Request, res: Response): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  res.write(": connected\n\n");
+
+  function cleanup(): void {
+    clearInterval(keepalive);
+    unsubscribe();
+  }
+
+  const unsubscribe = subscribeNotifications((notification: TandemNotification) => {
+    try {
+      res.write(`data: ${JSON.stringify(notification)}\n\n`);
+    } catch (err) {
+      console.error(
+        "[NotifyStream] Write failed, cleaning up:",
+        err instanceof Error ? err.message : err,
+      );
+      cleanup();
+    }
+  });
+
+  const keepalive = setInterval(() => {
+    res.write(": keepalive\n\n");
+  }, CHANNEL_SSE_KEEPALIVE_MS);
+
+  req.on("close", () => {
+    cleanup();
+    console.error("[NotifyStream] Client disconnected from /api/notify-stream");
+  });
+
+  console.error("[NotifyStream] Client connected to /api/notify-stream");
+}
+
+/** Register /api/open, /api/upload, and /api/notify-stream routes on the Express app. */
 export function registerApiRoutes(app: Express, largeBody: Handler): void {
+  // SSE notification stream for browser toasts
+  app.get("/api/notify-stream", apiMiddleware, notifyStreamHandler);
   app.options("/api/open", apiMiddleware);
   app.post("/api/open", apiMiddleware, largeBody, async (req: Request, res: Response) => {
     const { filePath, force } = (req.body ?? {}) as Record<string, unknown>;

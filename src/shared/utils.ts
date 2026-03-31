@@ -13,3 +13,7 @@ export function generateMessageId(): string {
 export function generateEventId(): string {
   return generateId("evt");
 }
+
+export function generateNotificationId(): string {
+  return generateId("ntf");
+}

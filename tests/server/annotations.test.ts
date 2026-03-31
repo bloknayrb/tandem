@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import * as Y from "yjs";
 import {
-  generateId,
   createAnnotation,
   collectAnnotations,
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
+import { generateAnnotationId } from "../../src/shared/utils.js";
 import { makeDoc, getAnnotationsMap, getFragment, rangeOf } from "../helpers/ydoc-factory.js";
 import { getOrCreateXmlText, extractText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
@@ -16,15 +16,15 @@ afterEach(() => {
   doc?.destroy();
 });
 
-describe("generateId", () => {
+describe("generateAnnotationId", () => {
   it("matches expected format", () => {
-    const id = generateId();
+    const id = generateAnnotationId();
     expect(id).toMatch(/^ann_\d+_[a-z0-9]+$/);
   });
 
   it("successive calls produce different IDs", () => {
-    const id1 = generateId();
-    const id2 = generateId();
+    const id1 = generateAnnotationId();
+    const id2 = generateAnnotationId();
     expect(id1).not.toBe(id2);
   });
 });

@@ -9,6 +9,7 @@ import { DocumentTabs } from "./tabs/DocumentTabs";
 import { ReviewSummary } from "./panels/ReviewSummary";
 import { HelpModal } from "./components/HelpModal";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
+import { ToastContainer } from "./components/ToastContainer";
 import {
   DISCONNECT_DEBOUNCE_MS,
   INTERRUPTION_MODE_DEFAULT,
@@ -20,6 +21,7 @@ import type { InterruptionMode } from "../shared/types";
 import { InterruptionModeSchema } from "../shared/types";
 import { useAnnotationGate } from "./hooks/useAnnotationGate";
 import { useFileDrop } from "./hooks/useFileDrop";
+import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useTabOrder } from "./hooks/useTabOrder";
 import { useYjsSync } from "./hooks/useYjsSync";
@@ -108,6 +110,7 @@ export default function App() {
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
+  const { toasts, dismiss: dismissToast } = useNotifications();
   const { fileDragOver, handleEditorDragOver, handleEditorDragLeave, handleEditorDrop } =
     useFileDrop();
   const { pendingCount, showReviewSummary, reviewSummaryData, dismissReviewSummary } =
@@ -387,6 +390,7 @@ export default function App() {
         />
       )}
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

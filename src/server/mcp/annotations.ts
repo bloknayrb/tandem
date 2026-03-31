@@ -19,6 +19,8 @@ import {
 } from "../../shared/types.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import type { RangeValidation, AnchoredRangeResult } from "../../shared/positions/index.js";
+import { pushNotification } from "../notifications.js";
+import { generateAnnotationId, generateNotificationId } from "../../shared/utils.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
@@ -26,6 +28,14 @@ function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<un
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
   return { ydoc, map: ydoc.getMap(Y_MAP_ANNOTATIONS) };
+}
+
+/** Human-readable message for a range validation failure. */
+function rangeFailureMessage(result: Extract<RangeValidation, { ok: false }>): string {
+  if (result.code === "RANGE_GONE") return "Target text no longer exists in the document.";
+  if (result.code === "RANGE_MOVED") return "Target text has moved.";
+  if (result.code === "INVALID_RANGE") return result.message;
+  return 'Range overlaps with heading markup (e.g., "## "). Target the text content only.';
 }
 
 /** Convert an anchoredRange validation failure to an MCP error response. */
@@ -49,7 +59,24 @@ function rangeFailureToError(result: Extract<RangeValidation, { ok: false }>) {
   );
 }
 
-import { generateAnnotationId as generateId } from "../../shared/utils.js";
+/** Push a notification to the browser alongside the MCP error response. */
+function notifyRangeFailure(
+  result: Extract<RangeValidation, { ok: false }>,
+  toolName: string,
+  documentId?: string,
+): void {
+  pushNotification({
+    id: generateNotificationId(),
+    type: "annotation-error",
+    severity: "error",
+    message: `Annotation failed: ${rangeFailureMessage(result)}`,
+    toolName,
+    errorCode: result.code,
+    documentId,
+    dedupKey: `${toolName}:${result.code}`,
+    timestamp: Date.now(),
+  });
+}
 
 const SNAPSHOT_CAP = 200;
 /** Capture a text snapshot from the document at the given range, truncated to SNAPSHOT_CAP chars. */
@@ -57,7 +84,6 @@ function captureSnapshot(ydoc: Y.Doc, from: number, to: number): string {
   const text = extractText(ydoc).slice(from, to);
   return text.length > SNAPSHOT_CAP ? text.slice(0, SNAPSHOT_CAP - 3) + "..." : text;
 }
-export { generateId };
 
 /** Create an annotation from an anchored range result and store it in the Y.Map.
  *  The ydoc parameter is required for origin-tagged transactions (prevents channel echo). */
@@ -69,7 +95,7 @@ export function createAnnotation(
   content: string,
   extras?: Partial<Annotation>,
 ): string {
-  const id = generateId();
+  const id = generateAnnotationId();
 
   const annotation: Annotation = {
     id,
@@ -124,7 +150,10 @@ export function registerAnnotationTools(server: McpServer): void {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) return rangeFailureToError(result);
+        if (!result.ok) {
+          notifyRangeFailure(result, "tandem_highlight", documentId);
+          return rangeFailureToError(result);
+        }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "highlight", result, note || "", {
           color: color as HighlightColor,
@@ -163,7 +192,10 @@ export function registerAnnotationTools(server: McpServer): void {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) return rangeFailureToError(result);
+        if (!result.ok) {
+          notifyRangeFailure(result, "tandem_comment", documentId);
+          return rangeFailureToError(result);
+        }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
           ...(priority ? { priority } : {}),
@@ -202,7 +234,10 @@ export function registerAnnotationTools(server: McpServer): void {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) return rangeFailureToError(result);
+        if (!result.ok) {
+          notifyRangeFailure(result, "tandem_suggest", documentId);
+          return rangeFailureToError(result);
+        }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(
           da.map,
@@ -244,7 +279,10 @@ export function registerAnnotationTools(server: McpServer): void {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) return rangeFailureToError(result);
+        if (!result.ok) {
+          notifyRangeFailure(result, "tandem_flag", documentId);
+          return rangeFailureToError(result);
+        }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "flag", result, note || "", {
           ...(priority ? { priority } : {}),
