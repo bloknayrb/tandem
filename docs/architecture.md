@@ -164,6 +164,19 @@ User clicks "+" in DocumentTabs or drops a file on the editor
     → For uploads: synthetic upload:// path, readOnly=true, no disk save
 ```
 
+### Opening a .docx with Word Comments
+
+```
+tandem_open("report.docx")
+    → file-opener.ts detects .docx format
+    → docx adapter converts HTML → Y.Doc (mammoth.js in worker thread)
+    → docx-comments.ts extracts <w:comment> elements via JSZip
+    → For each comment: resolves w:commentRangeStart/End to flat text offsets
+    → anchoredRange() creates CRDT-anchored positions
+    → Annotations created with author: "import", type based on comment content
+    → Browser renders imported comments in SidePanel with "Imported" filter
+```
+
 ### E2E Test Architecture
 
 ```
@@ -208,6 +221,10 @@ Claude calls tandem_reply({ text: "...", replyTo: "msg_..." })
 ### Session Persistence
 
 Chat state persists across server restarts via the same `saveCtrlSession` / `restoreCtrlSession` lifecycle used for the control channel. The `__tandem_ctrl__` Y.Doc (including `Y.Map('chat')`) is saved to `%LOCALAPPDATA%\tandem\sessions\` and restored on next startup.
+
+### Session Auto-Restore on Startup
+
+On server startup, `listSessionFilePaths()` scans the session directory and `restoreOpenDocuments()` reopens all previously-open files via `openFileByPath()`. `restoreCtrlSession()` returns the previous active document ID so the correct tab is selected. If a session's source file no longer exists (ENOENT), the stale session is cleaned up. The `sample/welcome.md` auto-open only fires if zero sessions were restored.
 
 ## Channel Push (Real-Time Events)
 

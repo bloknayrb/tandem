@@ -21,8 +21,9 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
-- `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html), `atomicWrite` helper
-- `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\
+- `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
+- `platform.ts` -- Cross-platform helpers: `sessionDir()`, `freePort()`, `waitForPort()` (TCP port availability polling)
+- `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\; `listSessionFilePaths()` for startup auto-restore
 
 ### Channel Shim (src/channel/)
 - `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
@@ -40,10 +41,10 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Annotations observed from Y.Map('annotations') on the active tab's Y.Doc
 - AnnotationExtension renders highlights/comments/suggestions as ProseMirror Decorations
 - AwarenessExtension renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
-- SidePanel: annotation filtering (type/author/status), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N)
+- SidePanel: annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss
 - ChatPanel + SidePanel are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - ChatPanel shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
-- StatusBar: connection status, Claude activity, interruption mode selector (All/Urgent/Paused). Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions.
+- StatusBar: connection status, Claude activity, interruption mode selector (All/Urgent/Paused). Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions. Client broadcasts `interruptionMode` to Y.Map('userAwareness').
 - ReviewSummary overlay shown when all pending annotations are resolved
 
 ### Shared (src/shared/)
@@ -55,8 +56,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 ## Key Patterns
 - All document mutations go through the server's Y.Doc
 - Claude's MCP tools mutate Y.Doc directly -> changes sync to browser via Hocuspocus
-- Annotations stored in Y.Map('annotations'), not in the document content. Y.Map key strings are centralized in `shared/constants.ts` (`Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, etc.) — never use raw string literals for Y.Map keys.
-- Claude's status stored in Y.Map('awareness') key 'claude'; user's selection in Y.Map('userAwareness')
+- Annotations stored in Y.Map('annotations'), not in the document content. Y.Map key strings are centralized in `shared/constants.ts` (`Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, etc.) — never use raw string literals for Y.Map keys. Annotation `author` field is `"user" | "claude" | "import"` — the `"import"` author is used for Word comments extracted from .docx files.
+- Claude's status stored in Y.Map('awareness') key 'claude'; user's selection and `interruptionMode` in Y.Map('userAwareness'). `tandem_status` and `tandem_checkInbox` include the user's current `interruptionMode` in their response so Claude can adapt behavior.
 - Server logs use console.error (stdout reserved for MCP protocol in stdio mode; defense-in-depth in HTTP mode)
 - Ranges use `validateRange()` and `anchoredRange()` for safe targeting (not raw offsets)
 - Three coordinate systems unified in position modules: "flat text offsets" (server, includes heading prefixes), "ProseMirror positions" (client, structural), and "Yjs RelativePositions" (CRDT-anchored, survive edits). Server logic in `src/server/positions.ts`, client logic in `src/client/positions.ts`, shared types in `src/shared/positions/`.
@@ -70,7 +71,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - Files can be opened from the browser via HTTP API (`POST /api/open` for path, `POST /api/upload` for content) or via MCP `tandem_open`. Both paths converge in `file-opener.ts`. Uploaded files get synthetic `upload://` paths and are read-only (no disk path to save to).
 - E2E tests use `data-testid` attributes (kebab-case, e.g. `data-testid="accept-btn"`). Key elements: annotation cards, accept/dismiss buttons, review mode button, tab items.
 
-## Implementation Status (as of 2026-03-25)
+## Implementation Status (as of 2026-03-30)
 
 **Done (Steps 0-6 + Phase 1 + Sprint 5):**
 - [x] Step 0: Repo scaffolding, npm install, TypeScript compiles, Vite builds
@@ -118,6 +119,14 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] Channel review fixes: ref-counted dedup, error handling across pipeline (subscriber dispatch, SSE write, MCP notification, permission relay), HTTP status checks, separated JSON parse vs transport errors, launcher cleanup, doc fixes, 35 new tests (676 total)
 - [x] feat(server): force-reload open documents from disk via `force` param on `tandem_open` / `POST /api/open` (Issue #128, 684 tests)
 
+**Done (Stability + Features — 2026-03-30):**
+- [x] fix(server): replace fixed sleep with port availability polling via `waitForPort()` in `platform.ts` (Issue #117)
+- [x] fix(e2e): stabilize flaky tab switching test using `tandem_switchDocument` + `data-active` selector (Issue #116)
+- [x] feat(server): auto-reopen documents on server restart via `listSessionFilePaths()` + `restoreOpenDocuments()` (Issue #102)
+- [x] feat(ui): undo accept/dismiss on annotations — 10s undo window, "Undo" link, Z key in review mode, atomic suggestion revert (Issue #88)
+- [x] feat(mcp): expose `interruptionMode` to Claude via `tandem_status` and `tandem_checkInbox` responses (Issue #98)
+- [x] feat(file-io): import Word comments (`<w:comment>`) as Tandem annotations on .docx open, `author: "import"`, "Imported" filter (Issue #85, 721 tests)
+
 **Done (UI polish — 2026-03-29):**
 - [x] feat(client): Claude typing indicator in ChatPanel — animated dots + status text (Issue #90)
 - [x] feat(client): bulk accept/dismiss confirmation — inline confirm step, respects active filters (Issue #95)
@@ -125,7 +134,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
-- [ ] Phase 3: .docx comments export — Word-native `<w:comment>` elements via JSZip
+- [ ] Phase 3: .docx comments export — Word-native `<w:comment>` export via JSZip (import done, export remaining)
 - [ ] Phase 4: Distribution — launch channels, positioning, pricing
 - [ ] Phase 5: Discovery sprint — CLI mode, VS Code extension, tracked changes, etc.
 
@@ -134,7 +143,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **MCP session re-initialization (Issue #18):** Resolved. Transport is now rotated per session — Claude Code's `/mcp` restart works without restarting the Tandem server.
 - **Y.js "Invalid access" warnings:** Harmless stderr noise during session restore. Data syncs correctly.
 - **Exception handler is narrowed, not blanket.** `uncaughtException` and `unhandledRejection` handlers in `index.ts` only swallow known Hocuspocus/ws protocol errors (via `isKnownHocuspocusError` in `error-filter.ts`). Unknown errors log full details and call `process.exit(1)`. If the server starts crashing on a new Hocuspocus error pattern, add the pattern to the discriminator.
-- **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:standalone` (or `npm run dev:server`) first.
+- **Server must be running before Claude Code connects.** HTTP transport means Claude Code doesn't auto-spawn the server. Run `npm run dev:standalone` (or `npm run dev:server`) first. Port availability is verified via `waitForPort()` polling (no more fixed-sleep race conditions).
 
 ## Documentation
 - [MCP Tool Reference](docs/mcp-tools.md) -- All 26 MCP tools + channel API endpoints
@@ -142,7 +151,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-019)
-- [Lessons Learned](docs/lessons-learned.md) -- 23 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 26 lessons including E2E testing gotchas
 
 ## Gotchas (save yourself time)
 - **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
@@ -164,6 +173,10 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **MCP Y.Map writes must be origin-tagged.** All server-side writes to observed Y.Maps (`annotations`, `chat`, `userAwareness`, `documentMeta`) must use `doc.transact(() => { ... }, 'mcp')`. This prevents the event queue from emitting echo events when Claude's own tool calls modify Y.Maps. If you add a new MCP tool that writes to any Y.Map, tag it.
 - **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` — not `document-id`.
 - **Channel shim uses low-level `Server`, not `McpServer`.** The Channels spec requires `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` with explicit `setRequestHandler()` calls. The existing HTTP MCP server uses the high-level `McpServer` wrapper. These are separate processes with different SDK classes.
+- **Word comment offsets need re-anchoring.** `.docx` comment ranges reference the original HTML-converted content. After Y.Doc population, the flat text offsets may drift from heading prefix insertion. `docx-comments.ts` re-resolves ranges via `anchoredRange()` to create CRDT-anchored positions. If imported annotations appear misplaced, check the comment's `w:commentRangeStart`/`w:commentRangeEnd` alignment.
+- **Undo timer cleanup on unmount.** The 10-second undo window for accept/dismiss uses `setTimeout`. All pending timers are cleared on component unmount to prevent state updates on unmounted components. The Z key in review mode undoes the most recent resolution.
+- **`waitForPort()` timeout defaults to 5 seconds.** If Hocuspocus fails to bind within this window (e.g., another process holds the port), startup fails with a clear error instead of silently racing. The polling interval is 100ms.
+- **Session auto-restore on startup.** `restoreOpenDocuments()` scans the session directory and reopens all previously-open files. Stale sessions (file deleted from disk) are cleaned up with ENOENT handling. The `sample/welcome.md` fallback only fires if zero sessions were restored.
 
 ## Security
 - Server binds to 127.0.0.1 only

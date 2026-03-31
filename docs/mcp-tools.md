@@ -253,9 +253,13 @@ Check editor status: running state, open documents, active document.
     { "documentId": "report-a1b2c3", "filePath": "...", "format": "md", "readOnly": false },
     { "documentId": "invoice-d4e5f6", "filePath": "...", "format": "docx", "readOnly": true }
   ],
-  "documentCount": 2
+  "documentCount": 2,
+  "interruptionMode": "all"
 }
 ```
+
+**Notes:**
+- `interruptionMode` reflects the user's current interruption preference from the browser StatusBar: `"all"` (show everything), `"urgent"` (only flags, questions, and `priority: 'urgent'`), or `"paused"` (hold all new annotations). Adapt your annotation strategy accordingly — e.g., in `"urgent"` mode, prefer `tandem_flag` with `priority: 'urgent'` over `tandem_comment` for important findings.
 
 ---
 
@@ -315,7 +319,7 @@ Switch the active document. Tools will operate on this document by default.
 
 ## Annotation Tools
 
-Annotations are metadata stored in `Y.Map('annotations')` on the shared document -- they don't modify the document text itself. Each annotation has an `id`, `author` (claude/user), `type`, `range`, `content`, `status` (pending/accepted/dismissed), and `timestamp`.
+Annotations are metadata stored in `Y.Map('annotations')` on the shared document -- they don't modify the document text itself. Each annotation has an `id`, `author` (claude/user/import), `type`, `range`, `content`, `status` (pending/accepted/dismissed), and `timestamp`. The `import` author is used for Word comments extracted from `.docx` files on open.
 
 ### tandem_highlight
 
@@ -655,7 +659,8 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
     "cursor": 142,
     "lastEdit": 1710936000000,
     "selectedText": null
-  }
+  },
+  "interruptionMode": "all"
 }
 ```
 
@@ -664,6 +669,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 - `userActions`: annotations created by the user (highlights, comments, questions).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
+- `interruptionMode`: the user's current interruption preference (`"all"`, `"urgent"`, or `"paused"`). When `"urgent"`, only use `tandem_flag` with `priority: 'urgent'` for critical findings. When `"paused"`, queue work and wait for the mode to change.
 
 ---
 

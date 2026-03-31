@@ -222,3 +222,27 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 | `Document.getConnectionsCount()` | `number` | Sum of WebSocket + direct connections. |
 
 **Impact:** These are public properties but not part of any documented/typed API. Brittle across Hocuspocus major upgrades — pin the version and grep for usage when upgrading.
+
+## 24. Port Polling vs Fixed Sleep on Windows
+
+**Problem:** The server startup used a fixed `setTimeout(300)` between `freePort()` and `Hocuspocus.listen()`. On Windows, port release after `taskkill` is not instant — the OS may hold the port in TIME_WAIT for several seconds. The fixed sleep was sometimes too short (causing EADDRINUSE) and always wasteful when the port was already free.
+
+**Solution:** Replace the fixed sleep with `waitForPort()` in `platform.ts`, which polls every 100ms (up to 5s default) by attempting a TCP `connect()` and checking for `ECONNREFUSED` (port free) vs success (port still held). Hocuspocus `.listen()` is also wrapped with EADDRINUSE detection for a clear error message.
+
+**Impact:** Eliminates a class of flaky startup failures on Windows, especially after unclean shutdowns. The polling approach adapts to actual OS port release timing instead of guessing.
+
+## 25. Atomic Undo for Accepted Suggestions
+
+**Problem:** When a user accepts a suggestion, the text edit is applied and the annotation status changes to "accepted". If undo only reverts the status without reverting the text edit, the document ends up in an inconsistent state — the suggestion's `newText` is in the document but the annotation shows as "pending" again.
+
+**Solution:** The undo handler for accepted suggestions atomically reverts both the text edit (restoring the original text at the annotation's range) and the annotation status in a single operation. The original text is captured at accept time and stored alongside the undo timer. For dismissed annotations (no text edit), undo only reverts the status.
+
+**Impact:** Without atomic undo, users could create documents where the text doesn't match any annotation state — confusing for both the user and Claude on subsequent reads.
+
+## 26. Deterministic E2E State via MCP Tool Calls
+
+**Problem:** The E2E tab switching test was flaky because it relied on browser-side tab click events to switch documents, but the Yjs sync chain (browser click → Y.Map update → server → broadcast → browser re-render) introduced non-deterministic timing. The test would sometimes assert on stale content.
+
+**Solution:** Use `tandem_switchDocument` (an MCP tool call) to set the active document server-side before asserting on browser state. Combined with `data-active='false'` attribute selectors to wait for the inactive tab to appear, this makes the test deterministic — the server state is the source of truth, and the browser catches up via Playwright's auto-waiting.
+
+**Impact:** General pattern: when E2E tests need specific server state, set it via MCP tools rather than simulating browser interactions. MCP calls are synchronous (request/response), while browser interactions trigger async multi-hop sync chains.

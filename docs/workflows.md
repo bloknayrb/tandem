@@ -207,10 +207,11 @@ Tab       → Jump to next pending annotation (editor scrolls to it)
 Shift+Tab → Previous annotation
 Y         → Accept the current annotation
 N         → Dismiss the current annotation
+Z         → Undo the last accept/dismiss (within 10-second window)
 Escape    → Exit review mode
 ```
 
-The side panel shows progress: "Reviewing 3 / 15". Each accepted suggestion applies its text change automatically.
+The side panel shows progress: "Reviewing 3 / 15". Each accepted suggestion applies its text change automatically. After accepting or dismissing, a 10-second undo window appears on the annotation card with an "Undo" link. For accepted suggestions, undo atomically reverts both the text edit and the annotation status.
 
 When all annotations are resolved, a **Review Summary** overlay appears showing:
 - Total reviewed, accepted count, dismissed count, accept rate
@@ -227,6 +228,40 @@ The status bar includes an interruption mode selector with three settings:
 
 This lets Bryan control how aggressively Claude's annotations interrupt the editing flow. During focused writing, switch to Paused; when ready to review, switch back to All.
 
+## Reviewing a .docx with Imported Word Comments
+
+**Setup:** Bryan receives a .docx file from a colleague that already contains Word comments. He wants Claude to review the document while seeing the existing comments.
+
+```
+Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\contract-review.docx" })
+→ { documentId: "contract-review-x1y2z3", readOnly: true, format: "docx", ... }
+```
+
+The .docx opens in review-only mode. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`. Bryan sees them in the SidePanel alongside any new annotations Claude adds.
+
+```
+Claude: tandem_getAnnotations({ author: "import" })
+→ { annotations: [
+    { id: "ann_...", author: "import", type: "comment", content: "Please verify this figure", range: { from: 120, to: 135 } },
+    { id: "ann_...", author: "import", type: "comment", content: "Legal needs to review this clause", range: { from: 890, to: 920 } }
+  ], count: 2 }
+```
+
+Claude reads the imported comments and acts on them:
+
+```
+Claude: tandem_getContext({ from: 120, to: 135, documentId: "contract-review-x1y2z3" })
+// Reads the context around the flagged figure
+
+Claude: tandem_flag({
+  from: 120, to: 135,
+  note: "Imported comment flagged this figure. Cross-checked: the correct amount per Q3 report is $4.2M, not $3.8M.",
+  priority: "urgent"
+})
+```
+
+Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. He can accept/dismiss both types using the same review workflow (Tab/Y/N/Z keys).
+
 ## Session Handoff
 
 **What persists** across server restarts (via session persistence):
@@ -238,7 +273,6 @@ This lets Bryan control how aggressively Claude's annotations interrupt the edit
 **What doesn't persist:**
 - Claude's awareness state (status text, focus paragraph)
 - User awareness state (selection, typing indicator)
-- Which documents were open (must reopen with `tandem_open`)
 
 **How a new Claude session picks up:**
 
@@ -251,10 +285,11 @@ This lets Bryan control how aggressively Claude's annotations interrupt the edit
 
 **If the server restarted:**
 
-1. Call `tandem_open()` with the same file path
-2. If the source file hasn't changed, the session is restored (annotations preserved)
-3. If the source file changed externally, a fresh load occurs (annotations may be stale)
-4. Open additional documents with more `tandem_open()` calls -- each gets its own tab
+1. Previously-open documents are auto-restored on startup (no manual `tandem_open` needed)
+2. Call `tandem_status()` to see which documents were restored
+3. If the source file hasn't changed, the session is restored (annotations preserved)
+4. If a source file was deleted from disk, the stale session is cleaned up automatically
+5. Open additional documents with more `tandem_open()` calls -- each gets its own tab
 
 **If a file changed on disk while already open (git pull, external editor):**
 

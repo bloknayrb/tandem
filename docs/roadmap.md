@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -135,19 +135,20 @@ First-run experience, error handling, and UX refinements.
 
 ### 8c: Review Mode — PARTIALLY DONE
 
-Keyboard review mode (Tab/Y/N) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, and review summary overlay are implemented.
+Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo.
 
 Remaining:
 - Configurable threshold banner ("Claude has 14 suggestions. Review in sequence or filter by type.")
 - Document dimming in review mode
 - E (edit) keyboard shortcut
 
-### 8d: Interruption Model
+### 8d: Interruption Model — PARTIALLY DONE
 
 - Claude never interrupts while user is actively typing (3-second debounce — already implemented)
+- Three modes implemented in StatusBar: All, Urgent, Paused
+- Client broadcasts `interruptionMode` to Y.Map('userAwareness') — Claude reads it via `tandem_status` and `tandem_checkInbox`
 - Queued annotations delivered on pause via side panel badge
 - High-priority findings (factual errors) use distinct yellow caution indicator
-- Three modes: "Interrupt freely", "Hold until I pause" (default), "Review mode — hold everything"
 
 ### 8e: Error Handling
 
@@ -207,8 +208,24 @@ Real-time push notifications from browser to Claude Code via the Channels API, r
 
 ### Known Issues from Channel Implementation
 
-- **E2E tab switching test flaky:** The "tab switching shows different documents" E2E test fails intermittently on both master and the channel branch. The test expects to see "Test Document" after switching tabs, but sometimes sees the second document's content instead. This is a pre-existing timing issue with Yjs sync in E2E, not caused by the channel changes.
-- **`dev:standalone` server startup:** The `concurrently` command in `npm run dev:standalone` sometimes fails to start the server component reliably (tsx stderr output not captured by concurrently). Workaround: start `npm run dev:server` and `npm run dev:client` in separate terminals. This affects E2E tests that rely on `webServer: { command: "npm run dev:standalone" }` — pre-starting the servers and relying on `reuseExistingServer` is more reliable for local dev.
+- **E2E tab switching test stabilized (Issue #116):** Previously flaky due to timing issues with Yjs sync. Rewritten to use `tandem_switchDocument` for deterministic active doc state and `data-active='false'` attribute selector.
+- **`dev:standalone` server startup fixed (Issue #117):** Previously unreliable due to fixed sleep before Hocuspocus bind. Now uses `waitForPort()` polling in `platform.ts` to verify port availability before proceeding. Both HTTP and stdio startup branches updated.
+
+---
+
+## Word Comment Import (Issue #85) — DONE
+
+**Files:** `src/server/file-io/docx-comments.ts`
+
+Extracts `<w:comment>` elements from .docx XML (via JSZip) during file open and creates Tandem annotations with `author: "import"` and CRDT-anchored ranges. The SidePanel author dropdown includes an "Imported" filter. This is the import half of Phase 3 (.docx comments) — export (`<w:comment>` generation) is not yet implemented.
+
+---
+
+## Session Auto-Restore (Issue #102) — DONE
+
+**Files:** `src/server/session/manager.ts`, `src/server/index.ts`
+
+On server startup, `listSessionFilePaths()` scans the session directory for previously-open files. `restoreOpenDocuments()` calls `openFileByPath()` for each, and `restoreCtrlSession()` returns the previous active document ID. The `sample/welcome.md` fallback only fires if no sessions were restored. Stale sessions (ENOENT) are cleaned up automatically.
 
 ---
 
