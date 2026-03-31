@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { getOrCreateDocument, setShouldKeepDocument } from "../yjs/provider.js";
 import {
   saveSession,
+  deleteSession,
   saveCtrlSession,
   loadCtrlSession,
   restoreCtrlDoc,
@@ -189,7 +190,8 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        console.error(`[Tandem] Skipping deleted file: ${filePath}`);
+        console.error(`[Tandem] Skipping deleted file (removing stale session): ${filePath}`);
+        deleteSession(filePath).catch(() => {});
       } else {
         console.error(`[Tandem] Failed to restore ${filePath}:`, err);
       }

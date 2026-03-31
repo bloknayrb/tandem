@@ -183,14 +183,15 @@ export async function listSessionFilePaths(): Promise<
         const data = JSON.parse(raw) as SessionData;
         if (!data.filePath || data.filePath.startsWith("upload://")) continue;
         results.push({ filePath: data.filePath, lastAccessed: data.lastAccessed ?? 0 });
-      } catch {
-        // Corrupt file — skip
+      } catch (err) {
+        console.error(`[Tandem] Skipping unreadable session file ${file}:`, err);
       }
     }
 
     results.sort((a, b) => b.lastAccessed - a.lastAccessed);
     return results;
-  } catch {
+  } catch (err) {
+    console.error("[Tandem] Failed to read session directory:", err);
     return [];
   }
 }
