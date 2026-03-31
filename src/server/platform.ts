@@ -1,4 +1,5 @@
 import { execSync } from "child_process";
+import net from "net";
 import path from "path";
 import envPaths from "env-paths";
 
@@ -21,6 +22,36 @@ export function freePort(port: number): void {
   } catch {
     // Nothing listening or kill failed — proceed anyway
   }
+}
+
+/**
+ * Poll until a TCP port is available for binding.
+ * Replaces the fixed 300ms sleep after freePort() — the OS may need
+ * longer to release a killed process's socket (especially on Windows).
+ */
+export async function waitForPort(port: number, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await tryBind(port)) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  console.error(
+    `[Tandem] Warning: port ${port} still not available after ${timeoutMs}ms, proceeding anyway`,
+  );
+}
+
+/** Attempt to bind a port and immediately release it. Returns true if available. */
+function tryBind(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => {
+      srv.close();
+      resolve(false);
+    });
+    srv.listen(port, "127.0.0.1", () => {
+      srv.close(() => resolve(true));
+    });
+  });
 }
 
 /** Parse PIDs from lsof output (one PID per line). */

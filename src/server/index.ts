@@ -11,7 +11,7 @@ import { startHocuspocus, setDocLifecycleCallbacks } from "./yjs/provider.js";
 import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT, CTRL_ROOM } from "../shared/constants.js";
 import { cleanupSessions, stopAutoSave } from "./session/manager.js";
 import { saveCurrentSession, restoreCtrlSession, writeGenerationId } from "./mcp/document.js";
-import { freePort } from "./platform.js";
+import { freePort, waitForPort } from "./platform.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
   attachCtrlObservers,
@@ -132,8 +132,7 @@ async function main() {
     // HTTP mode: no startup-order constraint — start both concurrently
     freePort(wsPort);
     freePort(mcpPort);
-    // Give the OS a moment to release the ports after killing stale processes
-    await new Promise((r) => setTimeout(r, 300));
+    await Promise.all([waitForPort(wsPort), waitForPort(mcpPort)]);
 
     const [srv] = await Promise.all([
       startMcpServerHttp(mcpPort),
@@ -171,7 +170,7 @@ async function main() {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
       freePort(wsPort);
-      await new Promise((r) => setTimeout(r, 300));
+      await waitForPort(wsPort);
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
     })().catch((err) => {

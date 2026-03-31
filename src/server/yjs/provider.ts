@@ -115,7 +115,18 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     },
   });
 
-  await hocuspocusInstance.listen();
+  // Hocuspocus.listen() never rejects on EADDRINUSE — the error goes to
+  // uncaughtException instead. Race listen() against an error listener on the
+  // internal httpServer so we surface bind failures properly.
+  await Promise.race([
+    hocuspocusInstance.listen(),
+    new Promise<never>((_, reject) => {
+      const internal = (hocuspocusInstance as any).server?.httpServer;
+      if (internal) {
+        internal.once("error", (err: Error) => reject(err));
+      }
+    }),
+  ]);
   return hocuspocusInstance;
 }
 

@@ -1,6 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import net from "net";
 import path from "path";
-import { SESSION_DIR, freePort, parseLsofPids, parseSsPid } from "../../src/server/platform";
+import {
+  SESSION_DIR,
+  freePort,
+  parseLsofPids,
+  parseSsPid,
+  waitForPort,
+} from "../../src/server/platform";
 
 describe("platform", () => {
   describe("SESSION_DIR", () => {
@@ -61,6 +68,49 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
 
     it("returns null for empty string", () => {
       expect(parseSsPid("")).toBeNull();
+    });
+  });
+
+  describe("waitForPort", () => {
+    let holdServer: net.Server | null = null;
+
+    afterEach(() => {
+      if (!holdServer?.listening) return;
+      const srv = holdServer;
+      holdServer = null;
+      return new Promise<void>((resolve) => srv.close(() => resolve()));
+    });
+
+    it("resolves immediately when port is free", async () => {
+      const start = Date.now();
+      await waitForPort(49170);
+      expect(Date.now() - start).toBeLessThan(500);
+    });
+
+    it("resolves when occupied port is released mid-poll", async () => {
+      holdServer = net.createServer();
+      await new Promise<void>((resolve) => holdServer!.listen(49171, "127.0.0.1", resolve));
+
+      // Release the port after 300ms
+      setTimeout(() => {
+        holdServer?.close();
+        holdServer = null;
+      }, 300);
+
+      const start = Date.now();
+      await waitForPort(49171, 5000);
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(200);
+      expect(elapsed).toBeLessThan(3000);
+    });
+
+    it("warns and returns when port stays occupied past timeout", async () => {
+      holdServer = net.createServer();
+      await new Promise<void>((resolve) => holdServer!.listen(49172, "127.0.0.1", resolve));
+
+      const start = Date.now();
+      await waitForPort(49172, 500);
+      expect(Date.now() - start).toBeGreaterThanOrEqual(400);
     });
   });
 });
