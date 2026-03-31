@@ -20,12 +20,17 @@ export function deduplicateDocList(
   return docList.filter((d) => !existingIds.has(d.id) && !pendingIds.has(d.id));
 }
 
+export type ConnectionStatus = "connected" | "connecting" | "disconnected";
+
 export interface YjsSyncResult {
   tabs: OpenTab[];
   activeTabId: string | null;
   setActiveTabId: (id: string) => void;
   handleTabClose: (id: string) => void;
   connected: boolean;
+  connectionStatus: ConnectionStatus;
+  reconnectAttempts: number;
+  disconnectedSince: number | null;
   annotations: Annotation[];
   claudeStatus: string | null;
   claudeActive: boolean;
@@ -40,6 +45,9 @@ export function useYjsSync(): YjsSyncResult {
   const [tabs, setTabs] = useState<OpenTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [disconnectedSince, setDisconnectedSince] = useState<number | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [claudeStatus, setClaudeStatus] = useState<string | null>(null);
   const [claudeActive, setClaudeActive] = useState(false);
@@ -47,6 +55,8 @@ export function useYjsSync(): YjsSyncResult {
   const [ready, setReady] = useState(false);
   const [serverRestarted, setServerRestarted] = useState(false);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Track whether we've ever connected — don't count initial connection attempt as a reconnect. */
+  const hadConnectionRef = useRef(false);
 
   const bootstrapRef = useRef<{ ydoc: Y.Doc; provider: HocuspocusProvider } | null>(null);
   const generationIdRef = useRef<string | null>(null);
@@ -207,6 +217,21 @@ export function useYjsSync(): YjsSyncResult {
 
     provider.on("status", ({ status }: { status: string }) => {
       setConnected(status === "connected");
+      setConnectionStatus(status as ConnectionStatus);
+
+      if (status === "connected") {
+        hadConnectionRef.current = true;
+        setReconnectAttempts(0);
+        setDisconnectedSince(null);
+      } else if (status === "disconnected") {
+        setDisconnectedSince((prev) => prev ?? Date.now());
+      } else if (status === "connecting") {
+        // Only count reconnection attempts after the first successful connection
+        if (hadConnectionRef.current) {
+          setReconnectAttempts((prev) => prev + 1);
+        }
+        setDisconnectedSince((prev) => prev ?? Date.now());
+      }
     });
 
     setReady(true);
@@ -278,6 +303,9 @@ export function useYjsSync(): YjsSyncResult {
     setActiveTabId,
     handleTabClose,
     connected,
+    connectionStatus,
+    reconnectAttempts,
+    disconnectedSince,
     annotations,
     claudeStatus,
     claudeActive,

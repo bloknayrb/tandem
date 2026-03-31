@@ -14,6 +14,7 @@ import {
   DISCONNECT_DEBOUNCE_MS,
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
+  PROLONGED_DISCONNECT_MS,
   REVIEW_BANNER_THRESHOLD,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
@@ -70,6 +71,43 @@ function EmptyState({ connected, claudeActive }: { connected: boolean; claudeAct
   );
 }
 
+/** Red banner shown after prolonged disconnect (>30s). Dismissible. */
+function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div
+      style={{
+        padding: "8px 16px",
+        background: "#fef2f2",
+        borderBottom: "1px solid #fca5a5",
+        fontSize: "13px",
+        color: "#991b1b",
+        textAlign: "center",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: "12px",
+      }}
+    >
+      <span>Connection to the Tandem server has been lost. Ensure the server is running.</span>
+      <button
+        onClick={onDismiss}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          color: "#991b1b",
+          fontSize: "16px",
+          lineHeight: 1,
+          padding: "0 4px",
+        }}
+        aria-label="Dismiss connection banner"
+      >
+        \u00d7
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const {
     tabs,
@@ -77,6 +115,9 @@ export default function App() {
     setActiveTabId,
     handleTabClose,
     connected,
+    connectionStatus,
+    reconnectAttempts,
+    disconnectedSince,
     annotations,
     claudeStatus,
     claudeActive,
@@ -106,6 +147,25 @@ export default function App() {
     const awareness = activeYdoc.getMap(Y_MAP_USER_AWARENESS);
     awareness.set("interruptionMode", interruptionMode);
   }, [interruptionMode, activeYdoc]);
+
+  // Prolonged disconnect banner — shown after PROLONGED_DISCONNECT_MS of being disconnected
+  const [showDisconnectBanner, setShowDisconnectBanner] = useState(false);
+  const [disconnectBannerDismissed, setDisconnectBannerDismissed] = useState(false);
+  useEffect(() => {
+    if (disconnectedSince == null) {
+      setShowDisconnectBanner(false);
+      setDisconnectBannerDismissed(false);
+      return;
+    }
+    const elapsed = Date.now() - disconnectedSince;
+    const remaining = PROLONGED_DISCONNECT_MS - elapsed;
+    if (remaining <= 0) {
+      setShowDisconnectBanner(true);
+      return;
+    }
+    const timer = setTimeout(() => setShowDisconnectBanner(true), remaining);
+    return () => clearTimeout(timer);
+  }, [disconnectedSince]);
 
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
@@ -192,6 +252,9 @@ export default function App() {
         >
           Server restarted — refreshing documents
         </div>
+      )}
+      {showDisconnectBanner && !disconnectBannerDismissed && (
+        <ConnectionBanner onDismiss={() => setDisconnectBannerDismissed(true)} />
       )}
       <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
       <DocumentTabs
@@ -373,6 +436,9 @@ export default function App() {
       </div>
       <StatusBar
         connected={connected}
+        connectionStatus={connectionStatus}
+        reconnectAttempts={reconnectAttempts}
+        disconnectedSince={disconnectedSince}
         claudeStatus={claudeStatus}
         claudeActive={claudeActive}
         readOnly={readOnly}
