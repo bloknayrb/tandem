@@ -3,7 +3,11 @@ import path from "path";
 import type { FormatAdapter } from "./types.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import { htmlToYDoc, loadDocx } from "./docx.js";
-import { extractDocxComments, injectCommentsAsAnnotations } from "./docx-comments.js";
+import {
+  extractDocxComments,
+  injectCommentsAsAnnotations,
+  type DocxComment,
+} from "./docx-comments.js";
 import { populateYDoc, extractText } from "../mcp/document-model.js";
 
 export type { FormatAdapter } from "./types.js";
@@ -34,7 +38,16 @@ const docxAdapter: FormatAdapter = {
   canSave: false,
   async load(doc, content) {
     const buffer = content as Buffer;
-    const [html, comments] = await Promise.all([loadDocx(buffer), extractDocxComments(buffer)]);
+    const [html, comments] = await Promise.all([
+      loadDocx(buffer),
+      extractDocxComments(buffer).catch((err) => {
+        console.error(
+          "[docx-comments] Comment extraction failed; document will load without imported comments:",
+          err,
+        );
+        return [] as DocxComment[];
+      }),
+    ]);
     htmlToYDoc(doc, html);
     if (comments.length > 0) {
       injectCommentsAsAnnotations(doc, comments);

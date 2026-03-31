@@ -12,6 +12,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { headingPrefixLength } from "../../shared/offsets.js";
 import { anchoredRange } from "../positions.js";
+import { MCP_ORIGIN } from "../events/queue.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -51,7 +52,12 @@ export async function extractDocxComments(buffer: Buffer): Promise<DocxComment[]
   const result: DocxComment[] = [];
   for (const [id, meta] of commentMap) {
     const range = ranges.get(id);
-    if (!range) continue; // comment without range markers — skip
+    if (!range) {
+      console.error(
+        `[docx-comments] Comment ${id} has no range markers in document.xml — skipping`,
+      );
+      continue;
+    }
     result.push({
       commentId: id,
       authorName: meta.authorName,
@@ -150,8 +156,18 @@ export function calculateCommentRanges(xml: string): Map<string, { from: number;
 
   // Find <w:body> and walk its children
   const bodyElements = findAllByName("w:body", doc.children);
-  if (bodyElements.length > 0) {
-    walk(bodyElements[0].children);
+  if (bodyElements.length === 0) {
+    console.error(
+      "[docx-comments] No <w:body> found in document.xml — cannot calculate comment ranges",
+    );
+    return ranges;
+  }
+  walk(bodyElements[0].children);
+
+  if (openRanges.size > 0) {
+    console.error(
+      `[docx-comments] ${openRanges.size} comment range(s) had start markers but no end markers: ${[...openRanges.keys()].join(", ")}`,
+    );
   }
 
   return ranges;
@@ -233,9 +249,9 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
       map.set(id, annotation);
       injected++;
     }
-  }, "mcp"); // origin tag prevents channel event echo
+  }, MCP_ORIGIN); // origin tag prevents channel event echo
 
-  if (injected > 0) {
+  if (injected > 0 || comments.length > 0) {
     console.error(`[docx-comments] Imported ${injected}/${comments.length} Word comments`);
   }
 
