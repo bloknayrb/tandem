@@ -8,6 +8,7 @@ import type { Annotation, ChatMessage } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import {
   CTRL_ROOM,
+  INTERRUPTION_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
@@ -175,6 +176,9 @@ export function registerAwarenessTools(server: McpServer): void {
           }
         | undefined;
 
+      const interruptionMode =
+        (userAwareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
+
       const hasSelection = selection && selection.from !== selection.to;
       const selectedText = hasSelection
         ? safeSlice(fullText, selection!.from, selection!.to)
@@ -212,6 +216,7 @@ export function registerAwarenessTools(server: McpServer): void {
       return mcpSuccess({
         summary,
         hasNew,
+        interruptionMode,
         userActions,
         userResponses,
         chatMessages,
