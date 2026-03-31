@@ -13,7 +13,12 @@ import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
 import { saveSession, stopAutoSave } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
-import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import {
+  INTERRUPTION_MODE_DEFAULT,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_SAVED_AT_VERSION,
+  Y_MAP_USER_AWARENESS,
+} from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 
 // Document model (pure logic)
@@ -445,8 +450,19 @@ export function registerDocumentTools(server: McpServer): void {
     withErrorBoundary("tandem_status", async () => {
       const activeId = getActiveDocId();
       const active = activeId ? openDocs.get(activeId) : null;
+
+      // Read the user's interruption mode from the active document's Y.Map
+      let interruptionMode: string = INTERRUPTION_MODE_DEFAULT;
+      if (activeId) {
+        const doc = getOrCreateDocument(activeId);
+        const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+        interruptionMode =
+          (awareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
+      }
+
       return mcpSuccess({
         running: true,
+        interruptionMode,
         activeDocument: active
           ? { documentId: active.id, filePath: active.filePath, format: active.format }
           : null,

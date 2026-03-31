@@ -1,4 +1,5 @@
 import {
+  INTERRUPTION_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
@@ -315,5 +316,28 @@ describe("tandem_getSelections — real Y.Map operations", () => {
     const selection = userAwareness.get("selection") as { from: number; to: number };
     // Production code: if (!selection || selection.from === selection.to) → no text selected
     expect(selection.from === selection.to).toBe(true);
+  });
+});
+
+describe("interruptionMode via Y.Map('userAwareness')", () => {
+  it("defaults to 'all' when no interruptionMode is set", () => {
+    const ydoc = setupDoc("int-1", "Hello world");
+    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
+    const mode = (userAwareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
+    expect(mode).toBe("all");
+  });
+
+  it("reads interruptionMode written by client", () => {
+    const ydoc = setupDoc("int-2", "Hello world");
+    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
+    userAwareness.set("interruptionMode", "urgent-only");
+    expect(userAwareness.get("interruptionMode")).toBe("urgent-only");
+  });
+
+  it("reads 'paused' interruptionMode", () => {
+    const ydoc = setupDoc("int-3", "Hello world");
+    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
+    userAwareness.set("interruptionMode", "paused");
+    expect(userAwareness.get("interruptionMode")).toBe("paused");
   });
 });

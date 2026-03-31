@@ -14,6 +14,7 @@ import {
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
   REVIEW_BANNER_THRESHOLD,
+  Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
 import type { InterruptionMode } from "../shared/types";
 import { InterruptionModeSchema } from "../shared/types";
@@ -92,6 +93,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode);
   }, [interruptionMode]);
+
+  // Broadcast interruption mode to Y.Map so the server (and Claude) can see it
+  const activeYdoc = tabs.find((t) => t.id === activeTabId)?.ydoc;
+  useEffect(() => {
+    if (!activeYdoc) return;
+    const awareness = activeYdoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("interruptionMode", interruptionMode);
+  }, [interruptionMode, activeYdoc]);
 
   const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
