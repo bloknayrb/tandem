@@ -121,7 +121,11 @@ function notifyStreamHandler(req: Request, res: Response): void {
   });
 
   const keepalive = setInterval(() => {
-    res.write(": keepalive\n\n");
+    try {
+      if (!res.writableEnded) res.write(": keepalive\n\n");
+    } catch {
+      cleanup();
+    }
   }, CHANNEL_SSE_KEEPALIVE_MS);
 
   req.on("close", () => {

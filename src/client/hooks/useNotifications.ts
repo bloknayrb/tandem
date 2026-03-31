@@ -16,19 +16,20 @@ export function useNotifications(): {
 
   // Schedule auto-dismiss for a toast
   const scheduleDismiss = useCallback((id: string, severity: TandemNotification["severity"]) => {
-    // Clear any existing timer for this id before setting a new one (dedup replacement)
+    // Clear any existing timer for this id before setting a new one
     const existing = timersRef.current.get(id);
     if (existing) clearTimeout(existing);
 
+    const ms = TOAST_DISMISS_MS[severity] ?? TOAST_DISMISS_MS.info;
     const timer = setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
       timersRef.current.delete(id);
-    }, TOAST_DISMISS_MS[severity]);
+    }, ms);
     timersRef.current.set(id, timer);
   }, []);
 
-  const dismiss = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  /** Clear a timer by toast ID, removing it from the ref map. */
+  const clearTimer = useCallback((id: string) => {
     const timer = timersRef.current.get(id);
     if (timer) {
       clearTimeout(timer);
@@ -36,66 +37,77 @@ export function useNotifications(): {
     }
   }, []);
 
+  const dismiss = useCallback(
+    (id: string) => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+      clearTimer(id);
+    },
+    [clearTimer],
+  );
+
   useEffect(() => {
     const url = `http://localhost:${DEFAULT_MCP_PORT}/api/notify-stream`;
     const es = new EventSource(url);
 
     es.onmessage = (event) => {
+      let notification: TandemNotification;
       try {
-        const notification = JSON.parse(event.data) as TandemNotification;
-
-        setToasts((prev) => {
-          // Dedup: if incoming has a dedupKey matching an existing toast, replace and increment count
-          if (notification.dedupKey) {
-            const existingIdx = prev.findIndex((t) => t.dedupKey === notification.dedupKey);
-            if (existingIdx !== -1) {
-              const existing = prev[existingIdx];
-              const updated: Toast = {
-                ...notification,
-                count: existing.count + 1,
-              };
-              const next = [...prev];
-              next[existingIdx] = updated;
-              // Reset dismiss timer for the updated toast
-              scheduleDismiss(updated.id, updated.severity);
-              return next;
-            }
-          }
-
-          const newToast: Toast = { ...notification, count: 1 };
-          const next = [...prev, newToast];
-
-          // Enforce max visible toasts — evict oldest
-          while (next.length > MAX_VISIBLE_TOASTS) {
-            const evicted = next.shift()!;
-            const timer = timersRef.current.get(evicted.id);
-            if (timer) {
-              clearTimeout(timer);
-              timersRef.current.delete(evicted.id);
-            }
-          }
-
-          scheduleDismiss(newToast.id, newToast.severity);
-          return next;
-        });
+        notification = JSON.parse(event.data) as TandemNotification;
       } catch {
-        // Ignore malformed SSE data
+        console.warn("[useNotifications] Malformed SSE data:", event.data);
+        return;
       }
+
+      setToasts((prev) => {
+        // Dedup: if incoming has a dedupKey matching an existing toast, replace and increment count
+        if (notification.dedupKey) {
+          const existingIdx = prev.findIndex((t) => t.dedupKey === notification.dedupKey);
+          if (existingIdx !== -1) {
+            const existing = prev[existingIdx];
+            // Clear old toast's timer before replacing
+            clearTimer(existing.id);
+            const updated: Toast = {
+              ...notification,
+              count: existing.count + 1,
+            };
+            const next = [...prev];
+            next[existingIdx] = updated;
+            scheduleDismiss(updated.id, updated.severity);
+            return next;
+          }
+        }
+
+        const newToast: Toast = { ...notification, count: 1 };
+        const next = [...prev, newToast];
+
+        // Enforce max visible toasts — evict oldest
+        while (next.length > MAX_VISIBLE_TOASTS) {
+          const evicted = next.shift()!;
+          clearTimer(evicted.id);
+        }
+
+        scheduleDismiss(newToast.id, newToast.severity);
+        return next;
+      });
     };
 
     es.onerror = () => {
-      // EventSource will auto-reconnect; nothing to do here
+      if (es.readyState === EventSource.CLOSED) {
+        console.warn(
+          "[useNotifications] EventSource permanently closed. " +
+            "Notifications will not be delivered. Is the server running?",
+        );
+      }
     };
 
     return () => {
       es.close();
-      // Clear all pending timers
       for (const timer of timersRef.current.values()) {
         clearTimeout(timer);
       }
       timersRef.current.clear();
     };
-  }, [scheduleDismiss]);
+  }, [scheduleDismiss, clearTimer]);
 
   return { toasts, dismiss };
 }
