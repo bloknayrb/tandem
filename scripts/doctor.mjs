@@ -71,11 +71,19 @@ function checkMcpJson() {
     return;
   }
 
+  let raw;
+  try {
+    raw = readFileSync(mcpPath, "utf-8");
+  } catch (err) {
+    fail(`.mcp.json could not be read: ${err.message}`);
+    return;
+  }
+
   let config;
   try {
-    config = JSON.parse(readFileSync(mcpPath, "utf-8"));
-  } catch {
-    fail(".mcp.json is not valid JSON", "Check for syntax errors");
+    config = JSON.parse(raw);
+  } catch (err) {
+    fail(`.mcp.json is not valid JSON: ${err.message}`);
     return;
   }
 
@@ -173,7 +181,7 @@ function httpGet(url, timeoutMs = 3000) {
         }
       });
     });
-    req.on("error", () => resolve(null));
+    req.on("error", (err) => resolve({ error: err.message }));
     req.on("timeout", () => {
       req.destroy();
       resolve(null);
@@ -187,6 +195,11 @@ async function checkHealth() {
 
   if (!result) {
     fail(`Server not responding on localhost:${MCP_PORT}`, "npm run dev:standalone");
+    return false;
+  }
+
+  if (result.error) {
+    fail(`Server not responding on localhost:${MCP_PORT} (${result.error})`, "npm run dev:standalone");
     return false;
   }
 
@@ -227,8 +240,8 @@ function checkSseEndpoint() {
         resolve();
       },
     );
-    req.on("error", () => {
-      // Server not running — already caught by health check
+    req.on("error", (err) => {
+      warn(`/api/events not reachable: ${err.message}`);
       resolve();
     });
     req.on("timeout", () => {
@@ -274,4 +287,8 @@ async function main() {
   console.log();
 }
 
-main();
+main().catch((err) => {
+  console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
+  console.error("  Please report this at https://github.com/bloknayrb/tandem/issues\n");
+  process.exit(2);
+});

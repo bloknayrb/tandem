@@ -27,7 +27,15 @@ const TANDEM_URL = process.env.TANDEM_URL || "http://localhost:3479";
 // --- Pre-flight: verify Tandem server is reachable before MCP handshake ---
 
 async function checkServerReachable(url: string, timeoutMs = 2000): Promise<boolean> {
-  const parsed = new URL(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    console.error(
+      `[Channel] Invalid TANDEM_URL: "${url}" — expected format: http://localhost:3479`,
+    );
+    return false;
+  }
   const port = parseInt(parsed.port || String(DEFAULT_MCP_PORT), 10);
   return new Promise((resolve) => {
     const socket = createConnection({ port, host: parsed.hostname }, () => {
@@ -39,7 +47,8 @@ async function checkServerReachable(url: string, timeoutMs = 2000): Promise<bool
       socket.destroy();
       resolve(false);
     });
-    socket.on("error", () => {
+    socket.on("error", (err) => {
+      console.error(`[Channel] Server probe failed: ${err.message}`);
       socket.destroy();
       resolve(false);
     });
