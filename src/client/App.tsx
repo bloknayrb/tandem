@@ -10,6 +10,7 @@ import { ReviewSummary } from "./panels/ReviewSummary";
 import { HelpModal } from "./components/HelpModal";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import { ToastContainer } from "./components/ToastContainer";
+import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import {
   DISCONNECT_DEBOUNCE_MS,
   INTERRUPTION_MODE_DEFAULT,
@@ -25,6 +26,7 @@ import { useFileDrop } from "./hooks/useFileDrop";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useTabOrder } from "./hooks/useTabOrder";
+import { useTutorial } from "./hooks/useTutorial";
 import { useYjsSync } from "./hooks/useYjsSync";
 import type { DocListEntry, OpenTab } from "./types";
 
@@ -220,6 +222,12 @@ export default function App() {
   }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
+
+  const { tutorialActive, currentStep, dismissTutorial, skipStep } = useTutorial(
+    annotations,
+    editorRef,
+    activeTab?.fileName,
+  );
 
   if (!ready) {
     return (
@@ -457,6 +465,13 @@ export default function App() {
       )}
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      {tutorialActive && (
+        <OnboardingTutorial
+          currentStep={currentStep}
+          onSkip={skipStep}
+          onDismiss={dismissTutorial}
+        />
+      )}
     </div>
   );
 }

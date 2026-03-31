@@ -57,6 +57,10 @@ export const TOAST_DISMISS_MS = { error: 8000, warning: 6000, info: 4000 } as co
 export const MAX_VISIBLE_TOASTS = 5;
 export const NOTIFICATION_BUFFER_SIZE = 50;
 
+// Onboarding tutorial
+export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
+export const TUTORIAL_ANNOTATION_PREFIX = "tutorial-";
+
 // Channel / event queue
 export const CHANNEL_EVENT_BUFFER_SIZE = 200;
 export const CHANNEL_EVENT_BUFFER_AGE_MS = 60_000; // 60 seconds

@@ -1,16 +1,18 @@
 # Welcome to Tandem
 
-This is your first document in Tandem -- a collaborative editor where you and Claude work together in real-time.
+Tandem is a collaborative document editor where you and Claude can review your documents together in real-time.
 
-## How It Works
+## Getting Started
+
+> Follow the tutorial in the bottom-left corner to learn the basics. You can dismiss it at any time.
 
 Both you and Claude can see and edit this document at the same time. Claude's cursor appears as a soft blue highlight on the paragraph being read.
 
-### Try These
+## Try These
 
-1. **Accept an annotation** -- Hover over the highlighted text below to see Claude's suggestion.
-2. **Ask Claude** -- Select some text and press Ctrl+Shift+A to ask Claude about it.
-3. **Make an edit** -- Type something and watch Claude respond in real-time.
+1. **Review an annotation** -- Look at the highlighted text in this document. Open the side panel to accept or dismiss annotations, or press Ctrl+Shift+R for Review Mode.
+2. **Ask Claude a question** -- Select some text and press Ctrl+Shift+A, or type in the Chat panel.
+3. **Make an edit** -- Click anywhere in the document and start typing. You can simplify sentences, fix typos, or add new content.
 
 ## Sample Content
 
