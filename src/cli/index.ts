@@ -10,12 +10,14 @@
  *   tandem --version  Show version
  */
 
+import updateNotifier from "update-notifier";
+
 // Injected at build time by tsup define; declared here for TypeScript
 declare const __TANDEM_VERSION__: string;
 const version = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : "0.0.0-dev";
 
-// TypeScript needs a top-level export to treat this as a module (enabling top-level await)
-export {};
+// Check for updates in background (non-blocking, throttled to once/day)
+updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
 
 const args = process.argv.slice(2);
 
