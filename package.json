@@ -1,8 +1,32 @@
 {
-  "name": "tandem",
+  "name": "tandem-editor",
   "version": "0.1.0",
-  "private": true,
+  "description": "Collaborative AI-human document editor with MCP tool integration for Claude",
+  "keywords": [
+    "tandem",
+    "mcp",
+    "claude",
+    "editor",
+    "ai",
+    "collaborative"
+  ],
+  "license": "MIT",
   "type": "module",
+  "main": "./dist/cli/index.js",
+  "bin": {
+    "tandem": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist/",
+    "sample/"
+  ],
+  "exports": {
+    ".": "./dist/cli/index.js",
+    "./dist/cli/index.js": "./dist/cli/index.js"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "vite",
     "dev:standalone": "concurrently \"vite\" \"tsx watch src/server/index.ts\"",
@@ -22,7 +46,8 @@
     "lint": "eslint .",
     "format": "biome format --write .",
     "doctor": "node scripts/doctor.mjs",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=22"
