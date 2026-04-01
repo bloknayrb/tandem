@@ -6,7 +6,7 @@ Tandem is a collaborative document editor where you and Claude can review your d
 
 > Follow the tutorial in the bottom-left corner to learn the basics. You can dismiss it at any time.
 
-Both you and Claude can see and edit this document at the same time. Claude's cursor appears as a soft blue highlight on the paragraph being read.
+Open Claude Code from any directory -- your Tandem tools are already configured. Both you and Claude can see and edit this document at the same time. Claude's cursor appears as a soft blue highlight on the paragraph being read.
 
 ## Try These
 
