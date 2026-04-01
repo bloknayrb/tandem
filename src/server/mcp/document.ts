@@ -13,6 +13,7 @@ import { pushNotification } from "../notifications.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
+import { convertToMarkdown } from "./convert.js";
 import { saveSession } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
 import {
@@ -552,6 +553,40 @@ export function registerDocumentTools(server: McpServer): void {
         activeDocumentId: documentId,
         ...toDocListEntry(openDocs.get(documentId)!),
       });
+    }),
+  );
+
+  server.tool(
+    "tandem_convertToMarkdown",
+    "Convert a .docx document to an editable Markdown file. Writes the .md file to disk and opens it as a new tab.",
+    {
+      documentId: z
+        .string()
+        .optional()
+        .describe("Document ID of the .docx to convert (defaults to active document)"),
+      outputPath: z
+        .string()
+        .optional()
+        .describe("Custom output path for the .md file (defaults to same directory as the .docx)"),
+    },
+    withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
+      try {
+        const result = await convertToMarkdown(documentId, outputPath);
+        return mcpSuccess({
+          converted: true,
+          outputPath: result.outputPath,
+          documentId: result.documentId,
+          fileName: result.fileName,
+          message: `Converted to Markdown: ${result.fileName}`,
+        });
+      } catch (err: unknown) {
+        const e = err as NodeJS.ErrnoException;
+        if (e.code === "FILE_NOT_FOUND") return noDocumentError();
+        if (e.code === "UNSUPPORTED_FORMAT" || e.code === "INVALID_PATH") {
+          return mcpError("FORMAT_ERROR", e.message);
+        }
+        return mcpError("FORMAT_ERROR", `Conversion failed: ${getErrorMessage(err)}`);
+      }
     }),
   );
 }

@@ -335,6 +335,7 @@ export default function App() {
         >
           <ReviewOnlyBanner
             visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+            documentId={activeTab?.id}
           />
           {activeTab ? (
             <Editor
