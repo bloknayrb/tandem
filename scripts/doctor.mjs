@@ -126,6 +126,41 @@ function checkMcpJson() {
   }
 }
 
+// ── Check: user-level MCP config (global install path) ─────────────
+
+function checkUserMcpConfig() {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const claudeCodePath = join(home, ".claude", "mcp_settings.json");
+
+  if (!existsSync(claudeCodePath)) {
+    warn(
+      "~/.claude/mcp_settings.json not found",
+      "Run: tandem setup  (or ignore if using project-local .mcp.json)",
+    );
+    return;
+  }
+
+  let config;
+  try {
+    config = JSON.parse(readFileSync(claudeCodePath, "utf-8"));
+  } catch {
+    warn("~/.claude/mcp_settings.json is malformed JSON", "Run: tandem setup to rewrite it");
+    return;
+  }
+
+  const servers = config?.mcpServers ?? {};
+  if (!servers.tandem) {
+    warn("tandem not registered in ~/.claude/mcp_settings.json", "Run: tandem setup");
+  } else {
+    pass("tandem registered in ~/.claude/mcp_settings.json");
+  }
+  if (!servers["tandem-channel"]) {
+    warn("tandem-channel not registered in ~/.claude/mcp_settings.json", "Run: tandem setup");
+  } else {
+    pass("tandem-channel registered in ~/.claude/mcp_settings.json");
+  }
+}
+
 // ── Check: port status ──────────────────────────────────────────────
 
 function probePort(port, timeoutMs = 2000) {
@@ -264,6 +299,7 @@ async function main() {
   checkNodeVersion();
   checkNodeModules();
   checkMcpJson();
+  checkUserMcpConfig();
 
   console.log();
   const { mcp } = await checkPorts();
