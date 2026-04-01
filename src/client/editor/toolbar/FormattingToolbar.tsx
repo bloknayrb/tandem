@@ -48,7 +48,9 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
 
   useEffect(() => {
     if (!editor) return;
-    const handler = () => setTick((t) => t + 1);
+    const handler = () => {
+      if (!editor.isDestroyed) setTick((t) => t + 1);
+    };
     editor.on("transaction", handler);
     return () => {
       editor.off("transaction", handler);
@@ -67,17 +69,18 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showHeadingMenu]);
 
-  const isEditable = editor?.isEditable ?? false;
-  const isDisabled = !editor || !isEditable || !!disabled;
-
   if (!editor) return null;
+
+  const isEditable = editor.isEditable;
+  const isDisabled = !isEditable || !!disabled;
 
   const activeHeading: HeadingLevel | null = findActiveHeading(editor);
 
   function handleHeadingToggle(level: HeadingLevel) {
     return (e: React.MouseEvent) => {
       e.preventDefault();
-      editor?.chain().focus().toggleHeading({ level }).run();
+      if (!editor || editor.isDestroyed) return;
+      editor.chain().focus().toggleHeading({ level }).run();
       setShowHeadingMenu(false);
     };
   }
@@ -139,6 +142,8 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         />
         {showHeadingMenu && (
           <div
+            role="menu"
+            aria-label="Heading level"
             style={{
               position: "absolute",
               top: "100%",
@@ -158,6 +163,7 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
             {HEADING_LEVELS.map((level) => (
               <button
                 type="button"
+                role="menuitem"
                 key={level}
                 onMouseDown={handleHeadingToggle(level)}
                 style={{
