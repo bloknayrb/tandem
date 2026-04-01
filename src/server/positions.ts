@@ -20,12 +20,15 @@ import * as Y from "yjs";
 import type { Annotation } from "../shared/types.js";
 import { MCP_ORIGIN } from "./events/queue.js";
 import type {
+  FlatOffset,
+  SerializedRelPos,
   DocumentRange,
   RelativeRange,
   RangeValidation,
   AnchoredRangeResult,
   ElementPosition,
 } from "../shared/positions/index.js";
+import { toFlatOffset, toSerializedRelPos } from "../shared/positions/index.js";
 import {
   getElementText,
   extractText,
@@ -43,7 +46,7 @@ import {
  */
 export function resolveToElement(
   fragment: Y.XmlFragment,
-  charOffset: number,
+  charOffset: FlatOffset,
 ): ElementPosition | null {
   let accumulated = 0;
 
@@ -94,7 +97,11 @@ export function resolveToElement(
  * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
  * Returns null if the offset falls in a heading prefix or can't be resolved.
  */
-export function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): unknown | null {
+export function flatOffsetToRelPos(
+  doc: Y.Doc,
+  offset: FlatOffset,
+  assoc: 0 | -1,
+): SerializedRelPos | null {
   const fragment = doc.getXmlFragment("default");
   const resolved = resolveToElement(fragment, offset);
   if (!resolved || resolved.clampedFromPrefix) return null;
@@ -105,14 +112,14 @@ export function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): u
   const xmlText = findXmlText(node);
   if (!xmlText) return null;
   const rpos = Y.createRelativePositionFromTypeIndex(xmlText, resolved.textOffset, assoc);
-  return Y.relativePositionToJSON(rpos);
+  return toSerializedRelPos(Y.relativePositionToJSON(rpos));
 }
 
 /**
  * Resolve a JSON-serialized Yjs RelativePosition back to a flat text offset.
  * Returns null if the referenced content was deleted.
  */
-export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | null {
+export function relPosToFlatOffset(doc: Y.Doc, relPosJson: SerializedRelPos): FlatOffset | null {
   let absPos;
   try {
     const rpos = Y.createRelativePositionFromJSON(relPosJson);
@@ -137,7 +144,7 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | nu
 
     const xmlText = findXmlText(node);
     if (xmlText && xmlText === absPos.type) {
-      return accumulated + prefixLen + absPos.index;
+      return toFlatOffset(accumulated + prefixLen + absPos.index);
     }
 
     accumulated += prefixLen + text.length;
@@ -162,8 +169,8 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | nu
  */
 export function validateRange(
   ydoc: Y.Doc,
-  from: number,
-  to: number,
+  from: FlatOffset,
+  to: FlatOffset,
   opts?: {
     textSnapshot?: string;
     rejectHeadingOverlap?: boolean;
@@ -198,8 +205,8 @@ export function validateRange(
       return {
         ok: false,
         code: "RANGE_MOVED",
-        resolvedFrom: best,
-        resolvedTo: best + opts.textSnapshot.length,
+        resolvedFrom: toFlatOffset(best),
+        resolvedTo: toFlatOffset(best + opts.textSnapshot.length),
       };
     }
   }
@@ -234,8 +241,8 @@ export function validateRange(
  */
 export function anchoredRange(
   ydoc: Y.Doc,
-  from: number,
-  to: number,
+  from: FlatOffset,
+  to: FlatOffset,
   textSnapshot?: string,
 ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
   const validation = validateRange(ydoc, from, to, { textSnapshot });

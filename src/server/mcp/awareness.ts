@@ -4,7 +4,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { getCurrentDoc, extractText } from "./document.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
 import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
-import type { Annotation, ChatMessage } from "../../shared/types.js";
+import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import {
   CTRL_ROOM,
@@ -40,7 +40,7 @@ export function registerAwarenessTools(server: McpServer): void {
       const doc = getOrCreateDocument(current.docName);
       const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       const selection = userAwareness.get("selection") as
-        | { from: number; to: number; timestamp: number }
+        | { from: FlatOffset; to: FlatOffset; timestamp: number }
         | undefined;
 
       if (!selection || selection.from === selection.to) {
@@ -166,7 +166,7 @@ export function registerAwarenessTools(server: McpServer): void {
       // Current user activity
       const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       const selection = userAwareness.get("selection") as
-        | { from: number; to: number; timestamp: number }
+        | { from: FlatOffset; to: FlatOffset; timestamp: number }
         | undefined;
       const activity = userAwareness.get("activity") as
         | {

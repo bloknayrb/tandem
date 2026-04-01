@@ -4,6 +4,8 @@ import { populateYDoc } from "../../src/server/mcp/document.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import type { Annotation } from "../../src/shared/types.js";
+import type { FlatOffset } from "../../src/shared/positions/types.js";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 
 /** Create a Y.Doc populated with text content */
 export function makeDoc(text: string): Y.Doc {
@@ -40,7 +42,7 @@ export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation 
     id: "ann_test_001",
     author: "claude",
     type: "comment",
-    range: { from: 0, to: 5 },
+    range: { from: toFlatOffset(0), to: toFlatOffset(5) },
     content: "test",
     status: "pending",
     timestamp: Date.now(),
@@ -51,9 +53,9 @@ export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation 
 /** Create an anchored range (flat + CRDT) for annotation creation in tests. */
 export function rangeOf(from: number, to: number, ydoc?: Y.Doc) {
   if (ydoc) {
-    const result = anchoredRange(ydoc, from, to);
+    const result = anchoredRange(ydoc, toFlatOffset(from), toFlatOffset(to));
     if (!result.ok) throw new Error("anchoredRange failed in test helper");
     return result;
   }
-  return { range: { from, to } };
+  return { range: { from: toFlatOffset(from), to: toFlatOffset(to) } };
 }

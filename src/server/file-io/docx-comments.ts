@@ -12,6 +12,8 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { headingPrefixLength } from "../../shared/offsets.js";
 import { anchoredRange } from "../positions.js";
+import type { FlatOffset } from "../../shared/types.js";
+import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 
 // ---------------------------------------------------------------------------
@@ -22,8 +24,8 @@ export interface DocxComment {
   commentId: string;
   authorName: string;
   bodyText: string;
-  from: number; // flat character offset (includes heading prefixes)
-  to: number;
+  from: FlatOffset;
+  to: FlatOffset;
   date?: string;
 }
 
@@ -109,9 +111,11 @@ export function parseCommentMetadata(xml: string): Map<string, CommentMeta> {
  * Walk the document body, counting flat-text characters (including heading
  * prefixes), and record start/end offsets for each comment range marker.
  */
-export function calculateCommentRanges(xml: string): Map<string, { from: number; to: number }> {
+export function calculateCommentRanges(
+  xml: string,
+): Map<string, { from: FlatOffset; to: FlatOffset }> {
   const doc = parseDocument(xml, { xmlMode: true });
-  const ranges = new Map<string, { from: number; to: number }>();
+  const ranges = new Map<string, { from: FlatOffset; to: FlatOffset }>();
   const openRanges = new Map<string, number>(); // commentId → startOffset
 
   let offset = 0;
@@ -139,7 +143,7 @@ export function calculateCommentRanges(xml: string): Map<string, { from: number;
       } else if (node.name === "w:commentRangeEnd") {
         const id = getAttr(node, "w:id");
         if (id && openRanges.has(id)) {
-          ranges.set(id, { from: openRanges.get(id)!, to: offset });
+          ranges.set(id, { from: toFlatOffset(openRanges.get(id)!), to: toFlatOffset(offset) });
           openRanges.delete(id);
         }
       } else if (node.name === "w:t") {
@@ -217,7 +221,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
 
   doc.transact(() => {
     for (const comment of comments) {
-      const result = anchoredRange(doc, comment.from, comment.to);
+      const result = anchoredRange(doc, toFlatOffset(comment.from), toFlatOffset(comment.to));
       if (!result.ok) {
         console.error(
           `[docx-comments] Skipping imported comment ${comment.commentId}: range [${comment.from}, ${comment.to}] — ${result.code}`,

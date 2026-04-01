@@ -16,7 +16,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import type { Annotation, ChatMessage } from "../../shared/types.js";
+import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { TandemEvent } from "./types.js";
@@ -175,7 +175,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
 
     if (event.keysChanged.has("selection")) {
       const selection = userAwareness.get("selection") as
-        | { from: number; to: number; selectedText?: string }
+        | { from: FlatOffset; to: FlatOffset; selectedText?: string }
         | undefined;
       pushEvent({
         id: generateEventId(),

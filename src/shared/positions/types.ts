@@ -11,23 +11,52 @@
  *   - src/client/positions.ts (ProseMirror operations)
  */
 
+// ---------------------------------------------------------------------------
+// Branded types — compile-time guards against mixing coordinate systems
+// ---------------------------------------------------------------------------
+
+declare const FlatOffsetBrand: unique symbol;
+declare const PmPosBrand: unique symbol;
+declare const SerializedRelPosBrand: unique symbol;
+
+/** Flat text offset (includes heading prefixes & \n separators). Server/MCP boundary. */
+export type FlatOffset = number & { readonly [FlatOffsetBrand]: true };
+
+/** ProseMirror position (structural node boundaries). Client-side only. */
+export type PmPos = number & { readonly [PmPosBrand]: true };
+
+/** JSON-serialized Y.js RelativePosition. Opaque — only created/consumed by position modules. */
+export type SerializedRelPos = unknown & { readonly [SerializedRelPosBrand]: true };
+
+// ---------------------------------------------------------------------------
+// Factory functions — cast raw values into branded types
+// ---------------------------------------------------------------------------
+
+export const toFlatOffset = (n: number): FlatOffset => n as FlatOffset;
+export const toPmPos = (n: number): PmPos => n as PmPos;
+export const toSerializedRelPos = (json: unknown): SerializedRelPos => json as SerializedRelPos;
+
+// ---------------------------------------------------------------------------
+// Range and result types
+// ---------------------------------------------------------------------------
+
 /** Flat-offset range used by MCP tools and annotations. */
 export interface DocumentRange {
-  from: number;
-  to: number;
+  from: FlatOffset;
+  to: FlatOffset;
 }
 
 /** CRDT-anchored range that survives concurrent edits. Serialized via Y.relativePositionToJSON(). */
 export interface RelativeRange {
-  fromRel: unknown;
-  toRel: unknown;
+  fromRel: SerializedRelPos;
+  toRel: SerializedRelPos;
 }
 
 /** Result of validating a flat-offset range against a document. */
 export type RangeValidation =
   | { ok: true; range: DocumentRange }
   | { ok: false; code: "RANGE_GONE" }
-  | { ok: false; code: "RANGE_MOVED"; resolvedFrom: number; resolvedTo: number }
+  | { ok: false; code: "RANGE_MOVED"; resolvedFrom: FlatOffset; resolvedTo: FlatOffset }
   | { ok: false; code: "INVALID_RANGE"; message: string }
   | { ok: false; code: "HEADING_OVERLAP" };
 
@@ -50,8 +79,8 @@ export type ResolutionMethod = "rel" | "flat";
 
 /** Result of resolving an annotation to ProseMirror positions. */
 export interface PmRangeResult {
-  from: number;
-  to: number;
+  from: PmPos;
+  to: PmPos;
   /** Which coordinate path was used to resolve the range. */
   method: ResolutionMethod;
 }
