@@ -147,9 +147,13 @@ export async function closeDocumentById(
 
   const closedPath = docState.filePath;
 
-  // Persist before removing
-  const doc = getOrCreateDocument(id);
-  await saveSession(docState.filePath, docState.format, doc);
+  // Best-effort persist before removing — save failure should not prevent close
+  try {
+    const doc = getOrCreateDocument(id);
+    await saveSession(docState.filePath, docState.format, doc);
+  } catch (err) {
+    console.error(`[Tandem] Failed to save session before closing ${id}:`, err);
+  }
 
   removeDoc(id);
 

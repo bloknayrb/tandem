@@ -306,9 +306,13 @@ export function useYjsSync(): YjsSyncResult {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId: tabId }),
-    }).catch((err) => {
-      console.warn("[Tandem] Failed to close document on server:", err);
-    });
+    })
+      .then((res) => {
+        if (!res.ok) console.warn("[Tandem] Server rejected close:", res.status);
+      })
+      .catch((err) => {
+        console.warn("[Tandem] Failed to close document on server:", err);
+      });
   }, []);
 
   return {
