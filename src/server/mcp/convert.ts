@@ -20,10 +20,11 @@ async function findAvailablePath(basePath: string): Promise<string> {
   const ext = path.extname(basePath);
   const name = path.basename(basePath, ext);
 
+  const MAX_ATTEMPTS = 1000;
   let candidate = basePath;
   let counter = 0;
 
-  while (true) {
+  while (counter <= MAX_ATTEMPTS) {
     try {
       await fs.access(candidate);
       // File exists, try next
@@ -34,6 +35,9 @@ async function findAvailablePath(basePath: string): Promise<string> {
       return candidate;
     }
   }
+  throw Object.assign(new Error("Could not find an available filename after 1000 attempts."), {
+    code: "CONFLICT",
+  });
 }
 
 /**
@@ -68,9 +72,16 @@ export async function convertToMarkdown(
   const markdown = extractMarkdown(doc);
 
   // Determine output path
+  const sourceDir = path.dirname(docState.filePath);
   let resolvedOutput: string;
   if (outputPath) {
     resolvedOutput = path.resolve(outputPath);
+    // Reject UNC paths (Windows NTLM security)
+    if (resolvedOutput.startsWith("\\\\") || resolvedOutput.startsWith("//")) {
+      throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
+        code: "INVALID_PATH",
+      });
+    }
     // If they gave a directory, append the filename
     try {
       const stat = await fs.stat(resolvedOutput);
@@ -82,9 +93,8 @@ export async function convertToMarkdown(
       // Path doesn't exist yet — use as-is
     }
   } else {
-    const dir = path.dirname(docState.filePath);
     const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
-    resolvedOutput = path.join(dir, `${baseName}.md`);
+    resolvedOutput = path.join(sourceDir, `${baseName}.md`);
   }
 
   // Avoid overwriting existing files
