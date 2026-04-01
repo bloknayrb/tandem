@@ -1,6 +1,6 @@
-#!/usr/bin/env node
 /**
  * Tandem CLI — entry point for the `tandem` global command.
+ * Shebang is added by tsup banner at build time.
  *
  * Usage:
  *   tandem            Start the Tandem server and open the browser
