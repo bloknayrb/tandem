@@ -30,9 +30,10 @@ async function findAvailablePath(basePath: string): Promise<string> {
       // File exists, try next
       counter++;
       candidate = path.join(dir, `${name}-${counter}${ext}`);
-    } catch {
-      // File doesn't exist — use it
-      return candidate;
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return candidate;
+      throw err; // Permission errors should propagate
     }
   }
   throw Object.assign(new Error("Could not find an available filename after 1000 attempts."), {
@@ -71,6 +72,14 @@ export async function convertToMarkdown(
   const doc = getOrCreateDocument(docState.id);
   const markdown = extractMarkdown(doc);
 
+  // Guard against empty conversion (corrupt .docx or unpopulated Y.Doc)
+  if (!markdown.trim()) {
+    throw Object.assign(
+      new Error("Conversion produced empty output — the .docx may not contain extractable text."),
+      { code: "EMPTY_CONVERSION" },
+    );
+  }
+
   // Determine output path
   const sourceDir = path.dirname(docState.filePath);
   let resolvedOutput: string;
@@ -89,8 +98,9 @@ export async function convertToMarkdown(
         const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
         resolvedOutput = path.join(resolvedOutput, `${baseName}.md`);
       }
-    } catch {
-      // Path doesn't exist yet — use as-is
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") throw err; // Only swallow "doesn't exist"
     }
   } else {
     const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
@@ -103,12 +113,20 @@ export async function convertToMarkdown(
   // Write the markdown file
   await atomicWrite(resolvedOutput, markdown);
 
-  // Open the new file in Tandem
-  const openResult = await openFileByPath(resolvedOutput);
-
-  return {
-    outputPath: resolvedOutput,
-    documentId: openResult.documentId,
-    fileName: openResult.fileName,
-  };
+  // Open the new file in Tandem — include outputPath in error if this fails
+  try {
+    const openResult = await openFileByPath(resolvedOutput);
+    return {
+      outputPath: resolvedOutput,
+      documentId: openResult.documentId,
+      fileName: openResult.fileName,
+    };
+  } catch (err) {
+    throw Object.assign(
+      new Error(
+        `Markdown written to ${resolvedOutput} but failed to open: ${(err as Error).message}`,
+      ),
+      { code: "OPEN_FAILED" },
+    );
+  }
 }

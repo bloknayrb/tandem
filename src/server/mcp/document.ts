@@ -582,10 +582,15 @@ export function registerDocumentTools(server: McpServer): void {
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "FILE_NOT_FOUND") return noDocumentError();
-        if (e.code === "UNSUPPORTED_FORMAT" || e.code === "INVALID_PATH") {
+        if (
+          e.code === "UNSUPPORTED_FORMAT" ||
+          e.code === "INVALID_PATH" ||
+          e.code === "EMPTY_CONVERSION" ||
+          e.code === "OPEN_FAILED"
+        ) {
           return mcpError("FORMAT_ERROR", e.message);
         }
-        return mcpError("FORMAT_ERROR", `Conversion failed: ${getErrorMessage(err)}`);
+        throw err; // Let withErrorBoundary handle unexpected errors
       }
     }),
   );

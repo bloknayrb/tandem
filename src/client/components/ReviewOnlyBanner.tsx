@@ -31,8 +31,8 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
         body: JSON.stringify({ documentId }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ message: "Conversion failed." }));
-        setError(body.message ?? "Conversion failed.");
+        const body = await res.json().catch(() => null);
+        setError(body?.message ?? `Conversion failed (HTTP ${res.status}).`);
       }
       // On success the server opens the new .md tab — Hocuspocus sync handles the rest
     } catch {
