@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE } from "../utils/fileUpload";
 
 const DISMISS_KEY = "tandem:reviewOnlyBannerDismissed";
 
@@ -25,7 +26,7 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
     setConverting(true);
     setError(null);
     try {
-      const res = await fetch("/api/convert", {
+      const res = await fetch(`${API_BASE}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentId }),
