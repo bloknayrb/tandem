@@ -262,7 +262,7 @@ export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
  * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
  * Returns null if the offset falls in a heading prefix or can't be resolved.
  */
-export function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): unknown | null {
+function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): unknown | null {
   const fragment = doc.getXmlFragment("default");
   const resolved = resolveOffset(fragment, offset);
   if (!resolved || resolved.clampedFromPrefix) return null;
@@ -279,7 +279,7 @@ export function flatOffsetToRelPos(doc: Y.Doc, offset: number, assoc: 0 | -1): u
  * Resolve a JSON-serialized Yjs RelativePosition back to a flat text offset.
  * Returns null if the referenced content was deleted.
  */
-export function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | null {
+function relPosToFlatOffset(doc: Y.Doc, relPosJson: unknown): number | null {
   const rpos = Y.createRelativePositionFromJSON(relPosJson);
   const absPos = Y.createAbsolutePositionFromRelativePosition(rpos, doc);
   if (!absPos) return null;

@@ -1,4 +1,6 @@
 import { Y_MAP_AWARENESS } from "../../shared/constants.js";
+import type { FlatOffset } from "../../shared/positions/types.js";
+import { toFlatOffset } from "../../shared/positions/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -20,8 +22,8 @@ function getFullText(docName: string): string {
 }
 
 export interface SearchMatch {
-  from: number;
-  to: number;
+  from: FlatOffset;
+  to: FlatOffset;
   text: string;
 }
 
@@ -36,7 +38,11 @@ export function searchText(
     const pattern = useRegex ? new RegExp(query, "gi") : new RegExp(escapeRegex(query), "gi");
     let match;
     while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({ from: match.index, to: match.index + match[0].length, text: match[0] });
+      matches.push({
+        from: toFlatOffset(match.index),
+        to: toFlatOffset(match.index + match[0].length),
+        text: match[0],
+      });
     }
   } catch (err) {
     return { matches: [], error: `Invalid regex: ${getErrorMessage(err)}` };
@@ -49,14 +55,18 @@ export function findOccurrence(
   fullText: string,
   pattern: string,
   occurrence: number = 1,
-): { from: number; to: number; text: string } | { error: string; totalCount: number } {
+): { from: FlatOffset; to: FlatOffset; text: string } | { error: string; totalCount: number } {
   const regex = new RegExp(escapeRegex(pattern), "g");
   let match;
   let count = 0;
   while ((match = regex.exec(fullText)) !== null) {
     count++;
     if (count === occurrence) {
-      return { from: match.index, to: match.index + match[0].length, text: match[0] };
+      return {
+        from: toFlatOffset(match.index),
+        to: toFlatOffset(match.index + match[0].length),
+        text: match[0],
+      };
     }
   }
   return {
@@ -68,12 +78,12 @@ export function findOccurrence(
 /** Extract context window around a range. Pure logic extracted for testability. */
 export function extractContext(
   fullText: string,
-  from: number,
-  to: number,
+  from: FlatOffset,
+  to: FlatOffset,
   windowSize: number = 500,
 ) {
-  const contextStart = Math.max(0, from - windowSize);
-  const contextEnd = Math.min(fullText.length, to + windowSize);
+  const contextStart = toFlatOffset(Math.max(0, from - windowSize));
+  const contextEnd = toFlatOffset(Math.min(fullText.length, to + windowSize));
   return {
     context: fullText.slice(contextStart, contextEnd),
     selection: fullText.slice(from, to),
@@ -177,12 +187,17 @@ export function registerNavigationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_getContext", async ({ from, to, windowSize = 500, documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
+    withErrorBoundary(
+      "tandem_getContext",
+      async ({ from: rawFrom, to: rawTo, windowSize = 500, documentId }) => {
+        const current = getCurrentDoc(documentId);
+        if (!current) return noDocumentError();
 
-      const fullText = getFullText(current.docName);
-      return mcpSuccess(extractContext(fullText, from, to, windowSize));
-    }),
+        const from = toFlatOffset(rawFrom);
+        const to = toFlatOffset(rawTo);
+        const fullText = getFullText(current.docName);
+        return mcpSuccess(extractContext(fullText, from, to, windowSize));
+      },
+    ),
   );
 }
