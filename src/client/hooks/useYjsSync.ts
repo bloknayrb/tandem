@@ -290,11 +290,29 @@ export function useYjsSync(): YjsSyncResult {
   }, [activeTabId, setupTabObservers]);
 
   const handleTabClose = useCallback((tabId: string) => {
+    // Optimistically switch to adjacent tab if closing the active one
     setActiveTabId((prev) => {
       if (prev !== tabId) return prev;
-      const remaining = tabsRef.current.filter((t) => t.id !== tabId);
-      return remaining.length > 0 ? remaining[0].id : null;
+      const currentTabs = tabsRef.current;
+      const idx = currentTabs.findIndex((t) => t.id === tabId);
+      const remaining = currentTabs.filter((t) => t.id !== tabId);
+      if (remaining.length === 0) return null;
+      // Prefer next tab; fall back to previous
+      return remaining[Math.min(idx, remaining.length - 1)].id;
     });
+
+    // Tell the server to close the document — the broadcast will reconcile tabs
+    fetch("/api/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: tabId }),
+    })
+      .then((res) => {
+        if (!res.ok) console.warn("[Tandem] Server rejected close:", res.status);
+      })
+      .catch((err) => {
+        console.warn("[Tandem] Failed to close document on server:", err);
+      });
   }, []);
 
   return {
