@@ -33,9 +33,27 @@ import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
 // In HTTP mode this is defense-in-depth; in stdio mode it's critical.
 
-console.log = console.error;
-console.warn = console.error;
-console.info = console.error;
+// In production (global install, TANDEM_OPEN_BROWSER=1), suppress known noisy
+// warnings from dependencies (mammoth, Y.js). In dev mode, show everything.
+const isProduction = process.env.TANDEM_OPEN_BROWSER === "1";
+const SUPPRESSED_PATTERNS = [/^\[mammoth\]/, /Invalid access/i, /^\s*add yjs type/i];
+
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+if (isProduction) {
+  const filteredError = (...args: Parameters<typeof console.error>) => {
+    const msg = args.map(String).join(" ");
+    if (SUPPRESSED_PATTERNS.some((p) => p.test(msg))) return;
+    originalStderrWrite(msg + "\n");
+  };
+  console.log = filteredError;
+  console.warn = filteredError;
+  console.info = filteredError;
+  console.error = filteredError;
+} else {
+  console.log = console.error;
+  console.warn = console.error;
+  console.info = console.error;
+}
 
 const transportMode = (process.env.TANDEM_TRANSPORT || "http").toLowerCase();
 const wsPort = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
