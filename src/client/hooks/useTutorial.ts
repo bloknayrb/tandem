@@ -9,7 +9,7 @@ interface UseTutorialResult {
   tutorialActive: boolean;
   currentStep: number;
   dismissTutorial: () => void;
-  skipStep: () => void;
+  nextStep: () => void;
 }
 
 function readCompleted(): boolean {
@@ -109,7 +109,7 @@ export function useTutorial(
     setCompleted(true);
   }, []);
 
-  const skipStep = useCallback(() => {
+  const nextStep = useCallback(() => {
     stepAdvancedAt.current = Date.now();
     setCurrentStep((prev) => Math.min(prev + 1, 3));
   }, []);
@@ -118,6 +118,6 @@ export function useTutorial(
     tutorialActive,
     currentStep,
     dismissTutorial,
-    skipStep,
+    nextStep,
   };
 }

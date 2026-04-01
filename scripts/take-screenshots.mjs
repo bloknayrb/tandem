@@ -145,7 +145,7 @@ async function main() {
     });
 
     // Dismiss any existing tutorial card
-    const tutorialDismiss = page.locator('[data-testid="tutorial-skip-btn"]');
+    const tutorialDismiss = page.locator('[data-testid="tutorial-next-btn"]');
     if (await tutorialDismiss.isVisible({ timeout: 1000 }).catch(() => false)) {
       await tutorialDismiss.click();
       await sleep(300);
