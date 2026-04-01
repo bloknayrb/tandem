@@ -8,6 +8,7 @@ import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { InputGroup } from "./InputGroup";
 import { ToolbarButton } from "./ToolbarButton";
+import { FormattingToolbar } from "./FormattingToolbar";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
   { value: "yellow", label: "Yellow" },
@@ -224,6 +225,11 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       >
         Tandem
       </span>
+      <div style={{ width: "1px", height: "20px", background: "#e5e7eb", margin: "0 8px" }} />
+
+      <FormattingToolbar editor={editor} disabled={inInputMode} />
+
+      {/* Divider between formatting and annotation sections */}
       <div style={{ width: "1px", height: "20px", background: "#e5e7eb", margin: "0 8px" }} />
 
       {/* Highlight with color picker */}

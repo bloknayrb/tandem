@@ -4,6 +4,7 @@ export function ToolbarButton({
   label,
   shortcut,
   disabled,
+  active,
   onMouseDown,
   onClick,
   style,
@@ -11,10 +12,24 @@ export function ToolbarButton({
   label: string;
   shortcut?: string;
   disabled?: boolean;
+  active?: boolean;
   onMouseDown?: (e: React.MouseEvent) => void;
   onClick?: () => void;
   style?: React.CSSProperties;
 }) {
+  let border = "1px solid #e5e7eb";
+  let background = "#fff";
+  let color = "#374151";
+
+  if (disabled) {
+    background = "#f9fafb";
+    color = "#9ca3af";
+  } else if (active) {
+    border = "1px solid #818cf8";
+    background = "#eef2ff";
+    color = "#4338ca";
+  }
+
   return (
     <button
       disabled={disabled}
@@ -24,10 +39,10 @@ export function ToolbarButton({
       style={{
         padding: "4px 10px",
         fontSize: "13px",
-        border: "1px solid #e5e7eb",
+        border,
         borderRadius: "4px",
-        background: disabled ? "#f9fafb" : "#fff",
-        color: disabled ? "#9ca3af" : "#374151",
+        background,
+        color,
         cursor: disabled ? "not-allowed" : "pointer",
         ...style,
       }}
