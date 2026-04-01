@@ -3,15 +3,21 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import { buildMcpEntries, detectTargets, applyConfig } from "../../src/cli/setup.js";
 
 describe("buildMcpEntries", () => {
   it("returns tandem HTTP entry and channel node entry", () => {
     const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js");
-    expect(entries.tandem).toEqual({ type: "http", url: "http://localhost:3479/mcp" });
+    expect(entries.tandem).toEqual({
+      type: "http",
+      url: `http://localhost:${DEFAULT_MCP_PORT}/mcp`,
+    });
     expect(entries["tandem-channel"].command).toBe("node");
     expect(entries["tandem-channel"].args).toEqual(["/abs/path/to/dist/channel/index.js"]);
-    expect(entries["tandem-channel"].env).toEqual({ TANDEM_URL: "http://localhost:3479" });
+    expect(entries["tandem-channel"].env).toEqual({
+      TANDEM_URL: `http://localhost:${DEFAULT_MCP_PORT}`,
+    });
   });
 });
 
@@ -31,7 +37,10 @@ describe("applyConfig", () => {
     const entries = buildMcpEntries("/fake/channel/index.js");
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(written.mcpServers.tandem).toEqual({ type: "http", url: "http://localhost:3479/mcp" });
+    expect(written.mcpServers.tandem).toEqual({
+      type: "http",
+      url: `http://localhost:${DEFAULT_MCP_PORT}/mcp`,
+    });
     expect(written.mcpServers["tandem-channel"].command).toBe("node");
   });
 
@@ -67,7 +76,7 @@ describe("applyConfig", () => {
     const entries = buildMcpEntries("/fake/channel/index.js");
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(written.mcpServers.tandem.url).toBe("http://localhost:3479/mcp");
+    expect(written.mcpServers.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
   });
 
   it("overwrites malformed JSON with fresh config", async () => {
@@ -94,23 +103,23 @@ describe("detectTargets", () => {
   it("detects Claude Code when mcp_settings.json exists", async () => {
     mkdirSync(join(tmpDir, ".claude"), { recursive: true });
     writeFileSync(join(tmpDir, ".claude", "mcp_settings.json"), "{}");
-    const targets = await detectTargets({ homeOverride: tmpDir });
+    const targets = detectTargets({ homeOverride: tmpDir });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
   });
 
   it("detects Claude Code when only ~/.claude directory exists (no mcp_settings.json yet)", async () => {
     mkdirSync(join(tmpDir, ".claude"), { recursive: true });
-    const targets = await detectTargets({ homeOverride: tmpDir });
+    const targets = detectTargets({ homeOverride: tmpDir });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
   });
 
   it("does not detect Claude Code when ~/.claude does not exist", async () => {
-    const targets = await detectTargets({ homeOverride: tmpDir });
+    const targets = detectTargets({ homeOverride: tmpDir });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(false);
   });
 
   it("detects Claude Code with --force even when ~/.claude is absent", async () => {
-    const targets = await detectTargets({ homeOverride: tmpDir, force: true });
+    const targets = detectTargets({ homeOverride: tmpDir, force: true });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
   });
 });

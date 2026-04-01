@@ -230,7 +230,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     // SPA fallback: serve index.html for client-side routes not matched above
     const indexPath = join(CLIENT_DIST, "index.html");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    app.get("*", (_req: import("express").Request, res: any) => {
+    app.get("/{*path}", (_req: import("express").Request, res: any) => {
       res.sendFile(indexPath);
     });
     console.error(`[Tandem] Serving client from ${CLIENT_DIST}`);

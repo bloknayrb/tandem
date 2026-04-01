@@ -1,14 +1,17 @@
-import { readFileSync, mkdirSync, existsSync } from "node:fs";
-import { writeFile, rename, copyFile, unlink } from "node:fs/promises";
+import { readFileSync, existsSync } from "node:fs";
+import { writeFile, rename, copyFile, unlink, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Absolute path to dist/channel/index.js (sibling of dist/cli/)
 const CHANNEL_DIST = resolve(__dirname, "../channel/index.js");
+
+const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
 
 export interface McpEntry {
   type?: "http";
@@ -27,12 +30,12 @@ export function buildMcpEntries(channelPath: string): McpEntries {
   return {
     tandem: {
       type: "http",
-      url: "http://localhost:3479/mcp",
+      url: `${MCP_URL}/mcp`,
     },
     "tandem-channel": {
       command: "node",
       args: [channelPath],
-      env: { TANDEM_URL: "http://localhost:3479" },
+      env: { TANDEM_URL: MCP_URL },
     },
   };
 }
@@ -47,7 +50,7 @@ interface DetectOptions {
   force?: boolean;
 }
 
-export async function detectTargets(opts: DetectOptions = {}): Promise<DetectedTarget[]> {
+export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   const home = opts.homeOverride ?? homedir();
   const targets: DetectedTarget[] = [];
 
@@ -110,14 +113,13 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
 }
 
 export async function applyConfig(configPath: string, entries: McpEntries): Promise<void> {
-  // Read existing config or start fresh
+  // Read existing config or start fresh — no existsSync guard needed,
+  // the catch handles both ENOENT (file missing) and malformed JSON.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
-  if (existsSync(configPath)) {
-    try {
-      existing = JSON.parse(readFileSync(configPath, "utf-8"));
-    } catch {
-      // Malformed JSON — overwrite with fresh config
-    }
+  try {
+    existing = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    // ENOENT or malformed JSON — start fresh
   }
 
   const updated = {
@@ -128,9 +130,7 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
     },
   };
 
-  // Ensure directory exists before writing
-  mkdirSync(dirname(configPath), { recursive: true });
-
+  await mkdir(dirname(configPath), { recursive: true });
   await atomicWrite(JSON.stringify(updated, null, 2) + "\n", configPath);
 }
 
@@ -139,7 +139,7 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
   console.error("\nTandem Setup\n");
   console.error("Detecting Claude installations...");
 
-  const targets = await detectTargets({ force: opts.force });
+  const targets = detectTargets({ force: opts.force });
 
   if (targets.length === 0) {
     console.error(

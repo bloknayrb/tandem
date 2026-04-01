@@ -25,8 +25,6 @@ export function runStart(): void {
   // Forward signals — proc.kill() with no argument uses SIGTERM on Unix
   // and TerminateProcess on Windows (correct cross-platform behavior).
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    process.on(sig, () => {
-      proc.kill();
-    });
+    process.once(sig, () => proc.kill());
   }
 }
