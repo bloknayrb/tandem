@@ -120,7 +120,13 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
       />
 
       {/* Heading dropdown */}
-      <div style={{ position: "relative" }} ref={headingMenuRef}>
+      <div
+        style={{ position: "relative" }}
+        ref={headingMenuRef}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setShowHeadingMenu(false);
+        }}
+      >
         <ToolbarButton
           label={headingLabel}
           disabled={isDisabled}
@@ -151,6 +157,7 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
           >
             {HEADING_LEVELS.map((level) => (
               <button
+                type="button"
                 key={level}
                 onMouseDown={handleHeadingToggle(level)}
                 style={{

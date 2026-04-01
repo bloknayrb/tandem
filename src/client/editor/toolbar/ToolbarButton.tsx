@@ -32,6 +32,7 @@ export function ToolbarButton({
 
   return (
     <button
+      type="button"
       disabled={disabled}
       title={shortcut ? `${label} (${shortcut})` : label}
       onMouseDown={onMouseDown}
@@ -39,12 +40,12 @@ export function ToolbarButton({
       style={{
         padding: "4px 10px",
         fontSize: "13px",
-        border,
         borderRadius: "4px",
-        background,
-        color,
         cursor: disabled ? "not-allowed" : "pointer",
         ...style,
+        border,
+        background,
+        color,
       }}
     >
       {label}
