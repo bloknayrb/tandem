@@ -17,8 +17,9 @@
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
 import type { Annotation } from "../shared/types";
-import type { DocumentRange, RelativeRange } from "../shared/positions/types";
+import type { FlatOffset, PmPos, DocumentRange, RelativeRange } from "../shared/positions/types";
 import type { PmRangeResult } from "../shared/positions/index";
+import { toFlatOffset, toPmPos } from "../shared/positions/types";
 import { headingPrefixLength } from "../shared/offsets";
 
 // ---------------------------------------------------------------------------
@@ -32,7 +33,7 @@ import { headingPrefixLength } from "../shared/offsets";
  * Flat text includes heading prefixes ("# ", "## ") and "\n" separators
  * that don't exist in ProseMirror's content model.
  */
-export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
+export function flatOffsetToPmPos(doc: PmNode, flatOffset: FlatOffset): PmPos {
   let accumulated = 0;
   let pmOffset = 0;
 
@@ -50,7 +51,7 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
     if (accumulated + fullFlatLen > flatOffset) {
       const offsetInFlat = flatOffset - accumulated;
       const textOffset = Math.max(0, offsetInFlat - prefixLen);
-      return childStart + Math.min(textOffset, textLen);
+      return toPmPos(childStart + Math.min(textOffset, textLen));
     }
 
     accumulated += fullFlatLen;
@@ -59,19 +60,19 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: number): number {
     if (i < nodeCount - 1) {
       accumulated += 1; // \n separator
       if (accumulated > flatOffset) {
-        return childStart + textLen;
+        return toPmPos(childStart + textLen);
       }
     }
   }
 
-  return doc.content.size;
+  return toPmPos(doc.content.size);
 }
 
 /**
  * Convert a ProseMirror position to a flat text offset.
  * Inverse of flatOffsetToPmPos.
  */
-export function pmPosToFlatOffset(doc: PmNode, pmPos: number): number {
+export function pmPosToFlatOffset(doc: PmNode, pmPos: PmPos): FlatOffset {
   let flatOffset = 0;
   let pmOffset = 0;
 
@@ -88,10 +89,10 @@ export function pmPosToFlatOffset(doc: PmNode, pmPos: number): number {
 
     if (pmPos <= nodeEnd) {
       if (pmPos <= nodeStart) {
-        return flatOffset + prefixLen;
+        return toFlatOffset(flatOffset + prefixLen);
       }
       const offsetInNode = pmPos - nodeStart;
-      return flatOffset + prefixLen + Math.min(offsetInNode, textLen);
+      return toFlatOffset(flatOffset + prefixLen + Math.min(offsetInNode, textLen));
     }
 
     flatOffset += prefixLen + textLen;
@@ -102,7 +103,7 @@ export function pmPosToFlatOffset(doc: PmNode, pmPos: number): number {
     }
   }
 
-  return flatOffset;
+  return toFlatOffset(flatOffset);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ function xmlTextIndexToPmPos(
   pmDoc: PmNode,
   fragment: Y.XmlFragment,
   absPos: { type: Y.AbstractType<unknown>; index: number },
-): number | null {
+): PmPos | null {
   let pmOffset = 0;
 
   const nodeCount = Math.min(pmDoc.childCount, fragment.length);
@@ -132,7 +133,9 @@ function xmlTextIndexToPmPos(
         const child = yNode.get(j);
         if (child instanceof Y.XmlText) {
           if (child === absPos.type) {
-            return childStart + Math.min(charAccum + absPos.index, pmChild.textContent.length);
+            return toPmPos(
+              childStart + Math.min(charAccum + absPos.index, pmChild.textContent.length),
+            );
           }
           charAccum += child.length;
         }
@@ -153,7 +156,7 @@ export function relRangeToPmPositions(
   ydoc: Y.Doc,
   pmDoc: PmNode,
   relRange: RelativeRange,
-): { from: number; to: number } | null {
+): { from: PmPos; to: PmPos } | null {
   let fromAbs, toAbs;
   try {
     const fromRpos = Y.createRelativePositionFromJSON(relRange.fromRel);
@@ -219,7 +222,7 @@ export function annotationToPmRange(
  */
 export function pmSelectionToFlat(
   pmDoc: PmNode,
-  selection: { from: number; to: number },
+  selection: { from: PmPos; to: PmPos },
 ): DocumentRange {
   return {
     from: pmPosToFlatOffset(pmDoc, selection.from),

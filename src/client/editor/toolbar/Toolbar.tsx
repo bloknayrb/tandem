@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
 import { pmPosToFlatOffset } from "../../positions";
+import { toPmPos } from "../../../shared/positions/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
@@ -86,8 +87,8 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     const { from, to } = range;
     if (from === to) return;
 
-    const flatFrom = pmPosToFlatOffset(editor.state.doc, from);
-    const flatTo = pmPosToFlatOffset(editor.state.doc, to);
+    const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
+    const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
 
     const id = generateAnnotationId();
     const annotation: Annotation = {

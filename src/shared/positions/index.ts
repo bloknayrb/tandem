@@ -1,4 +1,7 @@
 export type {
+  FlatOffset,
+  PmPos,
+  SerializedRelPos,
   DocumentRange,
   RelativeRange,
   RangeValidation,
@@ -6,4 +9,10 @@ export type {
   ElementPosition,
   ResolutionMethod,
   PmRangeResult,
+} from "./types.js";
+
+export {
+  toFlatOffset,
+  toPmPos,
+  toSerializedRelPos,
 } from "./types.js";

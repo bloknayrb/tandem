@@ -16,6 +16,7 @@ import {
   AuthorSchema,
   AnnotationActionSchema,
   ExportFormatSchema,
+  toFlatOffset,
 } from "../../shared/types.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import type { RangeValidation, AnchoredRangeResult } from "../../shared/positions/index.js";
@@ -146,9 +147,11 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_highlight",
-      async ({ from, to, color, note, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, color, note, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
+        const from = toFlatOffset(rawFrom);
+        const to = toFlatOffset(rawTo);
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) {
           notifyRangeFailure(result, "tandem_highlight", documentId);
@@ -188,9 +191,11 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({ from, to, text, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, text, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
+        const from = toFlatOffset(rawFrom);
+        const to = toFlatOffset(rawTo);
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) {
           notifyRangeFailure(result, "tandem_comment", documentId);
@@ -230,9 +235,11 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_suggest",
-      async ({ from, to, newText, reason, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, newText, reason, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
+        const from = toFlatOffset(rawFrom);
+        const to = toFlatOffset(rawTo);
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) {
           notifyRangeFailure(result, "tandem_suggest", documentId);
@@ -275,9 +282,11 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_flag",
-      async ({ from, to, note, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, note, documentId, priority, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
+        const from = toFlatOffset(rawFrom);
+        const to = toFlatOffset(rawTo);
         const result = anchoredRange(da.ydoc, from, to, textSnapshot);
         if (!result.ok) {
           notifyRangeFailure(result, "tandem_flag", documentId);

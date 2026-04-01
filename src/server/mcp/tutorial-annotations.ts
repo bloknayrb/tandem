@@ -4,6 +4,7 @@ import { Y_MAP_ANNOTATIONS, TUTORIAL_ANNOTATION_PREFIX } from "../../shared/cons
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
+import { toFlatOffset } from "../../shared/types.js";
 import { extractText } from "./document-model.js";
 
 interface TutorialAnnotationDef {
@@ -60,7 +61,12 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         continue;
       }
 
-      const result = anchoredRange(doc, idx, idx + def.targetText.length, def.targetText);
+      const result = anchoredRange(
+        doc,
+        toFlatOffset(idx),
+        toFlatOffset(idx + def.targetText.length),
+        def.targetText,
+      );
       if (!result.ok) {
         console.error(
           `[tutorial] anchoredRange failed for "${def.targetText}" — skipping ${def.id}`,

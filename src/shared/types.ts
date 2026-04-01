@@ -1,8 +1,15 @@
 import { z } from "zod";
-import type { DocumentRange, RelativeRange } from "./positions/types.js";
+import type { FlatOffset, DocumentRange, RelativeRange } from "./positions/types.js";
 
 // Canonical definitions live in the positions module; re-exported for backward compatibility.
-export type { DocumentRange, RelativeRange } from "./positions/types.js";
+export type {
+  FlatOffset,
+  PmPos,
+  SerializedRelPos,
+  DocumentRange,
+  RelativeRange,
+} from "./positions/types.js";
+export { toFlatOffset, toPmPos, toSerializedRelPos } from "./positions/types.js";
 
 // --- Zod schemas (source of truth) ---
 
@@ -171,8 +178,8 @@ export interface ChatMessage {
   timestamp: number;
   documentId?: string;
   anchor?: {
-    from: number;
-    to: number;
+    from: FlatOffset;
+    to: FlatOffset;
     textSnapshot: string;
   };
   replyTo?: string;

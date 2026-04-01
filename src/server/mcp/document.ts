@@ -21,6 +21,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 
 // Document model (pure logic)
@@ -290,94 +291,102 @@ export function registerDocumentTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    withErrorBoundary("tandem_edit", async ({ from, to, newText, documentId, textSnapshot }) => {
-      const r = requireDocument(documentId);
-      if (!r) return noDocumentError();
+    withErrorBoundary(
+      "tandem_edit",
+      async ({ from: rawFrom, to: rawTo, newText, documentId, textSnapshot }) => {
+        const r = requireDocument(documentId);
+        if (!r) return noDocumentError();
 
-      const docState = getCurrentDoc(documentId);
-      if (docState?.readOnly) {
-        return mcpError("FORMAT_ERROR", "Document is read-only (.docx). Use annotations instead.");
-      }
-
-      const v = validateRange(r.doc, from, to, {
-        textSnapshot,
-        rejectHeadingOverlap: true,
-      });
-      if (!v.ok) {
-        if (v.code === "RANGE_GONE") {
-          return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
-        }
-        if (v.code === "RANGE_MOVED") {
+        const docState = getCurrentDoc(documentId);
+        if (docState?.readOnly) {
           return mcpError(
-            "RANGE_MOVED",
-            "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
-            { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
+            "FORMAT_ERROR",
+            "Document is read-only (.docx). Use annotations instead.",
           );
         }
-        if (v.code === "HEADING_OVERLAP") {
+
+        const from = toFlatOffset(rawFrom);
+        const to = toFlatOffset(rawTo);
+        const v = validateRange(r.doc, from, to, {
+          textSnapshot,
+          rejectHeadingOverlap: true,
+        });
+        if (!v.ok) {
+          if (v.code === "RANGE_GONE") {
+            return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
+          }
+          if (v.code === "RANGE_MOVED") {
+            return mcpError(
+              "RANGE_MOVED",
+              "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
+              { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
+            );
+          }
+          if (v.code === "HEADING_OVERLAP") {
+            return mcpError(
+              "INVALID_RANGE",
+              'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
+                "Use tandem_resolveRange to find the text position.",
+            );
+          }
+          return mcpError("INVALID_RANGE", v.message);
+        }
+
+        const fragment = r.doc.getXmlFragment("default");
+        const startPos = resolveToElement(fragment, from);
+        const endPos = resolveToElement(fragment, to);
+
+        if (!startPos || !endPos) {
           return mcpError(
             "INVALID_RANGE",
-            'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
-              "Use tandem_resolveRange to find the text position.",
+            `Cannot resolve offset range [${from}, ${to}] in document.`,
           );
         }
-        return mcpError("INVALID_RANGE", v.message);
-      }
 
-      const fragment = r.doc.getXmlFragment("default");
-      const startPos = resolveToElement(fragment, from);
-      const endPos = resolveToElement(fragment, to);
+        if (startPos.elementIndex !== endPos.elementIndex) {
+          r.doc.transact(() => {
+            const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
+            const startText = getOrCreateXmlText(startNode);
+            const startLen = startText.toString().length;
+            if (startPos.textOffset < startLen) {
+              startText.delete(startPos.textOffset, startLen - startPos.textOffset);
+            }
 
-      if (!startPos || !endPos) {
-        return mcpError(
-          "INVALID_RANGE",
-          `Cannot resolve offset range [${from}, ${to}] in document.`,
-        );
-      }
+            const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
+            for (let i = 0; i < deleteCount; i++) {
+              fragment.delete(startPos.elementIndex + 1, 1);
+            }
 
-      if (startPos.elementIndex !== endPos.elementIndex) {
-        r.doc.transact(() => {
-          const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-          const startText = getOrCreateXmlText(startNode);
-          const startLen = startText.toString().length;
-          if (startPos.textOffset < startLen) {
-            startText.delete(startPos.textOffset, startLen - startPos.textOffset);
-          }
-
-          const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
-          for (let i = 0; i < deleteCount; i++) {
+            const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
+            const endText = getOrCreateXmlText(endNode);
+            if (endPos.textOffset > 0) {
+              endText.delete(0, endPos.textOffset);
+            }
+            const remainingText = endText.toString();
+            if (remainingText.length > 0) {
+              startText.insert(startPos.textOffset, remainingText);
+            }
             fragment.delete(startPos.elementIndex + 1, 1);
-          }
 
-          const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-          const endText = getOrCreateXmlText(endNode);
-          if (endPos.textOffset > 0) {
-            endText.delete(0, endPos.textOffset);
-          }
-          const remainingText = endText.toString();
-          if (remainingText.length > 0) {
-            startText.insert(startPos.textOffset, remainingText);
-          }
-          fragment.delete(startPos.elementIndex + 1, 1);
+            startText.insert(startPos.textOffset, newText);
+          }, MCP_ORIGIN);
+        } else {
+          r.doc.transact(() => {
+            const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
+            const textNode = getOrCreateXmlText(node);
+            const deleteLen = endPos.textOffset - startPos.textOffset;
+            if (deleteLen > 0) {
+              textNode.delete(startPos.textOffset, deleteLen);
+            }
+            if (newText.length > 0) {
+              textNode.insert(startPos.textOffset, newText);
+            }
+          }, MCP_ORIGIN);
+        }
 
-          startText.insert(startPos.textOffset, newText);
-        }, MCP_ORIGIN);
-      } else {
-        r.doc.transact(() => {
-          const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-          const textNode = getOrCreateXmlText(node);
-          const deleteLen = endPos.textOffset - startPos.textOffset;
-          if (deleteLen > 0) {
-            textNode.delete(startPos.textOffset, deleteLen);
-          }
-          if (newText.length > 0) {
-            textNode.insert(startPos.textOffset, newText);
-          }
-        }, MCP_ORIGIN);
-      }
-
-      return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
-    }),
+        return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
+      },
+    ),
   );
 
   server.tool(

@@ -6,6 +6,7 @@ import * as Y from "yjs";
 import { TYPING_DEBOUNCE, Y_MAP_AWARENESS, Y_MAP_USER_AWARENESS } from "../../../shared/constants";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { pmSelectionToFlat } from "../../positions";
+import { toPmPos } from "../../../shared/positions/types";
 
 const awarenessPluginKey = new PluginKey("tandemAwareness");
 
@@ -115,7 +116,10 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               // Broadcast selection changes (convert PM positions to flat text offsets)
               // Only when selection actually moved, not on every transaction
               if (!state.selection.eq(prevState.selection)) {
-                const flat = pmSelectionToFlat(state.doc, state.selection);
+                const flat = pmSelectionToFlat(state.doc, {
+                  from: toPmPos(state.selection.from),
+                  to: toPmPos(state.selection.to),
+                });
                 userAwareness.set("selection", {
                   ...flat,
                   timestamp: Date.now(),

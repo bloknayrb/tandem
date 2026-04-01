@@ -4,6 +4,8 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import ReactMarkdown from "react-markdown";
 import * as Y from "yjs";
 import { pmPosToFlatOffset, flatOffsetToPmPos } from "../positions";
+import type { FlatOffset } from "../../shared/positions/types";
+import { toPmPos } from "../../shared/positions/types";
 import { generateMessageId } from "../../shared/utils";
 import type { ChatMessage } from "../../shared/types";
 
@@ -38,8 +40,8 @@ export function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [capturedAnchor, setCapturedAnchor] = useState<{
-    from: number;
-    to: number;
+    from: FlatOffset;
+    to: FlatOffset;
     textSnapshot: string;
   } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -91,8 +93,8 @@ export function ChatPanel({
       setCapturedAnchor(null);
       return;
     }
-    const flatFrom = pmPosToFlatOffset(editor.state.doc, from);
-    const flatTo = pmPosToFlatOffset(editor.state.doc, to);
+    const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
+    const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
     const text = editor.state.doc.textBetween(from, to, "\n");
     setCapturedAnchor({
       from: flatFrom,
@@ -131,7 +133,7 @@ export function ChatPanel({
   );
 
   const scrollToAnchor = useCallback(
-    (anchor: { from: number; to: number }, docId?: string) => {
+    (anchor: { from: FlatOffset; to: FlatOffset }, docId?: string) => {
       if (!editor || (docId && docId !== activeDocId)) return;
       try {
         const pmFrom = flatOffsetToPmPos(editor.state.doc, anchor.from);

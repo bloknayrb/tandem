@@ -12,6 +12,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { headingPrefixLength } from "../../shared/offsets.js";
 import { anchoredRange } from "../positions.js";
+import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 
 // ---------------------------------------------------------------------------
@@ -217,7 +218,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
 
   doc.transact(() => {
     for (const comment of comments) {
-      const result = anchoredRange(doc, comment.from, comment.to);
+      const result = anchoredRange(doc, toFlatOffset(comment.from), toFlatOffset(comment.to));
       if (!result.ok) {
         console.error(
           `[docx-comments] Skipping imported comment ${comment.commentId}: range [${comment.from}, ${comment.to}] — ${result.code}`,
