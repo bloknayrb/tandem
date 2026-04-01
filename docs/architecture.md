@@ -65,7 +65,7 @@ graph LR
         Channel["Channel Notifications"]
     end
 
-    Tiptap <-->|@hocuspocus/provider| HP
+    Tiptap <-->|"@hocuspocus/provider"| HP
     HP <--> YDoc
     MCP -->|tandem_open| FO
     API -->|/api/open, /api/upload, /api/close| FO
