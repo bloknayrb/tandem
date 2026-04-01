@@ -4,6 +4,7 @@ import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 import { detectFormat } from "./document-model.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
+import { closeDocumentById } from "./document-service.js";
 import { subscribe as subscribeNotifications } from "../notifications.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
@@ -153,6 +154,23 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
     } catch (err: unknown) {
       sendApiError(res, err);
     }
+  });
+
+  app.options("/api/close", apiMiddleware);
+  app.post("/api/close", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+    const { documentId } = (req.body ?? {}) as Record<string, unknown>;
+    if (!documentId || typeof documentId !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });
+      return;
+    }
+    const result = await closeDocumentById(documentId);
+    if (!result.success) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({
+      data: { closedPath: result.closedPath, activeDocumentId: result.activeDocumentId },
+    });
   });
 
   app.options("/api/upload", apiMiddleware);

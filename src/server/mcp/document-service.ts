@@ -8,6 +8,7 @@ import {
   loadCtrlSession,
   restoreCtrlDoc,
   listSessionFilePaths,
+  stopAutoSave,
 } from "../session/manager.js";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
@@ -126,6 +127,44 @@ export function broadcastOpenDocs(): void {
   } catch (err) {
     console.error("[Tandem] broadcastOpenDocs error:", err);
   }
+}
+
+/**
+ * Close a document by ID. Saves the session, removes from tracking,
+ * picks a new active doc if needed, stops auto-save if no docs remain,
+ * and broadcasts the updated document list.
+ */
+export async function closeDocumentById(
+  id: string,
+): Promise<
+  | { success: true; closedPath: string; activeDocumentId: string | null }
+  | { success: false; error: string }
+> {
+  const docState = openDocs.get(id);
+  if (!docState) {
+    return { success: false, error: `Document ${id} not found.` };
+  }
+
+  const closedPath = docState.filePath;
+
+  // Persist before removing
+  const doc = getOrCreateDocument(id);
+  await saveSession(docState.filePath, docState.format, doc);
+
+  removeDoc(id);
+
+  if (getActiveDocId() === id) {
+    const remaining = Array.from(openDocs.keys());
+    setActiveDocId(remaining.length > 0 ? remaining[0] : null);
+  }
+
+  if (docCount() === 0) {
+    stopAutoSave();
+  }
+
+  broadcastOpenDocs();
+
+  return { success: true, closedPath, activeDocumentId: getActiveDocId() };
 }
 
 /** Save all open sessions (for shutdown handler). */
