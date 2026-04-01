@@ -7,3 +7,10 @@ dist/
 
 .gemini/
 gha-creds-*.json
+
+# Claude Code ephemeral
+.agents/
+.claude/worktrees/
+.claude/settings.local.json
+skills-lock.json
+test-results/
