@@ -10,7 +10,7 @@ A collaborative document editor where Claude and a human work on the same docume
 graph LR
     Browser["Browser<br/>Tiptap Editor"] <-->|WebSocket| Server["Tandem Server<br/>Node.js"]
     Server <-->|MCP HTTP| Claude["Claude Code"]
-    Server <-->|File I/O| Files[".md .txt .docx"]
+    Server <-->|File I/O| Files[".md .txt .html .docx"]
     Server -->|SSE events| Shim["Channel Shim"]
     Shim -->|push notifications| Claude
 ```
@@ -63,14 +63,14 @@ This checks Node.js version, MCP configuration (both `.mcp.json` and `~/.claude/
 
 ```bash
 curl http://localhost:3479/health
-# → {"status":"ok","version":"0.1.0","transport":"http","hasSession":false}
+# → {"status":"ok","version":"0.1.2","transport":"http","hasSession":false}
 ```
 
 `hasSession` becomes `true` once Claude Code connects.
 
 ## MCP Configuration
 
-Tandem uses two MCP connections: **HTTP** for document tools (27 tools including annotation editing), and a **channel shim** for real-time push notifications.
+Tandem uses two MCP connections: **HTTP** for document tools (28 tools including annotation editing), and a **channel shim** for real-time push notifications.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 
@@ -109,6 +109,7 @@ All optional -- defaults work out of the box.
 | `TANDEM_URL` | `http://localhost:3479` | Channel shim server URL |
 | `TANDEM_TRANSPORT` | `http` | Transport mode (`http` or `stdio`) |
 | `TANDEM_NO_SAMPLE` | unset | Set to `1` to skip auto-opening `sample/welcome.md` |
+| `TANDEM_CLAUDE_CMD` | `claude` | Claude Code executable name (for `tandem setup` auto-detection) |
 
 See `.env.example` for a copy-paste template.
 
@@ -217,7 +218,7 @@ On first launch, a 3-step guided walkthrough appears over the welcome document. 
 
 ## Documentation
 
-- [MCP Tool Reference](docs/mcp-tools.md) -- 27 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- 28 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions

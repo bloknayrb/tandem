@@ -142,7 +142,7 @@ Implemented in PR #147:
 
 ### 8c: Review Mode — PARTIALLY DONE
 
-Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool (27 tools total).
+Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool (28 tools total).
 
 Remaining:
 - Configurable threshold banner ("Claude has 14 suggestions. Review in sequence or filter by type.")

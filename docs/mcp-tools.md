@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 27 tools via MCP HTTP (Model Context Protocol) plus 1 tool via the channel shim (`tandem_reply`) that Claude Code discovers automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 28 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -316,6 +316,32 @@ Switch the active document. Tools will operate on this document by default.
 ```
 
 **Errors:** `NO_DOCUMENT` if document ID not found among open documents.
+
+---
+
+### tandem_convertToMarkdown
+
+Convert a `.docx` document to an editable Markdown file. Writes the `.md` file to disk and opens it as a new tab.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `documentId` | string | no | Document ID of the `.docx` to convert (defaults to active document) |
+| `outputPath` | string | no | Custom output path for the `.md` file (defaults to same directory as the `.docx`) |
+
+**Returns:**
+```json
+{
+  "converted": true,
+  "outputPath": "C:\\Users\\bkolb\\docs\\report.md",
+  "documentId": "report-a1b2c3",
+  "fileName": "report.md",
+  "message": "Converted to Markdown: report.md"
+}
+```
+
+**Notes:** The source document must be a `.docx` file. The converted Markdown file opens as a new editable tab alongside the original read-only `.docx`.
+
+**Errors:** `NO_DOCUMENT` (no active document or `documentId` not found), `FORMAT_ERROR` (source is not `.docx`, invalid output path, or conversion produced empty result)
 
 ---
 
