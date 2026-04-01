@@ -6,6 +6,7 @@ import { detectFormat } from "./document-model.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
 import { closeDocumentById } from "./document-service.js";
 import { subscribe as subscribeNotifications } from "../notifications.js";
+import { convertToMarkdown } from "./convert.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
@@ -196,6 +197,29 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
       const format = detectFormat(fileName);
       const decoded = format === "docx" ? Buffer.from(content, "base64") : String(content);
       const result = await openFileFromContent(fileName, decoded);
+      res.json({ data: result });
+    } catch (err: unknown) {
+      sendApiError(res, err);
+    }
+  });
+
+  app.options("/api/convert", apiMiddleware);
+  app.post("/api/convert", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+    const { documentId, outputPath } = (req.body ?? {}) as Record<string, unknown>;
+    if (documentId !== undefined && typeof documentId !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
+      return;
+    }
+    if (outputPath !== undefined && typeof outputPath !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "outputPath must be a string" });
+      return;
+    }
+
+    try {
+      const result = await convertToMarkdown(
+        documentId as string | undefined,
+        outputPath as string | undefined,
+      );
       res.json({ data: result });
     } catch (err: unknown) {
       sendApiError(res, err);
