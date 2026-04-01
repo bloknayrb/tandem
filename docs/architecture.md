@@ -237,6 +237,18 @@ On server startup, `listSessionFilePaths()` scans the session directory and `res
 
 The channel replaces polling for user actions. Instead of Claude calling `tandem_checkInbox` repeatedly, the channel shim pushes events to Claude Code as they happen.
 
+### Activation
+
+The channel shim is configured by `tandem setup`, but Claude Code must be started with the `--channels` flag to activate real-time push:
+
+```bash
+claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel
+```
+
+**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The `--dangerously-load-development-channels` flag is needed because `tandem-channel` is not yet on the official channel allowlist; it is safe to use with known, trusted channel servers like Tandem. Without the `--channels` flag, Claude Code does not start the channel shim — Claude falls back to `tandem_checkInbox` polling.
+
+**Known limitation (as of Claude Code v2.1.89):** The Channels API notification delivery does not appear to be fully functional — `<channel>` tags are not injected into the conversation even with proper flags. This affects all channel implementations. Tandem's polling fallback (`tandem_checkInbox`) remains reliable. See [#165](https://github.com/bloknayrb/tandem/issues/165) for tracking.
+
 ### Event Flow
 
 ```

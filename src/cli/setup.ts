@@ -190,6 +190,17 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
     );
   } else {
     console.error("\nSetup complete! Start Tandem with: tandem");
-    console.error("Then in Claude, your tandem_* tools will be available.\n");
+    console.error("Then in Claude, your tandem_* tools will be available.");
+  }
+
+  // Channel activation instructions (shown on all successful setups)
+  if (failures < targets.length) {
+    console.error(
+      "\n\x1b[1mReal-time push notifications (optional):\x1b[0m\n" +
+        "  To receive chat messages and events instantly (instead of polling),\n" +
+        "  start Claude Code with the channel flag:\n\n" +
+        "    claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel\n\n" +
+        "  Without this flag, Claude still works but relies on tandem_checkInbox polling.\n",
+    );
   }
 }

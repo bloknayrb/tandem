@@ -94,7 +94,25 @@ Tandem uses two MCP connections: **HTTP** for document tools (28 tools including
 
 Both entries are cross-platform -- no platform-specific configuration needed.
 
-The channel shim is optional -- without it, Claude relies on polling via `tandem_checkInbox` instead of receiving real-time push events.
+### Chat via Tandem (Recommended)
+
+To have Claude monitor the Tandem chat panel and respond to your messages automatically, use the `/loop` skill in Claude Code:
+
+```
+/loop 30s check tandem inbox and respond to any new messages
+```
+
+This polls every 30 seconds, creating a chat-like experience where you type in the Tandem UI and Claude responds through it. Token cost is minimal when there are no new messages.
+
+### Real-Time Push Notifications (Experimental)
+
+Tandem includes a channel shim for Claude Code's experimental Channels API, which would deliver events instantly without polling. To activate it:
+
+```bash
+claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel
+```
+
+**Note:** As of Claude Code v2.1.89, the Channels API does not reliably deliver `<channel>` notifications to the model. The `/loop` approach above is more reliable. See [#165](https://github.com/bloknayrb/tandem/issues/165) for tracking. The `--dangerously-load-development-channels` flag is required until Tandem is added to the official channel allowlist.
 
 **Important:** The server must be running before Claude Code connects.
 
