@@ -1,6 +1,6 @@
 interface OnboardingTutorialProps {
   currentStep: number;
-  onSkip: () => void;
+  onNext: () => void;
   onDismiss: () => void;
 }
 
@@ -26,7 +26,7 @@ const STEPS = [
 /** Steps 0-2 are actionable; step 3 is the completion message */
 const TOTAL_STEPS = 3;
 
-export function OnboardingTutorial({ currentStep, onSkip, onDismiss }: OnboardingTutorialProps) {
+export function OnboardingTutorial({ currentStep, onNext, onDismiss }: OnboardingTutorialProps) {
   const step = STEPS[currentStep];
   if (!step) return null;
 
@@ -116,8 +116,8 @@ export function OnboardingTutorial({ currentStep, onSkip, onDismiss }: Onboardin
               Dismiss tutorial
             </button>
             <button
-              data-testid="tutorial-skip-btn"
-              onClick={onSkip}
+              data-testid="tutorial-next-btn"
+              onClick={onNext}
               style={{
                 padding: "4px 12px",
                 fontSize: 12,
@@ -129,7 +129,7 @@ export function OnboardingTutorial({ currentStep, onSkip, onDismiss }: Onboardin
                 fontWeight: 500,
               }}
             >
-              Skip
+              {currentStep === TOTAL_STEPS - 1 ? "Done" : "Next"}
             </button>
           </div>
         </div>

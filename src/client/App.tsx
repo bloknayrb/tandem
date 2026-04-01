@@ -223,7 +223,7 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
-  const { tutorialActive, currentStep, dismissTutorial, skipStep } = useTutorial(
+  const { tutorialActive, currentStep, dismissTutorial, nextStep } = useTutorial(
     annotations,
     editorRef,
     activeTab?.fileName,
@@ -468,7 +468,7 @@ export default function App() {
       {tutorialActive && (
         <OnboardingTutorial
           currentStep={currentStep}
-          onSkip={skipStep}
+          onNext={nextStep}
           onDismiss={dismissTutorial}
         />
       )}

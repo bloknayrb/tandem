@@ -164,7 +164,7 @@ Annotation failures and save errors surface as dismissible toast notifications. 
 
 ### Onboarding Tutorial
 
-![Onboarding tutorial card showing step 1 of 3 with progress dots and skip button](docs/screenshots/08-onboarding-tutorial.png)
+![Onboarding tutorial card showing step 1 of 3 with progress dots and next button](docs/screenshots/08-onboarding-tutorial.png)
 
 On first launch, a 3-step guided walkthrough appears over the welcome document. Pre-placed annotations let you practice reviewing, asking Claude a question, and editing -- then the tutorial dismisses itself. Progress persists in localStorage so it only shows once.
 
