@@ -5,8 +5,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "module";
 
+import { openBrowser } from "../open-browser.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
@@ -22,6 +26,10 @@ try {
   console.error("[Tandem] Could not read version from package.json");
 }
 export { APP_VERSION };
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// dist/server/mcp/ → dist/client/
+const CLIENT_DIST = join(__dirname, "../../client");
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -211,11 +219,33 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   // --- Channel support endpoints ---
   registerChannelRoutes(app, apiMiddleware);
 
+  // Serve built client assets when present (populated by `vite build`).
+  // express.static falls through for paths it doesn't find, so /mcp, /api/*,
+  // /health, and channel routes registered above continue to work normally.
+  // Static routes intentionally omit apiMiddleware — assets carry no sensitive data.
+  if (existsSync(CLIENT_DIST)) {
+    // Express 5 types omit express.static and res.sendFile — they exist at runtime.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use((express as any).static(CLIENT_DIST, { index: "index.html" }));
+    // SPA fallback: serve index.html for client-side routes not matched above
+    const indexPath = join(CLIENT_DIST, "index.html");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.get("*", (_req: import("express").Request, res: any) => {
+      res.sendFile(indexPath);
+    });
+    console.error(`[Tandem] Serving client from ${CLIENT_DIST}`);
+  } else {
+    console.error(`[Tandem] No client dist at ${CLIENT_DIST} — run 'npm run build' first`);
+  }
+
   return new Promise<Server>((resolve, reject) => {
     const httpServer = app.listen(port, host, () => {
       httpServer.removeListener("error", reject);
       httpServer.on("error", (err: Error) => console.error("[Tandem] HTTP server error:", err));
       console.error(`[Tandem] MCP HTTP server on http://${host}:${port}/mcp`);
+      if (process.env.TANDEM_OPEN_BROWSER === "1") {
+        openBrowser(`http://localhost:${port}`);
+      }
       resolve(httpServer);
     });
     httpServer.on("error", reject);
