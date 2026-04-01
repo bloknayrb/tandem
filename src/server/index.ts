@@ -182,7 +182,7 @@ async function main() {
     console.error(`  WebSocket:   ws://localhost:${wsPort}`);
     console.error(`  Health:      http://localhost:${mcpPort}/health`);
     console.error("");
-    console.error("  Open Claude Code in this directory to connect.");
+    console.error("  Open Claude Code and ask Claude to review a document.");
     console.error("");
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout

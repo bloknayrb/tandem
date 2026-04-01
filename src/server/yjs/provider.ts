@@ -118,26 +118,17 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   // Hocuspocus.listen() never rejects on EADDRINUSE — the error goes to
   // uncaughtException instead. Race listen() against an error listener on the
   // internal httpServer so we surface bind failures properly.
-  // NOTE: accesses Hocuspocus internals (.server.httpServer) — verify on upgrades.
+  // NOTE: Hocuspocus creates .server (and .server.httpServer) inside listen(),
+  // so it's not available before the call. We call listen() first, then attach
+  // the error listener on the next tick if the internal is available.
+  await hocuspocusInstance.listen();
+
+  // Post-listen: attach an error handler for runtime bind errors (e.g., port stolen)
   const internal = (hocuspocusInstance as any).server?.httpServer;
   if (internal) {
-    let onError: (err: Error) => void;
-    await Promise.race([
-      hocuspocusInstance.listen().then((result) => {
-        internal.removeListener("error", onError);
-        return result;
-      }),
-      new Promise<never>((_, reject) => {
-        onError = (err: Error) => reject(err);
-        internal.once("error", onError);
-      }),
-    ]);
-  } else {
-    console.error(
-      "[Tandem] Warning: could not access Hocuspocus internal httpServer — " +
-        "bind failures may not be caught. Hocuspocus internals may have changed.",
-    );
-    await hocuspocusInstance.listen();
+    internal.on("error", (err: Error) => {
+      console.error(`[Tandem] Hocuspocus httpServer error: ${err.message}`);
+    });
   }
   return hocuspocusInstance;
 }
