@@ -139,8 +139,8 @@ test("tab switching shows different documents", async ({ page }) => {
   const editor = page.locator(".ProseMirror");
   await expect(editor).toBeVisible({ timeout: 10_000 });
 
-  // Both tabs should appear
-  const tabs = page.locator("[data-testid^='tab-']");
+  // Both tabs should appear (use data-active attribute to select only tab containers, not child spans)
+  const tabs = page.locator("[data-testid^='tab-'][data-active]");
   await expect(tabs).toHaveCount(2, { timeout: 10_000 });
 
   // First document should be showing
