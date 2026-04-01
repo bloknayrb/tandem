@@ -278,3 +278,11 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 **Solution:** Use context-aware targeting — resolve the range using both the target text and surrounding context (nearby heading, paragraph position). The `anchoredRange()` function creates CRDT-anchored positions at resolution time, so even if the flat offset drifts later, the relative position stays correct. For tutorial annotations, use specific unique text snippets that only appear once in the welcome document.
 
 **Impact:** Annotations appearing at the wrong location are confusing for users and can lead to incorrect accept/dismiss decisions. Always prefer unique text patterns or occurrence-indexed matching over bare `indexOf`.
+
+## 31. Coordinate System Consistency: extractText vs extractMarkdown
+
+**Problem:** `tandem_getTextContent` used `extractMarkdown()` for .md files, which produces markdown syntax (`> ` for blockquotes, `- ` for list items, etc.). But the annotation coordinate system uses flat text offsets from `extractText()`, which includes heading prefixes (`## `) and `\n` separators but NOT markdown block-level syntax. After a blockquote, the character offsets from `extractMarkdown()` diverge from `extractText()` — every `> ` prefix shifts subsequent offsets by 2 characters per blockquote line. Claude would read text via `tandem_getTextContent`, find a passage at offset N, then place an annotation at offset N — but the annotation coordinate system expected a different offset, so the annotation landed in the wrong place.
+
+**Solution:** `tandem_getTextContent` now always uses `extractText()` regardless of file format. The flat text format is the single source of truth for all offset-bearing operations. If Claude needs actual markdown, `tandem_save` writes the file to disk and Claude can read it via other means.
+
+**Key principle:** Any tool that returns character offsets (or text that will be used to compute character offsets) must use the same text representation as the annotation coordinate system. Mixing representations is a silent correctness bug — annotations appear to work but land in the wrong location, and the drift is proportional to the amount of block-level markdown syntax before the target range.
