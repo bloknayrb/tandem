@@ -22,25 +22,30 @@ graph LR
 - **Node.js 22+** ([download](https://nodejs.org))
 - **Claude Code** (`irm https://claude.ai/install.ps1 | iex`)
 
-### Install
+### Option A: Global Install (recommended)
+
+```bash
+npm install -g tandem-editor
+tandem setup     # registers MCP tools with Claude Code / Claude Desktop
+tandem           # starts server + opens browser
+```
+
+`tandem setup` auto-detects Claude Code and Claude Desktop and writes MCP configuration so tools work from any directory. Re-run after upgrading (`npm update -g tandem-editor`).
+
+### Option B: Development Setup
 
 ```bash
 git clone https://github.com/bloknayrb/tandem.git
 cd tandem
 npm install
-```
-
-### Run
-
-```bash
 npm run dev:standalone   # starts server (:3478/:3479) + browser client (:5173)
 ```
 
-Open http://localhost:5173 -- you'll see `sample/welcome.md` loaded automatically on first run.
+Open http://localhost:5173 -- you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
 
 ### Connect Claude Code
 
-Start Claude Code in the tandem directory. The `.mcp.json` in the repo tells Claude Code how to connect. Try:
+Start Claude Code and try:
 
 ```
 "Review the welcome document with me"
@@ -51,10 +56,10 @@ Claude calls `tandem_open`, the document appears in the browser, and annotations
 ### Verify (if something seems wrong)
 
 ```bash
-npm run doctor
+npm run doctor    # from the repo, or after global install
 ```
 
-This checks Node.js version, `.mcp.json` configuration, server health, and port status with actionable fix suggestions. You can also check the raw health endpoint:
+This checks Node.js version, MCP configuration (both `.mcp.json` and `~/.claude/mcp_settings.json`), server health, and port status with actionable fix suggestions. You can also check the raw health endpoint:
 
 ```bash
 curl http://localhost:3479/health
@@ -65,7 +70,11 @@ curl http://localhost:3479/health
 
 ## MCP Configuration
 
-Tandem uses two MCP connections: **HTTP** for document tools (27 tools including annotation editing), and a **channel shim** for real-time push notifications. Both are configured in `.mcp.json`:
+Tandem uses two MCP connections: **HTTP** for document tools (27 tools including annotation editing), and a **channel shim** for real-time push notifications.
+
+**Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
+
+**Development setup** (`.mcp.json`): The repo includes a `.mcp.json` that configures both entries automatically when Claude Code runs from the repo directory:
 
 ```json
 {
@@ -83,7 +92,7 @@ Tandem uses two MCP connections: **HTTP** for document tools (27 tools including
 }
 ```
 
-Both entries are cross-platform -- no platform-specific configuration needed. For production deployments (after `npm run build`), you can use `"command": "node", "args": ["dist/channel/index.js"]` instead for faster startup.
+Both entries are cross-platform -- no platform-specific configuration needed.
 
 The channel shim is optional -- without it, Claude relies on polling via `tandem_checkInbox` instead of receiving real-time push events.
 
@@ -108,16 +117,16 @@ See `.env.example` for a copy-paste template.
 Run `npm run doctor` for a quick diagnostic of your setup. It checks Node.js version, `.mcp.json` config, server health, and port status.
 
 **Claude Code says "MCP failed to connect"**
-Start the server first (`npm run dev:standalone`), then open Claude Code. The server must be running before Claude Code probes the MCP URL. If you restart the server, run `/mcp` in Claude Code to reconnect.
+Start the server first (`tandem` for global install, or `npm run dev:standalone` for dev setup), then open Claude Code. The server must be running before Claude Code probes the MCP URL. If you restart the server, run `/mcp` in Claude Code to reconnect.
 
 **Port already in use**
 Tandem kills stale processes on :3478/:3479 at startup. If another app uses those ports, set `TANDEM_PORT` / `TANDEM_MCP_PORT` to different values and update `TANDEM_URL` to match.
 
 **Channel shim fails to start**
-The `tandem-channel` entry spawns a subprocess. If you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
+The `tandem-channel` entry spawns a subprocess. For global installs, `tandem setup` writes absolute paths to the bundled `dist/channel/index.js` -- re-run `tandem setup` after upgrading. For dev setup, if you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
 
 **Browser shows "Cannot reach the Tandem server"**
-The Vite client connects to the server via WebSocket. Make sure `npm run dev:standalone` (or `npm run dev:server`) is running. The message appears after 3 seconds of failed connection.
+The browser connects to the server via WebSocket. For global installs, run `tandem` to start the server. For dev setup, use `npm run dev:standalone` (or `npm run dev:server`). The message appears after 3 seconds of failed connection.
 
 **Empty browser with no document**
 On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or deleted the sample file, click the **+** button in the tab bar or drop a file onto the editor.
@@ -184,14 +193,24 @@ On first launch, a 3-step guided walkthrough appears over the welcome document. 
 - **E2E tested** -- Playwright tests cover the annotation lifecycle end-to-end
 - **Atomic file saves** -- write to temp, then rename, preventing partial writes
 
-## Scripts
+## CLI Commands
+
+| Command | What it does |
+|---------|-------------|
+| `tandem` | Start server and open browser (global install) |
+| `tandem setup` | Register MCP tools with Claude Code / Claude Desktop |
+| `tandem setup --force` | Register to default paths regardless of auto-detection |
+| `tandem --version` | Show installed version |
+| `tandem --help` | Show usage |
+
+## Development Scripts
 
 | Command | What it does |
 |---------|-------------|
 | `npm run dev:standalone` | **Recommended** -- both frontend + backend (via concurrently) |
 | `npm run dev:server` | Backend only: Hocuspocus (:3478) + MCP HTTP (:3479) |
 | `npm run dev:client` | Frontend only: Vite dev server (:5173) |
-| `npm run build` | Production build (`dist/server/index.js` + `dist/channel/index.js`) |
+| `npm run build` | Production build (`dist/server/` + `dist/channel/` + `dist/cli/` + `dist/client/`) |
 | `npm test` | Run vitest (unit tests) |
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Playwright UI mode |

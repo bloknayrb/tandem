@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. npm global install (Step 9, PR #161) is complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -214,7 +214,7 @@ Real-time push notifications from browser to Claude Code via the Channels API, r
 - **Event queue** (`src/server/events/queue.ts`): Y.Map observers on annotations, chat, user awareness, and document metadata. Circular buffer (200 events / 60s). Origin tagging filters MCP-initiated changes.
 - **SSE endpoint** (`GET /api/events`): Server-Sent Events stream with `Last-Event-ID` reconnection replay and 15s keepalive.
 - **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `/api/launch-claude`
-- **Build**: tsup produces two bundles — `dist/server/index.js` + `dist/channel/index.js`
+- **Build**: tsup produces three bundles — `dist/server/index.js` + `dist/channel/index.js` + `dist/cli/index.js`
 - **8 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `chat:message`, `selection:changed`, `document:opened`, `document:closed`, `document:switched`
 
 ### Known Issues from Channel Implementation
@@ -267,6 +267,24 @@ Closing a tab in the browser now actually closes the document on the server. Pre
 
 ---
 
+## Step 9: npm Global Install (PR #161) — DONE
+
+**Files:** `src/cli/index.ts`, `src/cli/setup.ts`, `src/cli/start.ts`, `src/server/open-browser.ts`, `packages/tandem-doc/`
+
+`npm install -g tandem-editor` makes Tandem available as a global CLI command:
+
+- **`tandem`** — Starts the server and opens the browser at `http://localhost:3479`
+- **`tandem setup`** — Auto-detects Claude Code and Claude Desktop, writes MCP config entries with absolute paths to `~/.claude/mcp_settings.json` and/or `claude_desktop_config.json`
+- **`tandem setup --force`** — Writes config to default paths regardless of auto-detection
+- **Static file serving** — Express serves the Vite-built client from `dist/client/` on `:3479`, eliminating the need for a separate Vite dev server in production
+- **Package rename** — Published as `tandem-editor` (npm name availability); `tandem-doc` is a reserved alias stub
+- **Version baked in at build time** — tsup `define` injects `__TANDEM_VERSION__` (no runtime `package.json` lookup in CLI)
+- **Atomic config writes** — `atomicWrite()` with EXDEV fallback for Windows cross-drive scenarios
+- **Doctor updated** — `npm run doctor` checks user-level MCP registration (`~/.claude/mcp_settings.json`)
+- **12 tests** for `buildMcpEntries`, `detectTargets`, and `applyConfig`
+
+---
+
 ## Known Limitations (v1)
 
 These are intentional scope boundaries, not bugs:
@@ -279,7 +297,6 @@ These are intentional scope boundaries, not bugs:
 - Documents over ~50 pages may be slow to render
 - No plugin/extension architecture — custom extensions require code changes
 - No synchronized scrolling between split panes
-- No Windows installer — requires Node.js + Claude Code (PWA install planned for v2)
 
 ## Future Extensions (v2+)
 

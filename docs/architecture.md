@@ -20,6 +20,9 @@ Tandem is a single Node.js process that serves three roles simultaneously:
 1. **MCP server** (HTTP on port 3479) -- Claude Code connects here for tool discovery and execution via Streamable HTTP transport
 2. **Hocuspocus WebSocket server** (port 3478) -- Browser connects here for real-time Yjs sync
 3. **Channel event source** (SSE on port 3479) -- The channel shim connects here to receive real-time push events
+4. **Static file server** (HTTP on port 3479) -- Serves the Vite-built client from `dist/client/` when present (global install mode)
+
+When installed globally (`npm install -g tandem-editor`), the `tandem` CLI starts the server and opens the browser. The `tandem setup` command writes MCP config to Claude Code and/or Claude Desktop. In development, `npm run dev:standalone` runs the server alongside a Vite dev server for hot-reloading.
 
 A separate **channel shim** process (`dist/channel/index.js`) bridges the Tandem server and Claude Code's Channels API. Claude Code spawns it as a stdio subprocess. The shim connects to the server's SSE endpoint and forwards events as `notifications/claude/channel` to Claude Code, enabling push-based communication instead of polling.
 
@@ -478,12 +481,19 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via `TANDEM_TRANSPORT=stdio`)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
+- `open-browser.ts` -- Cross-platform browser launcher (`execFile`-based, no shell injection risk). Best-effort — errors logged, never thrown.
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
 - `platform.ts` -- Cross-platform helpers: `sessionDir()`, `freePort()`, `waitForPort()` (TCP port availability polling)
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\; `listSessionFilePaths()` for startup auto-restore
+
+### CLI (`src/cli/`)
+
+- `index.ts` -- CLI entrypoint for the `tandem` global command. Handles `--help`, `--version`, `setup`, and default start. Top-level error handler with reinstall guidance.
+- `setup.ts` -- `tandem setup` command. Auto-detects Claude Code (`~/.claude/`) and Claude Desktop (platform-specific paths). Writes MCP config atomically (EXDEV fallback for Windows cross-drive). Exports `buildMcpEntries`, `detectTargets`, `applyConfig`.
+- `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with `TANDEM_OPEN_BROWSER=1`, forwards signals, pre-validates server entry point exists.
 
 ### Channel Shim (`src/channel/`)
 

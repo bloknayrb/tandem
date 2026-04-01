@@ -5,7 +5,8 @@
 - `npm run dev:client` -- Frontend: Vite on :5173
 - `npm run dev:standalone` -- Both frontend + backend (via concurrently)
 - `npm run dev` -- Alias for `vite` (frontend only)
-- `npm run build:server` -- Bundle server via tsup -> `dist/server/index.js`
+- `npm run build` -- Production build: typecheck + vite build + tsup -> `dist/server/`, `dist/channel/`, `dist/cli/`, `dist/client/`
+- `npm run build:server` -- Bundle server + channel + CLI via tsup only
 - `npm run start:server` -- Run bundled server (`node dist/server/index.js`)
 - `npm run typecheck` -- Type-check server + client without emitting
 - `npm run doctor` -- Diagnose setup issues (Node version, .mcp.json, server health, ports)
@@ -27,7 +28,11 @@
 Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus on :3478 + MCP HTTP on :3479) <-> Claude Code. Channel shim (`src/channel/`) pushes real-time events to Claude Code via SSE, replacing polling.
 
 Key files for navigation:
+- `src/cli/index.ts` -- CLI entrypoint (`tandem` command), arg parsing, dispatches to start/setup
+- `src/cli/setup.ts` -- `tandem setup`: auto-detect Claude installs, write MCP config atomically
+- `src/cli/start.ts` -- `tandem start`: spawn server with `TANDEM_OPEN_BROWSER=1`
 - `src/server/index.ts` -- Entry point, port binding, console redirect
+- `src/server/open-browser.ts` -- Cross-platform browser launcher (execFile-based)
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
@@ -95,7 +100,7 @@ These WILL break things if violated:
 
 ## Status
 
-Core complete: 27 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, 765 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining phases (2-5: cowork integration, .docx export, distribution, discovery).
+Core complete: 27 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), 776 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining phases (2-5: cowork integration, .docx export, distribution, discovery).
 
 ## Security
 - Server binds to 127.0.0.1 only

@@ -2,6 +2,49 @@
 
 Real-world patterns for using Tandem with Claude on toll consulting documents.
 
+## Quick Start (Global Install)
+
+**Setup:** First-time user installs Tandem globally and connects Claude.
+
+```bash
+npm install -g tandem-editor
+tandem setup
+```
+
+`tandem setup` auto-detects Claude Code and Claude Desktop:
+```
+Tandem Setup
+
+Detecting Claude installations...
+  Found: Claude Code (~/.claude/mcp_settings.json)
+
+Writing MCP configuration...
+  ✓ Claude Code
+
+Setup complete! Start Tandem with: tandem
+Then in Claude, your tandem_* tools will be available.
+```
+
+Start Tandem from any directory:
+```bash
+tandem
+```
+
+The server starts and the browser opens to `http://localhost:3479`. `sample/welcome.md` loads on first run with the onboarding tutorial.
+
+Open Claude Code (from any directory) and try:
+```
+"Review the welcome document with me"
+```
+
+Claude connects to the running Tandem server, opens the document, and begins reviewing.
+
+**After upgrading:**
+```bash
+npm update -g tandem-editor
+tandem setup    # re-writes MCP config with new paths
+```
+
 ## Reviewing a DRPA Progress Report
 
 **Setup:** Bryan has a monthly progress report draft that needs review before submitting to DRPA.
