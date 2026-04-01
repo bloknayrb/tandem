@@ -14,7 +14,7 @@
 declare const __TANDEM_VERSION__: string;
 const version = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : "0.0.0-dev";
 
-// Make this a module so top-level await is allowed
+// TypeScript needs a top-level export to treat this as a module (enabling top-level await)
 export {};
 
 const args = process.argv.slice(2);
@@ -37,10 +37,20 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
-if (args[0] === "setup") {
-  const { runSetup } = await import("./setup.js");
-  await runSetup({ force: args.includes("--force") });
-} else {
-  const { runStart } = await import("./start.js");
-  runStart();
+try {
+  if (args[0] === "setup") {
+    const { runSetup } = await import("./setup.js");
+    await runSetup({ force: args.includes("--force") });
+  } else if (!args[0] || args[0] === "start") {
+    const { runStart } = await import("./start.js");
+    runStart();
+  } else {
+    console.error(`Unknown command: ${args[0]}`);
+    console.error("Run 'tandem --help' for usage.");
+    process.exit(1);
+  }
+} catch (err) {
+  console.error(`\n[Tandem] Fatal error: ${err instanceof Error ? err.message : String(err)}`);
+  console.error("If this persists, try reinstalling: npm install -g tandem-editor\n");
+  process.exit(1);
 }

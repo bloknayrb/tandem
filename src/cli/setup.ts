@@ -106,20 +106,31 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
       await copyFile(tmp, dest);
       await unlink(tmp);
     } else {
-      await unlink(tmp).catch(() => {}); // clean up temp on other errors
+      await unlink(tmp).catch((cleanupErr: Error) => {
+        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
+      });
       throw err;
     }
   }
 }
 
 export async function applyConfig(configPath: string, entries: McpEntries): Promise<void> {
-  // Read existing config or start fresh — no existsSync guard needed,
-  // the catch handles both ENOENT (file missing) and malformed JSON.
+  // Read existing config or start fresh — no existsSync guard needed.
+  // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
   try {
     existing = JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    // ENOENT or malformed JSON — start fresh
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      // File doesn't exist yet — start fresh
+    } else if (err instanceof SyntaxError) {
+      console.error(
+        `  Warning: ${configPath} contains malformed JSON — replacing with fresh config`,
+      );
+    } else {
+      throw err; // Permission errors, disk errors, etc. should not be silently swallowed
+    }
   }
 
   const updated = {
@@ -157,17 +168,28 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
   console.error("\nWriting MCP configuration...");
   const entries = buildMcpEntries(CHANNEL_DIST);
 
+  let failures = 0;
   for (const t of targets) {
     try {
       await applyConfig(t.configPath, entries);
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
     } catch (err) {
+      failures++;
       console.error(
         `  \x1b[31m✗\x1b[0m ${t.label}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
 
-  console.error("\nSetup complete! Start Tandem with: tandem");
-  console.error("Then in Claude, your tandem_* tools will be available.\n");
+  if (failures === targets.length) {
+    console.error("\nSetup failed — could not write any configuration. Check file permissions.");
+    process.exit(1);
+  } else if (failures > 0) {
+    console.error(
+      `\nSetup partially complete (${failures} target(s) failed). Start Tandem with: tandem`,
+    );
+  } else {
+    console.error("\nSetup complete! Start Tandem with: tandem");
+    console.error("Then in Claude, your tandem_* tools will be available.\n");
+  }
 }

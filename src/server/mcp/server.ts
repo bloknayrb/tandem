@@ -21,15 +21,17 @@ import { registerNavigationTools } from "./navigation.js";
 const esmRequire = createRequire(import.meta.url);
 let APP_VERSION = "0.0.0-unknown";
 try {
-  APP_VERSION = (esmRequire("../../../package.json") as { version: string }).version;
-} catch {
-  console.error("[Tandem] Could not read version from package.json");
+  APP_VERSION = (esmRequire("../../package.json") as { version: string }).version;
+} catch (err) {
+  console.error(
+    `[Tandem] Could not read version from package.json: ${err instanceof Error ? err.message : err}`,
+  );
 }
 export { APP_VERSION };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// dist/server/mcp/ → dist/client/
-const CLIENT_DIST = join(__dirname, "../../client");
+// dist/server/ → dist/client/ (tsup bundles server into dist/server/index.js)
+const CLIENT_DIST = join(__dirname, "../client");
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -222,7 +224,8 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   // Serve built client assets when present (populated by `vite build`).
   // express.static falls through for paths it doesn't find, so /mcp, /api/*,
   // /health, and channel routes registered above continue to work normally.
-  // Static routes intentionally omit apiMiddleware — assets carry no sensitive data.
+  // Static routes and SPA fallback intentionally omit apiMiddleware — they only serve
+  // static assets, no sensitive data.
   if (existsSync(CLIENT_DIST)) {
     // Express 5 types omit express.static and res.sendFile — they exist at runtime.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -244,7 +247,11 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
       httpServer.on("error", (err: Error) => console.error("[Tandem] HTTP server error:", err));
       console.error(`[Tandem] MCP HTTP server on http://${host}:${port}/mcp`);
       if (process.env.TANDEM_OPEN_BROWSER === "1") {
-        openBrowser(`http://localhost:${port}`);
+        if (existsSync(CLIENT_DIST)) {
+          openBrowser(`http://localhost:${port}`);
+        } else {
+          console.error("[Tandem] Skipping browser open — no client assets found");
+        }
       }
       resolve(httpServer);
     });

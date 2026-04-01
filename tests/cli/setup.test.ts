@@ -86,6 +86,16 @@ describe("applyConfig", () => {
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toBeDefined();
+    // Malformed JSON should result in only tandem entries (no remnants)
+    expect(Object.keys(written)).toEqual(["mcpServers"]);
+  });
+
+  it("propagates permission errors instead of silently swallowing", async () => {
+    const configPath = join(tmpDir, "mcp_settings.json");
+    // Create a directory where the file should be — readFileSync will throw EISDIR, not ENOENT
+    mkdirSync(configPath, { recursive: true });
+    const entries = buildMcpEntries("/fake/channel/index.js");
+    await expect(applyConfig(configPath, entries)).rejects.toThrow();
   });
 });
 
@@ -104,7 +114,9 @@ describe("detectTargets", () => {
     mkdirSync(join(tmpDir, ".claude"), { recursive: true });
     writeFileSync(join(tmpDir, ".claude", "mcp_settings.json"), "{}");
     const targets = detectTargets({ homeOverride: tmpDir });
-    expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
+    const cc = targets.find((t) => t.label === "Claude Code");
+    expect(cc).toBeDefined();
+    expect(cc!.configPath).toBe(join(tmpDir, ".claude", "mcp_settings.json"));
   });
 
   it("detects Claude Code when only ~/.claude directory exists (no mcp_settings.json yet)", async () => {

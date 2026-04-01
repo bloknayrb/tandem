@@ -143,8 +143,8 @@ function checkUserMcpConfig() {
   let config;
   try {
     config = JSON.parse(readFileSync(claudeCodePath, "utf-8"));
-  } catch {
-    warn("~/.claude/mcp_settings.json is malformed JSON", "Run: tandem setup to rewrite it");
+  } catch (err) {
+    warn(`~/.claude/mcp_settings.json is malformed JSON: ${err.message}`, "Run: tandem setup to rewrite it");
     return;
   }
 
