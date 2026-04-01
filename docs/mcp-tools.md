@@ -151,7 +151,9 @@ Read document as plain text. ~60% fewer tokens than `getContent`.
 tandem_getTextContent({ section: "Cost Summary" })
 ```
 
-**Notes:** Section extraction reads from the matching heading until the next heading at the same or higher level.
+**Notes:**
+- Always uses the flat text format (`extractText`) regardless of file format — offsets match the annotation coordinate system exactly. Does not return markdown syntax (no `> `, `- `, etc.).
+- Section extraction reads from the matching heading until the next heading at the same or higher level.
 
 ---
 
@@ -761,6 +763,28 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 ```
 
 **Errors:** `404 FILE_NOT_FOUND`, `400 UNSUPPORTED_FORMAT`, `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`
+
+### POST /api/close
+
+Close an open document by its document ID. Equivalent to `tandem_close` but callable from the browser. Used by the client's tab close button.
+
+**Request:**
+```json
+{ "documentId": "report-a1b2c3" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `documentId` | string | yes | Document ID to close |
+
+**Response (200):**
+```json
+{ "data": { "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
+```
+
+**Errors:** `400 BAD_REQUEST` (missing documentId), `404 NO_DOCUMENT` (document not found)
+
+---
 
 ### POST /api/upload
 

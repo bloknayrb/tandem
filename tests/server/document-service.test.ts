@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as Y from "yjs";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -13,9 +13,20 @@ import {
   requireDocument,
   toDocListEntry,
   broadcastOpenDocs,
+  closeDocumentById,
 } from "../../src/server/mcp/document-service.js";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
+
+// Mock session manager to avoid filesystem side effects
+vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    saveSession: vi.fn().mockResolvedValue(undefined),
+    stopAutoSave: vi.fn(),
+  };
+});
 
 function makeOpenDoc(id: string, filePath = `/tmp/${id}.md`): OpenDoc {
   return { id, filePath, format: "md", readOnly: false, source: "file" };
@@ -229,5 +240,87 @@ describe("getOpenDocs", () => {
     const docs = getOpenDocs();
     expect(docs.size).toBe(1);
     expect(docs.get("ro-1")).toBeDefined();
+  });
+});
+
+describe("closeDocumentById", () => {
+  it("closes an open document and removes it from tracking", async () => {
+    addDoc("close-1", makeOpenDoc("close-1", "/tmp/close1.md"));
+    setActiveDocId("close-1");
+
+    const result = await closeDocumentById("close-1");
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.closedPath).toBe("/tmp/close1.md");
+    }
+    expect(hasDoc("close-1")).toBe(false);
+    expect(docCount()).toBe(0);
+  });
+
+  it("returns error for non-existent document", async () => {
+    const result = await closeDocumentById("no-such-doc");
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("not found");
+    }
+  });
+
+  it("picks a new active doc when closing the active one", async () => {
+    addDoc("active-close", makeOpenDoc("active-close"));
+    addDoc("other-doc", makeOpenDoc("other-doc"));
+    setActiveDocId("active-close");
+
+    const result = await closeDocumentById("active-close");
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.activeDocumentId).toBe("other-doc");
+    }
+    expect(getActiveDocId()).toBe("other-doc");
+  });
+
+  it("sets active to null when closing the last document", async () => {
+    addDoc("last-doc", makeOpenDoc("last-doc"));
+    setActiveDocId("last-doc");
+
+    const result = await closeDocumentById("last-doc");
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.activeDocumentId).toBeNull();
+    }
+    expect(getActiveDocId()).toBeNull();
+  });
+
+  it("does not change active doc when closing a non-active doc", async () => {
+    addDoc("stay-active", makeOpenDoc("stay-active"));
+    addDoc("close-me", makeOpenDoc("close-me"));
+    setActiveDocId("stay-active");
+
+    await closeDocumentById("close-me");
+    expect(getActiveDocId()).toBe("stay-active");
+    expect(hasDoc("close-me")).toBe(false);
+  });
+
+  it("calls stopAutoSave when closing the last document", async () => {
+    const { stopAutoSave } = await import("../../src/server/session/manager.js");
+    addDoc("final-doc", makeOpenDoc("final-doc"));
+    setActiveDocId("final-doc");
+
+    await closeDocumentById("final-doc");
+    expect(stopAutoSave).toHaveBeenCalled();
+  });
+
+  it("broadcasts updated doc list after close", async () => {
+    addDoc("bc-close-1", makeOpenDoc("bc-close-1"));
+    addDoc("bc-close-2", makeOpenDoc("bc-close-2"));
+    setActiveDocId("bc-close-1");
+    broadcastOpenDocs();
+
+    await closeDocumentById("bc-close-1");
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
+    const docs = meta.get("openDocuments") as any[];
+    expect(docs).toHaveLength(1);
+    expect(docs[0].id).toBe("bc-close-2");
   });
 });

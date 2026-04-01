@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -15,7 +15,7 @@ Implemented via unified/remark with MDAST↔Y.Doc conversion:
 
 - **Load:** `loadMarkdown()` parses markdown via remark into an MDAST tree, then `mdastToYDoc()` converts it to Y.XmlFragment elements with Tiptap-compatible nodeNames and formatted Y.XmlText for inline marks.
 - **Save:** `saveMarkdown()` converts Y.Doc back to MDAST via `yDocToMdast()`, then serializes with remark-stringify. Round-trip preserves headings, bold/italic/strikethrough, links, inline code, lists (ordered/unordered/nested), blockquotes, code blocks, images, horizontal rules, and hard breaks.
-- **Read:** `extractMarkdown()` returns readable markdown for `tandem_getTextContent` on .md files.
+- **Read:** `extractText()` returns flat text (with heading prefixes) for `tandem_getTextContent` on all file formats, ensuring offset consistency with the annotation coordinate system. `extractMarkdown()` is available for markdown serialization (e.g., `tandem_save`) but is NOT used for `tandem_getTextContent` (see Issue #148).
 - **Key constraint:** Y.XmlText must be attached to the Y.Doc before populating text content — detached nodes reverse insert order (see ADR-009, Lesson 9).
 
 ### 5b: .docx (review-only mode) — DONE
@@ -237,6 +237,33 @@ Extracts `<w:comment>` elements from .docx XML (via JSZip) during file open and 
 **Files:** `src/server/session/manager.ts`, `src/server/index.ts`
 
 On server startup, `listSessionFilePaths()` scans the session directory for previously-open files. `restoreOpenDocuments()` calls `openFileByPath()` for each, and `restoreCtrlSession()` returns the previous active document ID. The `sample/welcome.md` fallback only fires if no sessions were restored. Stale sessions (ENOENT) are cleaned up automatically.
+
+---
+
+## Tab Close Fix (Issue #149) — DONE
+
+**Files:** `src/server/mcp/document-service.ts`, `src/server/mcp/api-routes.ts`, `src/server/mcp/document.ts`, `src/client/components/DocumentTabs.tsx`
+
+Closing a tab in the browser now actually closes the document on the server. Previously, tab close only affected the client UI without cleaning up the server-side document state.
+
+- **`closeDocumentById()`** shared helper in `document-service.ts` — single source of truth for document close logic (session save, doc removal, broadcast), used by both `tandem_close` MCP tool and `POST /api/close` HTTP endpoint
+- **`POST /api/close`** HTTP endpoint in `api-routes.ts` — browser-callable close, parallel to `/api/open`
+- **Client `handleTabClose`** calls `POST /api/close` with optimistic adjacent-tab selection
+- **Close button debounced** via `closingIdsRef` in `DocumentTabs.tsx` to prevent double-close from rapid clicks
+- **`saveSession` wrapped in try-catch** so save failure doesn't block close
+- 7 new unit tests for `closeDocumentById`
+
+---
+
+## getTextContent Offset Fix (Issue #148) — DONE
+
+**Files:** `src/server/mcp/document.ts`
+
+`tandem_getTextContent` was using `extractMarkdown()` for .md files, which produces markdown syntax (e.g., `> ` prefixes for blockquotes) that differs from the flat text format used by the annotation coordinate system. This caused offset drift — annotations placed using offsets from `tandem_getTextContent` would land in the wrong location after blockquotes.
+
+- Changed `tandem_getTextContent` to always use `extractText()` regardless of file format
+- `extractText()` produces the same flat text format (with heading prefixes like `## ` and `\n` separators) used by all annotation tools
+- 2 new unit tests for blockquote offset consistency
 
 ---
 

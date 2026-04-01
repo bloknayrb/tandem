@@ -205,6 +205,23 @@ export function DocumentTabs({
   reorder,
 }: DocumentTabsProps) {
   const [showDialog, setShowDialog] = useState(false);
+  /** Prevent double-click on close button from firing multiple close requests. */
+  const closingIdsRef = useRef<Set<string>>(new Set());
+  // Clean up stale entries when tabs change (closed tab removed from DOM)
+  useEffect(() => {
+    const currentIds = new Set(tabs.map((t) => t.id));
+    for (const id of closingIdsRef.current) {
+      if (!currentIds.has(id)) closingIdsRef.current.delete(id);
+    }
+  }, [tabs]);
+  const guardedClose = useCallback(
+    (tabId: string) => {
+      if (closingIdsRef.current.has(tabId)) return;
+      closingIdsRef.current.add(tabId);
+      onTabClose(tabId);
+    },
+    [onTabClose],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -381,7 +398,7 @@ export function DocumentTabs({
             tab={tab}
             isActive={tab.id === activeTabId}
             onSwitch={onTabSwitch}
-            onClose={onTabClose}
+            onClose={guardedClose}
             draggable={!singleTab}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}

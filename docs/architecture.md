@@ -43,7 +43,7 @@ graph LR
     subgraph "Tandem Server (Node.js)"
         HP["Hocuspocus<br/>WebSocket :3478"]
         MCP["MCP Server<br/>HTTP :3479"]
-        API["REST API<br/>/api/open, /api/upload"]
+        API["REST API<br/>/api/open, /api/upload, /api/close"]
         ChannelAPI["Channel API<br/>/api/events, /api/channel-*"]
         EventQueue["Event Queue<br/>(Y.Map observers)"]
         Notify["notifications.ts<br/>(ring buffer + SSE)"]
@@ -65,7 +65,7 @@ graph LR
     Tiptap <-->|@hocuspocus/provider| HP
     HP <--> YDoc
     MCP -->|tandem_open| FO
-    API -->|/api/open, /api/upload| FO
+    API -->|/api/open, /api/upload, /api/close| FO
     FO <--> YDoc
     FO <--> FileIO
     Tools <-->|HTTP| MCP
@@ -455,7 +455,7 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-020), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-021), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket

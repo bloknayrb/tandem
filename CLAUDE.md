@@ -20,7 +20,7 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via TANDEM_TRANSPORT=stdio)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
@@ -73,7 +73,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Toast notifications use SSE, not Y.Map.** Ephemeral notifications (annotation range failures, save errors) are pushed via `GET /api/notify-stream` SSE endpoint from `src/server/notifications.ts`. This avoids polluting the CRDT with transient data that doesn't need conflict resolution or persistence. The browser's `useNotifications` hook connects via EventSource.
 - Multi-document: each open file gets a unique documentId (hash of path), used as both Map key and Hocuspocus room name. All MCP tools accept optional `documentId` param, defaulting to the active document.
 - Server broadcasts `openDocuments` list via Y.Map('documentMeta') on each doc's Y.Doc. Client listens and syncs tabs.
-- Files can be opened from the browser via HTTP API (`POST /api/open` for path, `POST /api/upload` for content) or via MCP `tandem_open`. Both paths converge in `file-opener.ts`. Uploaded files get synthetic `upload://` paths and are read-only (no disk path to save to).
+- Files can be opened from the browser via HTTP API (`POST /api/open` for path, `POST /api/upload` for content) or via MCP `tandem_open`. Both paths converge in `file-opener.ts`. Documents can be closed from the browser via `POST /api/close` or via MCP `tandem_close`; both use `closeDocumentById()` in `document-service.ts`. Uploaded files get synthetic `upload://` paths and are read-only (no disk path to save to).
+- `tandem_getTextContent` always uses `extractText()` (flat text format with heading prefixes) regardless of file format. It does NOT use `extractMarkdown()` for .md files. This ensures offsets returned by `tandem_getTextContent` match the annotation coordinate system exactly.
 - E2E tests use `data-testid` attributes (kebab-case, e.g. `data-testid="accept-btn"`). Key elements: annotation cards, accept/dismiss buttons, review mode button, tab items, edit button.
 
 ## Implementation Status (as of 2026-03-31)
@@ -144,6 +145,10 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [x] feat(ui): inline annotation editing — pencil button, two textareas for suggestions, `tandem_editAnnotation` MCP tool (27 total), `editedAt` timestamp, "(edited)" indicator (Issue #97, 9 new tests)
 - [x] feat(ui): onboarding tutorial — `injectTutorialAnnotations` (3 pre-placed on welcome.md), `useTutorial` hook (3-step progression), `OnboardingTutorial` floating card, localStorage persistence (Issue #86)
 
+**Done (Bug fixes — 2026-03-31):**
+- [x] fix(ui): closing a tab now actually closes the document — `closeDocumentById()` shared helper in `document-service.ts`, `POST /api/close` endpoint, client `handleTabClose` calls HTTP API with optimistic adjacent-tab selection, close button debounced via `closingIdsRef` (Issue #149, 765 tests)
+- [x] fix(server): `tandem_getTextContent` uses `extractText()` instead of `extractMarkdown()` for .md files — fixes offset drift after blockquotes that broke annotation coordinate consistency (Issue #148, 765 tests)
+
 **Remaining — see [docs/roadmap.md](docs/roadmap.md):**
 - [ ] Phase 2: Cowork integration — configurable port/URL, cross-platform sessions, MCP registration
 - [ ] Phase 3: .docx comments export — Word-native `<w:comment>` export via JSZip (import done, export remaining)
@@ -162,8 +167,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-020)
-- [Lessons Learned](docs/lessons-learned.md) -- 30 lessons including E2E testing gotchas
+- [Design Decisions](docs/decisions.md) -- ADRs (001-021)
+- [Lessons Learned](docs/lessons-learned.md) -- 31 lessons including E2E testing gotchas
 
 ## Gotchas (save yourself time)
 - **stdout is still redirected.** Even though MCP now uses HTTP by default, `console.log`, `console.warn`, and `console.info` are ALL redirected to stderr in index.ts (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
@@ -193,6 +198,8 @@ Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus + MCP) <-> Claude C
 - **Tutorial annotations are injected idempotently.** `injectTutorialAnnotations()` checks for existing tutorial annotation IDs before inserting. Safe to call multiple times (e.g., on server restart with session restore). The tutorial only activates on `sample/welcome.md` — other documents skip injection.
 - **localStorage access needs try-catch.** The `useTutorial` hook wraps all `localStorage.getItem`/`setItem` calls in try-catch blocks. Some browsers (incognito, storage-disabled) throw on access. Without the guard, the tutorial component crashes the entire app.
 - **`tandem_editAnnotation` only works on pending annotations.** Attempting to edit an accepted or dismissed annotation returns an error. The `editedAt` timestamp is set on the annotation to track modification time.
+- **`tandem_getTextContent` always returns `extractText()` format.** Even for .md files, it uses the flat text extractor (with heading prefixes like `## `) rather than `extractMarkdown()`. This is intentional -- `extractMarkdown()` produces markdown syntax (e.g., `> ` for blockquotes) that shifts character offsets relative to the annotation coordinate system. If you need actual markdown, use `tandem_save` and read the file. See Issue #148.
+- **Tab close goes through `POST /api/close`.** The client's `handleTabClose` calls the server HTTP endpoint rather than manipulating Y.Map state directly. This ensures `closeDocumentById()` in `document-service.ts` runs the full cleanup (session save, doc removal, broadcast). The close button is debounced via `closingIdsRef` to prevent double-close from rapid clicks.
 
 ## Security
 - Server binds to 127.0.0.1 only

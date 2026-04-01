@@ -202,8 +202,8 @@ On first launch, a 3-step guided walkthrough appears over the welcome document. 
 - [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-020
-- [Lessons Learned](docs/lessons-learned.md) -- 30 implementation lessons
+- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-021
+- [Lessons Learned](docs/lessons-learned.md) -- 31 implementation lessons
 
 ## Tech Stack
 

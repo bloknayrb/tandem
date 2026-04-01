@@ -13,7 +13,7 @@ import { pushNotification } from "../notifications.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
-import { saveSession, stopAutoSave } from "../session/manager.js";
+import { saveSession } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
 import {
   INTERRUPTION_MODE_DEFAULT,
@@ -24,12 +24,7 @@ import {
 import { MCP_ORIGIN } from "../events/queue.js";
 
 // Document model (pure logic)
-import {
-  extractText,
-  extractMarkdown,
-  getElementText,
-  getOrCreateXmlText,
-} from "./document-model.js";
+import { extractText, getElementText, getOrCreateXmlText } from "./document-model.js";
 
 // Position system
 import { validateRange, resolveToElement } from "../positions.js";
@@ -43,9 +38,9 @@ import {
   requireDocument,
   broadcastOpenDocs,
   toDocListEntry,
-  removeDoc,
   hasDoc,
   docCount,
+  closeDocumentById,
 } from "./document-service.js";
 
 // Re-export for backward compatibility with existing consumers.
@@ -251,9 +246,10 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpSuccess({ text: result.text, filePath: r.filePath, section });
       }
 
-      const docState = getCurrentDoc(documentId);
-      const format = docState?.format;
-      const text = format === "md" ? extractMarkdown(r.doc) : extractText(r.doc);
+      // Always use extractText — its offsets match validateRange/anchoredRange.
+      // extractMarkdown adds markdown syntax (e.g. `> ` for blockquotes) that
+      // shifts offsets, causing RANGE_MOVED errors in annotation tools.
+      const text = extractText(r.doc);
       return mcpSuccess({ text, filePath: r.filePath, documentId: r.docId });
     }),
   );
@@ -504,29 +500,13 @@ export function registerDocumentTools(server: McpServer): void {
       const id = documentId ?? getActiveDocId();
       if (!id) return mcpError("NO_DOCUMENT", "No document to close.");
 
-      const docState = openDocs.get(id);
-      if (!docState) return mcpError("NO_DOCUMENT", `Document ${id} not found.`);
-
-      const doc = getOrCreateDocument(id);
-      await saveSession(docState.filePath, docState.format, doc);
-
-      removeDoc(id);
-
-      if (getActiveDocId() === id) {
-        const remaining = Array.from(openDocs.keys());
-        setActiveDocId(remaining.length > 0 ? remaining[0] : null);
-      }
-
-      if (docCount() === 0) {
-        stopAutoSave();
-      }
-
-      broadcastOpenDocs();
+      const result = await closeDocumentById(id);
+      if (!result.success) return mcpError("NO_DOCUMENT", result.error);
 
       return mcpSuccess({
         closed: true,
-        was: docState.filePath,
-        activeDocumentId: getActiveDocId(),
+        was: result.closedPath,
+        activeDocumentId: result.activeDocumentId,
       });
     }),
   );
