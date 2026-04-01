@@ -14,7 +14,7 @@
   "type": "module",
   "main": "./dist/cli/index.js",
   "bin": {
-    "tandem": "./dist/cli/index.js"
+    "tandem": "dist/cli/index.js"
   },
   "files": [
     "dist/",
