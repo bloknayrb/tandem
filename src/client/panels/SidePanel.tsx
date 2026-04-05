@@ -5,6 +5,7 @@ import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { annotationToPmRange } from "../positions";
 import { AnnotationCard } from "./AnnotationCard";
+import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { FilterSelect } from "./FilterSelect";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 
@@ -15,6 +16,8 @@ interface SidePanelProps {
   heldCount?: number;
   interruptionMode?: InterruptionMode;
   onModeChange?: (mode: InterruptionMode) => void;
+  activeDocFormat?: string;
+  documentId?: string;
   reviewMode: boolean;
   onToggleReviewMode: () => void;
   onExitReviewMode: () => void;
@@ -61,6 +64,8 @@ export function SidePanel({
   heldCount = 0,
   interruptionMode: _interruptionMode,
   onModeChange,
+  activeDocFormat,
+  documentId,
   reviewMode,
   onToggleReviewMode,
   onExitReviewMode,
@@ -544,6 +549,15 @@ export function SidePanel({
             Clear
           </button>
         )}
+      </div>
+
+      {/* Apply as tracked changes (docx only) */}
+      <div style={{ padding: "4px 16px 0" }}>
+        <ApplyChangesButton
+          annotations={annotations}
+          activeDocFormat={activeDocFormat}
+          documentId={documentId}
+        />
       </div>
 
       {/* Bulk actions */}
