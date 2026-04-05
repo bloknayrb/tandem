@@ -16,6 +16,15 @@ import {
   type TextHit,
 } from "./docx-walker.js";
 
+/** Element names inside <w:r> that would produce malformed XML if split. */
+const COMPLEX_RUN_ELEMENTS = new Set([
+  "w:footnoteReference",
+  "w:endnoteReference",
+  "w:drawing",
+  "w:pict",
+  "w:fldChar",
+]);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -153,14 +162,8 @@ export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetM
     }
   }
 
-  // Walk back from a paragraph node to find the body and document.
-  // The walker parsed the XML internally, so all hit nodes share the same DOM.
-  const doc = parseDocument(xml, { xmlMode: true });
-  const bodyElements = findAllByName("w:body", doc.children);
-
-  // We need the body from the SAME parse that the walker used. Since
-  // walkDocumentBody parses internally and we can't access its Document,
-  // we recover body/doc from the first hit's parent chain instead.
+  // Recover the walker's parsed DOM by walking up the parent chain from hits.
+  // The walker parses internally; all hit nodes share the same DOM tree.
   let walkerBody: Element;
   let walkerDoc: ReturnType<typeof parseDocument>;
   if (hits.length > 0) {
@@ -170,9 +173,14 @@ export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetM
       node = node.parent;
     }
     walkerBody = node as Element;
+    if (!walkerBody || walkerBody.name !== "w:body") {
+      throw new Error("Could not recover w:body from walker's parsed DOM");
+    }
     walkerDoc = walkerBody.parent as unknown as ReturnType<typeof parseDocument>;
   } else {
-    // No hits — use our own parse (no entries reference it anyway)
+    // No hits — parse ourselves (no entries reference it anyway)
+    const doc = parseDocument(xml, { xmlMode: true });
+    const bodyElements = findAllByName("w:body", doc.children);
     walkerBody = bodyElements[0] ?? new Element("w:body", {});
     walkerDoc = doc;
   }
@@ -284,7 +292,6 @@ function removeChild(node: ChildNode): void {
  * `<w:ins>` with the replacement. Inherits `<w:rPr>` from the first deleted run.
  */
 export function applySingleSuggestion(
-  _body: Element,
   offsetMap: OffsetMap,
   suggestion: SuggestionInput,
 ): ApplyResult {
@@ -556,8 +563,83 @@ export async function applyTrackedChanges(
     validAfterOverlapCheck.push(s);
   }
 
-  // The offset map already parsed the XML — reuse its DOM for mutation
-  const body = offsetMap.body;
+  // Reject suggestions whose range contains complex (non-text) elements
+  // that would produce malformed XML when the run is split or wrapped.
+  const validAfterComplexCheck: AcceptedSuggestion[] = [];
+  for (const s of validAfterOverlapCheck) {
+    const fromEntry = offsetMap.get(s.from)!;
+    const toEntry = offsetMap.get(s.to)!;
+    const paragraph = fromEntry.paragraph;
+
+    // Collect runs in the range [fromEntry.run .. toEntry.run]
+    let collecting = false;
+    let hasComplex = false;
+    for (const child of paragraph.children) {
+      if (!isElement(child) || child.name !== "w:r") continue;
+      if (child === fromEntry.run) collecting = true;
+      if (collecting) {
+        for (const rc of child.children) {
+          if (isElement(rc) && COMPLEX_RUN_ELEMENTS.has(rc.name)) {
+            hasComplex = true;
+            break;
+          }
+        }
+        if (hasComplex) break;
+        if (child === toEntry.run) break;
+      }
+    }
+
+    if (hasComplex) {
+      rejectedDetails.push({
+        id: s.id,
+        reason: "Overlaps a complex element (footnote, drawing, or field) and couldn't be applied",
+      });
+    } else {
+      validAfterComplexCheck.push(s);
+    }
+  }
+
+  // Reject suggestions that target the same <w:r> run — the first split would
+  // invalidate the second suggestion's DOM references.
+  const validAfterRunCheck: AcceptedSuggestion[] = [];
+  const claimedRuns = new Map<Element, string>(); // run -> suggestion id that claimed it
+  for (const s of validAfterComplexCheck) {
+    const fromEntry = offsetMap.get(s.from)!;
+    const toEntry = offsetMap.get(s.to)!;
+    const paragraph = fromEntry.paragraph;
+
+    // Collect all runs this suggestion touches
+    const touchedRuns: Element[] = [];
+    let collecting = false;
+    for (const child of paragraph.children) {
+      if (!isElement(child) || child.name !== "w:r") continue;
+      if (child === fromEntry.run) collecting = true;
+      if (collecting) {
+        touchedRuns.push(child);
+        if (child === toEntry.run) break;
+      }
+    }
+
+    let conflict = false;
+    for (const run of touchedRuns) {
+      if (claimedRuns.has(run)) {
+        rejectedDetails.push({
+          id: s.id,
+          reason: "Targets the same text run as another suggestion",
+        });
+        conflict = true;
+        break;
+      }
+    }
+    if (!conflict) {
+      for (const run of touchedRuns) {
+        claimedRuns.set(run, s.id);
+      }
+      validAfterRunCheck.push(s);
+    }
+  }
+
+  // The offset map already parsed the XML — reuse its DOM for serialization
   const doc = offsetMap.doc;
 
   // Find max existing w:id to avoid collisions
@@ -568,11 +650,14 @@ export async function applyTrackedChanges(
     if (num > maxId) maxId = num;
   }
 
-  // Apply each valid suggestion in reverse offset order
+  // Apply each valid suggestion in reverse offset order.
+  // ID allocation: maxId += 2 per suggestion because each tracked change
+  // needs two revision IDs — one for the <w:del> element (revisionId) and
+  // one for the <w:ins> element (revisionId + 1).
   let applied = 0;
-  for (const s of validAfterOverlapCheck) {
-    maxId += 2; // reserve two IDs: one for del, one for ins
-    const result = applySingleSuggestion(body, offsetMap, {
+  for (const s of validAfterRunCheck) {
+    maxId += 2;
+    const result = applySingleSuggestion(offsetMap, {
       from: s.from,
       to: s.to,
       newText: s.newText,
@@ -595,10 +680,10 @@ export async function applyTrackedChanges(
   const commentsResolved = await resolveWordComments(
     zip,
     offsetMap.commentParagraphIds,
-    validAfterOverlapCheck.filter((_, i) => {
+    validAfterRunCheck.filter((_, i) => {
       // Only include successfully applied suggestions
-      // Since we applied in order from validAfterOverlapCheck, check the rejectedDetails
-      return !rejectedDetails.some((r) => r.id === validAfterOverlapCheck[i]?.id);
+      // Since we applied in order from validAfterRunCheck, check the rejectedDetails
+      return !rejectedDetails.some((r) => r.id === validAfterRunCheck[i]?.id);
     }),
   );
 
@@ -662,7 +747,17 @@ export async function resolveWordComments(
       | Element
       | undefined;
     if (root) {
+      // Collect existing paraIds to avoid duplicate entries
+      const existingParaIds = new Set<string>();
+      for (const child of root.children) {
+        if (isElement(child) && child.name === "w15:commentEx") {
+          const pid = getAttr(child, "w15:paraId");
+          if (pid) existingParaIds.add(pid);
+        }
+      }
+
       for (const { paraId } of unique) {
+        if (existingParaIds.has(paraId)) continue;
         const entry = new Element("w15:commentEx", {
           "w15:paraId": paraId,
           "w15:done": "1",

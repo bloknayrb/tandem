@@ -149,7 +149,7 @@ describe("applySingleSuggestion", () => {
     const xml = wrapBody(`<w:p><w:r><w:t>Hello World</w:t></w:r></w:p>`);
     const map = buildOffsetMap(xml, new Set([0, 11]));
 
-    const result = applySingleSuggestion(map.body, map, {
+    const result = applySingleSuggestion(map, {
       from: 0,
       to: 11,
       newText: "Hi Earth",
@@ -177,7 +177,7 @@ describe("applySingleSuggestion", () => {
     const xml = wrapBody(`<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Bold text</w:t></w:r></w:p>`);
     const map = buildOffsetMap(xml, new Set([0, 9]));
 
-    const result = applySingleSuggestion(map.body, map, {
+    const result = applySingleSuggestion(map, {
       from: 0,
       to: 9,
       newText: "New bold",
@@ -199,7 +199,7 @@ describe("applySingleSuggestion", () => {
     // Replace "World" (offset 6..11)
     const map = buildOffsetMap(xml, new Set([6, 11]));
 
-    const result = applySingleSuggestion(map.body, map, {
+    const result = applySingleSuggestion(map, {
       from: 6,
       to: 11,
       newText: "Earth",
@@ -223,7 +223,7 @@ describe("applySingleSuggestion", () => {
     // Replace "Hello" (offset 0..5)
     const map = buildOffsetMap(xml, new Set([0, 5]));
 
-    const result = applySingleSuggestion(map.body, map, {
+    const result = applySingleSuggestion(map, {
       from: 0,
       to: 5,
       newText: "Hi",
@@ -246,7 +246,7 @@ describe("applySingleSuggestion", () => {
     const xml = wrapBody(`<w:p><w:r><w:t>Delete me</w:t></w:r></w:p>`);
     const map = buildOffsetMap(xml, new Set([0, 9]));
 
-    const result = applySingleSuggestion(map.body, map, {
+    const result = applySingleSuggestion(map, {
       from: 0,
       to: 9,
       newText: "",
@@ -272,7 +272,7 @@ describe("applySingleSuggestion", () => {
     // Replace "lo Wo" (offset 3..8) spanning two runs
     const map = buildOffsetMap(xml, new Set([3, 8]));
 
-    const result = applySingleSuggestion(map.body, map, {
+    const result = applySingleSuggestion(map, {
       from: 3,
       to: 8,
       newText: "LO WO",
@@ -350,9 +350,12 @@ describe("applyTrackedChanges", () => {
   });
 
   it("applies multiple suggestions in reverse order", async () => {
+    // Each suggestion targets a separate run so the same-run check doesn't fire
     const xml = wrapBody(`
       <w:p>
-        <w:r><w:t>Hello World Today</w:t></w:r>
+        <w:r><w:t>Hello</w:t></w:r>
+        <w:r><w:t> World </w:t></w:r>
+        <w:r><w:t>Today</w:t></w:r>
       </w:p>
     `);
     const docxBuffer = await createTestDocx(xml);
@@ -392,6 +395,70 @@ describe("applyTrackedChanges", () => {
     expect(output.applied + output.rejected).toBe(2);
     expect(output.rejected).toBeGreaterThanOrEqual(1);
     expect(output.rejectedDetails.some((r) => r.reason.includes("Overlapping"))).toBe(true);
+  });
+
+  it("rejects suggestions containing complex elements (footnoteReference)", async () => {
+    const xml = wrapBody(`
+      <w:p>
+        <w:r><w:t>See note</w:t><w:footnoteReference w:id="1"/></w:r>
+        <w:r><w:t> and more text</w:t></w:r>
+      </w:p>
+    `);
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [
+        { id: "s1", from: 0, to: 8, newText: "Check note" },
+        { id: "s2", from: 8, to: 22, newText: " plus extra" },
+      ],
+      { author: "Test", ydocFlatText: "See note and more text" },
+    );
+
+    // s1 targets the run with footnoteReference — should be rejected
+    expect(
+      output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("complex element")),
+    ).toBe(true);
+    // s2 targets the clean second run — should apply
+    expect(output.applied).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rejects later suggestion when two target the same run", async () => {
+    const xml = wrapBody(`<w:p><w:r><w:t>Hello World Today</w:t></w:r></w:p>`);
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [
+        { id: "s1", from: 0, to: 5, newText: "Hi" },
+        { id: "s2", from: 6, to: 11, newText: "Earth" },
+      ],
+      { author: "Test", ydocFlatText: "Hello World Today" },
+    );
+
+    // Both target the same single run — one should apply, one rejected
+    expect(output.applied).toBe(1);
+    expect(output.rejected).toBeGreaterThanOrEqual(1);
+    expect(output.rejectedDetails.some((r) => r.reason.includes("same text run"))).toBe(true);
+  });
+
+  it("rejects cross-paragraph suggestions", async () => {
+    const xml = wrapBody(`
+      <w:p><w:r><w:t>First paragraph</w:t></w:r></w:p>
+      <w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p>
+    `);
+    const docxBuffer = await createTestDocx(xml);
+
+    // "paragraph\nSecond" spans the paragraph boundary (offset 6..22 in "First paragraph\nSecond paragraph")
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 6, to: 22, newText: "REPLACED" }],
+      { author: "Test", ydocFlatText: "First paragraph\nSecond paragraph" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejected).toBe(1);
+    expect(output.rejectedDetails[0].reason).toContain("Cross-paragraph");
   });
 });
 
