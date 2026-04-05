@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { FlatOffset, DocumentRange, RelativeRange } from "./positions/types.js";
+import type { DocumentRange, RelativeRange } from "./positions/types.js";
 
 // Canonical definitions live in the positions module; re-exported for backward compatibility.
 export type {
@@ -170,6 +170,11 @@ export interface SessionData {
   lastAccessed: number;
 }
 
+/** Text selection snapshot captured when opening chat, attached to the next outgoing ChatMessage as its anchor. */
+export interface CapturedAnchor extends DocumentRange {
+  textSnapshot: string;
+}
+
 /** Chat message between user and Claude, stored in Y.Map('chat') on CTRL_ROOM */
 export interface ChatMessage {
   id: string;
@@ -177,11 +182,7 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   documentId?: string;
-  anchor?: {
-    from: FlatOffset;
-    to: FlatOffset;
-    textSnapshot: string;
-  };
+  anchor?: CapturedAnchor;
   replyTo?: string;
   read: boolean;
 }

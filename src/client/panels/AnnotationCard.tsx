@@ -326,12 +326,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid #d1d5db",
                 borderRadius: "3px",
-                background: "#f0fdf4",
-                color: "#166534",
+                background: isSuggestion ? "#f0fdf4" : "#eef2ff",
+                color: isSuggestion ? "#166534" : "#1e40af",
                 cursor: "pointer",
               }}
             >
-              Accept
+              {isSuggestion ? "Accept" : "Acknowledge"}
             </button>
           )}
           {onDismiss && (

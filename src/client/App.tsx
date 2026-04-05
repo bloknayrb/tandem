@@ -19,8 +19,10 @@ import {
   REVIEW_BANNER_THRESHOLD,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
-import type { InterruptionMode } from "../shared/types";
+import type { InterruptionMode, CapturedAnchor } from "../shared/types";
 import { InterruptionModeSchema } from "../shared/types";
+import { pmSelectionToFlat } from "./positions";
+import { toPmPos } from "../shared/positions/types";
 import { useAnnotationGate } from "./hooks/useAnnotationGate";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useNotifications } from "./hooks/useNotifications";
@@ -183,6 +185,7 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [capturedAnchor, setCapturedAnchor] = useState<CapturedAnchor | null>(null);
   const editorRef = useRef<TiptapEditor | null>(null);
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
@@ -208,6 +211,21 @@ export default function App() {
     setReviewMode(false);
     setShowBanner(false);
   }, []);
+
+  // Snapshot editor selection for chat anchor (mousedown fires before click moves focus from editor)
+  const captureSelectionForChat = useCallback(() => {
+    if (showChat) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const range = pmSelectionToFlat(editor.state.doc, { from: toPmPos(from), to: toPmPos(to) });
+    const text = editor.state.doc.textBetween(from, to, "\n");
+    setCapturedAnchor({
+      ...range,
+      textSnapshot: text.length > 200 ? text.slice(0, 197) + "..." : text,
+    });
+  }, [showChat]);
 
   // Toggle help modal with '?' — skip when focus is in a text input
   useEffect(() => {
@@ -384,6 +402,7 @@ export default function App() {
               Annotations
             </button>
             <button
+              onMouseDown={captureSelectionForChat}
               onClick={() => setShowChat(true)}
               style={{
                 flex: 1,
@@ -417,6 +436,8 @@ export default function App() {
               claudeActive={claudeActive}
               claudeStatus={claudeStatus}
               visible={showChat}
+              capturedAnchor={capturedAnchor}
+              onCapturedAnchorChange={setCapturedAnchor}
             />
           </div>
           <div
