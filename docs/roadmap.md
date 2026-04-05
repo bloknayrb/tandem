@@ -213,7 +213,7 @@ Real-time push notifications from browser to Claude Code via the Channels API, r
 - **Channel shim** (`src/channel/`): Separate stdio subprocess spawned by Claude Code. Low-level MCP `Server` class (not `McpServer`) with `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
 - **Event queue** (`src/server/events/queue.ts`): Y.Map observers on annotations, chat, user awareness, and document metadata. Circular buffer (200 events / 60s). Origin tagging filters MCP-initiated changes.
 - **SSE endpoint** (`GET /api/events`): Server-Sent Events stream with `Last-Event-ID` reconnection replay and 15s keepalive.
-- **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `/api/launch-claude`
+- **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `/api/launch-claude`, `DELETE /api/chat`
 - **Build**: tsup produces three bundles — `dist/server/index.js` + `dist/channel/index.js` + `dist/cli/index.js`
 - **8 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `chat:message`, `selection:changed`, `document:opened`, `document:closed`, `document:switched`
 

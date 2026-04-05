@@ -950,6 +950,14 @@ Channel shim forwards Claude's chat reply to the Y.Map('chat') on `__tandem_ctrl
 
 **Response:** `{ "sent": true, "messageId": "msg_1710936000000_x1y2z3" }`
 
+### DELETE /api/chat
+
+Clear all chat messages from the CTRL_ROOM Y.Map. The change syncs to connected browsers in real time.
+
+**Request body:** none
+
+**Response:** `{ "ok": true, "cleared": 5 }`
+
 ### POST /api/channel-error
 
 Channel shim reports connection errors.
