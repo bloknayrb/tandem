@@ -109,7 +109,7 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 ## Documentation
 
 - **[User Guide](docs/user-guide.md)** — How to use Tandem: browser UI, annotations, chat, review mode, keyboard shortcuts
-- [MCP Tool Reference](docs/mcp-tools.md) — 28 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) — 30 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: document review, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions

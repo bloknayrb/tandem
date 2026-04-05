@@ -16,7 +16,7 @@
 - **Start the server before connecting Claude Code.** `npm run dev:standalone` runs both. Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 28 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 30 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems, file map
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
@@ -100,7 +100,7 @@ These WILL break things if violated:
 
 ## Status
 
-Core complete: 28 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), 776 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining phases (2-5: cowork integration, .docx export, distribution, discovery).
+Core complete: 30 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), 776 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining phases (2-5: cowork integration, .docx export, distribution, discovery).
 
 ## Security
 - Server binds to 127.0.0.1 only
