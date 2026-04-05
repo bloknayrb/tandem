@@ -212,7 +212,7 @@ export default function App() {
     setShowBanner(false);
   }, []);
 
-  // Capture editor selection for chat anchor (before focus shifts on tab switch)
+  // Snapshot editor selection for chat anchor (mousedown fires before click moves focus from editor)
   const captureSelectionForChat = useCallback(() => {
     if (showChat) return;
     const editor = editorRef.current;
