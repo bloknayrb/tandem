@@ -328,12 +328,13 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 |---|---|---|---|
 | `annotations` | Server event queue | `src/server/events/queue.ts` → `attachObservers()` | Emit channel events (annotation:created/accepted/dismissed) |
 | `annotations` | Client React hook | `src/client/hooks/useYjsSync.ts` → `setupTabObservers()` | Drive sidebar annotation list via `setAnnotations()` |
-| `annotations` | Client ProseMirror | `src/client/extensions/AnnotationExtension.ts` → `buildDecorations()` | Render inline highlights/underlines |
+| `annotations` | Client ProseMirror | `src/client/editor/extensions/annotation.ts` → `buildDecorations()` | Render inline highlights/underlines |
 | `awareness` | Client React hook | `useYjsSync.ts` → `setupTabObservers()` | Drive "Claude -- typing" status indicator |
 | `userAwareness` | Server event queue | `queue.ts` → `attachObservers()` | Emit selection:changed events to channel |
-| `documentMeta` | Client React hook | `useYjsSync.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts |
+| `documentMeta` | Client React hook | `useYjsSync.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
+| `documentMeta` (per-doc) | Client React hook | `useYjsSync.ts` → `setupTabObservers()` | Sync readOnly flag per tab |
 
-**Force-reload (`force: true`)** clears all Y.Maps and repopulates content in a single `doc.transact()` (see `clearAndReload` in `file-opener.ts`). The Y.Doc instance, Hocuspocus room, and all observers survive -- no re-attachment needed. Server event queue observers are explicitly re-attached via `attachObservers()` after the transaction as a safety measure.
+**Force-reload (`force: true`)** clears all Y.Maps and repopulates content in a single `doc.transact()` (see `clearAndReload` in `file-opener.ts`). The Y.Doc instance, Hocuspocus room, and client connections survive. Client-side observers survive because they reference the same Y.Doc/Y.Map instances. Server event queue observers are defensively re-attached via `attachObservers()` (idempotent -- detaches existing first).
 
 ## Coordinate Systems
 

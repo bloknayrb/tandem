@@ -266,12 +266,7 @@ async function clearAndReload(
 ): Promise<void> {
   console.error(`[Tandem] clearAndReload: reloading ${id} from disk`);
 
-  // 1. Delete session so stale state doesn't restore on next startup
-  await deleteSession(existing.filePath).catch((err) => {
-    console.error(`[Tandem] clearAndReload: deleteSession failed for ${id}:`, err);
-  });
-
-  // 2. Prepare content outside the transaction (async I/O must happen before transact)
+  // 1. Prepare content outside the transaction (async I/O must happen before transact)
   const isDocx = format === "docx";
   let preparedHtml: string | undefined;
   let preparedComments: Awaited<ReturnType<typeof extractDocxComments>> | undefined;
@@ -293,42 +288,59 @@ async function clearAndReload(
     preparedContent = await fs.readFile(filePath, "utf-8");
   }
 
-  // 3. Single transaction: clear all state + repopulate from pre-parsed content.
+  // 2. Single transaction: clear all state + repopulate from pre-parsed content.
   //    Clients see one atomic Y.js update — no intermediate states.
-  doc.transact(() => {
-    // Clear Y.Maps
-    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-    annotations.forEach((_, k) => annotations.delete(k));
+  //    Content loaders are verified robust (remark-parse, htmlparser2 don't throw on
+  //    malformed input; populateYDoc is safe). The try-catch is a diagnostic safety net
+  //    for Y.js internal corruption — it logs context before re-throwing.
+  try {
+    doc.transact(() => {
+      // Clear Y.Maps
+      const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+      annotations.forEach((_, k) => annotations.delete(k));
 
-    const awareness = doc.getMap(Y_MAP_AWARENESS);
-    awareness.forEach((_, k) => awareness.delete(k));
+      const awareness = doc.getMap(Y_MAP_AWARENESS);
+      awareness.forEach((_, k) => awareness.delete(k));
 
-    const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.forEach((_, k) => userAwareness.delete(k));
+      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+      userAwareness.forEach((_, k) => userAwareness.delete(k));
 
-    // Repopulate content (adapters clear the XmlFragment internally)
-    if (isDocx && preparedHtml !== undefined) {
-      htmlToYDoc(doc, preparedHtml);
-      if (preparedComments && preparedComments.length > 0) {
-        injectCommentsAsAnnotations(doc, preparedComments);
+      // Repopulate content (load functions clear the XmlFragment internally)
+      if (isDocx && preparedHtml !== undefined) {
+        htmlToYDoc(doc, preparedHtml);
+        if (preparedComments && preparedComments.length > 0) {
+          injectCommentsAsAnnotations(doc, preparedComments);
+        }
+      } else if (format === "md" && preparedContent !== undefined) {
+        loadMarkdown(doc, preparedContent);
+      } else if (preparedContent !== undefined) {
+        populateYDoc(doc, preparedContent);
       }
-    } else if (format === "md" && preparedContent !== undefined) {
-      loadMarkdown(doc, preparedContent);
-    } else if (preparedContent !== undefined) {
-      populateYDoc(doc, preparedContent);
-    }
 
-    // Rewrite metadata + dirty-tracking baseline
-    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    meta.set("readOnly", isDocx);
-    meta.set("format", format);
-    meta.set("documentId", id);
-    meta.set("fileName", path.basename(filePath));
-    meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
-  }, MCP_ORIGIN);
+      // Rewrite metadata + dirty-tracking baseline
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      meta.set("readOnly", isDocx);
+      meta.set("format", format);
+      meta.set("documentId", id);
+      meta.set("fileName", path.basename(filePath));
+      meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+    }, MCP_ORIGIN);
 
-  // 4. Reattach event queue observers (idempotent — detaches existing first)
-  attachObservers(id, doc);
+    // 3. Reattach event queue observers (idempotent — detaches existing first)
+    attachObservers(id, doc);
+  } catch (err) {
+    console.error(
+      `[Tandem] clearAndReload: failed for ${id} (format=${format}). Y.Doc may be in a partially cleared state:`,
+      err,
+    );
+    throw err;
+  }
+
+  // 4. Delete session after successful reload so stale state doesn't restore on next startup.
+  //    Runs last: if readFile or transact fails above, the session survives as a recovery path.
+  await deleteSession(existing.filePath).catch((err) => {
+    console.error(`[Tandem] clearAndReload: deleteSession failed for ${id}:`, err);
+  });
 
   console.error(`[Tandem] clearAndReload: complete for ${id}`);
 }
