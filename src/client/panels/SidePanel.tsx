@@ -597,7 +597,7 @@ export function SidePanel({
               return (
                 <>
                   <span style={{ fontSize: "11px", color: "#374151" }}>
-                    {isAccept ? "Accept" : "Dismiss"}{" "}
+                    {isAccept ? "Acknowledge" : "Dismiss"}{" "}
                     {pending.length === allPending.length
                       ? `${pending.length} annotations?`
                       : `${pending.length} of ${allPending.length} pending?`}
@@ -629,7 +629,7 @@ export function SidePanel({
                 onClick={() => setBulkConfirm("accept")}
                 style={{ ...SMALL_BTN, background: "#f0fdf4", color: "#166534" }}
               >
-                Accept All ({pending.length})
+                Acknowledge All ({pending.length})
               </button>
               <button
                 onClick={() => setBulkConfirm("dismiss")}

@@ -3,11 +3,10 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import ReactMarkdown from "react-markdown";
 import * as Y from "yjs";
-import { pmPosToFlatOffset, flatOffsetToPmPos } from "../positions";
+import { flatOffsetToPmPos } from "../positions";
 import type { FlatOffset } from "../../shared/positions/types";
-import { toPmPos } from "../../shared/positions/types";
 import { generateMessageId } from "../../shared/utils";
-import type { ChatMessage } from "../../shared/types";
+import type { ChatMessage, CapturedAnchor } from "../../shared/types";
 
 const TYPING_DOT_STYLE: React.CSSProperties = {
   width: "5px",
@@ -26,6 +25,8 @@ interface ChatPanelProps {
   claudeActive?: boolean;
   claudeStatus?: string | null;
   visible?: boolean;
+  capturedAnchor: CapturedAnchor | null;
+  onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
 }
 
 export function ChatPanel({
@@ -36,14 +37,11 @@ export function ChatPanel({
   claudeActive,
   claudeStatus,
   visible,
+  capturedAnchor,
+  onCapturedAnchorChange,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
-  const [capturedAnchor, setCapturedAnchor] = useState<{
-    from: FlatOffset;
-    to: FlatOffset;
-    textSnapshot: string;
-  } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -85,24 +83,6 @@ export function ChatPanel({
     }
   }, [visible]);
 
-  // Capture selection on mousedown of send button (before editor loses focus)
-  const captureSelection = useCallback(() => {
-    if (!editor) return;
-    const { from, to } = editor.state.selection;
-    if (from === to) {
-      setCapturedAnchor(null);
-      return;
-    }
-    const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
-    const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
-    const text = editor.state.doc.textBetween(from, to, "\n");
-    setCapturedAnchor({
-      from: flatFrom,
-      to: flatTo,
-      textSnapshot: text.length > 200 ? text.slice(0, 197) + "..." : text,
-    });
-  }, [editor]);
-
   const sendMessage = useCallback(() => {
     if (!ctrlYdoc || !inputText.trim()) return;
     const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
@@ -119,8 +99,8 @@ export function ChatPanel({
 
     chatMap.set(msg.id, msg);
     setInputText("");
-    setCapturedAnchor(null);
-  }, [ctrlYdoc, inputText, activeDocId, capturedAnchor]);
+    onCapturedAnchorChange(null);
+  }, [ctrlYdoc, inputText, activeDocId, capturedAnchor, onCapturedAnchorChange]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -360,7 +340,7 @@ export function ChatPanel({
             {capturedAnchor.textSnapshot.length > 40 ? "..." : ""}&rdquo;
           </span>
           <button
-            onClick={() => setCapturedAnchor(null)}
+            onClick={() => onCapturedAnchorChange(null)}
             style={{
               background: "none",
               border: "none",
@@ -402,7 +382,6 @@ export function ChatPanel({
           }}
         />
         <button
-          onMouseDown={captureSelection}
           onClick={sendMessage}
           disabled={!inputText.trim()}
           style={{

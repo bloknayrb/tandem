@@ -170,6 +170,13 @@ export interface SessionData {
   lastAccessed: number;
 }
 
+/** Captured text selection anchor for chat messages */
+export interface CapturedAnchor {
+  from: FlatOffset;
+  to: FlatOffset;
+  textSnapshot: string;
+}
+
 /** Chat message between user and Claude, stored in Y.Map('chat') on CTRL_ROOM */
 export interface ChatMessage {
   id: string;
@@ -177,11 +184,7 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   documentId?: string;
-  anchor?: {
-    from: FlatOffset;
-    to: FlatOffset;
-    textSnapshot: string;
-  };
+  anchor?: CapturedAnchor;
   replyTo?: string;
   read: boolean;
 }
