@@ -67,7 +67,9 @@ export async function loadSession(filePath: string): Promise<SessionData | null>
     if (code === "ENOENT") return null;
     if (err instanceof SyntaxError) {
       console.error(`[Tandem] Corrupted session file ${sessionPath}, removing:`, err.message);
-      await fs.unlink(sessionPath).catch(() => {});
+      await fs.unlink(sessionPath).catch((unlinkErr) => {
+        console.error(`[Tandem] Failed to remove corrupted session ${sessionPath}:`, unlinkErr);
+      });
       return null;
     }
     console.error(`[Tandem] Failed to read session ${sessionPath}:`, err);
@@ -162,7 +164,12 @@ export async function loadCtrlSession(): Promise<string | null> {
     if (code === "ENOENT") return null;
     if (err instanceof SyntaxError) {
       console.error(`[Tandem] Corrupted ctrl session ${sessionPath}, removing:`, err.message);
-      await fs.unlink(sessionPath).catch(() => {});
+      await fs.unlink(sessionPath).catch((unlinkErr) => {
+        console.error(
+          `[Tandem] Failed to remove corrupted ctrl session ${sessionPath}:`,
+          unlinkErr,
+        );
+      });
       return null;
     }
     console.error(`[Tandem] Failed to read ctrl session:`, err);

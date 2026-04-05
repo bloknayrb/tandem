@@ -58,12 +58,17 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | nu
     return false;
   }
 
-  editor
-    .chain()
-    .focus()
-    .deleteRange({ from: resolved.from, to: resolved.to })
-    .insertContentAt(resolved.from, newText)
-    .run();
+  try {
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: resolved.from, to: resolved.to })
+      .insertContentAt(resolved.from, newText)
+      .run();
+  } catch (err) {
+    console.error("[SidePanel] Editor mutation failed for suggestion", ann.id, err);
+    return false;
+  }
   return true;
 }
 
@@ -143,7 +148,12 @@ export function SidePanel({
     if (!ann) return;
     map.set(id, { ...ann, status });
     if (status === "accepted" && editorRef.current) {
-      applySuggestion(ann, editorRef.current, ydocRef.current);
+      const applied = applySuggestion(ann, editorRef.current, ydocRef.current);
+      if (!applied) {
+        // Revert annotation status — text replacement failed
+        map.set(id, { ...ann, status: "pending" });
+        return;
+      }
     }
 
     // Track for timed undo
