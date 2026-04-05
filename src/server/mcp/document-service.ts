@@ -234,7 +234,9 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
         console.error(`[Tandem] Skipping deleted file (removing stale session): ${filePath}`);
-        deleteSession(filePath).catch(() => {});
+        deleteSession(filePath).catch((err) => {
+          console.error(`[Tandem] Failed to delete stale session for ${filePath}:`, err);
+        });
       } else {
         console.error(`[Tandem] Failed to restore ${filePath}:`, err);
       }

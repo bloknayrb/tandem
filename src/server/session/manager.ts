@@ -62,7 +62,15 @@ export async function loadSession(filePath: string): Promise<SessionData | null>
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     return JSON.parse(content) as SessionData;
-  } catch {
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    if (err instanceof SyntaxError) {
+      console.error(`[Tandem] Corrupted session file ${sessionPath}, removing:`, err.message);
+      await fs.unlink(sessionPath).catch(() => {});
+      return null;
+    }
+    console.error(`[Tandem] Failed to read session ${sessionPath}:`, err);
     return null;
   }
 }
@@ -149,7 +157,15 @@ export async function loadCtrlSession(): Promise<string | null> {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content);
     return data.ydocState ?? null;
-  } catch {
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    if (err instanceof SyntaxError) {
+      console.error(`[Tandem] Corrupted ctrl session ${sessionPath}, removing:`, err.message);
+      await fs.unlink(sessionPath).catch(() => {});
+      return null;
+    }
+    console.error(`[Tandem] Failed to read ctrl session:`, err);
     return null;
   }
 }
@@ -199,20 +215,27 @@ export async function listSessionFilePaths(): Promise<
 /** Delete sessions older than 30 days */
 export async function cleanupSessions(): Promise<number> {
   let cleaned = 0;
+  let files: string[];
   try {
-    const files = await fs.readdir(SESSION_DIR);
-    const now = Date.now();
+    files = await fs.readdir(SESSION_DIR);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    console.error("[Tandem] Failed to read session directory:", err);
+    return 0;
+  }
 
-    for (const file of files) {
+  const now = Date.now();
+  for (const file of files) {
+    try {
       const filePath = path.join(SESSION_DIR, file);
       const stat = await fs.stat(filePath);
       if (now - stat.mtimeMs > SESSION_MAX_AGE) {
         await fs.unlink(filePath);
         cleaned++;
       }
+    } catch (err) {
+      console.error(`[Tandem] cleanupSessions: failed to process ${file}:`, err);
     }
-  } catch {
-    // Session dir doesn't exist yet
   }
   return cleaned;
 }
