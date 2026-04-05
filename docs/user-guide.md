@@ -101,7 +101,7 @@ There are three ways to open a file:
 - **Markdown** (`.md`) — Full read-write support with lossless round-trip formatting.
 - **Word** (`.docx`) — Opens in review-only mode. A banner explains that edits aren't saved back to the original `.docx`. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". A **Convert to Markdown** button is available to create an editable copy.
 - **Plain text** (`.txt`) — Full read-write support.
-- **HTML** (`.html`) — Read support.
+- **HTML** (`.html`, `.htm`) — Read support.
 
 ### Multi-Document Tabs
 
@@ -113,7 +113,7 @@ Press `Ctrl+S` to save the active document to disk. Claude can also save via `ta
 
 ## Annotations
 
-Annotations are Tandem's core feature. There are four types, each with distinct visual styling in the document:
+Annotations are Tandem's core feature. There are five types, each with distinct visual styling in the document:
 
 ### Highlight
 
@@ -130,6 +130,10 @@ Wavy underline on the annotated text. Proposes a text replacement. The side pane
 ### Flag
 
 Marks text for urgent attention. Flags can carry priority levels. Use flags for items that need immediate action rather than just review.
+
+### Question
+
+Indigo border with a light tint on the annotated text. Created when you use **Ask Claude** (`Ctrl+Shift+A`) on a selection. The question appears in the side panel alongside other annotations and is also sent to Claude as a chat-like prompt. Claude can respond with annotations, chat messages, or both.
 
 ### Creating Annotations
 
@@ -185,7 +189,7 @@ When all annotations are resolved, a summary overlay appears showing: total revi
 The status bar includes an interruption mode selector with three settings:
 
 - **All** (default) — Show all annotations immediately as they arrive.
-- **Urgent** — Only show flags, questions, and annotations marked as urgent. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
+- **Urgent-only** — Only show flags, Ask Claude questions, and any annotation with urgent priority. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
 - **Paused** — Hold all new pending annotations. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
 Use **Paused** during focused writing to avoid interruption. Switch back to **All** when you're ready to review Claude's work.
@@ -222,9 +226,9 @@ Press `?` to open the in-app shortcuts reference at any time.
 |----------|--------|
 | `Ctrl+B` | Bold |
 | `Ctrl+I` | Italic |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
 | `Ctrl+S` | Save document |
+
+> **Note:** Undo/redo is not yet available in collaborative mode (tracked as a future enhancement).
 
 ### Annotations & Review
 
