@@ -170,15 +170,10 @@ async function main() {
       console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
     }
 
-    const [srv] = await Promise.all([
-      startMcpServerHttp(mcpPort),
-      startHocuspocus(wsPort).then(() => {
-        console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
-      }),
-    ]);
-    httpServer = srv;
-
-    // Open CHANGELOG.md as active tab on first startup after an update
+    // Open CHANGELOG.md as active tab on first startup after an update.
+    // Must run BEFORE servers start — the browser auto-opens when MCP binds,
+    // and a stale tab reconnecting can CRDT-merge an old openDocuments list
+    // that lacks the changelog, closing the tab.
     try {
       const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
       if (versionStatus === "upgraded") {
@@ -193,25 +188,33 @@ async function main() {
       console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
     }
 
-    // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session)
+    // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session).
+    // Also before servers start so the Y.Doc state is settled before clients connect.
     if (getOpenDocs().size === 0 && !process.env.TANDEM_NO_SAMPLE) {
       const samplePath = path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
         "../../sample/welcome.md",
       );
-      openFileByPath(samplePath)
-        .then(() => {
-          const doc = getOrCreateDocument(docIdFromPath(samplePath));
-          injectTutorialAnnotations(doc);
-        })
-        .catch((err) => {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            console.error("[Tandem] Sample file not found (skipping):", samplePath);
-          } else {
-            console.error("[Tandem] Failed to auto-open sample document:", err);
-          }
-        });
+      try {
+        await openFileByPath(samplePath);
+        const doc = getOrCreateDocument(docIdFromPath(samplePath));
+        injectTutorialAnnotations(doc);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          console.error("[Tandem] Sample file not found (skipping):", samplePath);
+        } else {
+          console.error("[Tandem] Failed to auto-open sample document:", err);
+        }
+      }
     }
+
+    const [srv] = await Promise.all([
+      startMcpServerHttp(mcpPort),
+      startHocuspocus(wsPort).then(() => {
+        console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
+      }),
+    ]);
+    httpServer = srv;
 
     console.error("");
     console.error(`  Tandem v${APP_VERSION}`);
