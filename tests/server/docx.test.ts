@@ -189,6 +189,46 @@ describe("htmlToYDoc — inline marks", () => {
     expect(delta[0].attributes?.link).toEqual({ href: "https://example.com" });
   });
 
+  it("link — http: href is preserved", () => {
+    loadHtml('<p><a href="http://example.com">click</a></p>');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    const textNode = el.get(0) as Y.XmlText;
+    const delta = textNode.toDelta();
+    expect(delta[0].attributes?.link).toEqual({ href: "http://example.com" });
+  });
+
+  it("link — mailto: href is preserved", () => {
+    loadHtml('<p><a href="mailto:user@example.com">email</a></p>');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    const textNode = el.get(0) as Y.XmlText;
+    const delta = textNode.toDelta();
+    expect(delta[0].attributes?.link).toEqual({ href: "mailto:user@example.com" });
+  });
+
+  it("link — javascript: href is sanitized to empty string", () => {
+    loadHtml('<p><a href="javascript:alert(1)">xss</a></p>');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    const textNode = el.get(0) as Y.XmlText;
+    const delta = textNode.toDelta();
+    expect(delta[0].attributes?.link).toEqual({ href: "" });
+  });
+
+  it("link — data: href is sanitized to empty string", () => {
+    loadHtml('<p><a href="data:text/html,<script>alert(1)</script>">xss</a></p>');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    const textNode = el.get(0) as Y.XmlText;
+    const delta = textNode.toDelta();
+    expect(delta[0].attributes?.link).toEqual({ href: "" });
+  });
+
+  it("link — vbscript: href is sanitized to empty string", () => {
+    loadHtml('<p><a href="vbscript:MsgBox(1)">xss</a></p>');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    const textNode = el.get(0) as Y.XmlText;
+    const delta = textNode.toDelta();
+    expect(delta[0].attributes?.link).toEqual({ href: "" });
+  });
+
   it("superscript and subscript", () => {
     loadHtml("<p><sup>up</sup><sub>down</sub></p>");
     const el = getFragment(doc).get(0) as Y.XmlElement;
