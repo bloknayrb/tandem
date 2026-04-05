@@ -236,7 +236,7 @@ Extracts `<w:comment>` elements from .docx XML (via JSZip) during file open and 
 
 **Files:** `src/server/session/manager.ts`, `src/server/index.ts`
 
-On server startup, `listSessionFilePaths()` scans the session directory for previously-open files. `restoreOpenDocuments()` calls `openFileByPath()` for each, and `restoreCtrlSession()` returns the previous active document ID. The `sample/welcome.md` fallback only fires if no sessions were restored. Stale sessions (ENOENT) are cleaned up automatically.
+On server startup, `listSessionFilePaths()` scans the session directory for previously-open files. `restoreOpenDocuments()` calls `openFileByPath()` for each, and `restoreCtrlSession()` returns the previous active document ID. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open — both before servers start. Stale sessions (ENOENT) are cleaned up automatically.
 
 ---
 
