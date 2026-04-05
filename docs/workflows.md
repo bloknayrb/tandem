@@ -1,5 +1,7 @@
 # Workflows
 
+> **Looking for browser UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
+
 Real-world patterns for using Tandem with Claude on toll consulting documents.
 
 ## Quick Start (Global Install)
