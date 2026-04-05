@@ -320,6 +320,22 @@ A bootstrap room (`__tandem_ctrl__`) provides the coordination channel for the b
 
 This is documented in [ADR decisions](decisions.md) and [lessons learned](lessons-learned.md).
 
+### Y.Map Observer Ownership
+
+Each Y.Map has observers attached by different subsystems. Understanding who owns which observer is critical for debugging "data exists but UI doesn't update" issues.
+
+| Y.Map Key | Observer Owner | Location | Purpose |
+|---|---|---|---|
+| `annotations` | Server event queue | `src/server/events/queue.ts` → `attachObservers()` | Emit channel events (annotation:created/accepted/dismissed) |
+| `annotations` | Client React hook | `src/client/hooks/useYjsSync.ts` → `setupTabObservers()` | Drive sidebar annotation list via `setAnnotations()` |
+| `annotations` | Client ProseMirror | `src/client/editor/extensions/annotation.ts` → `buildDecorations()` | Render inline highlights/underlines |
+| `awareness` | Client React hook | `useYjsSync.ts` → `setupTabObservers()` | Drive "Claude -- typing" status indicator |
+| `userAwareness` | Server event queue | `queue.ts` → `attachObservers()` | Emit selection:changed events to channel |
+| `documentMeta` | Client React hook | `useYjsSync.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
+| `documentMeta` (per-doc) | Client React hook | `useYjsSync.ts` → `setupTabObservers()` | Sync readOnly flag per tab |
+
+**Force-reload (`force: true`)** clears all Y.Maps and repopulates content in a single `doc.transact()` (see `clearAndReload` in `file-opener.ts`). The Y.Doc instance, Hocuspocus room, and client connections survive. Client-side observers survive because they reference the same Y.Doc/Y.Map instances. Server event queue observers are defensively re-attached via `attachObservers()` (idempotent -- detaches existing first).
+
 ## Coordinate Systems
 
 Three coordinate systems, unified in dedicated position modules:

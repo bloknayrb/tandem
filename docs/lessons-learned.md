@@ -315,3 +315,15 @@ Initial attempts to filter at the bridge and server levels had no effect because
 - A React ErrorBoundary at the app root prevents any rendering error from producing an unrecoverable white screen. Without it, corrupted Y.Map data (realistic after CRDT merges) can crash the entire UI.
 
 **Process:** Run security and error-handling audits in parallel using specialized reviewers. The security reviewer catches attack surfaces; the silent-failure hunter catches error handling that hides bugs or data loss. Together they provide comprehensive coverage.
+
+## 34. Clear Y.Docs In-Place Instead of Destroying Them
+
+**Problem:** `tandem_open` with `force: true` destroyed the Y.Doc and Hocuspocus room, then recreated both. The client tab got a new ydoc, but the React observer effect only depended on `activeTabId` (unchanged string), so annotation observers were never re-attached. Sidebar showed "No annotations" while ProseMirror inline decorations rendered fine — because ProseMirror reads from the live ydoc directly, but React state was stuck on the old (destroyed) ydoc's Y.Map.
+
+**Root cause:** Destroying a Y.Doc severs all observer subscriptions. Recreating produces a new instance that existing references don't track. This is the same bug class as the documented "Hocuspocus replaces Y.Doc in onLoadDocument" gotcha, which required manual observer re-attachment.
+
+**Fix:** Replace destroy-and-recreate with in-place clearing. `clearAndReload` in `file-opener.ts` clears all Y.Maps (annotations, awareness, userAwareness) and repopulates content in a single `doc.transact()`. The Y.Doc instance, Hocuspocus room, and client WebSocket connections all survive. Server event queue observers are re-attached via `attachObservers()` after the transaction.
+
+**Key insight:** When multiple subsystems hold references to a Y.Doc (server event queue, client React hooks, ProseMirror extensions), destroying the doc creates a coordination problem that no amount of lifecycle management can reliably solve. Clearing in-place eliminates the problem entirely. See the observer ownership table in [architecture.md](architecture.md) for the full list of who observes what.
+
+**Diagnostic pattern:** If the sidebar shows "No annotations" but inline decorations render, the React Y.Map observer is attached to a stale Y.Doc. Check whether the Y.Doc instance was replaced without the observer effect re-firing.

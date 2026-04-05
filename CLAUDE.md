@@ -67,9 +67,9 @@ These WILL break things if violated:
 - **Y.XmlText must be attached before populating.** Inserting formatted text into a detached Y.XmlText reverses segment order. Always attach to Y.Doc first, then insert (two-pass pattern in `mdast-ydoc.ts`).
 - **Y.XmlElement.setAttribute needs `as any` for numbers.** TypeScript types say string-only but Tiptap stores numeric heading levels.
 - **Stale browser tabs merge old CRDT state back.** If you change a file on disk and restart the server, an already-open browser tab will sync its old Y.Doc state back on reconnect, reverting your changes. Close all tabs before restarting, or use `force: true` to reload.
-- **Force-reload clears everything.** `tandem_open` with `force: true` reloads from disk but also clears annotations, awareness, and session state. Don't use mid-review.
+- **Force-reload clears in-place.** `tandem_open` with `force: true` clears annotations, awareness, and content, then repopulates from disk in a single Y.js transaction. Client connections and client-side observers survive; server event queue observers are defensively re-attached. Don't use mid-review -- annotations are still lost. See observer ownership table in [architecture.md](docs/architecture.md#y-map-observer-ownership).
 - **CRDT fallback logging.** `buildDecorations()` emits `console.warn` when a relRange-equipped annotation falls back to flat offsets. Check the browser console -- these indicate CRDT degradation.
-- **Hocuspocus replaces Y.Doc in `onLoadDocument`.** Server-side observers on pre-existing docs get destroyed. Re-attach observers after the hook.
+- **Hocuspocus replaces Y.Doc in `onLoadDocument`.** Server-side observers on pre-existing docs get destroyed. Re-attach observers after the hook. Related: force-reload avoids this by clearing in-place (see above). See #178 for audit of remaining destroy-recreate patterns.
 - **Y.js "Invalid access" warnings** during session restore are harmless stderr noise. Data syncs correctly.
 
 ### MCP / Server

@@ -11,6 +11,11 @@ import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { extractText, docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AWARENESS,
+  Y_MAP_DOCUMENT_META,
+} from "../../src/shared/constants.js";
 import type { SessionData } from "../../src/shared/types.js";
 
 let tmpDir: string | null = null;
@@ -121,7 +126,7 @@ describe("openFileByPath", () => {
       code: "ENOENT",
     });
 
-    // Doc should still be tracked — the error occurred before forceCloseDocument
+    // Doc should still be tracked — the error occurred before clearAndReload
     expect(getOpenDocs().has(id)).toBe(true);
   });
 
@@ -161,7 +166,7 @@ describe("openFileByPath", () => {
     expect(second.forceReloaded).toBe(false);
   });
 
-  it("force=true creates a new Y.Doc instance", async () => {
+  it("force=true clears and repopulates the same Y.Doc in-place", async () => {
     const dir = await makeTmpDir();
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
@@ -173,8 +178,11 @@ describe("openFileByPath", () => {
     await openFileByPath(filePath, { force: true });
     const docAfter = getOrCreateDocument(first.documentId);
 
-    // Teardown destroys the old Y.Doc and re-open creates a fresh one
-    expect(docAfter).not.toBe(docBefore);
+    // Same Y.Doc instance — cleared and repopulated in-place
+    expect(docAfter).toBe(docBefore);
+    // Content reflects the updated file
+    const text = extractText(docAfter);
+    expect(text).toContain("Changed");
   });
 
   it("force=true twice in succession does not crash", async () => {
@@ -214,6 +222,74 @@ describe("openFileByPath", () => {
     expect(text).toContain("After error");
 
     spy.mockRestore();
+  });
+
+  it("force=true clears Y_MAP_ANNOTATIONS", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const first = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+
+    // Inject a fake annotation
+    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+    annotations.set("fake-annotation-1", { text: "test" });
+    expect(annotations.size).toBe(1);
+
+    // Force-reload should clear it
+    await openFileByPath(filePath, { force: true });
+    expect(annotations.size).toBe(0);
+  });
+
+  it("force=true clears Y_MAP_AWARENESS", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const first = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+
+    // Inject fake awareness data
+    const awareness = doc.getMap(Y_MAP_AWARENESS);
+    awareness.set("claude-status", { typing: true });
+    expect(awareness.size).toBe(1);
+
+    // Force-reload should clear it
+    await openFileByPath(filePath, { force: true });
+    expect(awareness.size).toBe(0);
+  });
+
+  it("force=true works for .txt files", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.txt");
+    await fs.writeFile(filePath, "Original text");
+
+    const first = await openFileByPath(filePath);
+    await fs.writeFile(filePath, "Updated text");
+    await openFileByPath(filePath, { force: true });
+
+    const doc = getOrCreateDocument(first.documentId);
+    const text = extractText(doc);
+    expect(text).toContain("Updated text");
+    expect(text).not.toContain("Original");
+  });
+
+  it("force=true preserves correct metadata after reload", async () => {
+    const dir = await makeTmpDir();
+    const filePath = path.join(dir, "test.md");
+    await fs.writeFile(filePath, "# Hello");
+
+    const first = await openFileByPath(filePath);
+    await fs.writeFile(filePath, "# Changed");
+    await openFileByPath(filePath, { force: true });
+
+    const doc = getOrCreateDocument(first.documentId);
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    expect(meta.get("readOnly")).toBe(false);
+    expect(meta.get("format")).toBe("md");
+    expect(meta.get("fileName")).toBe("test.md");
+    expect(meta.get("documentId")).toBe(first.documentId);
   });
 });
 
