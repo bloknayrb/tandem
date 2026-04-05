@@ -29,9 +29,11 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
   switch (code) {
     case "ENOENT":
     case "FILE_NOT_FOUND":
+    case "NO_DOCUMENT":
       return 404;
     case "INVALID_PATH":
     case "UNSUPPORTED_FORMAT":
+    case "NO_SUGGESTIONS":
       return 400;
     case "FILE_TOO_LARGE":
       return 413;
@@ -40,6 +42,8 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
       return 423;
     case "EACCES":
       return 403;
+    case "BACKUP_FAILED":
+      return 500;
     default:
       return 500;
   }
@@ -67,11 +71,13 @@ function errorCodeToLabel(code: string): string {
   switch (code) {
     case "ENOENT":
     case "FILE_NOT_FOUND":
-      return "FILE_NOT_FOUND";
+    case "NO_DOCUMENT":
+      return "NOT_FOUND";
     case "INVALID_PATH":
       return "INVALID_PATH";
     case "UNSUPPORTED_FORMAT":
-      return "UNSUPPORTED_FORMAT";
+    case "NO_SUGGESTIONS":
+      return "BAD_REQUEST";
     case "FILE_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":
@@ -79,6 +85,8 @@ function errorCodeToLabel(code: string): string {
       return "FILE_LOCKED";
     case "EACCES":
       return "PERMISSION_DENIED";
+    case "BACKUP_FAILED":
+      return "INTERNAL";
     default:
       return "INTERNAL";
   }

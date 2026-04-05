@@ -326,7 +326,11 @@ export function applySingleSuggestion(
     }
     // Update fromEntry to point to the new run
     fromEntry.run = nextRun;
-    fromEntry.textNode = findTextNode(nextRun)!;
+    const nextTextNode = findTextNode(nextRun);
+    if (!nextTextNode) {
+      return { ok: false, reason: "Run contains no text element" };
+    }
+    fromEntry.textNode = nextTextNode;
     fromEntry.charIndex = 0;
   }
 
@@ -395,7 +399,9 @@ export function applySingleSuggestion(
   const delChildren: ChildNode[] = [];
 
   for (const run of runsToDelete) {
-    const text = getNodeText(findTextNode(run)!);
+    const tn = findTextNode(run);
+    if (!tn) continue; // skip tab-only or break-only runs with no <w:t>
+    const text = getNodeText(tn);
     const delRun = buildRun("w:delText", text, findRPr(run));
     delChildren.push(delRun);
   }
@@ -655,6 +661,7 @@ export async function applyTrackedChanges(
   // needs two revision IDs — one for the <w:del> element (revisionId) and
   // one for the <w:ins> element (revisionId + 1).
   let applied = 0;
+  const appliedSuggestions: AcceptedSuggestion[] = [];
   for (const s of validAfterRunCheck) {
     maxId += 2;
     const result = applySingleSuggestion(offsetMap, {
@@ -667,6 +674,7 @@ export async function applyTrackedChanges(
     });
     if (result.ok) {
       applied++;
+      appliedSuggestions.push(s);
     } else {
       rejectedDetails.push({ id: s.id, reason: result.reason ?? "Unknown error" });
     }
@@ -676,15 +684,11 @@ export async function applyTrackedChanges(
   const serialized = render(doc, { xmlMode: true });
   zip.file("word/document.xml", serialized);
 
-  // Resolve Word comments
+  // Resolve Word comments for successfully applied suggestions only
   const commentsResolved = await resolveWordComments(
     zip,
     offsetMap.commentParagraphIds,
-    validAfterRunCheck.filter((_, i) => {
-      // Only include successfully applied suggestions
-      // Since we applied in order from validAfterRunCheck, check the rejectedDetails
-      return !rejectedDetails.some((r) => r.id === validAfterRunCheck[i]?.id);
-    }),
+    appliedSuggestions,
   );
 
   const buffer = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));

@@ -96,5 +96,10 @@ export async function atomicWrite(filePath: string, content: string): Promise<vo
 export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
   const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
   await fs.writeFile(tempPath, content);
-  await fs.rename(tempPath, filePath);
+  try {
+    await fs.rename(tempPath, filePath);
+  } catch (err) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
 }

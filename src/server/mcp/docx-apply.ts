@@ -139,12 +139,21 @@ export async function applyChangesCore(
 
   // 5. Apply tracked changes
   const result = await applyTrackedChanges(buffer, suggestions, {
-    author: author ?? "Claude (via Tandem)",
+    author: author ?? "Tandem Review",
     ydocFlatText,
   });
 
-  // 6. Backup
-  const resolvedBackup = backupPath ?? filePath.replace(/\.docx$/i, ".backup.docx");
+  // 6. Backup — avoid overwriting an existing backup from a previous apply
+  let resolvedBackup = backupPath ?? filePath.replace(/\.docx$/i, ".backup.docx");
+  try {
+    await fs.access(resolvedBackup);
+    // Backup already exists — use a timestamped name to preserve the original
+    const ext = path.extname(resolvedBackup);
+    const base = resolvedBackup.slice(0, -ext.length);
+    resolvedBackup = `${base}-${Date.now()}${ext}`;
+  } catch {
+    // No existing backup — use the default path
+  }
   await fs.copyFile(filePath, resolvedBackup);
   // Verify backup size
   const [origStat, backupStat] = await Promise.all([fs.stat(filePath), fs.stat(resolvedBackup)]);
@@ -187,16 +196,13 @@ export function registerApplyTools(server: McpServer): void {
       author: z
         .string()
         .optional()
-        .describe("Author name for tracked changes (default: 'Claude (via Tandem)')"),
+        .describe("Author name for tracked changes (default: 'Tandem Review')"),
       backupPath: z
         .string()
         .optional()
         .describe("Custom backup path (default: {name}.backup.docx)"),
     },
     withErrorBoundary("tandem_applyChanges", async (args) => {
-      const r = requireDocument(args.documentId);
-      if (!r) return noDocumentError();
-
       try {
         const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
         return mcpSuccess(result);
@@ -204,8 +210,8 @@ export function registerApplyTools(server: McpServer): void {
         const e = err as Error & { code?: string };
         if (e.code === "NO_DOCUMENT") return noDocumentError();
         if (e.code === "NO_SUGGESTIONS") return mcpError("NO_SUGGESTIONS", e.message);
-        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("UNSUPPORTED_FORMAT", e.message);
-        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
+        if (e.code === "INVALID_PATH") return mcpError("FORMAT_ERROR", e.message);
         if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
         throw err;
       }
@@ -228,11 +234,22 @@ export function registerApplyTools(server: McpServer): void {
 
       try {
         await fs.access(backupPath);
-      } catch {
-        return mcpError("FILE_NOT_FOUND", `No backup file found at ${backupPath}`);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return mcpError("FILE_NOT_FOUND", `No backup file found at ${backupPath}`);
+        }
+        throw err;
       }
 
       await fs.copyFile(backupPath, filePath);
+      // Verify restored file matches backup size
+      const [backupStat, restoredStat] = await Promise.all([
+        fs.stat(backupPath),
+        fs.stat(filePath),
+      ]);
+      if (backupStat.size !== restoredStat.size) {
+        throw new Error("Restore verification failed: file sizes do not match.");
+      }
       return mcpSuccess({
         message: `Restored ${path.basename(filePath)} from backup.`,
         restoredFrom: backupPath,

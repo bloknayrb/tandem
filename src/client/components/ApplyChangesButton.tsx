@@ -43,7 +43,10 @@ export function ApplyChangesButton({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentId }),
       });
-      const body = await res.json().catch(() => null);
+      const body = await res.json().catch((parseErr) => {
+        console.error("[ApplyChanges] Failed to parse response JSON:", parseErr);
+        return null;
+      });
 
       if (!res.ok) {
         alert(body?.message ?? `Apply failed (HTTP ${res.status}).`);
@@ -63,8 +66,13 @@ export function ApplyChangesButton({
       } else {
         alert("Changes applied successfully.");
       }
-    } catch {
-      alert("Could not reach the server.");
+    } catch (err) {
+      console.error("[ApplyChanges] Request failed:", err);
+      alert(
+        err instanceof TypeError
+          ? "Could not reach the server."
+          : `Apply failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setApplying(false);
     }
