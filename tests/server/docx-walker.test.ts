@@ -164,6 +164,18 @@ describe("walkDocumentBody", () => {
     expect(result.totalLength).toBe(3);
   });
 
+  it("counts <w:sym> as 1 character", () => {
+    const xml = wrapBody(`
+      <w:p>
+        <w:r><w:t>A</w:t></w:r>
+        <w:r><w:sym w:font="Wingdings" w:char="F0FC"/></w:r>
+        <w:r><w:t>B</w:t></w:r>
+      </w:p>
+    `);
+    const result = walkDocumentBody(xml);
+    expect(result.totalLength).toBe(3);
+  });
+
   it("skips <w:instrText>", () => {
     const xml = wrapBody(`
       <w:p>

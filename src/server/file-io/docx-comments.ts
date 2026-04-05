@@ -200,34 +200,3 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
 
   return injected;
 }
-
-// ---------------------------------------------------------------------------
-// DOM helpers (lightweight — avoids adding domutils as a direct dependency)
-// ---------------------------------------------------------------------------
-
-function isElement(node: ChildNode): node is Element {
-  return node.type === "tag";
-}
-
-function getAttr(el: Element, name: string): string | undefined {
-  return el.attribs?.[name];
-}
-
-/** Recursively collect text content from a DOM node. */
-function getTextContent(node: ChildNode): string {
-  if (node.type === "text") return (node as { data: string }).data;
-  if (!isElement(node)) return "";
-  return node.children.map(getTextContent).join("");
-}
-
-/** Recursively find all elements with a given name. */
-function findAllByName(name: string, nodes: ChildNode[]): Element[] {
-  const results: Element[] = [];
-  for (const node of nodes) {
-    if (isElement(node)) {
-      if (node.name === name) results.push(node);
-      results.push(...findAllByName(name, node.children));
-    }
-  }
-  return results;
-}
