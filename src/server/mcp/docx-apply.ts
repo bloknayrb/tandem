@@ -84,8 +84,18 @@ export async function applyChangesCore(
     if (ann.relRange) {
       const resolvedFrom = relPosToFlatOffset(ydoc, ann.relRange.fromRel);
       const resolvedTo = relPosToFlatOffset(ydoc, ann.relRange.toRel);
-      if (resolvedFrom !== null) from = resolvedFrom;
-      if (resolvedTo !== null) to = resolvedTo;
+      // All-or-nothing: only use CRDT offsets if both resolve successfully
+      if (resolvedFrom !== null && resolvedTo !== null) {
+        if (resolvedFrom > resolvedTo) {
+          // Concurrent edits moved anchors past each other — skip this annotation
+          console.error(
+            `[docx-apply] Inverted CRDT range for ${ann.id}: [${resolvedFrom}, ${resolvedTo}]; skipping`,
+          );
+          continue;
+        }
+        from = resolvedFrom;
+        to = resolvedTo;
+      }
     }
 
     // Parse suggestion content
@@ -99,12 +109,13 @@ export async function applyChangesCore(
     }
 
     // Extract importCommentId from annotation ID if it starts with "import-"
+    // Format: import-{commentId}-{timestamp} where commentId may contain hyphens
     let importCommentId: string | undefined;
     if (ann.id.startsWith("import-")) {
-      // Format: import-{commentId}-{timestamp}
-      const parts = ann.id.split("-");
-      if (parts.length >= 2) {
-        importCommentId = parts[1];
+      const withoutPrefix = ann.id.slice("import-".length);
+      const lastDash = withoutPrefix.lastIndexOf("-");
+      if (lastDash > 0) {
+        importCommentId = withoutPrefix.slice(0, lastDash);
       }
     }
 
