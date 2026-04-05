@@ -6,18 +6,6 @@ A collaborative document editor where Claude and a human work on the same docume
 
 ![Tandem editor showing a document with annotations, side panel, and Claude's presence](docs/screenshots/01-editor-overview.png)
 
-```mermaid
-graph LR
-    Browser["Browser · Tiptap Editor"] -- WebSocket --> Server["Tandem Server · Node.js"]
-    Server -- WebSocket --> Browser
-    Server -- MCP HTTP --> Claude["Claude Code"]
-    Claude -- MCP HTTP --> Server
-    Server -- File I/O --> Files[".md .txt .html .docx"]
-    Files -- File I/O --> Server
-    Server -- SSE events --> Shim["Channel Shim"]
-    Shim -- push notifications --> Claude
-```
-
 ## Getting Started
 
 ### Prerequisites
