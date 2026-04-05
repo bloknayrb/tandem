@@ -158,6 +158,14 @@ export function ChatPanel({
 
   const unreadCount = messages.filter((m) => m.author === "claude" && !m.read).length;
 
+  const clearChat = useCallback(async () => {
+    try {
+      await fetch("/api/chat", { method: "DELETE" });
+    } catch (err) {
+      console.warn("[ChatPanel] Failed to clear chat:", err);
+    }
+  }, []);
+
   return (
     <div
       style={{
@@ -182,19 +190,39 @@ export function ChatPanel({
         }}
       >
         Chat
-        {unreadCount > 0 && (
-          <span
-            style={{
-              background: "#6366f1",
-              color: "white",
-              borderRadius: "10px",
-              padding: "2px 8px",
-              fontSize: "11px",
-            }}
-          >
-            {unreadCount}
-          </span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {unreadCount > 0 && (
+            <span
+              style={{
+                background: "#6366f1",
+                color: "white",
+                borderRadius: "10px",
+                padding: "2px 8px",
+                fontSize: "11px",
+              }}
+            >
+              {unreadCount}
+            </span>
+          )}
+          {messages.length > 0 && (
+            <button
+              onClick={clearChat}
+              title="Clear chat history"
+              data-testid="clear-chat-btn"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "#9ca3af",
+                fontSize: "13px",
+                padding: "2px 4px",
+                lineHeight: 1,
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}

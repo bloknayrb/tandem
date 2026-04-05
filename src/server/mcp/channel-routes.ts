@@ -132,6 +132,20 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     res.json({ ok: true, requestId, behavior: approved ? "allow" : "deny" });
   });
 
+  // Clear chat history
+  app.options("/api/chat", apiMiddleware);
+  app.delete("/api/chat", apiMiddleware, (_req: Request, res: Response) => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+    const count = chatMap.size;
+    ctrlDoc.transact(() => {
+      for (const key of Array.from(chatMap.keys())) {
+        chatMap.delete(key);
+      }
+    }, MCP_ORIGIN);
+    res.json({ ok: true, cleared: count });
+  });
+
   // Claude Code launcher
   app.options("/api/launch-claude", apiMiddleware);
   app.post("/api/launch-claude", apiMiddleware, async (_req: Request, res: Response) => {
