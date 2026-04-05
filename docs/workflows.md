@@ -251,7 +251,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 **Setup:** Claude has finished reviewing and left 15+ annotations. Bryan wants to process them efficiently.
 
 The browser's side panel shows all pending annotations with filter controls:
-- Filter by type (highlights, comments, suggestions, questions)
+- Filter by type (highlights, comments, suggestions, questions, flags)
 - Filter by author (Claude, You)
 - Filter by status (pending, accepted, dismissed)
 

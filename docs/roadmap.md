@@ -164,7 +164,7 @@ Remaining:
 - WebSocket reconnection: automatic, no data loss (Yjs handles this)
 
 Remaining:
-- `RANGE_STALE` error: auto-retry with re-resolved range (currently documented but not implemented)
+- `RANGE_MOVED` / `RANGE_GONE` auto-retry: re-resolve range automatically when text has shifted
 - Large file warnings: alert at 50+ pages about potential slowness
 
 ### 8f: Toolbar Enhancements — PARTIALLY DONE

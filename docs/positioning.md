@@ -14,10 +14,10 @@ Most AI document tools are writing assistants — they help you produce content.
 
 ### The annotation model
 
-Tandem's core differentiator is that AI suggestions are **first-class data objects**, not ephemeral UI. Each annotation (highlight, comment, suggestion, question) is:
+Tandem's core differentiator is that AI suggestions are **first-class data objects**, not ephemeral UI. Each annotation (highlight, comment, suggestion, question, flag) is:
 
 - **Addressable** — stored in a Y.Map with a unique ID
-- **Typed** — highlight, comment, suggestion, or question, each with distinct visual treatment
+- **Typed** — highlight, comment, suggestion, question, or flag, each with distinct visual treatment
 - **Attributable** — author field tracks who created it (Claude or user)
 - **Resolvable** — user accepts or dismisses each one individually
 - **Queryable** — user can ask Claude about specific annotations via "Ask Claude"

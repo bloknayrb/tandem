@@ -25,7 +25,9 @@ All tools return responses in a standard envelope:
 | `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
 | `FORMAT_ERROR` | Unsupported format, file too large (>50MB), or invalid regex. |
 | `INVALID_RANGE` | Offset out of bounds, text not found, or range overlaps heading markup. |
-| `RANGE_STALE` | *(Planned)* Document changed between resolveRange and a mutation. |
+| `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
+| `RANGE_GONE` | Target text was deleted from the document. |
+| `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
 
 ## Coordinate System
 
@@ -88,7 +90,7 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 
 **Notes:**
 - Supported formats: `.md`, `.txt`, `.html`, `.docx` (review-only).
-- Browser opens automatically to `http://localhost:5173` on the first call.
+- Browser opens automatically to `http://localhost:3479` on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - Pass `force: true` to reload from disk when the file changed externally (git pull, external editor). Clears annotations and session. Returns `forceReloaded: true`.
 - Multiple documents can be open simultaneously -- each gets its own tab.
@@ -261,7 +263,7 @@ Check editor status: running state, open documents, active document.
 ```
 
 **Notes:**
-- `interruptionMode` reflects the user's current interruption preference from the browser StatusBar: `"all"` (show everything), `"urgent"` (only flags, questions, and `priority: 'urgent'`), or `"paused"` (hold all new annotations). Adapt your annotation strategy accordingly — e.g., in `"urgent"` mode, prefer `tandem_flag` with `priority: 'urgent'` over `tandem_comment` for important findings.
+- `interruptionMode` reflects the user's current interruption preference from the browser StatusBar: `"all"` (show everything), `"urgent-only"` (only flags, questions, and `priority: 'urgent'`), or `"paused"` (hold all new annotations). Adapt your annotation strategy accordingly — e.g., in `"urgent-only"` mode, prefer `tandem_flag` with `priority: 'urgent'` over `tandem_comment` for important findings.
 
 ---
 
@@ -430,7 +432,7 @@ Flag a text range for attention (e.g., issues, concerns, or items needing review
 | `note` | string | No | Reason for flagging |
 | `documentId` | string | No | Target document ID (defaults to active document) |
 | `priority` | `'normal'` \| `'urgent'` | No | Annotation priority. Set to 'urgent' for critical issues visible in urgent-only mode. Flags and questions are implicitly urgent. |
-| `textSnapshot` | string | No | Expected text at range — returns RANGE_STALE if moved |
+| `textSnapshot` | string | No | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:** `{ annotationId: string }`
 
@@ -446,8 +448,8 @@ Read all annotations, optionally filtered. For checking new user actions, prefer
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `author` | enum | no | `user` or `claude` |
-| `type` | enum | no | `highlight`, `comment`, `suggestion`, `overlay`, `question` |
+| `author` | enum | no | `user`, `claude`, or `import` |
+| `type` | enum | no | `highlight`, `comment`, `suggestion`, `overlay`, `question`, `flag` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -732,7 +734,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 - `userActions`: annotations created by the user (highlights, comments, questions).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
-- `interruptionMode`: the user's current interruption preference (`"all"`, `"urgent"`, or `"paused"`). When `"urgent"`, only use `tandem_flag` with `priority: 'urgent'` for critical findings. When `"paused"`, queue work and wait for the mode to change.
+- `interruptionMode`: the user's current interruption preference (`"all"`, `"urgent-only"`, or `"paused"`). When `"urgent-only"`, only use `tandem_flag` with `priority: 'urgent'` for critical findings. When `"paused"`, queue work and wait for the mode to change.
 
 ---
 
