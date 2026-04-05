@@ -5,6 +5,13 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-04-05
+
+### Fixed
+
+- Changelog tab no longer disappears after upgrade — version check and sample/welcome.md now open before servers start, preventing CRDT merge races with stale browser tabs
+- Tutorial annotation injection errors now get their own log message instead of being misattributed as file-open failures
+
 ## [0.2.8] - 2026-04-05
 
 ### Added
