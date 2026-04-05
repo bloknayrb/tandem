@@ -19,9 +19,17 @@ export function loadRecentFiles(): string[] {
 }
 
 export function saveRecentFiles(list: string[]): void {
-  localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(list));
+  try {
+    localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(list));
+  } catch {
+    // localStorage unavailable (incognito, storage-disabled)
+  }
 }
 
 export function clearRecentFiles(): void {
-  localStorage.removeItem(RECENT_FILES_KEY);
+  try {
+    localStorage.removeItem(RECENT_FILES_KEY);
+  } catch {
+    // localStorage unavailable (incognito, storage-disabled)
+  }
 }

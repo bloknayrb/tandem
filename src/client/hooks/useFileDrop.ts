@@ -30,13 +30,17 @@ export function useFileDrop() {
     const file = e.dataTransfer.files[0];
     const content = await readFileForUpload(file);
     try {
-      await fetch(`${API_BASE}/upload`, {
+      const response = await fetch(`${API_BASE}/upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileName: file.name, content }),
       });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ message: "Upload failed" }));
+        console.error("[useFileDrop] Upload failed:", response.status, body.message ?? body.error);
+      }
     } catch {
-      // Server unreachable — silently fail (user can use the dialog instead)
+      console.error("[useFileDrop] Server unreachable — file drop ignored");
     }
   }, []);
 
