@@ -434,6 +434,8 @@ export default function App() {
               heldCount={heldCount}
               interruptionMode={interruptionMode}
               onModeChange={setInterruptionMode}
+              activeDocFormat={activeTab?.format}
+              documentId={activeTab?.id}
               reviewMode={reviewMode}
               onToggleReviewMode={toggleReviewMode}
               onExitReviewMode={exitReviewMode}

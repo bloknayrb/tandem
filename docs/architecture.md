@@ -287,7 +287,7 @@ Components:
 - **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
 - **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms), selection event debouncing (1.5s) with cleared-selection filtering
 
-The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 27 document tools, stdio for channel push + reply).
+The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 29 document tools, stdio for channel push + reply).
 
 ### Permission Relay
 
@@ -492,10 +492,12 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
 - `open-browser.ts` -- Cross-platform browser launcher (`execFile`-based, no shell injection risk). Best-effort — errors logged, never thrown.
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
+- `file-io/docx-walker.ts` -- Shared offset-tracking walker for document.xml (used by comment extraction and suggestion apply)
+- `file-io/docx-apply.ts` -- Core logic for applying suggestions as tracked changes via JSZip XML manipulation
 - `platform.ts` -- Cross-platform helpers: `sessionDir()`, `freePort()`, `waitForPort()` (TCP port availability polling)
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\; `listSessionFilePaths()` for startup auto-restore
 
@@ -519,6 +521,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `DocumentTabs` -- Tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
 - `ToastContainer` (`src/client/components/`) -- Renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
 - `OnboardingTutorial` (`src/client/components/`) -- Floating card at bottom-left, 3-step progression (review → ask → edit). `useTutorial` hook detects step completion via annotation status, user annotation creation, and editor focus. localStorage persistence, suppressed after completion.
+- `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files
 - `FileOpenDialog` (`src/client/components/`) -- Path input and drag-and-drop upload for opening files without Claude
 - `HelpModal` (`src/client/components/`) -- Keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)
 - `AnnotationExtension` -- Renders highlights/comments/suggestions as ProseMirror Decorations from Y.Map('annotations')

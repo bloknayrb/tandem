@@ -16,6 +16,7 @@ import { apiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { registerChannelRoutes } from "./channel-routes.js";
 import { registerDocumentTools } from "./document.js";
+import { registerApplyTools } from "./docx-apply.js";
 import { registerNavigationTools } from "./navigation.js";
 
 const esmRequire = createRequire(import.meta.url);
@@ -50,6 +51,7 @@ function createMcpServer(): McpServer {
   registerAnnotationTools(server);
   registerNavigationTools(server);
   registerAwarenessTools(server);
+  registerApplyTools(server);
 
   return server;
 }

@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 28 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 30 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -560,6 +560,70 @@ Export all annotations as a formatted summary. Useful for review reports, especi
 ```json
 { "annotations": [ { ...annotation, "textSnippet": "..." } ], "count": 5 }
 ```
+
+---
+
+## Apply Tools
+
+### tandem_applyChanges
+
+Apply all accepted suggestions back to the `.docx` file as tracked changes. The original file is backed up before modification.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `documentId` | string | no | Target document ID (defaults to active document) |
+| `author` | string | no | Attribution for tracked changes (defaults to `"Tandem Review"`) |
+| `backupPath` | string | no | Override backup file path (defaults to `{name}.backup.docx`) |
+
+**Returns:**
+```json
+{
+  "applied": 5,
+  "rejected": 1,
+  "rejectedDetails": [{"id": "ann-xyz", "reason": "..."}],
+  "backupPath": "C:\\Users\\bkolb\\docs\\report.backup.docx",
+  "outputPath": "C:\\Users\\bkolb\\docs\\report.docx",
+  "pendingWarning": "3 annotations are still pending review",
+  "commentsResolved": 2
+}
+```
+
+**Errors:** `FORMAT_ERROR` (not a `.docx` file, or uploaded document), `NO_DOCUMENT` (document not found)
+
+**Example:**
+```
+tandem_applyChanges({ author: "Claude Review" })
+```
+
+**Notes:**
+- Document must be `.docx` format (`FORMAT_ERROR` otherwise).
+- Document must be a local file, not uploaded (`FORMAT_ERROR` for `upload://` paths).
+- At least one accepted suggestion is required — returns an error if none exist.
+- Applies changes as Word tracked revisions (`<w:ins>`/`<w:del>`), not silent edits. Reviewers in Word see the changes as tracked changes they can accept or reject.
+- Creates a backup of the original file before modifying. Override the backup path with `backupPath`.
+- Warns if pending annotations remain (`pendingWarning`), but does not block the operation.
+- Word comments that overlap applied suggestions are marked as resolved (`commentsResolved` count).
+
+---
+
+### tandem_restoreBackup
+
+Restore a `.docx` file from its backup created by `tandem_applyChanges`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "restored": true, "backupPath": "C:\\Users\\bkolb\\docs\\report.backup.docx", "outputPath": "C:\\Users\\bkolb\\docs\\report.docx" }
+```
+
+**Errors:** Error if no backup file exists for the document.
+
+**Notes:**
+- Copies the backup file back over the modified `.docx`, undoing `tandem_applyChanges`.
+- The backup file is not deleted after restore — you can restore multiple times.
 
 ---
 

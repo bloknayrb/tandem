@@ -7,14 +7,13 @@
 
 import JSZip from "jszip";
 import { parseDocument } from "htmlparser2";
-import type { ChildNode, Element } from "domhandler";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { headingPrefixLength } from "../../shared/offsets.js";
 import { anchoredRange } from "../positions.js";
 import type { FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
+import { findAllByName, getAttr, getTextContent, walkDocumentBody } from "./docx-walker.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -110,63 +109,30 @@ export function parseCommentMetadata(xml: string): Map<string, CommentMeta> {
 /**
  * Walk the document body, counting flat-text characters (including heading
  * prefixes), and record start/end offsets for each comment range marker.
+ *
+ * Delegates to the shared `walkDocumentBody` walker which also skips
+ * `<w:del>` subtrees (mammoth excludes deleted tracked-change text).
  */
 export function calculateCommentRanges(
   xml: string,
 ): Map<string, { from: FlatOffset; to: FlatOffset }> {
-  const doc = parseDocument(xml, { xmlMode: true });
   const ranges = new Map<string, { from: FlatOffset; to: FlatOffset }>();
   const openRanges = new Map<string, number>(); // commentId → startOffset
 
-  let offset = 0;
-  let firstParagraph = true;
-
-  function walk(nodes: ChildNode[]): void {
-    for (const node of nodes) {
-      if (!isElement(node)) continue;
-
-      if (node.name === "w:p") {
-        // Paragraph separator (except for first paragraph)
-        if (!firstParagraph) offset += 1; // \n
-        firstParagraph = false;
-
-        // Detect heading style → add prefix length to offset
-        const headingLevel = detectHeadingLevel(node);
-        if (headingLevel > 0) {
-          offset += headingPrefixLength(headingLevel);
-        }
-
-        walk(node.children);
-      } else if (node.name === "w:commentRangeStart") {
-        const id = getAttr(node, "w:id");
-        if (id) openRanges.set(id, offset);
-      } else if (node.name === "w:commentRangeEnd") {
-        const id = getAttr(node, "w:id");
-        if (id && openRanges.has(id)) {
-          ranges.set(id, { from: toFlatOffset(openRanges.get(id)!), to: toFlatOffset(offset) });
-          openRanges.delete(id);
-        }
-      } else if (node.name === "w:t") {
-        const text = getTextContent(node);
-        offset += text.length;
-      } else if (node.name === "w:tab" || node.name === "w:br") {
-        offset += 1;
-      } else {
-        // Recurse into w:r, w:hyperlink, w:pPr children, etc.
-        walk(node.children);
+  walkDocumentBody(xml, {
+    onCommentStart({ commentId, offset }) {
+      openRanges.set(commentId, offset);
+    },
+    onCommentEnd(commentId, offset) {
+      if (openRanges.has(commentId)) {
+        ranges.set(commentId, {
+          from: toFlatOffset(openRanges.get(commentId)!),
+          to: toFlatOffset(offset),
+        });
+        openRanges.delete(commentId);
       }
-    }
-  }
-
-  // Find <w:body> and walk its children
-  const bodyElements = findAllByName("w:body", doc.children);
-  if (bodyElements.length === 0) {
-    console.error(
-      "[docx-comments] No <w:body> found in document.xml — cannot calculate comment ranges",
-    );
-    return ranges;
-  }
-  walk(bodyElements[0].children);
+    },
+  });
 
   if (openRanges.size > 0) {
     console.error(
@@ -175,33 +141,6 @@ export function calculateCommentRanges(
   }
 
   return ranges;
-}
-
-/**
- * Detect whether a <w:p> has a heading paragraph style.
- * Returns the heading level (1–6) or 0 if not a heading.
- *
- * Word heading styles appear as:
- *   <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>...</w:p>
- *
- * mammoth maps these to <h1>–<h6>, and htmlToYDoc maps those to
- * Y.XmlElement("heading") with a `level` attribute.
- */
-function detectHeadingLevel(paragraph: Element): number {
-  for (const child of paragraph.children) {
-    if (!isElement(child) || child.name !== "w:pPr") continue;
-    for (const prop of child.children) {
-      if (!isElement(prop) || prop.name !== "w:pStyle") continue;
-      const val = getAttr(prop, "w:val") || "";
-      // Match "Heading1" through "Heading6" (case-insensitive)
-      const match = val.match(/^heading\s*(\d)$/i);
-      if (match) {
-        const level = parseInt(match[1], 10);
-        if (level >= 1 && level <= 6) return level;
-      }
-    }
-  }
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,35 +199,4 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
   }
 
   return injected;
-}
-
-// ---------------------------------------------------------------------------
-// DOM helpers (lightweight — avoids adding domutils as a direct dependency)
-// ---------------------------------------------------------------------------
-
-function isElement(node: ChildNode): node is Element {
-  return node.type === "tag";
-}
-
-function getAttr(el: Element, name: string): string | undefined {
-  return el.attribs?.[name];
-}
-
-/** Recursively collect text content from a DOM node. */
-function getTextContent(node: ChildNode): string {
-  if (node.type === "text") return (node as { data: string }).data;
-  if (!isElement(node)) return "";
-  return node.children.map(getTextContent).join("");
-}
-
-/** Recursively find all elements with a given name. */
-function findAllByName(name: string, nodes: ChildNode[]): Element[] {
-  const results: Element[] = [];
-  for (const node of nodes) {
-    if (isElement(node)) {
-      if (node.name === name) results.push(node);
-      results.push(...findAllByName(name, node.children));
-    }
-  }
-  return results;
 }

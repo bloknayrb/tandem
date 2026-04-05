@@ -11,6 +11,12 @@ import {
 import { populateYDoc, extractText } from "../mcp/document-model.js";
 
 export type { FormatAdapter } from "./types.js";
+export {
+  applyTrackedChanges,
+  type AcceptedSuggestion,
+  type ApplyOptions,
+  type ApplyOutput,
+} from "./docx-apply.js";
 
 // -- Adapter implementations --
 
@@ -81,4 +87,19 @@ export async function atomicWrite(filePath: string, content: string): Promise<vo
   const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
   await fs.writeFile(tempPath, content, "utf-8");
   await fs.rename(tempPath, filePath);
+}
+
+/**
+ * Atomic binary file write: write Buffer to a temp file, then rename.
+ * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
+ */
+export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
+  const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
+  await fs.writeFile(tempPath, content);
+  try {
+    await fs.rename(tempPath, filePath);
+  } catch (err) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
 }
