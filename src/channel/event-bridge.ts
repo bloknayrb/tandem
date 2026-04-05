@@ -100,6 +100,7 @@ async function connectAndStream(
   // Debounced selection: coalesce rapid selection changes, skip cleared selections
   let selectionTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSelection: { event: TandemEvent; eventId?: string } | null = null;
+  let transportBroken = false;
 
   async function flushSelection() {
     if (!pendingSelection) return;
@@ -116,6 +117,8 @@ async function connectAndStream(
       });
     } catch (err) {
       console.error("[Channel] MCP notification failed (transport broken?):", err);
+      transportBroken = true;
+      return;
     }
     scheduleAwareness(event);
   }
@@ -126,6 +129,7 @@ async function connectAndStream(
   }
 
   while (true) {
+    if (transportBroken) throw new Error("MCP transport broken (detected in debounced flush)");
     const { done, value } = await reader.read();
     if (done) throw new Error("SSE stream ended");
 
