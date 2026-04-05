@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
-import { buildMcpEntries, detectTargets, applyConfig } from "../../src/cli/setup.js";
+import { buildMcpEntries, detectTargets, applyConfig, installSkill } from "../../src/cli/setup.js";
 
 describe("buildMcpEntries", () => {
   it("returns tandem HTTP entry and channel node entry", () => {
@@ -133,5 +133,64 @@ describe("detectTargets", () => {
   it("detects Claude Code with --force even when ~/.claude is absent", async () => {
     const targets = detectTargets({ homeOverride: tmpDir, force: true });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
+  });
+});
+
+describe("installSkill", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "tandem-skill-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes SKILL.md to ~/.claude/skills/tandem/", async () => {
+    await installSkill({ homeOverride: tmpDir });
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    const content = readFileSync(skillPath, "utf-8");
+    expect(content).toContain("---");
+    expect(content).toContain("name: tandem");
+  });
+
+  it("creates the skills/tandem/ directory if missing", async () => {
+    await installSkill({ homeOverride: tmpDir });
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    expect(readFileSync(skillPath, "utf-8")).toBeTruthy();
+  });
+
+  it("overwrites existing file on re-run", async () => {
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    mkdirSync(join(tmpDir, ".claude", "skills", "tandem"), { recursive: true });
+    writeFileSync(skillPath, "old content");
+    await installSkill({ homeOverride: tmpDir });
+    const content = readFileSync(skillPath, "utf-8");
+    expect(content).not.toBe("old content");
+    expect(content).toContain("name: tandem");
+  });
+
+  it("produces valid YAML frontmatter", async () => {
+    await installSkill({ homeOverride: tmpDir });
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    const content = readFileSync(skillPath, "utf-8");
+    // Frontmatter is delimited by --- lines
+    const parts = content.split("---");
+    expect(parts.length).toBeGreaterThanOrEqual(3);
+    const frontmatter = parts[1];
+    expect(frontmatter).toContain("name: tandem");
+    expect(frontmatter).toContain("description:");
+  });
+
+  it("includes key workflow guidance in the skill body", async () => {
+    await installSkill({ homeOverride: tmpDir });
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    const content = readFileSync(skillPath, "utf-8");
+    expect(content).toContain("tandem_resolveRange");
+    expect(content).toContain("tandem_checkInbox");
+    expect(content).toContain("Interruption Modes");
+    expect(content).toContain("Error Recovery");
+    expect(content).toContain("Session Handoff");
   });
 });
