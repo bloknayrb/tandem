@@ -239,15 +239,13 @@ The channel replaces polling for user actions. Instead of Claude calling `tandem
 
 ### Activation
 
-The channel shim is configured by `tandem setup`, but Claude Code must be started with the `--channels` flag to activate real-time push:
+The channel shim is configured by `tandem setup`, but Claude Code must be started with the `--dangerously-load-development-channels` flag to activate real-time push:
 
 ```bash
-claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel
+claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The `--dangerously-load-development-channels` flag is needed because `tandem-channel` is not yet on the official channel allowlist; it is safe to use with known, trusted channel servers like Tandem. Without the `--channels` flag, Claude Code does not start the channel shim — Claude falls back to `tandem_checkInbox` polling.
-
-**Known limitation (as of Claude Code v2.1.89):** The Channels API notification delivery does not appear to be fully functional — `<channel>` tags are not injected into the conversation even with proper flags. This affects all channel implementations. Tandem's polling fallback (`tandem_checkInbox`) remains reliable. See [#165](https://github.com/bloknayrb/tandem/issues/165) for tracking.
+**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The `--dangerously-load-development-channels` flag both activates and loads the channel — no separate `--channels` flag is needed. This flag is required because `tandem-channel` is not yet on the official channel allowlist; it is safe to use with known, trusted channel servers like Tandem. Without it, Claude Code does not start the channel shim — Claude falls back to `tandem_checkInbox` polling.
 
 ### Event Flow
 
@@ -276,7 +274,7 @@ All MCP-initiated Y.Map writes use `doc.transact(() => { ... }, 'mcp')`. The eve
 | `annotation:accepted` | User accepts Claude's annotation | `annotationId`, `textSnippet` |
 | `annotation:dismissed` | User dismisses Claude's annotation | `annotationId`, `textSnippet` |
 | `chat:message` | User sends chat message | `messageId`, `text`, `replyTo`, `anchor` |
-| `selection:changed` | User selects text | `from`, `to`, `selectedText` |
+| `selection:changed` | User selects text (debounced 1.5s, cleared selections dropped) | `from`, `to`, `selectedText` |
 | `document:opened` | New document opened in browser | `fileName`, `format` |
 | `document:closed` | Document closed | `fileName` |
 | `document:switched` | User switches tabs | `fileName` |
@@ -287,7 +285,7 @@ The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claud
 
 Components:
 - **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
-- **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms)
+- **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms), selection event debouncing (1.5s) with cleared-selection filtering
 
 The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 27 document tools, stdio for channel push + reply).
 

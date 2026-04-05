@@ -177,15 +177,17 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
       const selection = userAwareness.get("selection") as
         | { from: FlatOffset; to: FlatOffset; selectedText?: string }
         | undefined;
+      // Skip cleared selections (cursor moves without selecting text) — they flood the channel
+      if (!selection || selection.from === selection.to) return;
       pushEvent({
         id: generateEventId(),
         type: "selection:changed",
         timestamp: Date.now(),
         documentId: docName,
         payload: {
-          from: selection?.from ?? 0,
-          to: selection?.to ?? 0,
-          selectedText: selection?.from !== selection?.to ? (selection?.selectedText ?? "") : "",
+          from: selection.from,
+          to: selection.to,
+          selectedText: selection.selectedText ?? "",
         },
       });
     }

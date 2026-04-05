@@ -84,6 +84,17 @@ describe("formatEventContent", () => {
     expect(formatEventContent(event)).toBe("User cleared selection [doc: doc1]");
   });
 
+  it("selection:changed with truncated text", () => {
+    const longText = "a".repeat(250);
+    const event = makeEvent(
+      "selection:changed",
+      { from: 0, to: 250, selectedText: longText },
+      "doc1",
+    );
+    const expected = `User selected text (0-250): "${"a".repeat(250)}" [doc: doc1]`;
+    expect(formatEventContent(event)).toBe(expected);
+  });
+
   it("document:opened", () => {
     const event = makeEvent(
       "document:opened",

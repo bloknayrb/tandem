@@ -286,3 +286,18 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 **Solution:** `tandem_getTextContent` now always uses `extractText()` regardless of file format. The flat text format is the single source of truth for all offset-bearing operations. If Claude needs actual markdown, `tandem_save` writes the file to disk and Claude can read it via other means.
 
 **Key principle:** Any tool that returns character offsets (or text that will be used to compute character offsets) must use the same text representation as the annotation coordinate system. Mixing representations is a silent correctness bug — annotations appear to work but land in the wrong location, and the drift is proportional to the amount of block-level markdown syntax before the target range.
+
+## 32. Channel Selection Events Flood the Context Window
+
+**Problem:** The `selection:changed` event fires on every cursor movement and click in the editor. When the channel shim forwarded all of these to Claude Code, a single browsing session produced 25+ "User cleared selection" notifications in seconds, burning context and drowning out actionable events like chat messages and annotation actions. Additionally, actual text selection events never arrive at all — only "cleared selection" (cursor-only) events.
+
+**Root cause (discovered via raw SSE inspection):** The client awareness extension (`awareness.ts`) called `pmSelectionToFlat()` which returned `{ from, to }` — flat offsets only, with no `selectedText` field. Every selection event arrived at the server with `selectedText: ""` regardless of whether the user selected text or just clicked. This caused `formatEventContent` to label everything "User cleared selection" (empty string is falsy), masking that these were real text selections.
+
+Initial attempts to filter at the bridge and server levels had no effect because the filters checked `from === to` (cursor-only), but real selections had `from !== to` — they just lacked text content. The "cleared selection" label sent debugging down the wrong path for several hours.
+
+**Solution:** Three-layer fix:
+1. **Client** (`awareness.ts`): Extract selected text via `state.doc.textBetween()`, truncate to 200 chars, debounce Y.Map writes at 150ms during drag. Cancel debounce on deselect.
+2. **Server** (`queue.ts`): Filter `from === to` selections (cursor-only) before they reach the SSE stream.
+3. **Bridge** (`event-bridge.ts`): Drop cleared selections (`isSelectionCleared`), debounce real selections at 1.5s before forwarding to Claude Code.
+
+**Key principle:** When debugging event pipelines, inspect the raw wire format at each layer (SSE stream, bridge input, channel output). Misleading labels can send you on a multi-hour chase — the "User cleared selection" label masked that these were real selections with missing data. Also: channel events that map to high-frequency UI interactions need aggressive debouncing before reaching the LLM.

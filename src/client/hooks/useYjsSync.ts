@@ -200,7 +200,16 @@ export function useYjsSync(): YjsSyncResult {
       return [...kept, ...newTabs];
     });
 
-    if (newActiveId !== null) setActiveTabId(newActiveId);
+    // Keep the client's current tab when a *different* tab was closed and
+    // the server isn't explicitly requesting a switch to a new document.
+    if (newActiveId !== null) {
+      setActiveTabId((prev) => {
+        if (prev === null) return newActiveId;
+        if (!serverIds.has(prev)) return newActiveId; // active tab was removed
+        if (toRemove.length > 0 && newActiveId === prev) return prev; // close of another tab
+        return newActiveId;
+      });
+    }
   };
 
   // Bootstrap connection — coordinates document list.

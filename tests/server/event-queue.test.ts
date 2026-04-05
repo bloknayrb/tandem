@@ -11,7 +11,11 @@ import {
   wasEmittedViaChannel,
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
-import { CHANNEL_EVENT_BUFFER_SIZE, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import {
+  CHANNEL_EVENT_BUFFER_SIZE,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
 
 afterEach(() => {
   resetForTesting();
@@ -336,5 +340,82 @@ describe("subscriber error isolation", () => {
     unsubscribe(goodSub);
     detachObservers("error-doc");
     doc.destroy();
+  });
+});
+
+// --- Selection event filtering ---
+
+describe("selection event filtering", () => {
+  let doc: Y.Doc;
+
+  beforeEach(() => {
+    doc = new Y.Doc();
+    attachObservers("sel-doc", doc);
+  });
+
+  afterEach(() => {
+    detachObservers("sel-doc");
+    doc.destroy();
+  });
+
+  it("filters out cursor-only selections (from === to)", () => {
+    const { events, cleanup } = collectEvents();
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    // Simulate a click (cursor position, no range)
+    awareness.set("selection", { from: 42, to: 42, timestamp: Date.now() });
+
+    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
+    cleanup();
+  });
+
+  it("emits selection:changed for real text selections (from !== to)", () => {
+    const { events, cleanup } = collectEvents();
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    // Simulate a text selection with selectedText
+    awareness.set("selection", {
+      from: 10,
+      to: 50,
+      selectedText: "some selected text",
+      timestamp: Date.now(),
+    });
+
+    const selEvents = events.filter((e) => e.type === "selection:changed");
+    expect(selEvents).toHaveLength(1);
+    expect(selEvents[0].payload.from).toBe(10);
+    expect(selEvents[0].payload.to).toBe(50);
+    expect(selEvents[0].payload.selectedText).toBe("some selected text");
+    cleanup();
+  });
+
+  it("emits selection:changed with empty selectedText when field is missing", () => {
+    const { events, cleanup } = collectEvents();
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    // Simulate a selection without selectedText field (backward compat)
+    awareness.set("selection", { from: 10, to: 50, timestamp: Date.now() });
+
+    const selEvents = events.filter((e) => e.type === "selection:changed");
+    expect(selEvents).toHaveLength(1);
+    expect(selEvents[0].payload.selectedText).toBe("");
+    cleanup();
+  });
+
+  it("does not emit for MCP-origin selection writes", () => {
+    const { events, cleanup } = collectEvents();
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    doc.transact(() => {
+      awareness.set("selection", {
+        from: 10,
+        to: 50,
+        selectedText: "test",
+        timestamp: Date.now(),
+      });
+    }, MCP_ORIGIN);
+
+    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
+    cleanup();
   });
 });

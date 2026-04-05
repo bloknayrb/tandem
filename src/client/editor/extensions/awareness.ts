@@ -107,6 +107,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         view() {
           let typingTimeout: ReturnType<typeof setTimeout> | null = null;
           let activityWriteTimeout: ReturnType<typeof setTimeout> | null = null;
+          let selectionDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
           let pendingActivity = false;
           let lastCursor = -1;
           return {
@@ -120,10 +121,37 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   from: toPmPos(state.selection.from),
                   to: toPmPos(state.selection.to),
                 });
-                userAwareness.set("selection", {
-                  ...flat,
-                  timestamp: Date.now(),
-                });
+
+                if (state.selection.from === state.selection.to) {
+                  // Cursor click (deselect) — write immediately and cancel any pending selection
+                  if (selectionDebounceTimeout) {
+                    clearTimeout(selectionDebounceTimeout);
+                    selectionDebounceTimeout = null;
+                  }
+                  userAwareness.set("selection", {
+                    ...flat,
+                    timestamp: Date.now(),
+                  });
+                } else {
+                  // Real text selection — debounce to reduce Y.Map churn during drag
+                  const selectedText = state.doc.textBetween(
+                    state.selection.from,
+                    state.selection.to,
+                    "\n",
+                  );
+                  const truncated =
+                    selectedText.length > 200 ? selectedText.slice(0, 197) + "..." : selectedText;
+
+                  if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
+                  selectionDebounceTimeout = setTimeout(() => {
+                    selectionDebounceTimeout = null;
+                    userAwareness.set("selection", {
+                      ...flat,
+                      selectedText: truncated,
+                      timestamp: Date.now(),
+                    });
+                  }, 150);
+                }
               }
 
               // Broadcast typing activity — debounce the Y.Map write to avoid
@@ -161,6 +189,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
             destroy() {
               if (typingTimeout) clearTimeout(typingTimeout);
               if (activityWriteTimeout) clearTimeout(activityWriteTimeout);
+              if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
             },
           };
         },
