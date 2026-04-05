@@ -2,18 +2,18 @@
   <img src="docs/assets/banner.png" alt="Tandem — Collaborative AI-Human Document Editor" width="800">
 </p>
 
-A collaborative document editor where Claude and a human work on the same document in real-time -- editing, highlighting, commenting, and annotating together.
+An AI document reviewer — open a progress report, RFP, or compliance filing and Claude reviews it alongside you in real time. Highlights, comments, suggestions, and questions appear as first-class annotations you accept, dismiss, or discuss. The original file is never modified unless you save.
 
 ![Tandem editor showing a document with annotations, side panel, and Claude's presence](docs/screenshots/01-editor-overview.png)
 
-## Getting Started
+## Quick Start
 
 ### Prerequisites
 
 - **Node.js 22+** ([download](https://nodejs.org))
 - **Claude Code** (`irm https://claude.ai/install.ps1 | iex`)
 
-### Option A: Global Install (recommended)
+### Install and Run
 
 ```bash
 npm install -g tandem-editor
@@ -21,9 +21,47 @@ tandem setup     # registers MCP tools with Claude Code / Claude Desktop
 tandem           # starts server + opens browser
 ```
 
-`tandem setup` auto-detects Claude Code and Claude Desktop and writes MCP configuration so tools work from any directory. Re-run after upgrading (`npm update -g tandem-editor`).
+`tandem setup` auto-detects Claude Code and Claude Desktop and writes MCP configuration so tools work from any directory. Re-run after upgrading (`npm update -g tandem-editor && tandem setup`).
 
-### Option B: Development Setup
+### Connect Claude Code
+
+Start Claude Code with channel push for real-time notifications:
+
+```bash
+claude --dangerously-load-development-channels server:tandem-channel
+```
+
+Then try:
+
+```
+"Review the welcome document with me"
+```
+
+Claude calls `tandem_open`, the document appears in the browser, and annotations start flowing. Chat messages, annotation actions, and text selections push to Claude instantly.
+
+**Without channels:** Use the `/loop` skill in Claude Code to poll:
+
+```
+/loop 30s check tandem inbox and respond to any new messages
+```
+
+### Verify
+
+```bash
+npm run doctor    # checks Node.js, MCP config, server health, ports
+```
+
+Or check the raw health endpoint:
+
+```bash
+curl http://localhost:3479/health
+# → {"status":"ok","version":"0.1.2","transport":"http","hasSession":false}
+```
+
+`hasSession` becomes `true` once Claude Code connects.
+
+<details>
+<summary><strong>Development Setup</strong> (contributing / building from source)</summary>
 
 ```bash
 git clone https://github.com/bloknayrb/tandem.git
@@ -32,32 +70,61 @@ npm install
 npm run dev:standalone   # starts server (:3478/:3479) + browser client (:5173)
 ```
 
-Open http://localhost:5173 -- you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
+Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
 
-### Connect Claude Code
+</details>
 
-Start Claude Code and try:
+## Features
 
-```
-"Review the welcome document with me"
-```
+### Annotations
 
-Claude calls `tandem_open`, the document appears in the browser, and annotations start flowing.
+![Side panel showing annotation cards with filtering, bulk actions, and text previews](docs/screenshots/03-side-panel.png)
 
-### Verify (if something seems wrong)
+Claude adds highlights, comments, suggestions, and flags directly in the document. The side panel lists all annotations with filtering by type, author, and status. Accept, dismiss, or edit each one individually — or use bulk actions to process them in batches.
 
-```bash
-npm run doctor    # from the repo, or after global install
-```
+### Chat
 
-This checks Node.js version, MCP configuration (both `.mcp.json` and `~/.claude/mcp_settings.json`), server health, and port status with actionable fix suggestions. You can also check the raw health endpoint:
+![Chat sidebar showing messages, typing indicator, and panel toggle](docs/screenshots/02-chat-sidebar.png)
 
-```bash
-curl http://localhost:3479/health
-# → {"status":"ok","version":"0.1.2","transport":"http","hasSession":false}
-```
+Send freeform messages to Claude alongside annotation review. Select text before sending to attach it as a clickable anchor — clicking it later scrolls back to that passage.
 
-`hasSession` becomes `true` once Claude Code connects.
+### Review Mode
+
+![Review mode with dimmed editor and active annotation highlighted](docs/screenshots/05-review-mode.png)
+
+Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, accept with **Y**, dismiss with **N**, examine with **E**. A 10-second undo window lets you reverse accidental accepts. The side panel tracks your position.
+
+### More
+
+- **Multi-document tabs** — open `.md`, `.txt`, `.docx` files side by side; drag to reorder
+- **.docx review-only mode** — open Word documents for annotation; imported Word comments appear alongside Claude's
+- **Session persistence** — documents and annotations survive server restarts
+- **Real-time channel push** — annotation actions, chat, and selections push to Claude instantly
+- **Keyboard shortcuts** — press `?` for the full reference
+- **Unsaved-changes indicator** — dot on tab title when a document has pending edits
+- **Configurable display name** — set your name so Claude knows who's reviewing
+- **Atomic file saves** — write to temp, then rename, preventing partial writes
+- **E2E tested** — Playwright tests cover the annotation lifecycle end-to-end
+
+## Documentation
+
+- **[User Guide](docs/user-guide.md)** — How to use Tandem: browser UI, annotations, chat, review mode, keyboard shortcuts
+- [MCP Tool Reference](docs/mcp-tools.md) — 28 MCP tools + channel API endpoints
+- [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
+- [Workflows](docs/workflows.md) — Claude Code usage patterns: document review, cross-referencing, multi-model
+- [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
+- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-021
+- [Lessons Learned](docs/lessons-learned.md) — 31 implementation lessons
+
+## CLI Commands
+
+| Command | What it does |
+|---------|-------------|
+| `tandem` | Start server and open browser (global install) |
+| `tandem setup` | Register MCP tools with Claude Code / Claude Desktop |
+| `tandem setup --force` | Register to default paths regardless of auto-detection |
+| `tandem --version` | Show installed version |
+| `tandem --help` | Show usage |
 
 ## MCP Configuration
 
@@ -83,33 +150,11 @@ Tandem uses two MCP connections: **HTTP** for document tools (28 tools including
 }
 ```
 
-Both entries are cross-platform -- no platform-specific configuration needed.
-
-### Real-Time Push Notifications (Recommended)
-
-Tandem includes a channel shim that pushes events (chat messages, annotation actions, text selections) to Claude Code instantly. Start Claude Code with the channel flag:
-
-```bash
-claude --dangerously-load-development-channels server:tandem-channel
-```
-
-Chat messages, annotation creates/accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is required until Tandem is added to the official channel allowlist.
-
-**Important:** The server must be running before Claude Code connects.
-
-### Polling Fallback
-
-If channels aren't available, use the `/loop` skill in Claude Code to poll for messages:
-
-```
-/loop 30s check tandem inbox and respond to any new messages
-```
-
-This polls every 30 seconds. Token cost is minimal when there are no new messages.
+Both entries are cross-platform — no platform-specific configuration needed.
 
 ## Environment Variables
 
-All optional -- defaults work out of the box.
+All optional — defaults work out of the box.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -133,7 +178,7 @@ Start the server first (`tandem` for global install, or `npm run dev:standalone`
 Tandem kills stale processes on :3478/:3479 at startup. If another app uses those ports, set `TANDEM_PORT` / `TANDEM_MCP_PORT` to different values and update `TANDEM_URL` to match.
 
 **Channel shim fails to start**
-The `tandem-channel` entry spawns a subprocess. For global installs, `tandem setup` writes absolute paths to the bundled `dist/channel/index.js` -- re-run `tandem setup` after upgrading. For dev setup, if you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
+The `tandem-channel` entry spawns a subprocess. For global installs, `tandem setup` writes absolute paths to the bundled `dist/channel/index.js` — re-run `tandem setup` after upgrading. For dev setup, if you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
 
 **Browser shows "Cannot reach the Tandem server"**
 The browser connects to the server via WebSocket. For global installs, run `tandem` to start the server. For dev setup, use `npm run dev:standalone` (or `npm run dev:server`). The message appears after 3 seconds of failed connection.
@@ -141,83 +186,11 @@ The browser connects to the server via WebSocket. For global installs, run `tand
 **Empty browser with no document**
 On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or deleted the sample file, click the **+** button in the tab bar or drop a file onto the editor.
 
-## Features
-
-### Annotations
-
-Claude adds highlights, comments, suggestions, and flags directly in the document. Each annotation type has distinct styling -- colored backgrounds for highlights, dashed underlines for comments, wavy underlines for suggestions -- so you can scan at a glance.
-
-![Side panel showing annotation cards with text excerpts, accept/dismiss buttons, filtering, and bulk actions](docs/screenshots/03-side-panel.png)
-
-The side panel lists all annotations with filtering by type, author, and status. Each card shows a preview of the annotated text. Bulk accept/dismiss buttons appear when multiple annotations are pending. Annotations can be edited after creation via the pencil button -- typos in comments or suggestions no longer require deleting and recreating.
-
-### Chat Sidebar
-
-![Chat sidebar showing Claude review messages, typing indicator, and panel toggle tabs](docs/screenshots/02-chat-sidebar.png)
-
-The right sidebar toggles between **Annotations** and **Chat** views. In chat mode, send freeform messages to Claude alongside annotation review. If you have text selected when you hit Send, it is attached as a clickable anchor -- clicking it later scrolls the editor back to that passage. Claude's responses are rendered as Markdown. An unread badge on the Chat tab appears when Claude has replied while you were in the Annotations view.
-
-### Toolbar
-
-![Toolbar with annotation buttons, multiple document tabs with format indicators, and side panel header](docs/screenshots/04-toolbar-actions.png)
-
-Select text in the editor to activate the toolbar buttons: Highlight (with color picker), Comment, Suggest, Flag, and Ask Claude. The tab bar shows open documents with format indicators (M for Markdown, W for Word, T for Text). Tabs scroll horizontally when they overflow, and can be reordered via drag-and-drop or Alt+Left/Right.
-
-### Keyboard Review Mode
-
-![Review mode with dimmed editor text and active annotation highlighted](docs/screenshots/05-review-mode.png)
-
-Press **Ctrl+Shift+R** or click "Review in sequence" to enter review mode. The editor dims non-annotated text so annotations stand out. Navigate with **Tab/Shift+Tab**, accept with **Y**, dismiss with **N**, or examine with **E**. The side panel tracks your position (e.g. "Reviewing 1 / 7").
-
-### Claude's Presence
-
-![Status bar showing connection state, document count, interruption mode, and Claude's current activity](docs/screenshots/06-claude-presence.png)
-
-The status bar shows real-time connection state with reconnect attempt count and elapsed time, open document count, and Claude's current activity. A prominent banner appears after 30 seconds of continuous disconnect with actionable guidance. Claude's focus paragraph gets a subtle blue highlight in the editor. Interruption modes (All / Urgent / Paused) control which annotations surface immediately vs. get held for later.
-
-### Toast Notifications
-
-![Toast notification showing an annotation failure message with dismiss button](docs/screenshots/07-toast-notification.png)
-
-Annotation failures and save errors surface as dismissible toast notifications. Toasts auto-dismiss by severity (errors linger longest) and deduplicate with a count badge when the same message repeats.
-
-### Onboarding Tutorial
-
-![Onboarding tutorial card showing step 1 of 3 with progress dots and next button](docs/screenshots/08-onboarding-tutorial.png)
-
-On first launch, a 3-step guided walkthrough appears over the welcome document. Pre-placed annotations let you practice reviewing, asking Claude a question, and editing -- then the tutorial dismisses itself. Progress persists in localStorage so it only shows once.
-
-### More
-
-- **Multi-document tabs** -- open `.md`, `.txt`, `.docx` files side by side, each in its own Y.Doc room
-- **Browser file open** -- click "+" in the tab bar or drag-and-drop a file onto the editor (no Claude needed); recent files remembered
-- **Markdown round-trip** -- lossless MDAST-based conversion preserves formatting through load/save cycles
-- **.docx review-only mode** -- open Word documents for annotation; a banner makes clear edits aren't saved back to the original
-- **Session persistence** -- Y.Doc state and annotations survive server restarts
-- **Real-time channel push** -- annotation accepts/dismisses, chat messages, and document switches push to Claude instantly via the Channels API (no polling)
-- **User→Claude inbox** -- highlights, comments, and questions you add are surfaced to Claude via push events or `tandem_checkInbox` fallback
-- **Unsaved-changes indicator** -- dot on the tab title when a document has pending edits
-- **Configurable display name** -- set your name so Claude knows who's reviewing
-- **Annotation text preview** -- each card in the side panel shows an excerpt of the annotated text
-- **Keyboard shortcuts reference** -- press `?` to open the in-app shortcut reference
-- **E2E tested** -- Playwright tests cover the annotation lifecycle end-to-end
-- **Atomic file saves** -- write to temp, then rename, preventing partial writes
-
-## CLI Commands
+## Development
 
 | Command | What it does |
 |---------|-------------|
-| `tandem` | Start server and open browser (global install) |
-| `tandem setup` | Register MCP tools with Claude Code / Claude Desktop |
-| `tandem setup --force` | Register to default paths regardless of auto-detection |
-| `tandem --version` | Show installed version |
-| `tandem --help` | Show usage |
-
-## Development Scripts
-
-| Command | What it does |
-|---------|-------------|
-| `npm run dev:standalone` | **Recommended** -- both frontend + backend (via concurrently) |
+| `npm run dev:standalone` | **Recommended** — both frontend + backend (via concurrently) |
 | `npm run dev:server` | Backend only: Hocuspocus (:3478) + MCP HTTP (:3479) |
 | `npm run dev:client` | Frontend only: Vite dev server (:5173) |
 | `npm run build` | Production build (`dist/server/` + `dist/channel/` + `dist/cli/` + `dist/client/`) |
@@ -225,18 +198,4 @@ On first launch, a 3-step guided walkthrough appears over the welcome document. 
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Playwright UI mode |
 
-## Documentation
-
-- [MCP Tool Reference](docs/mcp-tools.md) -- 28 MCP tools + channel API endpoints
-- [Architecture](docs/architecture.md) -- System design, data flows, coordinate systems, channel push
-- [Workflows](docs/workflows.md) -- Real-world usage patterns
-- [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) -- ADR-001 through ADR-021
-- [Lessons Learned](docs/lessons-learned.md) -- 31 implementation lessons
-
-## Tech Stack
-
-**Frontend:** React 19, Tiptap, Vite, TypeScript
-**Backend:** Node.js, Hocuspocus (Yjs WebSocket), MCP SDK (Streamable HTTP transport), Express
-**Collaboration:** Yjs (CRDT), @hocuspocus/provider, y-prosemirror
-**File I/O:** mammoth.js (.docx), unified/remark (.md)
+**Tech Stack:** React 19, Tiptap, Vite, TypeScript | Node.js, Hocuspocus (Yjs WebSocket), MCP SDK, Express | Yjs (CRDT), y-prosemirror | mammoth.js (.docx), unified/remark (.md)
