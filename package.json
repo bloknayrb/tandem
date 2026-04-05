@@ -18,7 +18,8 @@
   },
   "files": [
     "dist/",
-    "sample/"
+    "sample/",
+    "CHANGELOG.md"
   ],
   "exports": {
     ".": "./dist/cli/index.js",
