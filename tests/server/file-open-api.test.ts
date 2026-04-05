@@ -161,7 +161,7 @@ describe("openFileByPath", () => {
     expect(second.forceReloaded).toBe(false);
   });
 
-  it("force=true creates a new Y.Doc instance", async () => {
+  it("force=true clears and repopulates the same Y.Doc in-place", async () => {
     const dir = await makeTmpDir();
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
@@ -173,8 +173,11 @@ describe("openFileByPath", () => {
     await openFileByPath(filePath, { force: true });
     const docAfter = getOrCreateDocument(first.documentId);
 
-    // Teardown destroys the old Y.Doc and re-open creates a fresh one
-    expect(docAfter).not.toBe(docBefore);
+    // Same Y.Doc instance — cleared and repopulated in-place
+    expect(docAfter).toBe(docBefore);
+    // Content reflects the updated file
+    const text = extractText(docAfter);
+    expect(text).toContain("Changed");
   });
 
   it("force=true twice in succession does not crash", async () => {

@@ -3,23 +3,25 @@ import fsSync from "fs";
 import path from "path";
 import type * as Y from "yjs";
 import { randomUUID } from "node:crypto";
-import {
-  getOrCreateDocument,
-  getDocument,
-  removeDocument,
-  getHocuspocus,
-} from "../yjs/provider.js";
+import { getOrCreateDocument, getDocument } from "../yjs/provider.js";
 import {
   MAX_FILE_SIZE,
   CHARS_PER_PAGE,
   LARGE_FILE_PAGE_THRESHOLD,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   SUPPORTED_EXTENSIONS,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AWARENESS,
+  Y_MAP_USER_AWARENESS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
-import { MCP_ORIGIN, detachObservers } from "../events/queue.js";
+import { MCP_ORIGIN, attachObservers } from "../events/queue.js";
 import { getAdapter } from "../file-io/index.js";
+import { loadMarkdown } from "../file-io/markdown.js";
+import { loadDocx } from "../file-io/docx.js";
+import { htmlToYDoc } from "../file-io/docx-html.js";
+import { extractDocxComments, injectCommentsAsAnnotations } from "../file-io/docx-comments.js";
 import {
   saveSession,
   loadSession,
@@ -29,14 +31,13 @@ import {
   startAutoSave,
   isAutoSaveRunning,
 } from "../session/manager.js";
-import { extractText, detectFormat, docIdFromPath } from "./document-model.js";
+import { extractText, detectFormat, docIdFromPath, populateYDoc } from "./document-model.js";
 import {
   type OpenDoc,
   getOpenDocs,
   setActiveDocId,
   broadcastOpenDocs,
   addDoc,
-  removeDoc,
 } from "./document-service.js";
 
 export { SUPPORTED_EXTENSIONS };
@@ -127,7 +128,27 @@ export async function openFileByPath(
   }
 
   if (forceReload) {
-    await forceCloseDocument(id, existing);
+    const doc = getDocument(id) ?? getOrCreateDocument(id);
+    const fileName = path.basename(resolved);
+    await clearAndReload(id, doc, resolved, format, existing);
+
+    addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
+    setActiveDocId(id);
+    broadcastOpenDocs();
+    ensureAutoSave();
+
+    return {
+      ...buildResult(doc, {
+        documentId: id,
+        filePath: resolved,
+        fileName,
+        format,
+        readOnly,
+        source: "file",
+        restoredFromSession: false,
+      }),
+      forceReloaded: true,
+    };
   }
 
   const doc = getOrCreateDocument(id);
@@ -173,7 +194,7 @@ export async function openFileByPath(
       source: "file",
       restoredFromSession,
     }),
-    forceReloaded: forceReload === true,
+    forceReloaded: false,
   };
 }
 
@@ -231,87 +252,85 @@ export async function openFileFromContent(
 // --- Private helpers ---
 
 /**
- * Tear down an open document so it can be re-opened fresh from disk.
- * Clears all document state (content, annotations, awareness, session).
- * Directly manipulates Hocuspocus internals to avoid the nondeterministic
- * async timing of `unloadDocument()` (which bails if connections > 0).
- * Best-effort: each step is wrapped in try-catch so a failure in one step
- * doesn't prevent subsequent cleanup.
+ * Clear all document state in-place and repopulate from disk.
+ * Unlike the old forceCloseDocument, this preserves the Y.Doc instance, Hocuspocus
+ * room, and client WebSocket connections. All state (content, annotations, awareness)
+ * is cleared and repopulated in a single Y.js transaction so clients see one atomic update.
  */
-async function forceCloseDocument(id: string, existing: OpenDoc): Promise<void> {
-  console.error(`[Tandem] forceCloseDocument: tearing down ${id}`);
-  let errors = 0;
+async function clearAndReload(
+  id: string,
+  doc: Y.Doc,
+  filePath: string,
+  format: string,
+  existing: OpenDoc,
+): Promise<void> {
+  console.error(`[Tandem] clearAndReload: reloading ${id} from disk`);
 
-  // 1. Stop event queue observers for this document
-  try {
-    detachObservers(id);
-  } catch (err) {
-    errors++;
-    console.error(`[Tandem] forceCloseDocument: detachObservers failed for ${id}:`, err);
+  // 1. Delete session so stale state doesn't restore on next startup
+  await deleteSession(existing.filePath).catch((err) => {
+    console.error(`[Tandem] clearAndReload: deleteSession failed for ${id}:`, err);
+  });
+
+  // 2. Prepare content outside the transaction (async I/O must happen before transact)
+  const isDocx = format === "docx";
+  let preparedHtml: string | undefined;
+  let preparedComments: Awaited<ReturnType<typeof extractDocxComments>> | undefined;
+  let preparedContent: string | undefined;
+
+  if (isDocx) {
+    const buffer = await fs.readFile(filePath);
+    [preparedHtml, preparedComments] = await Promise.all([
+      loadDocx(buffer),
+      extractDocxComments(buffer).catch((err) => {
+        console.error(
+          "[docx-comments] Comment extraction failed; document will reload without imported comments:",
+          err,
+        );
+        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
+      }),
+    ]);
+  } else {
+    preparedContent = await fs.readFile(filePath, "utf-8");
   }
 
-  // 2. Remove from open-docs tracking and broadcast removal to clients.
-  //    Clients see the doc disappear from openDocuments and destroy their provider+ydoc.
-  try {
-    removeDoc(id);
-    broadcastOpenDocs();
-  } catch (err) {
-    errors++;
-    console.error(`[Tandem] forceCloseDocument: removeDoc/broadcast failed for ${id}:`, err);
-  }
+  // 3. Single transaction: clear all state + repopulate from pre-parsed content.
+  //    Clients see one atomic Y.js update — no intermediate states.
+  doc.transact(() => {
+    // Clear Y.Maps
+    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+    annotations.forEach((_, k) => annotations.delete(k));
 
-  // 3. Hocuspocus cleanup (may not be running in tests / MCP-only mode)
-  try {
-    const hp = getHocuspocus();
-    if (hp) {
-      // Force-close WebSocket connections so clients disconnect
-      hp.closeConnections(id);
+    const awareness = doc.getMap(Y_MAP_AWARENESS);
+    awareness.forEach((_, k) => awareness.delete(k));
 
-      // Delete from hp.documents so that any deferred unloadDocument calls
-      // (triggered by closeConnections settling) become no-ops
-      // (line 594 of src/Hocuspocus.ts: `if (!this.documents.has(documentName)) return`).
-      const hpDoc = hp.documents.get(id);
-      if (hpDoc) {
-        hp.documents.delete(id);
-        hpDoc.destroy();
+    const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+    userAwareness.forEach((_, k) => userAwareness.delete(k));
+
+    // Repopulate content (adapters clear the XmlFragment internally)
+    if (isDocx && preparedHtml !== undefined) {
+      htmlToYDoc(doc, preparedHtml);
+      if (preparedComments && preparedComments.length > 0) {
+        injectCommentsAsAnnotations(doc, preparedComments);
       }
-
-      // Clear any in-flight load promise to prevent stale state on reconnect
-      hp.loadingDocuments.delete(id);
+    } else if (format === "md" && preparedContent !== undefined) {
+      loadMarkdown(doc, preparedContent);
+    } else if (preparedContent !== undefined) {
+      populateYDoc(doc, preparedContent);
     }
-  } catch (err) {
-    errors++;
-    console.error(`[Tandem] forceCloseDocument: Hocuspocus cleanup failed for ${id}:`, err);
-  }
 
-  // 4. Remove from Tandem's provider Y.Doc map (idempotent if afterUnloadDocument already ran)
-  try {
-    const oldDoc = getDocument(id);
-    if (oldDoc) {
-      oldDoc.destroy();
-      removeDocument(id);
-    }
-  } catch (err) {
-    errors++;
-    console.error(`[Tandem] forceCloseDocument: Y.Doc removal failed for ${id}:`, err);
-  }
+    // Rewrite metadata + dirty-tracking baseline
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    meta.set("readOnly", isDocx);
+    meta.set("format", format);
+    meta.set("documentId", id);
+    meta.set("fileName", path.basename(filePath));
+    meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+  }, MCP_ORIGIN);
 
-  // 5. Delete session so it doesn't restore stale state
-  try {
-    await deleteSession(existing.filePath);
-  } catch (err) {
-    errors++;
-    console.error(`[Tandem] forceCloseDocument: deleteSession failed for ${id}:`, err);
-  }
+  // 4. Reattach event queue observers (idempotent — detaches existing first)
+  attachObservers(id, doc);
 
-  // 6. Best-effort delay so the removal broadcast propagates to clients before re-add.
-  //    Without this, React's automatic batching could merge remove+add into one render,
-  //    causing the stale provider to survive. 100ms is a heuristic, not a guarantee.
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  console.error(
-    `[Tandem] forceCloseDocument: teardown complete for ${id}${errors > 0 ? ` with ${errors} error(s)` : ""}`,
-  );
+  console.error(`[Tandem] clearAndReload: complete for ${id}`);
 }
 
 /** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
