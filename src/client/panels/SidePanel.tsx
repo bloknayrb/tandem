@@ -38,23 +38,33 @@ type FilterAuthor = "all" | "claude" | "user" | "import";
 type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
 
 /** Apply a suggestion annotation's text replacement in the editor */
-function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null) {
-  if (ann.type !== "suggestion") return;
+function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null): boolean {
+  if (ann.type !== "suggestion") return false;
+
+  let newText: string;
   try {
-    const { newText } = JSON.parse(ann.content);
-    if (typeof newText === "string") {
-      const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
-      if (!resolved) return;
-      editor
-        .chain()
-        .focus()
-        .deleteRange({ from: resolved.from, to: resolved.to })
-        .insertContentAt(resolved.from, newText)
-        .run();
-    }
+    const parsed = JSON.parse(ann.content);
+    newText = parsed.newText;
   } catch {
-    // Malformed suggestion content
+    console.warn("[SidePanel] Malformed suggestion content for", ann.id);
+    return false;
   }
+
+  if (typeof newText !== "string") return false;
+
+  const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
+  if (!resolved) {
+    console.warn("[SidePanel] Could not resolve range for suggestion", ann.id);
+    return false;
+  }
+
+  editor
+    .chain()
+    .focus()
+    .deleteRange({ from: resolved.from, to: resolved.to })
+    .insertContentAt(resolved.from, newText)
+    .run();
+  return true;
 }
 
 export function SidePanel({

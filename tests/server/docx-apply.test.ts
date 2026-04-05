@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import JSZip from "jszip";
 import render from "dom-serializer";
 import {
@@ -7,6 +7,14 @@ import {
   applyTrackedChanges,
   resolveWordComments,
 } from "../../src/server/file-io/docx-apply.js";
+import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
+import {
+  addDoc,
+  removeDoc,
+  setActiveDocId,
+  getOpenDocs,
+} from "../../src/server/mcp/document-service.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -531,5 +539,47 @@ describe("resolveWordComments", () => {
 
     const resolved = await resolveWordComments(zip, commentParaIds, suggestions);
     expect(resolved).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyChangesCore — UNC backupPath rejection
+// ---------------------------------------------------------------------------
+
+describe("applyChangesCore — UNC backupPath rejection", () => {
+  const DOC_ID = "unc-test-doc";
+
+  beforeEach(() => {
+    for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    setActiveDocId(null);
+
+    // Register a fake .docx document so the format/source checks pass
+    getOrCreateDocument(DOC_ID);
+    addDoc(DOC_ID, {
+      id: DOC_ID,
+      filePath: "/tmp/test.docx",
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(DOC_ID);
+  });
+
+  it("rejects a UNC backupPath starting with \\\\", async () => {
+    // Only meaningful on win32; on other platforms path.resolve won't produce
+    // a UNC path, so the check is a no-op — skip on non-Windows.
+    if (process.platform !== "win32") return;
+
+    await expect(
+      applyChangesCore(DOC_ID, "Test Author", "\\\\attacker.com\\share\\backup.docx"),
+    ).rejects.toMatchObject({ code: "INVALID_PATH", message: /UNC paths are not supported/ });
+  });
+
+  it("rejects a UNC backupPath starting with //", async () => {
+    if (process.platform !== "win32") return;
+
+    await expect(
+      applyChangesCore(DOC_ID, "Test Author", "//attacker.com/share/backup.docx"),
+    ).rejects.toMatchObject({ code: "INVALID_PATH", message: /UNC paths are not supported/ });
   });
 });

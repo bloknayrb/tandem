@@ -113,10 +113,26 @@ export function createAnnotation(
   return id;
 }
 
-/** Collect all annotations from the Y.Map as an array */
+/** Collect all annotations from the Y.Map as an array, skipping malformed entries */
 export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
   const result: Annotation[] = [];
-  map.forEach((value) => result.push(value as Annotation));
+  map.forEach((value, key) => {
+    const ann = value as Record<string, unknown>;
+    if (
+      ann &&
+      typeof ann === "object" &&
+      typeof ann.id === "string" &&
+      typeof ann.type === "string" &&
+      typeof ann.status === "string" &&
+      ann.range &&
+      typeof (ann.range as Record<string, unknown>).from === "number" &&
+      typeof (ann.range as Record<string, unknown>).to === "number"
+    ) {
+      result.push(ann as unknown as Annotation);
+    } else {
+      console.warn(`[Tandem] Skipping malformed annotation entry: ${key}`);
+    }
+  });
   return result;
 }
 

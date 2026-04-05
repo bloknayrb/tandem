@@ -27,9 +27,11 @@ const INLINE_MARK_TAGS: Record<string, (el: Element) => Record<string, object>> 
   del: () => ({ strike: {} }),
   sup: () => ({ superscript: {} }),
   sub: () => ({ subscript: {} }),
-  a: (el) => ({
-    link: { href: el.attribs.href || "" },
-  }),
+  a: (el) => {
+    const href = el.attribs.href || "";
+    const safeHref = /^https?:\/\//i.test(href) || href.startsWith("mailto:") ? href : "";
+    return { link: { href: safeHref } };
+  },
 };
 
 /** Tags that represent block-level elements */

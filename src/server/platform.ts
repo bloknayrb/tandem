@@ -19,8 +19,8 @@ export function freePort(port: number): void {
     } else {
       freePortUnix(port);
     }
-  } catch {
-    // Nothing listening or kill failed — proceed anyway
+  } catch (err) {
+    console.error(`[Tandem] freePort(${port}): ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -35,9 +35,7 @@ export async function waitForPort(port: number, timeoutMs = 5000): Promise<void>
     if (await tryBind(port)) return;
     await new Promise((r) => setTimeout(r, 200));
   }
-  console.error(
-    `[Tandem] Warning: port ${port} still not available after ${timeoutMs}ms, proceeding anyway`,
-  );
+  throw new Error(`Port ${port} still not available after ${timeoutMs}ms`);
 }
 
 /** Attempt to bind a port and immediately release it. Returns true if available. */

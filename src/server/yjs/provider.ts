@@ -66,12 +66,14 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     async onConnect({ request, documentName }) {
       // Origin validation: reject connections not from localhost (prevents DNS rebinding)
       const origin = request?.headers?.origin;
-      if (origin) {
-        const url = new URL(origin);
-        if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
-          console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
-          throw new Error("Connection rejected: invalid origin");
-        }
+      if (!origin) {
+        console.error("[Hocuspocus] Rejected connection: missing Origin header");
+        throw new Error("Connection rejected: missing origin header");
+      }
+      const url = new URL(origin);
+      if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+        console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
+        throw new Error("Connection rejected: invalid origin");
       }
       console.error(`[Hocuspocus] Client connected to: ${documentName}`);
     },

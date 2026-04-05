@@ -139,8 +139,12 @@ export function ChatPanel({
         const pmFrom = flatOffsetToPmPos(editor.state.doc, anchor.from);
         const pmTo = flatOffsetToPmPos(editor.state.doc, anchor.to);
         editor.chain().focus().setTextSelection({ from: pmFrom, to: pmTo }).scrollIntoView().run();
-      } catch {
-        // Anchor may be stale — ignore silently
+      } catch (err) {
+        // Anchor may be stale after edits — log for debugging
+        console.warn(
+          "[ChatPanel] Could not scroll to anchor:",
+          err instanceof Error ? err.message : err,
+        );
       }
     },
     [editor, activeDocId],

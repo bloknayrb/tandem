@@ -64,6 +64,19 @@ export async function applyChangesCore(
     });
   }
 
+  // Reject UNC backup paths (Windows NTLM hash leak)
+  if (backupPath) {
+    const resolvedBp = path.resolve(backupPath);
+    if (
+      process.platform === "win32" &&
+      (resolvedBp.startsWith("\\\\") || resolvedBp.startsWith("//"))
+    ) {
+      throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
+        code: "INVALID_PATH",
+      });
+    }
+  }
+
   // 3. Collect accepted suggestions
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const suggestions: AcceptedSuggestion[] = [];

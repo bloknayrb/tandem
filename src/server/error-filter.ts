@@ -27,7 +27,7 @@ export function isKnownHocuspocusError(err: unknown): boolean {
   const msg = err.message;
 
   if (msg.startsWith("WebSocket is not open")) return true;
-  if (msg === "Unexpected end of array" || msg === "Integer out of Range") return true;
+  if (msg.includes("Unexpected end of array") || msg.includes("Integer out of Range")) return true;
   if (msg.startsWith("Received a message with an unknown type:")) return true;
 
   return false;

@@ -102,30 +102,32 @@ export function toDocListEntry(d: OpenDoc) {
  *  Writes to both the bootstrap room (CTRL_ROOM) so new clients discover
  *  docs, and to the active document's room so tab-switching clients stay in sync. */
 export function broadcastOpenDocs(): void {
-  try {
-    const docList = Array.from(openDocs.values()).map(toDocListEntry);
-    const id = activeDocId;
+  const docList = Array.from(openDocs.values()).map(toDocListEntry);
+  const id = activeDocId;
 
+  try {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     ctrl.transact(() => {
       ctrlMeta.set("openDocuments", docList);
       ctrlMeta.set("activeDocumentId", id);
     }, MCP_ORIGIN);
+  } catch (err) {
+    console.error("[Tandem] broadcastOpenDocs: failed to update CTRL_ROOM:", err);
+  }
 
-    // Update ALL open doc rooms so no per-doc Y.Doc ever has a stale list.
-    // If only the active doc were updated, a previously active doc's stale list
-    // could fire the client's metaObserver and incorrectly remove tabs.
-    for (const [docId] of openDocs) {
+  // Update ALL open doc rooms so no per-doc Y.Doc ever has a stale list.
+  for (const [docId] of openDocs) {
+    try {
       const ydoc = getOrCreateDocument(docId);
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
       ydoc.transact(() => {
         meta.set("openDocuments", docList);
         meta.set("activeDocumentId", id);
       }, MCP_ORIGIN);
+    } catch (err) {
+      console.error(`[Tandem] broadcastOpenDocs: failed to update doc ${docId}:`, err);
     }
-  } catch (err) {
-    console.error("[Tandem] broadcastOpenDocs error:", err);
   }
 }
 
@@ -234,7 +236,9 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
         console.error(`[Tandem] Skipping deleted file (removing stale session): ${filePath}`);
-        deleteSession(filePath).catch(() => {});
+        deleteSession(filePath).catch((err) => {
+          console.error(`[Tandem] Failed to delete stale session for ${filePath}:`, err);
+        });
       } else {
         console.error(`[Tandem] Failed to restore ${filePath}:`, err);
       }

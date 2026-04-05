@@ -68,7 +68,13 @@ export async function openFileByPath(
   let resolved = path.resolve(filePath);
   try {
     resolved = fsSync.realpathSync(resolved);
-  } catch {
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      console.error(
+        `[Tandem] realpathSync failed for ${filePath} (${code}), using path.resolve fallback`,
+      );
+    }
     resolved = path.resolve(filePath);
   }
 

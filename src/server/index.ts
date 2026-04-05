@@ -163,7 +163,11 @@ async function main() {
     // HTTP mode: no startup-order constraint — start both concurrently
     freePort(wsPort);
     freePort(mcpPort);
-    await Promise.all([waitForPort(wsPort), waitForPort(mcpPort)]);
+    try {
+      await Promise.all([waitForPort(wsPort), waitForPort(mcpPort)]);
+    } catch (err) {
+      console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
+    }
 
     const [srv] = await Promise.all([
       startMcpServerHttp(mcpPort),
@@ -206,7 +210,11 @@ async function main() {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
       freePort(wsPort);
-      await waitForPort(wsPort);
+      try {
+        await waitForPort(wsPort);
+      } catch (err) {
+        console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
+      }
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
     })().catch((err) => {
