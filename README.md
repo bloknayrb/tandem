@@ -17,11 +17,11 @@ An AI document reviewer — open a progress report, RFP, or compliance filing an
 
 ```bash
 npm install -g tandem-editor
-tandem setup     # registers MCP tools with Claude Code / Claude Desktop
+tandem setup     # registers MCP tools + installs Claude Code skill
 tandem           # starts server + opens browser
 ```
 
-`tandem setup` auto-detects Claude Code and Claude Desktop and writes MCP configuration so tools work from any directory. Re-run after upgrading (`npm update -g tandem-editor && tandem setup`).
+`tandem setup` auto-detects Claude Code and Claude Desktop, writes MCP configuration, and installs a skill (`~/.claude/skills/tandem/SKILL.md`) that teaches Claude how to use Tandem's tools effectively. Re-run after upgrading (`npm update -g tandem-editor && tandem setup`).
 
 ### Connect Claude Code
 
