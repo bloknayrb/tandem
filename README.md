@@ -109,10 +109,10 @@ This polls every 30 seconds, creating a chat-like experience where you type in t
 Tandem includes a channel shim for Claude Code's experimental Channels API, which would deliver events instantly without polling. To activate it:
 
 ```bash
-claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel
+claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Note:** As of Claude Code v2.1.89, the Channels API does not reliably deliver `<channel>` notifications to the model. The `/loop` approach above is more reliable. See [#165](https://github.com/bloknayrb/tandem/issues/165) for tracking. The `--dangerously-load-development-channels` flag is required until Tandem is added to the official channel allowlist.
+**Note:** The `--dangerously-load-development-channels` flag both activates the channel and loads it — no separate `--channels` flag is needed. This flag is required until Tandem is added to the official channel allowlist.
 
 **Important:** The server must be running before Claude Code connects.
 

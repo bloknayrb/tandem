@@ -286,3 +286,29 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 **Solution:** `tandem_getTextContent` now always uses `extractText()` regardless of file format. The flat text format is the single source of truth for all offset-bearing operations. If Claude needs actual markdown, `tandem_save` writes the file to disk and Claude can read it via other means.
 
 **Key principle:** Any tool that returns character offsets (or text that will be used to compute character offsets) must use the same text representation as the annotation coordinate system. Mixing representations is a silent correctness bug — annotations appear to work but land in the wrong location, and the drift is proportional to the amount of block-level markdown syntax before the target range.
+
+## 32. Channel Selection Events Flood the Context Window
+
+**Problem:** The `selection:changed` event fires on every cursor movement and click in the editor. When the channel shim forwarded all of these to Claude Code, a single browsing session produced 25+ "User cleared selection" notifications in seconds, burning context and drowning out actionable events like chat messages and annotation actions. Additionally, actual text selection events never arrive at all — only "cleared selection" (cursor-only) events.
+
+**Attempted solutions (2026-04-04, not yet working):**
+
+1. **Bridge-side filtering in `event-bridge.ts`:** Added `isSelectionCleared()` to drop events where `from === to` with no `selectedText`, plus 1.5s debounce for real selections via `setTimeout`/`flushSelection`. Code confirmed present in source, tsx cache (`/tmp/tsx-blokn/`), and global npm dist. No effect — cleared events still arrive.
+
+2. **Global MCP config removal:** Removed `tandem-channel` from `~/.claude/mcp_settings.json` (which pointed to the built dist at `AppData/Roaming/npm/node_modules/tandem-editor/dist/channel/index.js`) so only the project `.mcp.json` (tsx source) is used. No effect.
+
+3. **Server-side filtering in `queue.ts`:** Added `if (!selection || selection.from === selection.to) return;` in the awareness observer to stop emitting cleared selections at the SSE level. Server killed and restarted. No effect.
+
+4. **Debug logging:** Added `require("fs").appendFileSync()` in the bridge's selection handler. Log file was never created — possibly because `require()` fails silently in ESM context, or the code path is never reached.
+
+**Root cause (discovered via raw SSE inspection):** The client awareness extension (`awareness.ts`) calls `pmSelectionToFlat()` which returns `{ from, to }` — flat offsets only, with no `selectedText` field. Every selection event arrives at the server with `selectedText: ""` regardless of whether the user selected text or just clicked. This caused:
+- The server-side filter (`from === to`) didn't catch real selections (e.g., `from: 264, to: 396`)
+- The bridge-side filter (`from === to && !selectedText`) also didn't catch them
+- `formatEventContent` saw `!selectedText` (empty string is falsy) and labeled everything "User cleared selection"
+- So "cleared selection" events were actually real text selections with missing text content — the label was misleading
+
+Additionally, selection events fire at ~10ms intervals during mouse drag (every ProseMirror transaction), producing 30+ events per second. Even with correct filtering, this needs debouncing.
+
+**Fix required:** The client must extract selected text from the ProseMirror document and include it in the awareness write. The server/bridge filters should use `from === to` (cursor vs range) as the cleared-selection heuristic, not `selectedText` emptiness.
+
+**Key principle:** When debugging event pipelines, inspect the raw wire format at each layer (SSE stream, bridge input, channel output). Misleading labels can send you on a multi-hour chase — the "User cleared selection" label masked that these were real selections with missing data. Also: channel events that map to high-frequency UI interactions need aggressive debouncing before reaching the LLM.

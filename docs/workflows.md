@@ -34,7 +34,7 @@ The server starts and the browser opens to `http://localhost:3479`. `sample/welc
 
 In a separate terminal, open Claude Code with the channel flag for real-time push notifications:
 ```bash
-claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel
+claude --dangerously-load-development-channels server:tandem-channel
 ```
 
 Then try:
@@ -42,7 +42,7 @@ Then try:
 "Review the welcome document with me"
 ```
 
-Claude connects to the running Tandem server, opens the document, and begins reviewing. With the `--channels` flag, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
+Claude connects to the running Tandem server, opens the document, and begins reviewing. With the channel active, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
 
 **After upgrading:**
 ```bash
