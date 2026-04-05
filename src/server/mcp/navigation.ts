@@ -33,16 +33,27 @@ export function searchText(
   query: string,
   useRegex?: boolean,
 ): { matches: SearchMatch[]; error?: string } {
+  const MAX_MATCHES = 10_000;
   const matches: SearchMatch[] = [];
   try {
     const pattern = useRegex ? new RegExp(query, "gi") : new RegExp(escapeRegex(query), "gi");
     let match;
+    const start = Date.now();
     while ((match = pattern.exec(fullText)) !== null) {
       matches.push({
         from: toFlatOffset(match.index),
         to: toFlatOffset(match.index + match[0].length),
         text: match[0],
       });
+      if (matches.length >= MAX_MATCHES) {
+        return { matches, error: `Search capped at ${MAX_MATCHES} matches` };
+      }
+      // Guard against catastrophic backtracking — bail after 2s
+      if (Date.now() - start > 2000) {
+        return { matches, error: "Search timed out — simplify the regex pattern" };
+      }
+      // Prevent infinite loops on zero-length matches
+      if (match[0].length === 0) pattern.lastIndex++;
     }
   } catch (err) {
     return { matches: [], error: `Invalid regex: ${getErrorMessage(err)}` };
