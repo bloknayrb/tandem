@@ -11,6 +11,12 @@ import {
 import { populateYDoc, extractText } from "../mcp/document-model.js";
 
 export type { FormatAdapter } from "./types.js";
+export {
+  applyTrackedChanges,
+  type AcceptedSuggestion,
+  type ApplyOptions,
+  type ApplyOutput,
+} from "./docx-apply.js";
 
 // -- Adapter implementations --
 
