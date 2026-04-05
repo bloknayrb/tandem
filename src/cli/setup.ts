@@ -56,11 +56,11 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   const targets: DetectedTarget[] = [];
 
   // Claude Code — cross-platform.
-  // Detect if the config file exists OR if ~/.claude directory exists
-  // (Claude Code creates ~/.claude at install; mcp_settings.json may not exist yet).
+  // MCP servers are configured in ~/.claude.json under the "mcpServers" key.
+  // Detect if the file exists OR if ~/.claude directory exists (Claude Code is installed).
   // With --force, always include regardless.
-  const claudeCodeConfig = join(home, ".claude", "mcp_settings.json");
-  const claudeCodeDir = dirname(claudeCodeConfig);
+  const claudeCodeConfig = join(home, ".claude.json");
+  const claudeCodeDir = join(home, ".claude");
   if (opts.force || existsSync(claudeCodeConfig) || existsSync(claudeCodeDir)) {
     targets.push({ label: "Claude Code", configPath: claudeCodeConfig });
   }

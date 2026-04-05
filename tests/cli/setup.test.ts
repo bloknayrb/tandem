@@ -33,7 +33,7 @@ describe("applyConfig", () => {
   });
 
   it("creates config file with tandem entries when file does not exist", async () => {
-    const configPath = join(tmpDir, "mcp_settings.json");
+    const configPath = join(tmpDir, ".claude.json");
     const entries = buildMcpEntries("/fake/channel/index.js");
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -45,7 +45,7 @@ describe("applyConfig", () => {
   });
 
   it("creates parent directory if it does not exist", async () => {
-    const configPath = join(tmpDir, "nested", "dir", "mcp_settings.json");
+    const configPath = join(tmpDir, "nested", "dir", ".claude.json");
     const entries = buildMcpEntries("/fake/channel/index.js");
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -53,7 +53,7 @@ describe("applyConfig", () => {
   });
 
   it("merges with existing config without overwriting other servers", async () => {
-    const configPath = join(tmpDir, "mcp_settings.json");
+    const configPath = join(tmpDir, ".claude.json");
     writeFileSync(
       configPath,
       JSON.stringify({ mcpServers: { "my-other-server": { command: "foo" } } }),
@@ -65,8 +65,18 @@ describe("applyConfig", () => {
     expect(written.mcpServers.tandem).toBeDefined();
   });
 
+  it("preserves non-mcpServers keys in .claude.json", async () => {
+    const configPath = join(tmpDir, ".claude.json");
+    writeFileSync(configPath, JSON.stringify({ numStartups: 42, mcpServers: {} }));
+    const entries = buildMcpEntries("/fake/channel/index.js");
+    await applyConfig(configPath, entries);
+    const written = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(written.numStartups).toBe(42);
+    expect(written.mcpServers.tandem).toBeDefined();
+  });
+
   it("overwrites existing tandem entries", async () => {
-    const configPath = join(tmpDir, "mcp_settings.json");
+    const configPath = join(tmpDir, ".claude.json");
     writeFileSync(
       configPath,
       JSON.stringify({
@@ -80,19 +90,17 @@ describe("applyConfig", () => {
   });
 
   it("overwrites malformed JSON with fresh config", async () => {
-    const configPath = join(tmpDir, "mcp_settings.json");
+    const configPath = join(tmpDir, ".claude.json");
     writeFileSync(configPath, "{ this is not json }}}");
     const entries = buildMcpEntries("/fake/channel/index.js");
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toBeDefined();
-    // Malformed JSON should result in only tandem entries (no remnants)
     expect(Object.keys(written)).toEqual(["mcpServers"]);
   });
 
   it("propagates permission errors instead of silently swallowing", async () => {
-    const configPath = join(tmpDir, "mcp_settings.json");
-    // Create a directory where the file should be — readFileSync will throw EISDIR, not ENOENT
+    const configPath = join(tmpDir, ".claude.json");
     mkdirSync(configPath, { recursive: true });
     const entries = buildMcpEntries("/fake/channel/index.js");
     await expect(applyConfig(configPath, entries)).rejects.toThrow();
@@ -110,16 +118,15 @@ describe("detectTargets", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("detects Claude Code when mcp_settings.json exists", async () => {
-    mkdirSync(join(tmpDir, ".claude"), { recursive: true });
-    writeFileSync(join(tmpDir, ".claude", "mcp_settings.json"), "{}");
+  it("detects Claude Code when .claude.json exists", async () => {
+    writeFileSync(join(tmpDir, ".claude.json"), "{}");
     const targets = detectTargets({ homeOverride: tmpDir });
     const cc = targets.find((t) => t.label === "Claude Code");
     expect(cc).toBeDefined();
-    expect(cc!.configPath).toBe(join(tmpDir, ".claude", "mcp_settings.json"));
+    expect(cc!.configPath).toBe(join(tmpDir, ".claude.json"));
   });
 
-  it("detects Claude Code when only ~/.claude directory exists (no mcp_settings.json yet)", async () => {
+  it("detects Claude Code when only ~/.claude directory exists (no .claude.json yet)", async () => {
     mkdirSync(join(tmpDir, ".claude"), { recursive: true });
     const targets = detectTargets({ homeOverride: tmpDir });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
