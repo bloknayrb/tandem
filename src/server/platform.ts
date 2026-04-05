@@ -8,6 +8,9 @@ const paths = envPaths("tandem", { suffix: "" });
 /** Platform-appropriate session storage directory. */
 export const SESSION_DIR = path.join(paths.data, "sessions");
 
+/** Path to the file tracking the last version the user ran. */
+export const LAST_SEEN_VERSION_FILE = path.join(paths.data, "last-seen-version");
+
 /**
  * Kill any process currently listening on the given TCP port.
  * Best-effort — swallows all errors so startup always proceeds.
