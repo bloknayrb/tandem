@@ -123,6 +123,7 @@ export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
       typeof ann === "object" &&
       typeof ann.id === "string" &&
       typeof ann.type === "string" &&
+      typeof ann.status === "string" &&
       ann.range &&
       typeof (ann.range as Record<string, unknown>).from === "number" &&
       typeof (ann.range as Record<string, unknown>).to === "number"

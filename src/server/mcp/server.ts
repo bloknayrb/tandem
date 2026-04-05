@@ -186,7 +186,12 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     "/health",
     apiMiddleware,
     (_req: import("express").Request, res: import("express").Response) => {
-      res.json({ status: "ok" });
+      res.json({
+        status: "ok",
+        version: APP_VERSION,
+        transport: "http",
+        hasSession: currentTransport !== null,
+      });
     },
   );
 
