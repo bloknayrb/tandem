@@ -72,7 +72,21 @@ async function connectAndStream(
 
   // Debounced awareness: only send the latest status after a quiet period
   let awarenessTimer: ReturnType<typeof setTimeout> | null = null;
+  let clearAwarenessTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingAwareness: TandemEvent | null = null;
+  const AWARENESS_CLEAR_MS = 3000; // Reset active state after 3s of no new events
+
+  function clearAwareness(documentId?: string) {
+    fetch(`${tandemUrl}/api/channel-awareness`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        documentId: documentId ?? null,
+        status: "idle",
+        active: false,
+      }),
+    }).catch(() => {});
+  }
 
   function flushAwareness() {
     if (!pendingAwareness) return;
@@ -89,6 +103,10 @@ async function connectAndStream(
     }).catch((err) => {
       console.error("[Channel] Awareness update failed:", err instanceof Error ? err.message : err);
     });
+
+    // Auto-clear after timeout so the indicator doesn't stick
+    if (clearAwarenessTimer) clearTimeout(clearAwarenessTimer);
+    clearAwarenessTimer = setTimeout(() => clearAwareness(event.documentId), AWARENESS_CLEAR_MS);
   }
 
   function scheduleAwareness(event: TandemEvent) {
