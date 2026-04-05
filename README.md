@@ -8,11 +8,14 @@ A collaborative document editor where Claude and a human work on the same docume
 
 ```mermaid
 graph LR
-    Browser["Browser<br/>Tiptap Editor"] <-->|WebSocket| Server["Tandem Server<br/>Node.js"]
-    Server <-->|MCP HTTP| Claude["Claude Code"]
-    Server <-->|File I/O| Files[".md .txt .html .docx"]
-    Server -->|SSE events| Shim["Channel Shim"]
-    Shim -->|push notifications| Claude
+    Browser["Browser · Tiptap Editor"] -- WebSocket --> Server["Tandem Server · Node.js"]
+    Server -- WebSocket --> Browser
+    Server -- MCP HTTP --> Claude["Claude Code"]
+    Claude -- MCP HTTP --> Server
+    Server -- File I/O --> Files[".md .txt .html .docx"]
+    Files -- File I/O --> Server
+    Server -- SSE events --> Shim["Channel Shim"]
+    Shim -- push notifications --> Claude
 ```
 
 ## Getting Started
