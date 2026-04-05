@@ -301,3 +301,17 @@ Initial attempts to filter at the bridge and server levels had no effect because
 3. **Bridge** (`event-bridge.ts`): Drop cleared selections (`isSelectionCleared`), debounce real selections at 1.5s before forwarding to Claude Code.
 
 **Key principle:** When debugging event pipelines, inspect the raw wire format at each layer (SSE stream, bridge input, channel output). Misleading labels can send you on a multi-hour chase — the "User cleared selection" label masked that these were real selections with missing data. Also: channel events that map to high-frequency UI interactions need aggressive debouncing before reaching the LLM.
+
+## 33. Security Audit Patterns
+
+**Problem:** A full security audit uncovered 25 findings across 7 categories — UNC path validation gaps, missing Origin header checks, unsanitized URLs in imported documents, ReDoS via user-supplied regex, DNS rebinding on unprotected endpoints, silent error swallowing in session management, and missing React error boundaries.
+
+**Key findings:**
+- UNC path validation must be applied to *every* user-controlled path parameter, not just the primary file open/save paths. The `backupPath` parameter in `tandem_applyChanges` was missed because it wasn't part of the main file I/O flow.
+- WebSocket Origin header validation must reject *missing* headers, not just *invalid* ones. Connections from `file://` pages or browser extensions don't send Origin.
+- Imported `.docx` content can contain `javascript:` URLs in hyperlinks. Protocol-allowlisting (`http:`, `https:`, `mailto:` only) prevents XSS when Tiptap renders the links.
+- User-supplied regex in `tandem_search` needs both a match count cap and a time-based bailout to prevent catastrophic backtracking from blocking the event loop.
+- Every `catch {}` block (bare catch) is a code smell. Distinguish expected errors (ENOENT) from corruption (SyntaxError) from system errors (EACCES). Session file corruption from a crash during save silently loses all annotations if you just `return null`.
+- A React ErrorBoundary at the app root prevents any rendering error from producing an unrecoverable white screen. Without it, corrupted Y.Map data (realistic after CRDT merges) can crash the entire UI.
+
+**Process:** Run security and error-handling audits in parallel using specialized reviewers. The security reviewer catches attack surfaces; the silent-failure hunter catches error handling that hides bugs or data loss. Together they provide comprehensive coverage.
