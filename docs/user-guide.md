@@ -185,7 +185,7 @@ When all annotations are resolved, a summary overlay appears showing: total revi
 The status bar includes an interruption mode selector with three settings:
 
 - **All** (default) — Show all annotations immediately as they arrive.
-- **Urgent** — Only show flags, questions, and annotations marked as urgent. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
+- **Urgent-only** — Only show flags, questions, and annotations marked as urgent. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
 - **Paused** — Hold all new pending annotations. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
 Use **Paused** during focused writing to avoid interruption. Switch back to **All** when you're ready to review Claude's work.

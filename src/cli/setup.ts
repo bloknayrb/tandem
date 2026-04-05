@@ -97,7 +97,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
  * %TEMP% and %APPDATA% are on different drives.
  */
 async function atomicWrite(content: string, dest: string): Promise<void> {
-  const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.json.tmp`);
+  const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
   await writeFile(tmp, content, "utf-8");
   try {
     await rename(tmp, dest);
@@ -105,7 +105,9 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
     // EXDEV: cross-device link — fall back to copy + delete
     if ((err as NodeJS.ErrnoException).code === "EXDEV") {
       await copyFile(tmp, dest);
-      await unlink(tmp);
+      await unlink(tmp).catch((cleanupErr: Error) => {
+        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
+      });
     } else {
       await unlink(tmp).catch((cleanupErr: Error) => {
         console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
@@ -223,7 +225,7 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
       "\n\x1b[1mReal-time push notifications (optional):\x1b[0m\n" +
         "  To receive chat messages and events instantly (instead of polling),\n" +
         "  start Claude Code with the channel flag:\n\n" +
-        "    claude --channels server:tandem-channel --dangerously-load-development-channels server:tandem-channel\n\n" +
+        "    claude --dangerously-load-development-channels server:tandem-channel\n\n" +
         "  Without this flag, Claude still works but relies on tandem_checkInbox polling.\n",
     );
   }

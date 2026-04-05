@@ -56,7 +56,7 @@ Choose the right type for each finding:
 Check \`interruptionMode\` from \`tandem_status\` or \`tandem_checkInbox\` and adapt:
 
 - **All** (default) — Annotate freely.
-- **Urgent** — Only create \`tandem_flag\` and annotations with \`priority: 'urgent'\`. Continue reading and preparing findings, but hold non-urgent annotations until the mode changes.
+- **Urgent-only** (\`"urgent-only"\`) — Only create \`tandem_flag\` and annotations with \`priority: 'urgent'\`. Continue reading and preparing findings, but hold non-urgent annotations until the mode changes.
 - **Paused** — Hold all new annotations. Keep working (read, outline, prepare) but don't push findings until the mode changes.
 
 ## Collaboration Etiquette
