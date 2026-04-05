@@ -7,6 +7,7 @@ import { openFileByPath, openFileFromContent } from "./file-opener.js";
 import { closeDocumentById } from "./document-service.js";
 import { subscribe as subscribeNotifications } from "../notifications.js";
 import { convertToMarkdown } from "./convert.js";
+import { applyChangesCore } from "./docx-apply.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
@@ -219,6 +220,34 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
       const result = await convertToMarkdown(
         documentId as string | undefined,
         outputPath as string | undefined,
+      );
+      res.json({ data: result });
+    } catch (err: unknown) {
+      sendApiError(res, err);
+    }
+  });
+
+  app.options("/api/apply-changes", apiMiddleware);
+  app.post("/api/apply-changes", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+    const { documentId, author, backupPath } = (req.body ?? {}) as Record<string, unknown>;
+    if (documentId !== undefined && typeof documentId !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
+      return;
+    }
+    if (author !== undefined && typeof author !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "author must be a string" });
+      return;
+    }
+    if (backupPath !== undefined && typeof backupPath !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "backupPath must be a string" });
+      return;
+    }
+
+    try {
+      const result = await applyChangesCore(
+        documentId as string | undefined,
+        author as string | undefined,
+        backupPath as string | undefined,
       );
       res.json({ data: result });
     } catch (err: unknown) {
