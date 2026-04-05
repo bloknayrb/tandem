@@ -181,15 +181,14 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     currentTransport = null;
   });
 
-  // Health endpoint on outer app (bypasses SDK's DNS rebinding middleware)
-  app.get("/health", (_req: import("express").Request, res: import("express").Response) => {
-    res.json({
-      status: "ok",
-      version: APP_VERSION,
-      transport: "http",
-      hasSession: currentTransport !== null,
-    });
-  });
+  // Health endpoint — apiMiddleware protects against DNS rebinding
+  app.get(
+    "/health",
+    apiMiddleware,
+    (_req: import("express").Request, res: import("express").Response) => {
+      res.json({ status: "ok" });
+    },
+  );
 
   // RFC 9728 Protected Resource Metadata — declares no auth required.
   // Newer Claude Code versions probe this before connecting to MCP.
