@@ -89,7 +89,7 @@ These WILL break things if violated:
 ### Files, Sessions & Lifecycle
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save. Sessions persist normally -- the synthetic path is the session key.
 - **Session files at platform-appropriate dir** via `env-paths`: `%LOCALAPPDATA%\tandem\Data\sessions\` on Windows (note `Data` subdir), `~/Library/Application Support/tandem/sessions/` on macOS, `~/.local/share/tandem/sessions/` on Linux. Delete to force fresh load.
-- **Auto-open `sample/welcome.md`** on first run (no restored session). `TANDEM_NO_SAMPLE=1` to disable.
+- **Auto-open `sample/welcome.md`** on first run (no restored session). `TANDEM_NO_SAMPLE=1` to disable. On upgrade (version change detected via `last-seen-version` file in data dir), `CHANGELOG.md` opens as the active tab instead — the welcome tutorial is suppressed since `getOpenDocs().size > 0`.
 - **Word comment offsets need re-anchoring.** `.docx` comment ranges reference the original HTML-converted content. After Y.Doc population, flat text offsets drift from heading prefix insertion. `docx-comments.ts` re-resolves via `anchoredRange()`.
 - **Session auto-restore on startup.** `restoreOpenDocuments()` scans the session directory, reopens all previously-open files, cleans stale sessions (ENOENT handling). `sample/welcome.md` fallback only fires if zero sessions restored.
 - **Exception handler is narrowed, not blanket.** `uncaughtException`/`unhandledRejection` in `index.ts` only swallow known Hocuspocus/ws errors (via `isKnownHocuspocusError` in `error-filter.ts`). Unknown errors log details and call `process.exit(1)`. If the server starts crashing on a new Hocuspocus error pattern, add the pattern to the discriminator.
