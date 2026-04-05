@@ -5,6 +5,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
+import { SKILL_CONTENT } from "./skill-content.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -145,6 +146,18 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
   await atomicWrite(JSON.stringify(updated, null, 2) + "\n", configPath);
 }
 
+/**
+ * Install the Tandem skill to ~/.claude/skills/tandem/SKILL.md.
+ * Claude Code auto-discovers skills in this directory and uses the description
+ * field to trigger them when tandem_* tools are present.
+ */
+export async function installSkill(opts: { homeOverride?: string } = {}): Promise<void> {
+  const home = opts.homeOverride ?? homedir();
+  const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
+  await mkdir(dirname(skillPath), { recursive: true });
+  await atomicWrite(SKILL_CONTENT, skillPath);
+}
+
 /** Run the setup command. Writes MCP config to all detected Claude installs. */
 export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
   console.error("\nTandem Setup\n");
@@ -191,6 +204,17 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
   } else {
     console.error("\nSetup complete! Start Tandem with: tandem");
     console.error("Then in Claude, your tandem_* tools will be available.");
+  }
+
+  // Install Claude Code skill (best-effort — doesn't block MCP setup)
+  console.error("\nInstalling Claude Code skill...");
+  try {
+    await installSkill();
+    console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+  } catch (err) {
+    console.error(
+      `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Channel activation instructions (shown on all successful setups)

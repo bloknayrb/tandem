@@ -13,7 +13,7 @@ npm install -g tandem-editor
 tandem setup
 ```
 
-`tandem setup` auto-detects Claude Code and Claude Desktop:
+`tandem setup` auto-detects Claude Code and Claude Desktop, writes MCP config, and installs a Claude Code skill with workflow guidance:
 ```
 Tandem Setup
 
@@ -23,9 +23,14 @@ Detecting Claude installations...
 Writing MCP configuration...
   ✓ Claude Code
 
+Installing Claude Code skill...
+  ✓ ~/.claude/skills/tandem/SKILL.md
+
 Setup complete! Start Tandem with: tandem
 Then in Claude, your tandem_* tools will be available.
 ```
+
+The skill teaches Claude how to use Tandem's 28 MCP tools effectively — workflow patterns, annotation strategy, interruption mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
 Start Tandem from any directory:
 ```bash
@@ -46,7 +51,7 @@ Then try:
 
 Claude connects to the running Tandem server, opens the document, and begins reviewing. With the channel active, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
 
-**After upgrading:**
+**After upgrading** (re-run setup to update the skill and MCP paths):
 ```bash
 npm update -g tandem-editor
 tandem setup    # re-writes MCP config with new paths
