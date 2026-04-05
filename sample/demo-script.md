@@ -1,23 +1,23 @@
 # Tandem Demo Script
 
-Tandem is an open-source document editor that extends Claude Code into document review. Claude doesn't just read your files — it highlights, comments, suggests edits, and chats with you about the content, all in real time.
+This is a live recording. The document you're reading is the actual script for this demo — Claude is reviewing it right now in the side panel.
 
-## What You're Watching
+## Highlight This
 
-This is a live recording of Tandem in action. The document you see here is the actual script for this demo — Claude is reviewing it right now in the side panel.
+This sentence will be highlighted by Claude to show how Tandem marks up passages worth noting. A green highlight appears in the sidebar, and you can click it to jump to the relevant text.
 
-## The Setup
+## Comment on This
 
-Tandem runs as a local server alongside Claude Code. Your Claude session already knows your codebase, your style, your domain. Tandem gives it a place to review your documents with that same context.
+This paragraph is about to receive a comment. Claude will leave a question or observation here, the way a colleague might flag something during a document review. You'll see it appear in the annotations panel.
 
-Annotations appear in three flavors: highlights for things worth noting, comments for questions or feedback, and suggestions for concrete edits that you can accept or dismiss with one click.
+## Suggest an Edit Here
 
-## Why This Matters
+Most AI writing tools start from scratch — no memory, no project context, no history. Claude is about to suggest a tighter version of that line.
 
-Most AI writing tools start from scratch — no memory, no project context, no history. Tandem is different. It connects to the Claude Code session you're already using, so the reviewer actually understands what you're working on.
+## Accept the Suggestion
 
-Think of it like handing a draft to a colleague who sat in on every standup and read every PR. That's what document review should feel like.
+When the suggestion above appears, click the accept button in the side panel. The text changes live in the document — no copy-paste, no switching windows.
 
-## Get Involved
+## Chat About This
 
-Tandem is free and open source. Install it with `npx tandem-editor` and connect it to Claude Code. Your documents, your context, your review.
+This closing line could be stronger, but that's what the chat is for. Select this text, open the chat panel, and ask Claude to improve it. When Claude responds, ask it to implement the change — it'll create a new suggestion right here, and you can accept that too. Review, discuss, revise, all in one place.
