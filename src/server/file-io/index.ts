@@ -82,3 +82,13 @@ export async function atomicWrite(filePath: string, content: string): Promise<vo
   await fs.writeFile(tempPath, content, "utf-8");
   await fs.rename(tempPath, filePath);
 }
+
+/**
+ * Atomic binary file write: write Buffer to a temp file, then rename.
+ * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
+ */
+export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
+  const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
+  await fs.writeFile(tempPath, content);
+  await fs.rename(tempPath, filePath);
+}
