@@ -134,7 +134,11 @@ function notifyStreamHandler(req: Request, res: Response): void {
   const keepalive = setInterval(() => {
     try {
       if (!res.writableEnded) res.write(": keepalive\n\n");
-    } catch {
+    } catch (err) {
+      console.error(
+        "[NotifyStream] Keepalive write failed, cleaning up:",
+        err instanceof Error ? err.message : err,
+      );
       cleanup();
     }
   }, CHANNEL_SSE_KEEPALIVE_MS);
