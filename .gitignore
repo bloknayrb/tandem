@@ -12,5 +12,6 @@ gha-creds-*.json
 .agents/
 .claude/worktrees/
 .claude/settings.local.json
+.superpowers/
 skills-lock.json
 test-results/
