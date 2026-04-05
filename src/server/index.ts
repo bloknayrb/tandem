@@ -197,13 +197,19 @@ async function main() {
       );
       try {
         await openFileByPath(samplePath);
-        const doc = getOrCreateDocument(docIdFromPath(samplePath));
-        injectTutorialAnnotations(doc);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           console.error("[Tandem] Sample file not found (skipping):", samplePath);
         } else {
           console.error("[Tandem] Failed to auto-open sample document:", err);
+        }
+      }
+      if (getOpenDocs().size > 0) {
+        try {
+          const doc = getOrCreateDocument(docIdFromPath(samplePath));
+          injectTutorialAnnotations(doc);
+        } catch (err) {
+          console.error("[Tandem] Failed to inject tutorial annotations:", err);
         }
       }
     }

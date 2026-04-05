@@ -327,3 +327,11 @@ Initial attempts to filter at the bridge and server levels had no effect because
 **Key insight:** When multiple subsystems hold references to a Y.Doc (server event queue, client React hooks, ProseMirror extensions), destroying the doc creates a coordination problem that no amount of lifecycle management can reliably solve. Clearing in-place eliminates the problem entirely. See the observer ownership table in [architecture.md](architecture.md) for the full list of who observes what.
 
 **Diagnostic pattern:** If the sidebar shows "No annotations" but inline decorations render, the React Y.Map observer is attached to a stale Y.Doc. Check whether the Y.Doc instance was replaced without the observer effect re-firing.
+
+## 32. Startup Document Opens Must Precede Server Bind
+
+**Problem:** After upgrading Tandem, the CHANGELOG.md tab opened in the browser but then disappeared. The version check and changelog open ran *after* `Promise.all([startMcpServerHttp, startHocuspocus])`, but the browser auto-opens when MCP binds (inside that Promise.all). A stale browser tab from the previous version reconnecting could CRDT-merge its old `openDocuments` list — which lacked the changelog — and win the Y.Map conflict resolution, removing the tab.
+
+**Fix:** Move the version check + changelog open (and the `sample/welcome.md` fallback) to before `Promise.all`, after `restoreOpenDocuments()` and `waitForPort()`. These operations only need the filesystem and in-memory Y.Docs — no server required. By the time any client connects, the Y.Doc state is fully settled.
+
+**Key insight:** Any document that should appear on startup must be opened before Hocuspocus binds. The browser auto-open and stale tab reconnection both create races where clients can receive (and merge back) incomplete `openDocuments` lists. The general rule: settle all Y.Doc state before accepting WebSocket connections.
