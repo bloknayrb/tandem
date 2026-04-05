@@ -16,7 +16,8 @@ import {
   restoreOpenDocuments,
   writeGenerationId,
 } from "./mcp/document.js";
-import { freePort, waitForPort } from "./platform.js";
+import { freePort, waitForPort, LAST_SEEN_VERSION_FILE } from "./platform.js";
+import { checkVersionChange } from "./version-check.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
   attachCtrlObservers,
@@ -176,6 +177,21 @@ async function main() {
       }),
     ]);
     httpServer = srv;
+
+    // Open CHANGELOG.md as active tab on first startup after an update
+    try {
+      const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
+      if (versionStatus === "upgraded") {
+        const changelogPath = path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../CHANGELOG.md",
+        );
+        await openFileByPath(changelogPath);
+        console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
+      }
+    } catch (err) {
+      console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
+    }
 
     // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session)
     if (getOpenDocs().size === 0 && !process.env.TANDEM_NO_SAMPLE) {
