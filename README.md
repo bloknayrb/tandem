@@ -94,27 +94,27 @@ Tandem uses two MCP connections: **HTTP** for document tools (28 tools including
 
 Both entries are cross-platform -- no platform-specific configuration needed.
 
-### Chat via Tandem (Recommended)
+### Real-Time Push Notifications (Recommended)
 
-To have Claude monitor the Tandem chat panel and respond to your messages automatically, use the `/loop` skill in Claude Code:
-
-```
-/loop 30s check tandem inbox and respond to any new messages
-```
-
-This polls every 30 seconds, creating a chat-like experience where you type in the Tandem UI and Claude responds through it. Token cost is minimal when there are no new messages.
-
-### Real-Time Push Notifications (Experimental)
-
-Tandem includes a channel shim for Claude Code's experimental Channels API, which would deliver events instantly without polling. To activate it:
+Tandem includes a channel shim that pushes events (chat messages, annotation actions, text selections) to Claude Code instantly. Start Claude Code with the channel flag:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Note:** The `--dangerously-load-development-channels` flag both activates the channel and loads it — no separate `--channels` flag is needed. This flag is required until Tandem is added to the official channel allowlist.
+Chat messages, annotation creates/accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is required until Tandem is added to the official channel allowlist.
 
 **Important:** The server must be running before Claude Code connects.
+
+### Polling Fallback
+
+If channels aren't available, use the `/loop` skill in Claude Code to poll for messages:
+
+```
+/loop 30s check tandem inbox and respond to any new messages
+```
+
+This polls every 30 seconds. Token cost is minimal when there are no new messages.
 
 ## Environment Variables
 
