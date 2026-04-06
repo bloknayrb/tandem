@@ -446,6 +446,10 @@ export default function App() {
         {/* Resize handle */}
         <div
           data-testid="panel-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel"
+          tabIndex={0}
           onMouseDown={handleResizeStart}
           style={{
             width: "4px",

@@ -465,6 +465,18 @@ export function SidePanel({
               </span>
             )}
           </h3>
+          <span
+            aria-live="polite"
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              overflow: "hidden",
+              clip: "rect(0,0,0,0)",
+            }}
+          >
+            {allPending.length} pending annotation{allPending.length !== 1 ? "s" : ""}
+          </span>
           {allPending.length > 0 && (
             <button
               data-testid="review-mode-btn"
@@ -672,15 +684,17 @@ export function SidePanel({
                 <summary style={{ fontSize: "12px", color: "#9ca3af", cursor: "pointer" }}>
                   {resolved.length} resolved
                 </summary>
-                {resolved.map((ann) => (
-                  <AnnotationCard
-                    key={ann.id}
-                    annotation={ann}
-                    onUndo={handleUndo}
-                    undoable={recentlyResolved.has(ann.id)}
-                    onClick={() => scrollToAnnotation(ann)}
-                  />
-                ))}
+                <div role="list" aria-label="Resolved annotations">
+                  {resolved.map((ann) => (
+                    <AnnotationCard
+                      key={ann.id}
+                      annotation={ann}
+                      onUndo={handleUndo}
+                      undoable={recentlyResolved.has(ann.id)}
+                      onClick={() => scrollToAnnotation(ann)}
+                    />
+                  ))}
+                </div>
               </details>
             )}
           </>
