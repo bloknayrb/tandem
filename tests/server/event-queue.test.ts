@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
+  attachCtrlObservers,
   attachObservers,
   detachObservers,
   MCP_ORIGIN,
+  reattachObservers,
   replaySince,
   resetForTesting,
   subscribe,
@@ -14,6 +16,7 @@ import type { TandemEvent } from "../../src/server/events/types.js";
 import {
   CHANNEL_EVENT_BUFFER_SIZE,
   Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 
@@ -157,14 +160,33 @@ describe("origin filtering", () => {
 
 describe("buffer eviction and replaySince", () => {
   it("buffer is capped at CHANNEL_EVENT_BUFFER_SIZE", () => {
-    const { cleanup } = collectEvents();
+    const { events, cleanup } = collectEvents();
+    const doc = new Y.Doc();
+    attachObservers("cap-doc", doc);
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
-    // Push more than buffer size
-    for (let i = 0; i < CHANNEL_EVENT_BUFFER_SIZE + 50; i++) {
-      // Trigger via direct subscriber — we need to push events through the queue
-      // Since we can't call pushEvent directly, use Y.Map observer path
+    const total = CHANNEL_EVENT_BUFFER_SIZE + 50;
+    for (let i = 0; i < total; i++) {
+      map.set(`ann_cap_${i}`, {
+        id: `ann_cap_${i}`,
+        type: "comment",
+        author: "user",
+        content: `cap ${i}`,
+        status: "pending",
+        textSnapshot: `text ${i}`,
+        range: { from: 0, to: 5 },
+      });
     }
 
+    // All events were delivered to the subscriber
+    expect(events).toHaveLength(total);
+
+    // But replaySince (which reads from the capped buffer) should be at most CHANNEL_EVENT_BUFFER_SIZE
+    const replayed = replaySince("nonexistent");
+    expect(replayed.length).toBeLessThanOrEqual(CHANNEL_EVENT_BUFFER_SIZE);
+
+    detachObservers("cap-doc");
+    doc.destroy();
     cleanup();
   });
 
@@ -416,6 +438,208 @@ describe("selection event filtering", () => {
     }, MCP_ORIGIN);
 
     expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
+    cleanup();
+  });
+});
+
+// --- reattachObservers (doc swap on Hocuspocus onLoadDocument) ---
+
+describe("reattachObservers", () => {
+  it("stops emitting events from the old doc and starts emitting from the new one", () => {
+    const { events, cleanup } = collectEvents();
+
+    const oldDoc = new Y.Doc();
+    attachObservers("swap-doc", oldDoc);
+
+    // Write to old doc — should emit
+    const oldMap = oldDoc.getMap(Y_MAP_ANNOTATIONS);
+    oldMap.set("ann_old", {
+      id: "ann_old",
+      type: "comment",
+      author: "user",
+      content: "from old doc",
+      status: "pending",
+      textSnapshot: "old text",
+      range: { from: 0, to: 5 },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("annotation:created");
+
+    // Simulate Hocuspocus doc swap: reattach to a new doc
+    const newDoc = new Y.Doc();
+    reattachObservers("swap-doc", newDoc);
+
+    // Write to old doc — should NOT emit (observers detached)
+    oldMap.set("ann_old_2", {
+      id: "ann_old_2",
+      type: "comment",
+      author: "user",
+      content: "stale write",
+      status: "pending",
+      textSnapshot: "stale",
+      range: { from: 0, to: 5 },
+    });
+    expect(events).toHaveLength(1); // Still 1 — old doc write was ignored
+
+    // Write to new doc — should emit
+    const newMap = newDoc.getMap(Y_MAP_ANNOTATIONS);
+    newMap.set("ann_new", {
+      id: "ann_new",
+      type: "comment",
+      author: "user",
+      content: "from new doc",
+      status: "pending",
+      textSnapshot: "new text",
+      range: { from: 0, to: 5 },
+    });
+    expect(events).toHaveLength(2);
+    expect(events[1].payload.annotationId).toBe("ann_new");
+
+    detachObservers("swap-doc");
+    oldDoc.destroy();
+    newDoc.destroy();
+    cleanup();
+  });
+
+  it("preserves the documentId in events emitted from the new doc", () => {
+    const { events, cleanup } = collectEvents();
+
+    const doc1 = new Y.Doc();
+    attachObservers("my-room", doc1);
+
+    const doc2 = new Y.Doc();
+    reattachObservers("my-room", doc2);
+
+    const map = doc2.getMap(Y_MAP_ANNOTATIONS);
+    map.set("ann_room", {
+      id: "ann_room",
+      type: "comment",
+      author: "user",
+      content: "room test",
+      status: "pending",
+      textSnapshot: "room",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].documentId).toBe("my-room");
+
+    detachObservers("my-room");
+    doc1.destroy();
+    doc2.destroy();
+    cleanup();
+  });
+
+  it("is idempotent — reattaching to the same doc twice does not duplicate events", () => {
+    const { events, cleanup } = collectEvents();
+
+    const doc = new Y.Doc();
+    attachObservers("idempotent-doc", doc);
+    reattachObservers("idempotent-doc", doc);
+    reattachObservers("idempotent-doc", doc);
+
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    map.set("ann_idem", {
+      id: "ann_idem",
+      type: "comment",
+      author: "user",
+      content: "once only",
+      status: "pending",
+      textSnapshot: "idem",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(1);
+
+    detachObservers("idempotent-doc");
+    doc.destroy();
+    cleanup();
+  });
+});
+
+// --- attachCtrlObservers (CTRL_ROOM chat observer) ---
+// attachCtrlObservers calls getOrCreateDocument(CTRL_ROOM) internally.
+// We mock the provider module at the top level (vi.mock is hoisted) and use
+// a module-scoped variable that beforeEach can reassign before each test.
+
+let _ctrlTestDoc: Y.Doc = new Y.Doc();
+
+vi.mock("../../src/server/yjs/provider.js", () => ({
+  getOrCreateDocument: () => _ctrlTestDoc,
+}));
+
+vi.mock("../../src/server/mcp/document-service.js", () => ({
+  getOpenDocs: () => new Map(),
+}));
+
+describe("attachCtrlObservers (CTRL_ROOM)", () => {
+  beforeEach(() => {
+    _ctrlTestDoc = new Y.Doc();
+  });
+
+  afterEach(() => {
+    _ctrlTestDoc.destroy();
+  });
+
+  it("emits chat:message for user-authored chat messages", () => {
+    const { events, cleanup } = collectEvents();
+
+    attachCtrlObservers();
+
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_1", {
+      id: "msg_1",
+      author: "user",
+      text: "Hello from the user",
+      timestamp: Date.now(),
+      documentId: "some-doc",
+    });
+
+    const chatEvents = events.filter((e) => e.type === "chat:message");
+    expect(chatEvents).toHaveLength(1);
+    expect(chatEvents[0].payload.text).toBe("Hello from the user");
+    expect(chatEvents[0].payload.messageId).toBe("msg_1");
+
+    cleanup();
+  });
+
+  it("ignores MCP-origin chat writes", () => {
+    const { events, cleanup } = collectEvents();
+
+    attachCtrlObservers();
+
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    _ctrlTestDoc.transact(() => {
+      chatMap.set("msg_mcp", {
+        id: "msg_mcp",
+        author: "claude",
+        text: "Claude reply",
+        timestamp: Date.now(),
+        documentId: "some-doc",
+      });
+    }, MCP_ORIGIN);
+
+    expect(events.filter((e) => e.type === "chat:message")).toHaveLength(0);
+
+    cleanup();
+  });
+
+  it("ignores non-user-authored chat messages", () => {
+    const { events, cleanup } = collectEvents();
+
+    attachCtrlObservers();
+
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_claude", {
+      id: "msg_claude",
+      author: "claude",
+      text: "Claude speaking",
+      timestamp: Date.now(),
+      documentId: "some-doc",
+    });
+
+    expect(events.filter((e) => e.type === "chat:message")).toHaveLength(0);
+
     cleanup();
   });
 });

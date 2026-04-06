@@ -92,6 +92,12 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
         const update = Y.encodeStateAsUpdate(existing);
         Y.applyUpdate(document, update);
         existing.destroy();
+        if (!onDocSwapped) {
+          console.error(
+            `[Tandem] WARN: onDocSwapped callback not registered during doc swap for ${documentName}. ` +
+              `Server-side observers will be attached to a stale Y.Doc. Call setDocLifecycleCallbacks() before starting Hocuspocus.`,
+          );
+        }
         console.error(`[Hocuspocus] Merged pre-existing content into document: ${documentName}`);
       }
 
