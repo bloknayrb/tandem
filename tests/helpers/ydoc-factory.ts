@@ -4,7 +4,6 @@ import { populateYDoc } from "../../src/server/mcp/document.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import type { Annotation } from "../../src/shared/types.js";
-import type { FlatOffset } from "../../src/shared/positions/types.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 
 /** Create a Y.Doc populated with text content */
