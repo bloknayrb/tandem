@@ -1,22 +1,27 @@
 import React from "react";
 
-export function ToolbarButton({
-  label,
-  shortcut,
-  disabled,
-  active,
-  onMouseDown,
-  onClick,
-  style,
-}: {
-  label: string;
+type ToolbarButtonProps = (
+  | { label: string; ariaLabel?: string }
+  | { label: React.ReactNode; ariaLabel: string }
+) & {
   shortcut?: string;
   disabled?: boolean;
   active?: boolean;
   onMouseDown?: (e: React.MouseEvent) => void;
   onClick?: () => void;
   style?: React.CSSProperties;
-}) {
+};
+
+export function ToolbarButton({
+  label,
+  ariaLabel,
+  shortcut,
+  disabled,
+  active,
+  onMouseDown,
+  onClick,
+  style,
+}: ToolbarButtonProps) {
   let border = "1px solid #e5e7eb";
   let background = "#fff";
   let color = "#374151";
@@ -30,11 +35,15 @@ export function ToolbarButton({
     color = "#4338ca";
   }
 
+  const ariaLabelValue = ariaLabel ?? (typeof label === "string" ? label : undefined);
+  const titleText = ariaLabelValue ?? "";
+
   return (
     <button
       type="button"
       disabled={disabled}
-      title={shortcut ? `${label} (${shortcut})` : label}
+      title={shortcut ? `${titleText} (${shortcut})` : titleText}
+      aria-label={ariaLabelValue}
       onMouseDown={onMouseDown}
       onClick={onClick}
       style={{
