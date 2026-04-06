@@ -5,6 +5,14 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-04-06
+
+### Added
+
+- Undo/redo toolbar buttons powered by Y.js UndoManager — tracks document edits with proper CRDT-aware undo scoping (#189, #210)
+- Adjustable editor content width toggle — switch between comfortable and full-width layouts, preference persists in localStorage (#185, #205)
+- SVG icons for unordered list, ordered list, and blockquote toolbar buttons, replacing plain text labels (#194)
+
 ## [0.2.11] - 2026-04-06
 
 ### Added
