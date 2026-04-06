@@ -5,6 +5,25 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-04-06
+
+### Added
+
+- Auto-reload documents when files change on disk — Tandem detects external edits (e.g., Claude's Edit tool) via `fs.watch`, reloads content, and preserves existing annotations (#175)
+- File watcher module with 500ms debounce and self-write suppression (prevents reload loops when Tandem saves)
+- Toast notification when a document is reloaded from disk
+- Runtime warning when `onDocSwapped` callback is missing during Hocuspocus doc swap (defensive guard for #178 audit)
+- 28 new tests: observer reattachment, CTRL_ROOM lifecycle, buffer cap, file watcher debounce/suppress, annotation-preserving reload
+
+### Fixed
+
+- Dead CRDT `relRange` handling — `refreshRange` now strips broken CRDT anchors and re-anchors from flat offsets instead of leaving annotations permanently stuck with non-functional RelativePositions (#175)
+- Buffer cap test was previously a no-op (empty loop body) — now actually exercises the event queue buffer (#178)
+
+### Changed
+
+- CLAUDE.md gotcha for Hocuspocus doc replacement updated to document the automatic `onDocSwapped` callback lifecycle (#178)
+
 ## [0.2.10] - 2026-04-05
 
 ### Added

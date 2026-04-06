@@ -30,19 +30,26 @@ Implemented via unified/remark with MDAST↔Y.Doc conversion:
 - **Opt-in lossy save:** For users who explicitly request it, save as .docx with pre-flight warnings about formatting loss.
 - **Known limitations:** Complex tables, tracked changes, footnotes, headers/footers, custom styles do not survive round-trip.
 
-### 5c: File change detection
+### 5c: File change detection — PARTIAL (v0.2.11, PR #184)
 
-- `fs.watch()` on source files while open in Tandem
-- On external change: three-way merge (original snapshot, external change, Tandem edits)
-- For .md/.txt: text-based merge via `diff3` library
-- For .docx: section-level merge using headings as boundaries
-- Conflict UI: show both versions side-by-side, user picks or merges
-- Flag annotations on externally-changed text: "The text this annotation referred to has been modified outside Tandem"
+**Implemented:**
+- `fs.watch()` on source `.md`/`.txt`/`.html` files while open in Tandem
+- On external change: auto-reload content, preserve annotations via CRDT re-anchoring + textSnapshot relocation
+- Self-write suppression prevents reload loops when Tandem saves
+- Toast notification on reload
+- Dead `relRange` recovery in `refreshRange` (strips broken CRDT anchors, re-anchors from flat offsets)
+
+**Not yet implemented:**
+- Three-way merge (original snapshot, external change, Tandem edits)
+- Conflict UI: show both versions side-by-side
+- Dirty-document guard (if user has unsaved Tandem edits when external change occurs)
+- `.docx` auto-reload (binary format, `fs.watch` unreliable)
+- Flag annotations on externally-changed text
 
 ### Verification
 - Open a .md file, edit in Tandem, save, reopen — content preserved exactly
 - Open a .docx file — content appears, annotations work, original .docx unchanged
-- Edit a file externally while open in Tandem — merge dialog appears
+- Edit a .md file externally while open in Tandem — content updates, annotations preserved, toast appears
 
 ---
 

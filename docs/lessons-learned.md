@@ -328,10 +328,26 @@ Initial attempts to filter at the bridge and server levels had no effect because
 
 **Diagnostic pattern:** If the sidebar shows "No annotations" but inline decorations render, the React Y.Map observer is attached to a stale Y.Doc. Check whether the Y.Doc instance was replaced without the observer effect re-firing.
 
-## 32. Startup Document Opens Must Precede Server Bind
+## 35. Startup Document Opens Must Precede Server Bind
 
 **Problem:** After upgrading Tandem, the CHANGELOG.md tab opened in the browser but then disappeared. The version check and changelog open ran *after* `Promise.all([startMcpServerHttp, startHocuspocus])`, but the browser auto-opens when MCP binds (inside that Promise.all). A stale browser tab from the previous version reconnecting could CRDT-merge its old `openDocuments` list — which lacked the changelog — and win the Y.Map conflict resolution, removing the tab.
 
 **Fix:** Move the version check + changelog open (and the `sample/welcome.md` fallback) to before `Promise.all`, after `restoreOpenDocuments()` and `waitForPort()`. These operations only need the filesystem and in-memory Y.Docs — no server required. By the time any client connects, the Y.Doc state is fully settled.
 
 **Key insight:** Any document that should appear on startup must be opened before Hocuspocus binds. The browser auto-open and stale tab reconnection both create races where clients can receive (and merge back) incomplete `openDocuments` lists. The general rule: settle all Y.Doc state before accepting WebSocket connections.
+
+## 36. Dead CRDT RelativePositions Must Be Stripped, Not Preserved
+
+**Problem:** After `reloadFromDisk` replaces Y.Doc content, all CRDT items are new. Old `relRange` RelativePositions reference deleted items. `refreshRange` tried `relPosToFlatOffset` → got null → returned the annotation unchanged with the dead `relRange` still set. The lazy re-attachment path (which creates new relRange from flat offsets) only fires when `relRange` is absent, so annotations were permanently stuck with non-functional CRDT anchors.
+
+**Fix:** When `relPosToFlatOffset` returns null for either endpoint, strip the dead `relRange` and attempt re-anchoring from flat offsets via `flatOffsetToRelPos`. If that also fails, delete `relRange` entirely so the lazy path can recover on the next call.
+
+**Key insight:** A dead `relRange` is worse than no `relRange`. The lazy attachment path is the recovery mechanism, but it only fires when the field is falsy. Preserving a non-functional reference blocks recovery. The general pattern: when a cached/derived value becomes invalid, delete it rather than keeping it around — stale data that prevents self-healing is the worst kind.
+
+## 37. File Watcher Self-Write Suppression Must Check at Event Arrival
+
+**Problem:** When Tandem saves a file (`tandem_save`), it calls `suppressNextChange(filePath)` to prevent the file watcher from triggering a reload loop. The initial implementation checked the suppress flag inside the debounce timer callback (500ms later). If another external edit arrived within that window, the debounce timer would reset, and the suppress flag would be consumed by the wrong event — silently swallowing the external change.
+
+**Fix:** Check and clear the suppress flag at event arrival time (inside the `fs.watch` callback), before starting the debounce timer. This ensures the suppress only affects the immediate event batch from the self-write, not a later external edit that happens to arrive within the debounce window.
+
+**Key insight:** Debounce and suppression are independent concerns. Suppression answers "should I ignore this event?" — that's an arrival-time decision. Debounce answers "should I wait for more events before acting?" — that's a delivery-time decision. Mixing them (checking suppress at delivery time) creates a race where the suppress can consume the wrong event.

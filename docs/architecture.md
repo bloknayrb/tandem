@@ -511,6 +511,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`), `api-routes.ts` (REST API: `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
+- `file-watcher.ts` -- File change detection: `fs.watch` wrapper with 500ms debounce, self-write suppression (`suppressNextChange`), per-path watcher lifecycle (`watchFile`/`unwatchFile`/`unwatchAll`)
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
 - `file-io/docx-walker.ts` -- Shared offset-tracking walker for document.xml (used by comment extraction and suggestion apply)
 - `file-io/docx-apply.ts` -- Core logic for applying suggestions as tracked changes via JSZip XML manipulation

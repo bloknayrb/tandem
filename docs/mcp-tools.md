@@ -92,7 +92,8 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 - Supported formats: `.md`, `.txt`, `.html`, `.docx` (review-only).
 - Browser opens automatically to `http://localhost:3479` on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
-- Pass `force: true` to reload from disk when the file changed externally (git pull, external editor). Clears annotations and session. Returns `forceReloaded: true`.
+- **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the browser.
+- Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
 
