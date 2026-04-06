@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undo/redo toolbar buttons powered by Y.js UndoManager — tracks document edits with proper CRDT-aware undo scoping (#189, #210)
 - Adjustable editor content width toggle — switch between comfortable and full-width layouts, preference persists in localStorage (#185, #205)
 - SVG icons for unordered list, ordered list, and blockquote toolbar buttons, replacing plain text labels (#194)
+- Automated npm publishing via GitHub Actions with OIDC trusted publisher (tokenless)
+
+### Fixed
+
+- Guard all localStorage access with try-catch for private/disabled browser storage modes; reset scroll position on annotation filter clear (#212, #202)
 
 ## [0.2.11] - 2026-04-06
 
