@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
+import { yUndoPluginKey } from "y-prosemirror";
 import { ToolbarButton } from "./ToolbarButton";
 
 const BulletListIcon = (
@@ -67,6 +68,58 @@ const BlockquoteIcon = (
   </svg>
 );
 
+const UndoIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M4 7L1 4l3-3"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M1 4h9a5 5 0 0 1 0 10H7"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const RedoIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M12 7l3-3-3-3"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M15 4H6a5 5 0 0 0 0 10h3"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 interface FormattingToolbarProps {
   editor: TiptapEditor | null;
   disabled?: boolean;
@@ -97,14 +150,7 @@ function withPreventDefault(command: () => void): (e: React.MouseEvent) => void 
   };
 }
 
-/**
- * Rich text formatting buttons that drive Tiptap's StarterKit extensions.
- *
- * Undo/Redo are omitted: the Collaboration extension disables Tiptap's built-in
- * history, and integrating Y.js UndoManager requires adding
- * @tiptap/extension-collaboration-history or manual wiring. Deferred to a
- * follow-up issue.
- */
+/** Rich text formatting buttons that drive Tiptap's StarterKit extensions. */
 export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) {
   // Tiptap's isActive() reads editor state imperatively and doesn't trigger React
   // re-renders on its own, so we force a re-render on every transaction.
@@ -139,6 +185,10 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
   const isEditable = editor.isEditable;
   const isDisabled = !isEditable || !!disabled;
 
+  const undoState = yUndoPluginKey.getState(editor.state);
+  const canUndo = !isDisabled && (undoState?.undoManager?.undoStack.length ?? 0) > 0;
+  const canRedo = !isDisabled && (undoState?.undoManager?.redoStack.length ?? 0) > 0;
+
   const activeHeading: HeadingLevel | null = findActiveHeading(editor);
 
   function handleHeadingToggle(level: HeadingLevel) {
@@ -154,6 +204,23 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+      <ToolbarButton
+        label={UndoIcon}
+        ariaLabel="Undo"
+        shortcut="Ctrl+Z"
+        disabled={!canUndo}
+        onMouseDown={withPreventDefault(() => editor.commands.undo())}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
+      />
+      <ToolbarButton
+        label={RedoIcon}
+        ariaLabel="Redo"
+        shortcut="Ctrl+Shift+Z"
+        disabled={!canRedo}
+        onMouseDown={withPreventDefault(() => editor.commands.redo())}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
+      />
+      <div style={{ width: "1px", height: "16px", background: "#e5e7eb", margin: "0 2px" }} />
       <ToolbarButton
         label="B"
         shortcut="Ctrl+B"
