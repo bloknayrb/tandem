@@ -2,6 +2,71 @@ import React, { useState, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { ToolbarButton } from "./ToolbarButton";
 
+const BulletListIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <circle cx="2" cy="4" r="1.5" fill="currentColor" />
+    <circle cx="2" cy="8" r="1.5" fill="currentColor" />
+    <circle cx="2" cy="12" r="1.5" fill="currentColor" />
+    <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
+    <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
+    <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
+  </svg>
+);
+
+const OrderedListIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
+    <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
+    <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
+    <text x="0" y="5.5" fontSize="4.5" fill="currentColor" fontFamily="monospace" fontWeight="bold">
+      1.
+    </text>
+    <text x="0" y="9.5" fontSize="4.5" fill="currentColor" fontFamily="monospace" fontWeight="bold">
+      2.
+    </text>
+    <text
+      x="0"
+      y="13.5"
+      fontSize="4.5"
+      fill="currentColor"
+      fontFamily="monospace"
+      fontWeight="bold"
+    >
+      3.
+    </text>
+  </svg>
+);
+
+const BlockquoteIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <rect x="0" y="2" width="3" height="12" rx="1.5" fill="currentColor" />
+    <rect x="5" y="4" width="9" height="2" rx="1" fill="currentColor" opacity="0.7" />
+    <rect x="5" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7" />
+    <rect x="5" y="12" width="8" height="2" rx="1" fill="currentColor" opacity="0.7" />
+  </svg>
+);
+
 interface FormattingToolbarProps {
   editor: TiptapEditor | null;
   disabled?: boolean;
@@ -41,7 +106,7 @@ function withPreventDefault(command: () => void): (e: React.MouseEvent) => void 
  * follow-up issue.
  */
 export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) {
-  // Force re-render on editor transaction so active states stay current
+  // Tiptap's isActive() reads editor state imperatively and doesn't trigger React re-renders on its own
   const [, setTick] = useState(0);
   const [showHeadingMenu, setShowHeadingMenu] = useState(false);
   const headingMenuRef = useRef<HTMLDivElement>(null);
@@ -57,7 +122,6 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
     };
   }, [editor]);
 
-  // Close heading menu on outside click
   useEffect(() => {
     if (!showHeadingMenu) return;
     function handleClickOutside(e: MouseEvent) {
@@ -189,28 +253,31 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
       <div style={{ width: "1px", height: "16px", background: "#e5e7eb", margin: "0 2px" }} />
 
       <ToolbarButton
-        label="UL"
+        label={BulletListIcon}
+        ariaLabel="Bullet list"
         shortcut="Ctrl+Shift+8"
         disabled={isDisabled}
         active={editor.isActive("bulletList")}
         onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBulletList().run())}
-        style={{ minWidth: "30px" }}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
       />
       <ToolbarButton
-        label="OL"
+        label={OrderedListIcon}
+        ariaLabel="Ordered list"
         shortcut="Ctrl+Shift+7"
         disabled={isDisabled}
         active={editor.isActive("orderedList")}
         onMouseDown={withPreventDefault(() => editor.chain().focus().toggleOrderedList().run())}
-        style={{ minWidth: "30px" }}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
       />
       <ToolbarButton
-        label="BQ"
+        label={BlockquoteIcon}
+        ariaLabel="Blockquote"
         shortcut="Ctrl+Shift+B"
         disabled={isDisabled}
         active={editor.isActive("blockquote")}
         onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBlockquote().run())}
-        style={{ minWidth: "30px" }}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
       />
     </div>
   );
