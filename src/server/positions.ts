@@ -294,6 +294,12 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
   const newFrom = relPosToFlatOffset(ydoc, ann.relRange.fromRel);
   const newTo = relPosToFlatOffset(ydoc, ann.relRange.toRel);
   if (newFrom === null || newTo === null) {
+    if (newFrom !== null || newTo !== null) {
+      console.error(
+        `[positions] refreshRange: partial CRDT resolution for ${ann.id} ` +
+          `(from: ${newFrom !== null ? "ok" : "dead"}, to: ${newTo !== null ? "ok" : "dead"})`,
+      );
+    }
     // CRDT resolution failed (items deleted after content replacement).
     // Strip the dead relRange and attempt re-anchoring from flat offsets.
     const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);

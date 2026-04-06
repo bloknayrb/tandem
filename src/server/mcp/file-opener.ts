@@ -23,7 +23,6 @@ import { refreshAllRanges, validateRange, anchoredRange } from "../positions.js"
 import { pushNotification } from "../notifications.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import type { Annotation } from "../../shared/types.js";
-import type { FlatOffset } from "../../shared/positions/index.js";
 import { loadMarkdown } from "../file-io/markdown.js";
 import { loadDocx } from "../file-io/docx.js";
 import { htmlToYDoc } from "../file-io/docx-html.js";
@@ -47,6 +46,8 @@ import {
 } from "./document-service.js";
 
 export { SUPPORTED_EXTENSIONS };
+
+const reloadInProgress = new Set<string>();
 
 export interface OpenFileResult {
   documentId: string;
@@ -420,73 +421,77 @@ function buildResult(
  * 5. Reattach event queue observers
  */
 async function reloadFromDisk(id: string, filePath: string, format: string): Promise<void> {
-  console.error(`[FileWatcher] reloadFromDisk: reloading ${id} from ${filePath}`);
+  if (reloadInProgress.has(id)) {
+    console.error(`[FileWatcher] reload already in progress for ${id}, skipping`);
+    return;
+  }
+  reloadInProgress.add(id);
+  try {
+    console.error(`[FileWatcher] reloadFromDisk: reloading ${id} from ${filePath}`);
 
-  const doc = getOrCreateDocument(id);
+    const doc = getOrCreateDocument(id);
 
-  // 1. Read new content outside the transaction (async I/O)
-  const fileContent = await fs.readFile(filePath, "utf-8");
+    // 1. Read new content outside the transaction (async I/O)
+    const fileContent = await fs.readFile(filePath, "utf-8");
 
-  // 2. Single transaction: clear awareness + repopulate content, preserve annotations
-  doc.transact(() => {
-    const awareness = doc.getMap(Y_MAP_AWARENESS);
-    awareness.forEach((_, k) => awareness.delete(k));
-
-    const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.forEach((_, k) => userAwareness.delete(k));
-
-    // Repopulate content (load functions clear XmlFragment internally)
-    if (format === "md") {
-      loadMarkdown(doc, fileContent);
-    } else {
-      populateYDoc(doc, fileContent);
-    }
-  }, MCP_ORIGIN);
-
-  // 3. Refresh all annotation ranges in a batch transaction
-  const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
-  const annotations: Annotation[] = [];
-  annotationMap.forEach((val) => annotations.push(val as Annotation));
-
-  if (annotations.length > 0) {
-    const refreshed = refreshAllRanges(annotations, doc, annotationMap);
-
-    // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges
+    // 2. Single transaction: clear awareness + repopulate content, preserve annotations
     doc.transact(() => {
-      for (const ann of refreshed) {
-        if (!ann.textSnapshot) continue;
+      const awareness = doc.getMap(Y_MAP_AWARENESS);
+      awareness.forEach((_, k) => awareness.delete(k));
 
-        const vr = validateRange(doc, ann.range.from, ann.range.to, {
-          textSnapshot: ann.textSnapshot,
-        });
+      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+      userAwareness.forEach((_, k) => userAwareness.delete(k));
 
-        if (vr.ok) continue; // Range is still valid
-
-        if (vr.code === "RANGE_MOVED" && "resolvedFrom" in vr && "resolvedTo" in vr) {
-          const relocated = anchoredRange(
-            doc,
-            vr.resolvedFrom as FlatOffset,
-            vr.resolvedTo as FlatOffset,
-            ann.textSnapshot,
-          );
-          if (relocated.ok) {
-            const updated: Annotation = {
-              ...ann,
-              range: relocated.range,
-              relRange: "relRange" in relocated ? relocated.relRange : ann.relRange,
-            };
-            annotationMap.set(ann.id, updated);
-          }
-        }
-        // RANGE_GONE: annotation text was deleted entirely — leave as-is
+      // Repopulate content (load functions clear XmlFragment internally)
+      if (format === "md") {
+        loadMarkdown(doc, fileContent);
+      } else {
+        populateYDoc(doc, fileContent);
       }
     }, MCP_ORIGIN);
+
+    // 3. Refresh all annotation ranges in a batch transaction
+    const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
+    const annotations: Annotation[] = [];
+    annotationMap.forEach((val) => annotations.push(val as Annotation));
+
+    if (annotations.length > 0) {
+      const refreshed = refreshAllRanges(annotations, doc, annotationMap);
+
+      // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges
+      doc.transact(() => {
+        for (const ann of refreshed) {
+          if (!ann.textSnapshot) continue;
+
+          const vr = validateRange(doc, ann.range.from, ann.range.to, {
+            textSnapshot: ann.textSnapshot,
+          });
+
+          if (vr.ok) continue; // Range is still valid
+
+          if (vr.code === "RANGE_MOVED") {
+            const relocated = anchoredRange(doc, vr.resolvedFrom, vr.resolvedTo, ann.textSnapshot);
+            if (relocated.ok) {
+              const updated: Annotation = {
+                ...ann,
+                range: relocated.range,
+                relRange: relocated.fullyAnchored ? relocated.relRange : undefined,
+              };
+              annotationMap.set(ann.id, updated);
+            }
+          }
+          // RANGE_GONE: annotation text was deleted entirely — leave as-is
+        }
+      }, MCP_ORIGIN);
+    }
+
+    // 5. Reattach event queue observers (idempotent)
+    attachObservers(id, doc);
+
+    console.error(`[FileWatcher] reloadFromDisk: complete for ${id}`);
+  } finally {
+    reloadInProgress.delete(id);
   }
-
-  // 5. Reattach event queue observers (idempotent)
-  attachObservers(id, doc);
-
-  console.error(`[FileWatcher] reloadFromDisk: complete for ${id}`);
 }
 
 /**
@@ -509,6 +514,15 @@ function wireFileWatcher(id: string, filePath: string, format: string): void {
         });
       } catch (err) {
         console.error(`[FileWatcher] reloadFromDisk failed for ${filePath}:`, err);
+        pushNotification({
+          id: generateNotificationId(),
+          type: "general-error",
+          severity: "warning",
+          message: `Failed to reload ${path.basename(filePath)} from disk`,
+          documentId: id,
+          dedupKey: `reload-error:${id}`,
+          timestamp: Date.now(),
+        });
       }
     });
   } catch (err) {

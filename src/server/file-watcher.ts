@@ -31,18 +31,18 @@ export function watchFile(filePath: string, onChanged: (filePath: string) => Pro
       const entry = watched.get(filePath);
       if (!entry) return;
 
+      // Check suppress at event arrival, not timer expiry
+      if (entry.suppressed) {
+        entry.suppressed = false;
+        return;
+      }
+
       // Debounce: clear any pending timer and set a new 500ms delay
       if (entry.timer !== null) {
         clearTimeout(entry.timer);
       }
       entry.timer = setTimeout(() => {
         entry.timer = null;
-
-        if (entry.suppressed) {
-          entry.suppressed = false;
-          return;
-        }
-
         onChanged(filePath).catch((err) => {
           console.error(`[FileWatcher] onChanged callback failed for ${filePath}:`, err);
         });
@@ -85,8 +85,8 @@ export function unwatchFile(filePath: string): void {
   }
   try {
     entry.watcher.close();
-  } catch {
-    // Already closed or errored — ignore
+  } catch (err) {
+    console.error(`[FileWatcher] watcher.close() failed for ${filePath}:`, err);
   }
   watched.delete(filePath);
   console.error(`[FileWatcher] Unwatched ${filePath}`);
