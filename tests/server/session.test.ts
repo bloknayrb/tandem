@@ -1,8 +1,21 @@
 import { Y_MAP_ANNOTATIONS, Y_MAP_CHAT, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import * as Y from "yjs";
 import fs from "fs/promises";
 import path from "path";
+
+// Isolate session tests in a unique temp directory to avoid races with other test files
+vi.mock("../../src/server/platform", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../src/server/platform")>();
+  const osMod = await import("os");
+  const pathMod = await import("path");
+  const cryptoMod = await import("crypto");
+  return {
+    ...mod,
+    SESSION_DIR: pathMod.join(osMod.tmpdir(), `tandem-test-session-${cryptoMod.randomUUID()}`),
+  };
+});
+
 import {
   saveSession,
   loadSession,
@@ -14,11 +27,17 @@ import {
   loadCtrlSession,
   restoreCtrlDoc,
 } from "../../src/server/session/manager";
-
-// Use a temp directory for test sessions
-const _TEST_SESSION_DIR = path.join(".tandem", "test-sessions");
+import { SESSION_DIR } from "../../src/server/platform";
 
 describe("Session persistence", () => {
+  beforeAll(async () => {
+    await fs.mkdir(SESSION_DIR, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await fs.rm(SESSION_DIR, { recursive: true, force: true });
+  });
+
   // Create a Y.Doc with some content and annotations
   function createTestDoc(): Y.Doc {
     const doc = new Y.Doc();

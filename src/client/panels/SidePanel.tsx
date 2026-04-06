@@ -470,6 +470,7 @@ export function SidePanel({
               data-testid="review-mode-btn"
               onClick={onToggleReviewMode}
               title="Keyboard review mode (Ctrl+Shift+R)"
+              aria-pressed={reviewMode}
               style={{
                 padding: "2px 8px",
                 fontSize: "11px",
@@ -498,7 +499,7 @@ export function SidePanel({
             color: "#4338ca",
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: "2px" }}>
+          <div aria-live="polite" style={{ fontWeight: 600, marginBottom: "2px" }}>
             Reviewing {reviewIndex + 1} / {reviewTargets.length}
           </div>
           <div style={{ color: "#6366f1" }}>
@@ -643,9 +644,9 @@ export function SidePanel({
       )}
 
       {/* Annotation list */}
-      <div style={{ padding: "8px 16px", flex: 1 }}>
+      <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
         {filtered.length === 0 ? (
-          <p style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
+          <p role="listitem" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
             {hasFilters
               ? "No annotations match filters."
               : "No annotations yet. Open a document to get started."}
@@ -653,15 +654,20 @@ export function SidePanel({
         ) : (
           <>
             {pending.map((ann) => (
-              <AnnotationCard
+              <div
                 key={ann.id}
-                annotation={ann}
-                isReviewTarget={activeReviewAnn?.id === ann.id}
-                onAccept={handleAccept}
-                onDismiss={handleDismiss}
-                onEdit={handleEdit}
-                onClick={() => scrollToAnnotation(ann)}
-              />
+                role="listitem"
+                aria-current={activeReviewAnn?.id === ann.id ? "true" : undefined}
+              >
+                <AnnotationCard
+                  annotation={ann}
+                  isReviewTarget={activeReviewAnn?.id === ann.id}
+                  onAccept={handleAccept}
+                  onDismiss={handleDismiss}
+                  onEdit={handleEdit}
+                  onClick={() => scrollToAnnotation(ann)}
+                />
+              </div>
             ))}
             {resolved.length > 0 && (
               <details style={{ marginTop: "12px" }}>
@@ -669,13 +675,14 @@ export function SidePanel({
                   {resolved.length} resolved
                 </summary>
                 {resolved.map((ann) => (
-                  <AnnotationCard
-                    key={ann.id}
-                    annotation={ann}
-                    onUndo={handleUndo}
-                    undoable={recentlyResolved.has(ann.id)}
-                    onClick={() => scrollToAnnotation(ann)}
-                  />
+                  <div key={ann.id} role="listitem">
+                    <AnnotationCard
+                      annotation={ann}
+                      onUndo={handleUndo}
+                      undoable={recentlyResolved.has(ann.id)}
+                      onClick={() => scrollToAnnotation(ann)}
+                    />
+                  </div>
                 ))}
               </details>
             )}

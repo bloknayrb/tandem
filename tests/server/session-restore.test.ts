@@ -1,7 +1,21 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import * as Y from "yjs";
 import fs from "fs/promises";
 import path from "path";
+import { CTRL_ROOM } from "../../src/shared/constants";
+
+// Isolate session tests in a unique temp directory to avoid races with other test files
+vi.mock("../../src/server/platform", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/platform")>();
+  const osMod = await import("os");
+  const pathMod = await import("path");
+  const cryptoMod = await import("crypto");
+  return {
+    ...original,
+    SESSION_DIR: pathMod.join(osMod.tmpdir(), `tandem-test-restore-${cryptoMod.randomUUID()}`),
+  };
+});
+
 import {
   saveSession,
   deleteSession,
@@ -10,7 +24,6 @@ import {
   sessionKey,
 } from "../../src/server/session/manager";
 import { SESSION_DIR } from "../../src/server/platform";
-import { CTRL_ROOM } from "../../src/shared/constants";
 
 // Unique paths to avoid collisions with other tests
 const TEST_FILES = [
@@ -29,6 +42,14 @@ function createMinimalDoc(): Y.Doc {
 }
 
 describe("listSessionFilePaths", () => {
+  beforeAll(async () => {
+    await fs.mkdir(SESSION_DIR, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await fs.rm(SESSION_DIR, { recursive: true, force: true });
+  });
+
   afterEach(async () => {
     // Clean up all test session files
     for (const fp of TEST_FILES) {

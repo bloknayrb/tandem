@@ -8,7 +8,32 @@ import { SESSION_MAX_AGE, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.j
 import { MCP_ORIGIN } from "../events/queue.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
+const RENAME_MAX_RETRIES = 3;
+const RENAME_RETRY_BASE_MS = 50;
 let sessionDirReady = false;
+
+/**
+ * Write data to a file atomically: write to .tmp, then rename.
+ * Retries the rename on EPERM/EACCES (Windows file-handle contention).
+ */
+async function atomicWrite(sessionPath: string, content: string): Promise<void> {
+  const tmpPath = `${sessionPath}.tmp`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  for (let attempt = 0; attempt < RENAME_MAX_RETRIES; attempt++) {
+    try {
+      await fs.rename(tmpPath, sessionPath);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if ((code === "EPERM" || code === "EACCES") && attempt < RENAME_MAX_RETRIES - 1) {
+        await new Promise((r) => setTimeout(r, RENAME_RETRY_BASE_MS * 2 ** attempt));
+        continue;
+      }
+      await fs.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
+  }
+}
 
 /** Generate a session key from a file path */
 export function sessionKey(filePath: string): string {
@@ -45,14 +70,7 @@ export async function saveSession(filePath: string, format: string, doc: Y.Doc):
     sessionDirReady = true;
   }
   const sessionPath = path.join(SESSION_DIR, `${key}.json`);
-  const tmpPath = `${sessionPath}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(data), "utf-8");
-  try {
-    await fs.rename(tmpPath, sessionPath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
+  await atomicWrite(sessionPath, JSON.stringify(data));
 }
 
 /** Load a session file if it exists */
@@ -142,14 +160,7 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
 
   const data = { ydocState, lastAccessed: Date.now() };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
-  const tmpPath = `${sessionPath}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(data), "utf-8");
-  try {
-    await fs.rename(tmpPath, sessionPath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
+  await atomicWrite(sessionPath, JSON.stringify(data));
 }
 
 /** Load the CTRL_ROOM session if it exists */

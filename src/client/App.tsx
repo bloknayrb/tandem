@@ -192,6 +192,67 @@ export default function App() {
     editorRef.current = editor;
   }, []);
 
+  // Resizable side panel
+  const PANEL_MIN_WIDTH = 200;
+  const PANEL_MAX_WIDTH = 600;
+  const PANEL_DEFAULT_WIDTH = 300;
+  const PANEL_WIDTH_KEY = "tandem-panel-width";
+
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(PANEL_WIDTH_KEY);
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (Number.isFinite(parsed)) {
+          return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
+        }
+      }
+    } catch {
+      // localStorage unavailable (incognito/storage-disabled)
+    }
+    return PANEL_DEFAULT_WIDTH;
+  });
+
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = panelWidth;
+
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+
+      const onMouseMove = (ev: MouseEvent) => {
+        // Panel is on the right, so dragging left (smaller clientX) increases width
+        const newWidth = Math.max(
+          PANEL_MIN_WIDTH,
+          Math.min(PANEL_MAX_WIDTH, startWidth - (ev.clientX - startX)),
+        );
+        setPanelWidth(newWidth);
+      };
+
+      const onMouseUp = () => {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        // Persist after drag ends
+        setPanelWidth((w) => {
+          try {
+            localStorage.setItem(PANEL_WIDTH_KEY, String(w));
+          } catch {
+            // localStorage unavailable
+          }
+          return w;
+        });
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [panelWidth],
+  );
+
   // Show banner when pending annotations exceed threshold
   useEffect(() => {
     if (pendingCount >= REVIEW_BANNER_THRESHOLD && !reviewMode) {
@@ -369,11 +430,29 @@ export default function App() {
             <EmptyState connected={connected} claudeActive={claudeActive} />
           )}
         </div>
+        {/* Resize handle */}
+        <div
+          data-testid="panel-resize-handle"
+          onMouseDown={handleResizeStart}
+          style={{
+            width: "4px",
+            cursor: "col-resize",
+            background: "transparent",
+            flexShrink: 0,
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLDivElement).style.background = "transparent";
+          }}
+        />
         <div
           style={{
             display: "flex",
             flexDirection: "column",
-            width: "300px",
+            width: `${panelWidth}px`,
             borderLeft: "1px solid #e5e7eb",
           }}
         >

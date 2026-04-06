@@ -50,6 +50,8 @@ function buildDecorations(
           class: `tandem-highlight tandem-highlight--${color}`,
           style: `background: ${bg}; border-radius: 2px; padding: 1px 0;`,
           "data-annotation-id": ann.id,
+          role: "mark",
+          "aria-label": `${color.charAt(0).toUpperCase() + color.slice(1)} highlight`,
         };
         break;
       }
@@ -58,6 +60,8 @@ function buildDecorations(
           class: "tandem-comment",
           style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
           "data-annotation-id": ann.id,
+          role: "mark",
+          "aria-label": "Comment",
         };
         break;
       case "suggestion":
@@ -66,6 +70,8 @@ function buildDecorations(
           style:
             "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
           "data-annotation-id": ann.id,
+          role: "mark",
+          "aria-label": "Suggestion",
         };
         break;
       case "question":
@@ -74,6 +80,8 @@ function buildDecorations(
           style:
             "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
           "data-annotation-id": ann.id,
+          role: "mark",
+          "aria-label": "Question",
         };
         break;
       case "flag":
@@ -82,6 +90,8 @@ function buildDecorations(
           style:
             "background: rgba(239, 68, 68, 0.12); border-bottom: 2px solid #ef4444; padding-bottom: 1px;",
           "data-annotation-id": ann.id,
+          role: "mark",
+          "aria-label": "Flag",
         };
         break;
       default:

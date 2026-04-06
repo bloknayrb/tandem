@@ -118,10 +118,18 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     lineHeight: 1,
   };
 
+  const truncatedContent = annotation.content
+    ? annotation.content.length > 60
+      ? annotation.content.slice(0, 57) + "..."
+      : annotation.content
+    : "";
+  const cardLabel = `${annotation.type} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
+
   return (
     <div
       onClick={onClick}
       data-testid={`annotation-card-${annotation.id}`}
+      aria-label={cardLabel}
       style={{
         padding: "8px 10px",
         marginBottom: "6px",
