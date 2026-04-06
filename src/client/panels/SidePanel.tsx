@@ -397,6 +397,7 @@ export function SidePanel({
     }
   }, [reviewMode, reviewTargets.length, onExitReviewMode]);
 
+  const listRef = useRef<HTMLDivElement>(null);
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
   const activeReviewAnn =
     reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
@@ -569,6 +570,7 @@ export function SidePanel({
               setFilterType("all");
               setFilterAuthor("all");
               setFilterStatus("all");
+              listRef.current?.scrollTo({ top: 0 });
             }}
             style={{
               background: "none",
@@ -656,7 +658,12 @@ export function SidePanel({
       )}
 
       {/* Annotation list */}
-      <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
+      <div
+        ref={listRef}
+        style={{ padding: "8px 16px", flex: 1 }}
+        role="list"
+        aria-label="Annotations"
+      >
         {filtered.length === 0 ? (
           <p role="status" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
             {hasFilters
