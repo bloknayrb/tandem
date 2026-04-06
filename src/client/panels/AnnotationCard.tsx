@@ -129,7 +129,9 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     <div
       onClick={onClick}
       data-testid={`annotation-card-${annotation.id}`}
+      role="listitem"
       aria-label={cardLabel}
+      aria-current={isReviewTarget ? "true" : undefined}
       style={{
         padding: "8px 10px",
         marginBottom: "6px",

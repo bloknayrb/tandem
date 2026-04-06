@@ -112,6 +112,11 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
+const PANEL_MIN_WIDTH = 200;
+const PANEL_MAX_WIDTH = 600;
+const PANEL_DEFAULT_WIDTH = 300;
+const PANEL_WIDTH_KEY = "tandem-panel-width";
+
 export default function App() {
   const {
     tabs,
@@ -192,12 +197,6 @@ export default function App() {
     editorRef.current = editor;
   }, []);
 
-  // Resizable side panel
-  const PANEL_MIN_WIDTH = 200;
-  const PANEL_MAX_WIDTH = 600;
-  const PANEL_DEFAULT_WIDTH = 300;
-  const PANEL_WIDTH_KEY = "tandem-panel-width";
-
   const [panelWidth, setPanelWidth] = useState<number>(() => {
     try {
       const saved = localStorage.getItem(PANEL_WIDTH_KEY);
@@ -213,45 +212,59 @@ export default function App() {
     return PANEL_DEFAULT_WIDTH;
   });
 
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = panelWidth;
+  const panelWidthRef = useRef(panelWidth);
+  panelWidthRef.current = panelWidth;
+  const dragListenersRef = useRef<{
+    move: (e: MouseEvent) => void;
+    up: () => void;
+  } | null>(null);
 
-      document.body.style.userSelect = "none";
-      document.body.style.cursor = "col-resize";
-
-      const onMouseMove = (ev: MouseEvent) => {
-        // Panel is on the right, so dragging left (smaller clientX) increases width
-        const newWidth = Math.max(
-          PANEL_MIN_WIDTH,
-          Math.min(PANEL_MAX_WIDTH, startWidth - (ev.clientX - startX)),
-        );
-        setPanelWidth(newWidth);
-      };
-
-      const onMouseUp = () => {
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
+  // Clean up drag listeners if the component unmounts mid-drag
+  useEffect(() => {
+    return () => {
+      if (dragListenersRef.current) {
+        document.removeEventListener("mousemove", dragListenersRef.current.move);
+        document.removeEventListener("mouseup", dragListenersRef.current.up);
         document.body.style.userSelect = "";
         document.body.style.cursor = "";
-        // Persist after drag ends
-        setPanelWidth((w) => {
-          try {
-            localStorage.setItem(PANEL_WIDTH_KEY, String(w));
-          } catch {
-            // localStorage unavailable
-          }
-          return w;
-        });
-      };
+      }
+    };
+  }, []);
 
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    },
-    [panelWidth],
-  );
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = panelWidthRef.current;
+    let latestWidth = startWidth;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (ev: MouseEvent) => {
+      latestWidth = Math.max(
+        PANEL_MIN_WIDTH,
+        Math.min(PANEL_MAX_WIDTH, startWidth - (ev.clientX - startX)),
+      );
+      setPanelWidth(latestWidth);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      dragListenersRef.current = null;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      try {
+        localStorage.setItem(PANEL_WIDTH_KEY, String(latestWidth));
+      } catch {
+        // localStorage unavailable
+      }
+    };
+
+    dragListenersRef.current = { move: onMouseMove, up: onMouseUp };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
 
   // Show banner when pending annotations exceed threshold
   useEffect(() => {

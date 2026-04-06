@@ -646,43 +646,40 @@ export function SidePanel({
       {/* Annotation list */}
       <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
         {filtered.length === 0 ? (
-          <p role="listitem" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
+          <p role="status" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
             {hasFilters
               ? "No annotations match filters."
               : "No annotations yet. Open a document to get started."}
           </p>
         ) : (
           <>
-            {pending.map((ann) => (
-              <div
-                key={ann.id}
-                role="listitem"
-                aria-current={activeReviewAnn?.id === ann.id ? "true" : undefined}
-              >
+            {pending.map((ann) => {
+              const isTarget = activeReviewAnn?.id === ann.id;
+              return (
                 <AnnotationCard
+                  key={ann.id}
                   annotation={ann}
-                  isReviewTarget={activeReviewAnn?.id === ann.id}
+                  isReviewTarget={isTarget}
                   onAccept={handleAccept}
                   onDismiss={handleDismiss}
                   onEdit={handleEdit}
                   onClick={() => scrollToAnnotation(ann)}
                 />
-              </div>
-            ))}
+              );
+            })}
             {resolved.length > 0 && (
               <details style={{ marginTop: "12px" }}>
                 <summary style={{ fontSize: "12px", color: "#9ca3af", cursor: "pointer" }}>
                   {resolved.length} resolved
                 </summary>
                 {resolved.map((ann) => (
-                  <div key={ann.id} role="listitem">
-                    <AnnotationCard
-                      annotation={ann}
-                      onUndo={handleUndo}
-                      undoable={recentlyResolved.has(ann.id)}
-                      onClick={() => scrollToAnnotation(ann)}
-                    />
-                  </div>
+                  <AnnotationCard
+                    key={ann.id}
+                    annotation={ann}
+                    onUndo={handleUndo}
+                    undoable={recentlyResolved.has(ann.id)}
+                    onClick={() => scrollToAnnotation(ann)}
+                  />
                 ))}
               </details>
             )}
