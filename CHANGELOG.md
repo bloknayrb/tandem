@@ -5,6 +5,22 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-04-05
+
+### Added
+
+- Resizable side panel — drag to resize between 200–600px, width persists in localStorage
+- Accessibility: ARIA labels on annotation highlights (type-specific), annotation cards (`role="listitem"`, `aria-current`), annotation list (`role="list"`), review mode button (`aria-pressed`), live region for pending count and review progress
+
+### Fixed
+
+- Flaky session tests — each test file now uses an isolated temp directory via `vi.mock`, eliminating cross-file race conditions (#177)
+- Session file writes use atomic rename with retry on Windows EPERM/EACCES (#173)
+
+### Changed
+
+- `atomicWrite()` extracted as shared helper in session manager — consolidates duplicate write-tmp-rename logic with exponential backoff retry
+
 ## [0.2.9] - 2026-04-05
 
 ### Fixed
