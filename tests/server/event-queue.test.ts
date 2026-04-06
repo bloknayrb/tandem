@@ -530,6 +530,36 @@ describe("reattachObservers", () => {
     cleanup();
   });
 
+  it("still filters MCP_ORIGIN writes after swap", () => {
+    const { events, cleanup } = collectEvents();
+    const doc1 = new Y.Doc();
+    attachObservers("origin-swap-doc", doc1);
+
+    const doc2 = new Y.Doc();
+    reattachObservers("origin-swap-doc", doc2);
+
+    // MCP-origin write to new doc should be filtered
+    const map = doc2.getMap(Y_MAP_ANNOTATIONS);
+    doc2.transact(() => {
+      map.set("ann_mcp", {
+        id: "ann_mcp",
+        type: "comment",
+        author: "claude",
+        content: "echo",
+        status: "pending",
+        textSnapshot: "echo text",
+        range: { from: 0, to: 5 },
+      });
+    }, MCP_ORIGIN);
+
+    expect(events).toHaveLength(0);
+
+    detachObservers("origin-swap-doc");
+    doc1.destroy();
+    doc2.destroy();
+    cleanup();
+  });
+
   it("is idempotent — reattaching to the same doc twice does not duplicate events", () => {
     const { events, cleanup } = collectEvents();
 
@@ -557,6 +587,14 @@ describe("reattachObservers", () => {
   });
 });
 
+// --- detachObservers edge cases ---
+
+describe("detachObservers edge cases", () => {
+  it("detachObservers on a never-attached doc does not throw", () => {
+    expect(() => detachObservers("never-attached-doc")).not.toThrow();
+  });
+});
+
 // --- attachCtrlObservers (CTRL_ROOM chat observer) ---
 // attachCtrlObservers calls getOrCreateDocument(CTRL_ROOM) internally.
 // We mock the provider module at the top level (vi.mock is hoisted) and use
@@ -564,6 +602,10 @@ describe("reattachObservers", () => {
 
 let _ctrlTestDoc: Y.Doc = new Y.Doc();
 
+// NOTE: vi.mock() is hoisted to file scope by Vitest. These mocks affect ALL tests
+// in this file. This is currently safe because only attachCtrlObservers() calls
+// getOrCreateDocument() -- attachObservers/reattachObservers take a Y.Doc parameter
+// directly and are unaffected. If that changes, move CTRL_ROOM tests to a separate file.
 vi.mock("../../src/server/yjs/provider.js", () => ({
   getOrCreateDocument: () => _ctrlTestDoc,
 }));
@@ -593,6 +635,7 @@ describe("attachCtrlObservers (CTRL_ROOM)", () => {
       text: "Hello from the user",
       timestamp: Date.now(),
       documentId: "some-doc",
+      read: false,
     });
 
     const chatEvents = events.filter((e) => e.type === "chat:message");
@@ -616,6 +659,7 @@ describe("attachCtrlObservers (CTRL_ROOM)", () => {
         text: "Claude reply",
         timestamp: Date.now(),
         documentId: "some-doc",
+        read: false,
       });
     }, MCP_ORIGIN);
 
@@ -636,6 +680,7 @@ describe("attachCtrlObservers (CTRL_ROOM)", () => {
       text: "Claude speaking",
       timestamp: Date.now(),
       documentId: "some-doc",
+      read: false,
     });
 
     expect(events.filter((e) => e.type === "chat:message")).toHaveLength(0);
