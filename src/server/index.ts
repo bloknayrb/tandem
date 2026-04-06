@@ -26,6 +26,7 @@ import {
   detachObservers,
 } from "./events/queue.js";
 import { docCount } from "./mcp/document-service.js";
+import { unwatchAll } from "./file-watcher.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 import { docIdFromPath } from "./mcp/document-model.js";
 import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
@@ -98,6 +99,7 @@ async function shutdown(signal: string) {
   isShuttingDown = true;
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
+    unwatchAll();
     await saveCurrentSession();
     stopAutoSave();
   } catch (err) {

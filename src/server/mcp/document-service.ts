@@ -13,6 +13,7 @@ import {
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { randomUUID } from "node:crypto";
+import { unwatchFile } from "../file-watcher.js";
 
 // --- Multi-document state ---
 
@@ -148,6 +149,9 @@ export async function closeDocumentById(
   }
 
   const closedPath = docState.filePath;
+
+  // Stop watching for external changes before removing the document
+  unwatchFile(docState.filePath);
 
   // Best-effort persist before removing — save failure should not prevent close
   try {
