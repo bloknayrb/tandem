@@ -46,15 +46,23 @@ export function StatusBar({
   widthMode,
   onToggleWidthMode,
 }: StatusBarProps) {
-  const [userName, setUserName] = useState(
-    () => localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT,
-  );
+  const [userName, setUserName] = useState(() => {
+    try {
+      return localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT;
+    } catch {
+      return USER_NAME_DEFAULT;
+    }
+  });
   const [nameInput, setNameInput] = useState(userName);
   const commitName = () => {
     const trimmed = nameInput.trim() || USER_NAME_DEFAULT;
     setUserName(trimmed);
     setNameInput(trimmed);
-    localStorage.setItem(USER_NAME_KEY, trimmed);
+    try {
+      localStorage.setItem(USER_NAME_KEY, trimmed);
+    } catch {
+      // localStorage unavailable (incognito/storage-disabled)
+    }
   };
   const [showReconnectedFlash, setShowReconnectedFlash] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);

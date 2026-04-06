@@ -143,13 +143,21 @@ export default function App() {
 
   // Interruption mode — persisted to localStorage
   const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
-    const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
-    return InterruptionModeSchema.safeParse(saved).success
-      ? (saved as InterruptionMode)
-      : INTERRUPTION_MODE_DEFAULT;
+    try {
+      const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
+      return InterruptionModeSchema.safeParse(saved).success
+        ? (saved as InterruptionMode)
+        : INTERRUPTION_MODE_DEFAULT;
+    } catch {
+      return INTERRUPTION_MODE_DEFAULT;
+    }
   });
   useEffect(() => {
-    localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode);
+    try {
+      localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode);
+    } catch {
+      // localStorage unavailable (incognito/storage-disabled)
+    }
   }, [interruptionMode]);
 
   // Broadcast interruption mode to Y.Map so the server (and Claude) can see it

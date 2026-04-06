@@ -58,7 +58,13 @@ export function Editor({
         CollaborationCursor.configure({
           provider: provider,
           user: {
-            name: localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT,
+            name: (() => {
+              try {
+                return localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT;
+              } catch {
+                return USER_NAME_DEFAULT;
+              }
+            })(),
             color: "#f59e0b",
           },
         }),
