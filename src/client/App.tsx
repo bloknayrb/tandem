@@ -13,13 +13,14 @@ import { ToastContainer } from "./components/ToastContainer";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import {
   DISCONNECT_DEBOUNCE_MS,
+  EDITOR_WIDTH_MODE_KEY,
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
   REVIEW_BANNER_THRESHOLD,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
-import type { InterruptionMode, CapturedAnchor } from "../shared/types";
+import type { InterruptionMode, WidthMode, CapturedAnchor } from "../shared/types";
 import { InterruptionModeSchema } from "../shared/types";
 import { pmSelectionToFlat } from "./positions";
 import { toPmPos } from "../shared/positions/types";
@@ -117,6 +118,8 @@ const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
 const PANEL_WIDTH_KEY = "tandem-panel-width";
 
+const EDITOR_READING_WIDTH_PX = 740;
+
 export default function App() {
   const {
     tabs,
@@ -211,6 +214,26 @@ export default function App() {
     }
     return PANEL_DEFAULT_WIDTH;
   });
+
+  const [widthMode, setWidthMode] = useState<WidthMode>(() => {
+    try {
+      return localStorage.getItem(EDITOR_WIDTH_MODE_KEY) === "reading" ? "reading" : "full";
+    } catch {
+      return "full";
+    }
+  });
+
+  const toggleWidthMode = useCallback(() => {
+    setWidthMode((prev) => {
+      const next = prev === "reading" ? "full" : "reading";
+      try {
+        localStorage.setItem(EDITOR_WIDTH_MODE_KEY, next);
+      } catch {
+        // localStorage unavailable
+      }
+      return next;
+    });
+  }, []);
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
@@ -429,19 +452,26 @@ export default function App() {
             visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
             documentId={activeTab?.id}
           />
-          {activeTab ? (
-            <Editor
-              key={activeTab.id}
-              ydoc={activeTab.ydoc}
-              provider={activeTab.provider}
-              readOnly={readOnly}
-              reviewMode={reviewMode}
-              activeAnnotationId={activeAnnotationId}
-              onEditorReady={handleEditorReady}
-            />
-          ) : (
-            <EmptyState connected={connected} claudeActive={claudeActive} />
-          )}
+          <div
+            style={{
+              maxWidth: widthMode === "reading" ? `${EDITOR_READING_WIDTH_PX}px` : undefined,
+              margin: widthMode === "reading" ? "0 auto" : undefined,
+            }}
+          >
+            {activeTab ? (
+              <Editor
+                key={activeTab.id}
+                ydoc={activeTab.ydoc}
+                provider={activeTab.provider}
+                readOnly={readOnly}
+                reviewMode={reviewMode}
+                activeAnnotationId={activeAnnotationId}
+                onEditorReady={handleEditorReady}
+              />
+            ) : (
+              <EmptyState connected={connected} claudeActive={claudeActive} />
+            )}
+          </div>
         </div>
         {/* Resize handle */}
         <div
@@ -574,6 +604,8 @@ export default function App() {
         interruptionMode={interruptionMode}
         onModeChange={setInterruptionMode}
         heldCount={heldCount}
+        widthMode={widthMode}
+        onToggleWidthMode={toggleWidthMode}
       />
       {showReviewSummary && reviewSummaryData && (
         <ReviewSummary
