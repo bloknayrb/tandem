@@ -99,7 +99,14 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       documents.set(documentName, document);
 
       // Notify event queue to reattach observers to the new doc instance
-      onDocSwapped?.(documentName, document);
+      if (onDocSwapped) {
+        onDocSwapped(documentName, document);
+      } else {
+        console.error(
+          `[Tandem] WARN: onDocSwapped callback not registered during doc load for ${documentName}. ` +
+            `Server-side observers will NOT be attached. Call setDocLifecycleCallbacks() before starting Hocuspocus.`,
+        );
+      }
 
       return document;
     },
