@@ -293,7 +293,22 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
   // Resolve relRange to current flat offsets
   const newFrom = relPosToFlatOffset(ydoc, ann.relRange.fromRel);
   const newTo = relPosToFlatOffset(ydoc, ann.relRange.toRel);
-  if (newFrom === null || newTo === null) return ann; // deleted content
+  if (newFrom === null || newTo === null) {
+    // CRDT resolution failed (items deleted after content replacement).
+    // Strip the dead relRange and attempt re-anchoring from flat offsets.
+    const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
+    const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
+    if (fromRel && toRel) {
+      const updated: Annotation = { ...ann, relRange: { fromRel, toRel } };
+      if (map) map.set(ann.id, updated);
+      return updated;
+    }
+    // Can't re-anchor — strip dead relRange so lazy path works next time
+    const stripped: Annotation = { ...ann };
+    delete stripped.relRange;
+    if (map) map.set(ann.id, stripped);
+    return stripped;
+  }
   if (newFrom > newTo) {
     console.error(
       `[positions] refreshRange: inverted CRDT range for annotation ${ann.id}: ` +

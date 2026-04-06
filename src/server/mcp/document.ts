@@ -13,6 +13,7 @@ import { pushNotification } from "../notifications.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { getAdapter, atomicWrite } from "../file-io/index.js";
+import { suppressNextChange } from "../file-watcher.js";
 import { convertToMarkdown } from "./convert.js";
 import { saveSession } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
@@ -433,6 +434,7 @@ export function registerDocumentTools(server: McpServer): void {
         }
 
         const output = adapter.save(r.doc)!;
+        suppressNextChange(r.filePath);
         await atomicWrite(r.filePath, output);
         await saveSession(r.filePath, format, r.doc);
 

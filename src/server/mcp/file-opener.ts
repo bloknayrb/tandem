@@ -18,6 +18,12 @@ import {
 } from "../../shared/constants.js";
 import { MCP_ORIGIN, attachObservers } from "../events/queue.js";
 import { getAdapter } from "../file-io/index.js";
+import { watchFile } from "../file-watcher.js";
+import { refreshAllRanges, validateRange, anchoredRange } from "../positions.js";
+import { pushNotification } from "../notifications.js";
+import { generateNotificationId } from "../../shared/utils.js";
+import type { Annotation } from "../../shared/types.js";
+import type { FlatOffset } from "../../shared/positions/index.js";
 import { loadMarkdown } from "../file-io/markdown.js";
 import { loadDocx } from "../file-io/docx.js";
 import { htmlToYDoc } from "../file-io/docx-html.js";
@@ -183,6 +189,11 @@ export async function openFileByPath(
   initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
+
+  // Watch for external file changes (skip .docx — binary format, no live reload)
+  if (format !== "docx") {
+    wireFileWatcher(id, resolved, format);
+  }
 
   return {
     ...buildResult(doc, {
@@ -395,6 +406,114 @@ function buildResult(
     forceReloaded: false,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
+}
+
+/**
+ * Reload document content from disk without clearing annotations.
+ * Used by the file watcher when an external tool modifies the source file.
+ *
+ * Steps:
+ * 1. Read new content from disk (async I/O outside transaction)
+ * 2. Single transaction: clear awareness maps + repopulate content (NOT annotations)
+ * 3. After transaction: refreshAllRanges to re-anchor annotation CRDT positions
+ * 4. Second pass: textSnapshot-based relocation for still-stale annotations
+ * 5. Reattach event queue observers
+ */
+async function reloadFromDisk(id: string, filePath: string, format: string): Promise<void> {
+  console.error(`[FileWatcher] reloadFromDisk: reloading ${id} from ${filePath}`);
+
+  const doc = getOrCreateDocument(id);
+
+  // 1. Read new content outside the transaction (async I/O)
+  const fileContent = await fs.readFile(filePath, "utf-8");
+
+  // 2. Single transaction: clear awareness + repopulate content, preserve annotations
+  doc.transact(() => {
+    const awareness = doc.getMap(Y_MAP_AWARENESS);
+    awareness.forEach((_, k) => awareness.delete(k));
+
+    const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+    userAwareness.forEach((_, k) => userAwareness.delete(k));
+
+    // Repopulate content (load functions clear XmlFragment internally)
+    if (format === "md") {
+      loadMarkdown(doc, fileContent);
+    } else {
+      populateYDoc(doc, fileContent);
+    }
+  }, MCP_ORIGIN);
+
+  // 3. Refresh all annotation ranges in a batch transaction
+  const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
+  const annotations: Annotation[] = [];
+  annotationMap.forEach((val) => annotations.push(val as Annotation));
+
+  if (annotations.length > 0) {
+    const refreshed = refreshAllRanges(annotations, doc, annotationMap);
+
+    // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges
+    doc.transact(() => {
+      for (const ann of refreshed) {
+        if (!ann.textSnapshot) continue;
+
+        const vr = validateRange(doc, ann.range.from, ann.range.to, {
+          textSnapshot: ann.textSnapshot,
+        });
+
+        if (vr.ok) continue; // Range is still valid
+
+        if (vr.code === "RANGE_MOVED" && "resolvedFrom" in vr && "resolvedTo" in vr) {
+          const relocated = anchoredRange(
+            doc,
+            vr.resolvedFrom as FlatOffset,
+            vr.resolvedTo as FlatOffset,
+            ann.textSnapshot,
+          );
+          if (relocated.ok) {
+            const updated: Annotation = {
+              ...ann,
+              range: relocated.range,
+              relRange: "relRange" in relocated ? relocated.relRange : ann.relRange,
+            };
+            annotationMap.set(ann.id, updated);
+          }
+        }
+        // RANGE_GONE: annotation text was deleted entirely — leave as-is
+      }
+    }, MCP_ORIGIN);
+  }
+
+  // 5. Reattach event queue observers (idempotent)
+  attachObservers(id, doc);
+
+  console.error(`[FileWatcher] reloadFromDisk: complete for ${id}`);
+}
+
+/**
+ * Wire up the file watcher for a document. Calls reloadFromDisk on
+ * external changes and pushes a browser notification.
+ */
+function wireFileWatcher(id: string, filePath: string, format: string): void {
+  try {
+    watchFile(filePath, async () => {
+      try {
+        await reloadFromDisk(id, filePath, format);
+        pushNotification({
+          id: generateNotificationId(),
+          type: "file-reloaded",
+          severity: "info",
+          message: `File changed on disk — reloaded: ${path.basename(filePath)}`,
+          documentId: id,
+          dedupKey: `reload:${id}`,
+          timestamp: Date.now(),
+        });
+      } catch (err) {
+        console.error(`[FileWatcher] reloadFromDisk failed for ${filePath}:`, err);
+      }
+    });
+  } catch (err) {
+    console.error(`[FileWatcher] wireFileWatcher failed for ${filePath}:`, err);
+  }
 }
 
 function ensureAutoSave(): void {
