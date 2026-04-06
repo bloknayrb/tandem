@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
-import type { InterruptionMode } from "../../shared/types";
+import type { InterruptionMode, WidthMode } from "../../shared/types";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -15,6 +15,8 @@ interface StatusBarProps {
   interruptionMode: InterruptionMode;
   onModeChange: (mode: InterruptionMode) => void;
   heldCount: number;
+  widthMode: WidthMode;
+  onToggleWidthMode: () => void;
 }
 
 const MODES: { value: InterruptionMode; label: string; title: string }[] = [
@@ -41,6 +43,8 @@ export function StatusBar({
   interruptionMode,
   onModeChange,
   heldCount,
+  widthMode,
+  onToggleWidthMode,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(
     () => localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT,
@@ -179,6 +183,28 @@ export function StatusBar({
             </button>
           ))}
         </div>
+        <button
+          title={
+            widthMode === "reading"
+              ? "Switch to full width layout"
+              : "Switch to narrow reading width layout"
+          }
+          aria-label="Toggle reading width"
+          aria-pressed={widthMode === "reading"}
+          onClick={onToggleWidthMode}
+          style={{
+            padding: "1px 8px",
+            fontSize: "11px",
+            border: "1px solid #d1d5db",
+            borderRadius: "4px",
+            cursor: "pointer",
+            background: widthMode === "reading" ? "#6366f1" : "transparent",
+            color: widthMode === "reading" ? "#fff" : "#6b7280",
+            fontWeight: widthMode === "reading" ? 600 : 400,
+          }}
+        >
+          Reading Width
+        </button>
       </div>
 
       <div

@@ -61,6 +61,9 @@ export const NOTIFICATION_BUFFER_SIZE = 50;
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 export const TUTORIAL_ANNOTATION_PREFIX = "tutorial-";
 
+// Editor layout
+export const EDITOR_WIDTH_MODE_KEY = "tandem:editorWidthMode";
+
 // Channel / event queue
 export const CHANNEL_EVENT_BUFFER_SIZE = 200;
 export const CHANNEL_EVENT_BUFFER_AGE_MS = 60_000; // 60 seconds

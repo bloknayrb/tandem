@@ -47,6 +47,7 @@ export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
 export type AnnotationPriority = z.infer<typeof AnnotationPrioritySchema>;
 export type InterruptionMode = z.infer<typeof InterruptionModeSchema>;
+export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 
