@@ -106,7 +106,8 @@ function withPreventDefault(command: () => void): (e: React.MouseEvent) => void 
  * follow-up issue.
  */
 export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) {
-  // Tiptap's isActive() reads editor state imperatively and doesn't trigger React re-renders on its own
+  // Tiptap's isActive() reads editor state imperatively and doesn't trigger React
+  // re-renders on its own, so we force a re-render on every transaction.
   const [, setTick] = useState(0);
   const [showHeadingMenu, setShowHeadingMenu] = useState(false);
   const headingMenuRef = useRef<HTMLDivElement>(null);
