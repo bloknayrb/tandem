@@ -389,6 +389,9 @@ export default function App() {
           setSettingsAnchor(rect);
           setSettingsOpen(true);
         }}
+        tandemMode={tandemMode}
+        onModeChange={setTandemMode}
+        heldCount={heldCount}
       />
       <DocumentTabs
         tabs={orderedTabs}
@@ -811,9 +814,6 @@ export default function App() {
         claudeActive={claudeActive}
         readOnly={readOnly}
         documentCount={tabs.length}
-        tandemMode={tandemMode}
-        onModeChange={setTandemMode}
-        heldCount={heldCount}
       />
       {showReviewSummary && reviewSummaryData && (
         <ReviewSummary

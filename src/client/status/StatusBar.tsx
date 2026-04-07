@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
-import type { TandemMode } from "../../shared/types";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -12,9 +11,6 @@ interface StatusBarProps {
   claudeActive: boolean;
   readOnly?: boolean;
   documentCount?: number;
-  tandemMode: TandemMode;
-  onModeChange: (mode: TandemMode) => void;
-  heldCount: number;
 }
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -28,9 +24,6 @@ export function StatusBar({
   claudeActive,
   readOnly,
   documentCount = 0,
-  tandemMode,
-  onModeChange,
-  heldCount,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(() => {
     try {
@@ -131,78 +124,6 @@ export function StatusBar({
             {documentCount} doc{documentCount !== 1 ? "s" : ""} open
           </span>
         )}
-      </div>
-
-      {/* Mode switcher */}
-      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-        {heldCount > 0 && (
-          <span
-            style={{
-              padding: "1px 6px",
-              fontSize: "10px",
-              fontWeight: 600,
-              color: "#92400e",
-              background: "#fef3c7",
-              borderRadius: "9999px",
-            }}
-          >
-            {heldCount} held
-          </span>
-        )}
-        <div
-          style={{
-            display: "flex",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-            overflow: "hidden",
-          }}
-        >
-          <button
-            title="Write undisturbed — Claude only responds when you message"
-            onClick={() => onModeChange("solo")}
-            style={{
-              padding: "1px 8px",
-              fontSize: "11px",
-              border: "none",
-              borderRight: "1px solid #d1d5db",
-              cursor: "pointer",
-              background: tandemMode === "solo" ? "#6366f1" : "transparent",
-              color: tandemMode === "solo" ? "#fff" : "#6b7280",
-              fontWeight: tandemMode === "solo" ? 600 : 400,
-            }}
-          >
-            Solo
-          </button>
-          <button
-            title="Full collaboration — Claude reacts to selections and document changes"
-            onClick={() => onModeChange("tandem")}
-            style={{
-              padding: "1px 8px",
-              fontSize: "11px",
-              border: "none",
-              cursor: "pointer",
-              background: tandemMode === "tandem" ? "#6366f1" : "transparent",
-              color: tandemMode === "tandem" ? "#fff" : "#6b7280",
-              fontWeight: tandemMode === "tandem" ? 600 : 400,
-            }}
-          >
-            Tandem
-          </button>
-        </div>
-        <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px" }}>
-          <span
-            style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              background: tandemMode === "tandem" ? "#22c55e" : "#9ca3af",
-              display: "inline-block",
-            }}
-          />
-          <span style={{ color: "#9ca3af" }}>
-            {tandemMode === "tandem" ? "Claude is active" : "Claude is listening"}
-          </span>
-        </span>
       </div>
 
       <div
