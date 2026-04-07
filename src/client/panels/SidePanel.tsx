@@ -498,6 +498,16 @@ export function SidePanel({
               {reviewMode ? "Exit Review" : "Review"}
             </button>
           )}
+          <div
+            data-testid="review-shortcut-hints"
+            style={{
+              fontSize: "10px",
+              color: "#9ca3af",
+              marginTop: "2px",
+            }}
+          >
+            A = accept, D = dismiss, ↑↓ = navigate, Z = undo
+          </div>
         </div>
       </div>
 

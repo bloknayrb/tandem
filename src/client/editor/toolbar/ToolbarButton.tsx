@@ -6,6 +6,7 @@ type ToolbarButtonProps = (
 ) & {
   shortcut?: string;
   disabled?: boolean;
+  disabledTitle?: string;
   active?: boolean;
   onMouseDown?: (e: React.MouseEvent) => void;
   onClick?: () => void;
@@ -17,6 +18,7 @@ export function ToolbarButton({
   ariaLabel,
   shortcut,
   disabled,
+  disabledTitle,
   active,
   onMouseDown,
   onClick,
@@ -42,7 +44,13 @@ export function ToolbarButton({
     <button
       type="button"
       disabled={disabled}
-      title={shortcut ? `${titleText} (${shortcut})` : titleText}
+      title={
+        disabled && disabledTitle
+          ? disabledTitle
+          : shortcut
+            ? `${titleText} (${shortcut})`
+            : titleText
+      }
       aria-label={ariaLabelValue}
       onMouseDown={onMouseDown}
       onClick={onClick}
