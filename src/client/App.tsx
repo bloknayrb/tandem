@@ -218,9 +218,7 @@ export default function App() {
   }, []);
 
   const handleAnnotationClick = useCallback((annotationId: string) => {
-    // Guard: don't swap if user has unsent text in chat
-    if (chatInputRef.current && chatInputRef.current.value.trim() !== "") return;
-    setShowChat(false); // Switch to Annotations tab
+    setShowChat(false);
     setActiveAnnotationId(annotationId);
   }, []);
 
