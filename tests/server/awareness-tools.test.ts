@@ -1,4 +1,5 @@
 import {
+  CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
@@ -24,6 +25,7 @@ import {
 } from "../../src/server/mcp/document-service.js";
 import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
 import { generateMessageId } from "../../src/shared/utils.js";
+import { TandemModeSchema } from "../../src/shared/types.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 
 function setupDoc(id: string, text: string) {
@@ -340,5 +342,30 @@ describe("tandemMode via Y.Map('userAwareness')", () => {
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
     userAwareness.set(Y_MAP_MODE, "solo");
     expect(userAwareness.get(Y_MAP_MODE)).toBe("solo");
+  });
+});
+
+describe("/api/mode endpoint validation", () => {
+  it("returns 'tandem' by default when no mode is set", () => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+    expect(mode).toBe("tandem");
+  });
+
+  it("returns 'solo' when mode is set to solo", () => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set(Y_MAP_MODE, "solo");
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+    expect(mode).toBe("solo");
+  });
+
+  it("falls back to default for invalid mode values", () => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set(Y_MAP_MODE, "garbage-value");
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+    expect(mode).toBe("tandem");
   });
 });
