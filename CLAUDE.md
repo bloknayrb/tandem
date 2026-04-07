@@ -46,7 +46,9 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Annotations stored in Y.Map('annotations'), not in document content. `author` field: `"user" | "claude" | "import"` (import = Word comments from .docx files)
 - Three coordinate systems: flat text offsets (server, includes heading prefixes), ProseMirror positions (client, structural), Yjs RelativePositions (CRDT-anchored, survive edits). Modules: `src/server/positions.ts`, `src/client/positions.ts`, shared types in `src/shared/positions/`
 - Multi-document: each file gets a documentId (hash of path) = Hocuspocus room name. All MCP tools accept optional `documentId`, defaulting to active document. `CTRL_ROOM` is reserved -- never use as a document ID. Server broadcasts `openDocuments` via Y.Map('documentMeta')
-- Communication: `tandem_checkInbox` (poll for user actions + chat) and `tandem_reply` (Claude's chat responses). **Call `tandem_checkInbox` between tasks.** `tandem_status` and `tandem_checkInbox` include the user's current `interruptionMode` so Claude can adapt behavior
+- Communication: `tandem_checkInbox` (poll for user actions + chat) and `tandem_reply` (Claude's chat responses). **Call `tandem_checkInbox` between tasks.** `tandem_status` and `tandem_checkInbox` return `mode: "solo" | "tandem"` — adapt behavior accordingly (in Solo mode, hold non-urgent annotations)
+- Solo/Tandem mode is stored on the `CTRL_ROOM` Y.Map (`Y_MAP_MODE` key), not per-document. Mode changes broadcast to all open documents
+- Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady; configurable via `TANDEM_SELECTION_DWELL_MS` env var
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
 
 ## Critical Rules
@@ -78,6 +80,7 @@ These WILL break things if violated:
 - **`freePort()` kills stale processes** on :3478/:3479 at startup. Can't run two Tandem instances simultaneously.
 - **`waitForPort()` timeout defaults to 5 seconds** (100ms polling). If Hocuspocus fails to bind, startup fails with a clear error.
 - **`APP_VERSION` is read from `package.json`** via `createRequire` in `src/server/mcp/server.ts`. Don't hardcode version strings.
+- **`tandem_status` and `tandem_checkInbox` return `mode: "solo" | "tandem"`** (not the old `interruptionMode` field). In `"solo"` mode, hold non-urgent annotations until mode switches to `"tandem"`.
 
 ### Client / UI
 - **ChatPanel + SidePanel are always mounted** (CSS display toggle, not conditional rendering) so local state persists across panel switches.

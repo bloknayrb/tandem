@@ -259,12 +259,12 @@ Check editor status: running state, open documents, active document.
     { "documentId": "invoice-d4e5f6", "filePath": "...", "format": "docx", "readOnly": true }
   ],
   "documentCount": 2,
-  "interruptionMode": "all"
+  "mode": "tandem"
 }
 ```
 
 **Notes:**
-- `interruptionMode` reflects the user's current interruption preference from the browser StatusBar: `"all"` (show everything), `"urgent-only"` (only flags, questions, and `priority: 'urgent'`), or `"paused"` (hold all new annotations). Adapt your annotation strategy accordingly — e.g., in `"urgent-only"` mode, prefer `tandem_flag` with `priority: 'urgent'` over `tandem_comment` for important findings.
+- `mode` reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold non-urgent annotations until mode switches back to `"tandem"`).
 
 ---
 
@@ -790,7 +790,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
     "lastEdit": 1710936000000,
     "selectedText": null
   },
-  "interruptionMode": "all"
+  "mode": "tandem"
 }
 ```
 
@@ -799,7 +799,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 - `userActions`: annotations created by the user (highlights, comments, questions).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
-- `interruptionMode`: the user's current interruption preference (`"all"`, `"urgent-only"`, or `"paused"`). When `"urgent-only"`, only use `tandem_flag` with `priority: 'urgent'` for critical findings. When `"paused"`, queue work and wait for the mode to change.
+- `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold non-urgent annotations and wait for the mode to switch to `"tandem"` before resuming.
 
 ---
 
