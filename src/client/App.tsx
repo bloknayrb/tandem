@@ -17,7 +17,6 @@ import {
   INTERRUPTION_MODE_DEFAULT,
   INTERRUPTION_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
-  REVIEW_BANNER_THRESHOLD,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
 import type { InterruptionMode, WidthMode, CapturedAnchor } from "../shared/types";
@@ -193,11 +192,10 @@ export default function App() {
   const { toasts, dismiss: dismissToast } = useNotifications();
   const { fileDragOver, handleEditorDragOver, handleEditorDragLeave, handleEditorDrop } =
     useFileDrop();
-  const { pendingCount, showReviewSummary, reviewSummaryData, dismissReviewSummary } =
+  const { showReviewSummary, reviewSummaryData, dismissReviewSummary } =
     useReviewCompletion(annotations);
 
   const [reviewMode, setReviewMode] = useState(false);
-  const [showBanner, setShowBanner] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -297,24 +295,12 @@ export default function App() {
     document.addEventListener("mouseup", onMouseUp);
   }, []);
 
-  // Show banner when pending annotations exceed threshold
-  useEffect(() => {
-    if (pendingCount >= REVIEW_BANNER_THRESHOLD && !reviewMode) {
-      setShowBanner(true);
-    }
-    if (pendingCount === 0) {
-      setShowBanner(false);
-    }
-  }, [pendingCount, reviewMode]);
-
   const toggleReviewMode = useCallback(() => {
     setReviewMode((prev) => !prev);
-    setShowBanner(false);
   }, []);
 
   const exitReviewMode = useCallback(() => {
     setReviewMode(false);
-    setShowBanner(false);
   }, []);
 
   // Snapshot editor selection for chat anchor (mousedown fires before click moves focus from editor)
@@ -395,53 +381,6 @@ export default function App() {
         onTabClose={handleTabClose}
         reorder={reorder}
       />
-      {showBanner && !reviewMode && (
-        <div
-          style={{
-            padding: "8px 16px",
-            background: "#eef2ff",
-            borderBottom: "1px solid #c7d2fe",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            fontSize: "13px",
-            color: "#4338ca",
-          }}
-        >
-          <span>{pendingCount} annotations pending review.</span>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button
-              onClick={toggleReviewMode}
-              style={{
-                padding: "3px 10px",
-                fontSize: "12px",
-                border: "1px solid #6366f1",
-                borderRadius: "4px",
-                background: "#6366f1",
-                color: "white",
-                cursor: "pointer",
-                fontWeight: 500,
-              }}
-            >
-              Review in sequence
-            </button>
-            <button
-              onClick={() => setShowBanner(false)}
-              style={{
-                padding: "3px 10px",
-                fontSize: "12px",
-                border: "1px solid #d1d5db",
-                borderRadius: "4px",
-                background: "white",
-                color: "#6b7280",
-                cursor: "pointer",
-              }}
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <div
           style={{
