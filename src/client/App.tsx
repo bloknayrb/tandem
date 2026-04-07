@@ -18,6 +18,7 @@ import {
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
 import type { TandemMode, CapturedAnchor } from "../shared/types";
@@ -162,7 +163,7 @@ export default function App() {
   useEffect(() => {
     if (!bootstrapYdoc) return;
     const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
-    awareness.set("mode", tandemMode);
+    awareness.set(Y_MAP_MODE, tandemMode);
   }, [tandemMode, bootstrapYdoc]);
 
   // Prolonged disconnect banner — shown after PROLONGED_DISCONNECT_MS of being disconnected

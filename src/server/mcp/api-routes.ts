@@ -4,6 +4,7 @@ import {
   CHANNEL_SSE_KEEPALIVE_MS,
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
@@ -248,7 +249,7 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
   app.get("/api/mode", apiMiddleware, (_req: Request, res: Response) => {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-    const mode = (awareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
+    const mode = (awareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
     res.json({ mode });
   });
 

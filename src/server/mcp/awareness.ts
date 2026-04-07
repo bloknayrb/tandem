@@ -11,6 +11,7 @@ import {
   TANDEM_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
@@ -177,7 +178,7 @@ export function registerAwarenessTools(server: McpServer): void {
         | undefined;
 
       const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-      const mode = (ctrlAwareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
+      const mode = (ctrlAwareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
 
       const hasSelection = selection && selection.from !== selection.to;
       const selectedText = hasSelection

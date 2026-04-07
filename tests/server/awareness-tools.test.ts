@@ -3,6 +3,7 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { describe, it, expect, beforeEach } from "vitest";
@@ -323,21 +324,21 @@ describe("tandemMode via Y.Map('userAwareness')", () => {
   it("defaults to 'tandem' when no mode is set", () => {
     const ydoc = setupDoc("int-1", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    const mode = (userAwareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
+    const mode = (userAwareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
     expect(mode).toBe("tandem");
   });
 
   it("reads mode written by client", () => {
     const ydoc = setupDoc("int-2", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("mode", "solo");
-    expect(userAwareness.get("mode")).toBe("solo");
+    userAwareness.set(Y_MAP_MODE, "solo");
+    expect(userAwareness.get(Y_MAP_MODE)).toBe("solo");
   });
 
-  it("reads 'tandem' mode", () => {
+  it("reads 'solo' mode", () => {
     const ydoc = setupDoc("int-3", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("mode", "tandem");
-    expect(userAwareness.get("mode")).toBe("tandem");
+    userAwareness.set(Y_MAP_MODE, "solo");
+    expect(userAwareness.get(Y_MAP_MODE)).toBe("solo");
   });
 });

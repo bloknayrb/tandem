@@ -42,6 +42,7 @@ export const CTRL_ROOM = "__tandem_ctrl__";
 export const Y_MAP_ANNOTATIONS = "annotations";
 export const Y_MAP_AWARENESS = "awareness";
 export const Y_MAP_USER_AWARENESS = "userAwareness";
+export const Y_MAP_MODE = "mode";
 export const Y_MAP_CHAT = "chat";
 export const Y_MAP_DOCUMENT_META = "documentMeta";
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";
