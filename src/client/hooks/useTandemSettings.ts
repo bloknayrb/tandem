@@ -1,10 +1,5 @@
 import { useState, useCallback } from "react";
-import {
-  TANDEM_SETTINGS_KEY,
-  SELECTION_DWELL_DEFAULT_MS,
-  SELECTION_DWELL_MIN_MS,
-  SELECTION_DWELL_MAX_MS,
-} from "../../shared/constants";
+import { TANDEM_SETTINGS_KEY } from "../../shared/constants";
 
 export type LayoutMode = "tabbed" | "three-panel";
 export type PrimaryTab = "chat" | "annotations";
@@ -14,7 +9,6 @@ export interface TandemSettings {
   layout: LayoutMode;
   primaryTab: PrimaryTab;
   panelOrder: PanelOrder;
-  selectionDwellMs: number;
   editorWidthPercent: number;
 }
 
@@ -22,7 +16,6 @@ const DEFAULTS: TandemSettings = {
   layout: "tabbed",
   primaryTab: "chat",
   panelOrder: "chat-editor-annotations",
-  selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   editorWidthPercent: 100,
 };
 
@@ -38,13 +31,6 @@ function loadSettings(): TandemSettings {
           parsed.panelOrder === "annotations-editor-chat"
             ? "annotations-editor-chat"
             : "chat-editor-annotations",
-        selectionDwellMs: Math.max(
-          SELECTION_DWELL_MIN_MS,
-          Math.min(
-            SELECTION_DWELL_MAX_MS,
-            Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
-          ),
-        ),
         editorWidthPercent: Math.max(50, Math.min(100, Number(parsed.editorWidthPercent) || 100)),
       };
     }

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { TandemSettings } from "../hooks/useTandemSettings";
-import { SELECTION_DWELL_MIN_MS, SELECTION_DWELL_MAX_MS } from "../../shared/constants";
 
 interface SettingsPopoverProps {
   open: boolean;
@@ -216,41 +215,6 @@ export function SettingsPopover({
           </div>
         </div>
       )}
-
-      {/* Selection dwell time */}
-      <div>
-        <div style={sectionLabelStyle}>
-          Selection Response Delay:{" "}
-          <span style={{ fontWeight: 400, textTransform: "none" }}>
-            {(settings.selectionDwellMs / 1000).toFixed(1)}s
-          </span>
-        </div>
-        <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
-          How long you hold a text selection before Claude responds to it. Shorter = faster
-          reactions, longer = fewer interruptions while reading.
-        </div>
-        <input
-          type="range"
-          min={SELECTION_DWELL_MIN_MS}
-          max={SELECTION_DWELL_MAX_MS}
-          step={100}
-          value={settings.selectionDwellMs}
-          onChange={(e) => onUpdate({ selectionDwellMs: Number(e.target.value) })}
-          style={{ width: "100%", accentColor: "#6366f1" }}
-          aria-label="Selection dwell time"
-        />
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: "10px",
-            color: "#9ca3af",
-          }}
-        >
-          <span>{(SELECTION_DWELL_MIN_MS / 1000).toFixed(1)}s</span>
-          <span>{(SELECTION_DWELL_MAX_MS / 1000).toFixed(1)}s</span>
-        </div>
-      </div>
 
       {/* Editor width */}
       <div>

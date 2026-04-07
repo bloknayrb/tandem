@@ -48,7 +48,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Multi-document: each file gets a documentId (hash of path) = Hocuspocus room name. All MCP tools accept optional `documentId`, defaulting to active document. `CTRL_ROOM` is reserved -- never use as a document ID. Server broadcasts `openDocuments` via Y.Map('documentMeta')
 - Communication: `tandem_checkInbox` (poll for user actions + chat) and `tandem_reply` (Claude's chat responses). **Call `tandem_checkInbox` between tasks.** `tandem_status` and `tandem_checkInbox` return `mode: "solo" | "tandem"` — adapt behavior accordingly (in Solo mode, hold non-urgent annotations)
 - Solo/Tandem mode is stored on the `CTRL_ROOM` Y.Map (`Y_MAP_MODE` key), not per-document. Mode changes broadcast to all open documents
-- Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady; configurable via `TANDEM_SELECTION_DWELL_MS` env var
+- Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
 
 ## Critical Rules
