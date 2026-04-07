@@ -10,7 +10,7 @@ The biggest UX gap. Tandem has good features that users won't find.
 
 - **No onboarding flow.** Roadmap 8b spec'd a 90-second tutorial with a pre-loaded sample doc — never built. New users land on a blank editor with no guidance.
 - **Keyboard shortcuts are hidden.** Review mode (Ctrl+Shift+R), Ask Claude (Ctrl+Shift+A), and the Tab/Y/N review workflow are only discoverable via tiny inline banners or tooltips. No help modal, no shortcut reference.
-- **Interruption modes unexplained.** The All/Urgent/Paused buttons in the status bar have no tooltips explaining what they do. "Urgent-only" mode is effectively broken — no UI to set annotation priority, so it filters to zero pending annotations.
+- ~~**Interruption modes unexplained.**~~ Resolved in Wave 4 — the three-state All/Urgent/Paused selector was replaced by a simpler Solo/Tandem toggle in the toolbar.
 - **Chat anchor selection is non-obvious.** Users can capture a text selection when sending a chat message, but nothing tells them this exists.
 
 ## 2. Missing Editor Basics
@@ -37,7 +37,7 @@ Users can't always tell what Claude is doing or whether it heard them.
 
 - **No typing indicator.** Status bar says "Claude -- Reviewing..." but there's no "Claude is typing..." in chat or editor. Users send messages and wait with no feedback.
 - **Polling-only inbox.** Claude must explicitly call `tandem_checkInbox()` to see user actions. If Claude is busy with a long task, user messages sit unseen. (Issue #43 tracks this.)
-- **Claude doesn't know about interruption mode.** No MCP tool to query whether the user has paused annotations. Claude might emit annotations the user won't see.
+- ~~**Claude doesn't know about interruption mode.**~~ Resolved in Wave 4 — `tandem_status` and `tandem_checkInbox` now both return `mode: "solo" | "tandem"` so Claude can adapt its behavior.
 - **Silent annotation failures.** If `tandem_highlight()` fails (file locked, range invalid), only Claude sees the error. No user-facing toast or alert.
 
 ## 5. Document Management

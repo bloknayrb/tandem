@@ -141,7 +141,7 @@ export function formatEventContent(event: TandemEvent): string {
     case "selection:changed": {
       const { from, to, selectedText } = event.payload;
       if (!selectedText) return `User cleared selection${doc}`;
-      return `User selected text (${from}-${to}): "${selectedText}"${doc}`;
+      return `User is pointing at text (${from}-${to}): "${selectedText}"${doc} — respond via tandem_reply`;
     }
     case "document:opened": {
       const { fileName, format } = event.payload;
@@ -181,6 +181,17 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
     case "chat:message":
       meta.message_id = event.payload.messageId;
       break;
+    case "selection:changed":
+      meta.respond_via = "tandem_reply";
+      break;
+    case "document:opened":
+    case "document:closed":
+    case "document:switched":
+      break;
+    default: {
+      const _exhaustive: never = event;
+      break;
+    }
   }
 
   return meta;

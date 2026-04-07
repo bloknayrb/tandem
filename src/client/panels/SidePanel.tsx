@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
-import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/types";
+import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { annotationToPmRange } from "../positions";
 import { AnnotationCard } from "./AnnotationCard";
@@ -14,8 +14,8 @@ interface SidePanelProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
   heldCount?: number;
-  interruptionMode?: InterruptionMode;
-  onModeChange?: (mode: InterruptionMode) => void;
+  tandemMode?: TandemMode;
+  onModeChange?: (mode: TandemMode) => void;
   activeDocFormat?: string;
   documentId?: string;
   reviewMode: boolean;
@@ -77,14 +77,14 @@ export function SidePanel({
   editor,
   ydoc,
   heldCount = 0,
-  interruptionMode: _interruptionMode,
+  tandemMode: _tandemMode,
   onModeChange,
   activeDocFormat,
   documentId,
   reviewMode,
   onToggleReviewMode,
   onExitReviewMode,
-  activeAnnotationId: _activeAnnotationId,
+  activeAnnotationId,
   onActiveAnnotationChange,
 }: SidePanelProps) {
   const [filterType, setFilterType] = useState<FilterType>("all");
@@ -397,6 +397,22 @@ export function SidePanel({
     }
   }, [reviewMode, reviewTargets.length, onExitReviewMode]);
 
+  // Scroll to and flash the annotation card when activeAnnotationId changes externally
+  useEffect(() => {
+    if (!activeAnnotationId) return;
+    // Small delay to let the panel become visible if the tab was just switched
+    const timer = setTimeout(() => {
+      const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        card.classList.add("tandem-annotation-flash");
+        const onEnd = () => card.classList.remove("tandem-annotation-flash");
+        card.addEventListener("animationend", onEnd, { once: true });
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [activeAnnotationId]);
+
   const listRef = useRef<HTMLDivElement>(null);
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
   const activeReviewAnn =
@@ -430,7 +446,7 @@ export function SidePanel({
             {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
           </span>
           <button
-            onClick={() => onModeChange?.("all")}
+            onClick={() => onModeChange?.("tandem")}
             style={{
               fontSize: "11px",
               padding: "1px 8px",
@@ -719,6 +735,15 @@ export function SidePanel({
           </>
         )}
       </div>
+      <style>{`
+        @keyframes tandem-annotation-flash {
+          0% { background-color: rgba(99, 102, 241, 0.2); }
+          100% { background-color: transparent; }
+        }
+        .tandem-annotation-flash {
+          animation: tandem-annotation-flash 0.8s ease-out;
+        }
+      `}</style>
     </div>
   );
 }

@@ -547,7 +547,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - `ChatPanel` -- Shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
-- `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time), Claude activity, interruption mode selector (All/Urgent/Paused). Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. Urgent-only mode shows flags, questions, and explicitly `priority: 'urgent'` annotations; hides comments, highlights, and suggestions. Client broadcasts `interruptionMode` to Y.Map('userAwareness').
+- `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the Toolbar (not StatusBar); client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
 - `ReviewSummary` -- Overlay shown when all pending annotations are resolved
 
 ### Shared (`src/shared/`)

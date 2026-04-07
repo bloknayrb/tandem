@@ -27,6 +27,7 @@ interface ChatPanelProps {
   visible?: boolean;
   capturedAnchor: CapturedAnchor | null;
   onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
+  inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 export function ChatPanel({
@@ -39,11 +40,19 @@ export function ChatPanel({
   visible,
   capturedAnchor,
   onCapturedAnchorChange,
+  inputRef: externalInputRef,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Sync local textarea ref to external ref so parent can read its value
+  useEffect(() => {
+    if (externalInputRef) {
+      externalInputRef.current = inputRef.current;
+    }
+  }, [externalInputRef]);
 
   // Observe Y.Map('chat') for changes
   useEffect(() => {

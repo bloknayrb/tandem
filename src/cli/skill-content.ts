@@ -45,19 +45,18 @@ Choose the right type for each finding:
 - **\`tandem_highlight\`** — Visual marker with a short note. Colors: green (verified/good), red (problem), yellow (needs attention). Use when the finding is self-evident from the color and a brief note.
 - **\`tandem_comment\`** — Observation requiring explanation. Use when you need more than one sentence to convey reasoning.
 - **\`tandem_suggest\`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
-- **\`tandem_flag\`** — Blocking issue the user must address before the document ships. Factual errors, compliance risks, missing required content. Always visible in urgent-only interruption mode.
+- **\`tandem_flag\`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
 
-**Priority:** Set \`priority: 'urgent'\` on any annotation type when the finding is critical and the user may be in urgent-only mode.
+**Priority:** Set \`priority: 'urgent'\` on any annotation type when the finding is critical.
 
 **User-created types:** \`question\` and \`overlay\` annotations are created by users, not Claude. When you see a \`question\` in \`tandem_checkInbox\` or \`tandem_getAnnotations\`, respond with a \`tandem_comment\` on the same range or \`tandem_reply\` for conversational answers.
 
-## Interruption Modes
+## Collaboration Mode
 
-Check \`interruptionMode\` from \`tandem_status\` or \`tandem_checkInbox\` and adapt:
+Check \`mode\` from \`tandem_status\` or \`tandem_checkInbox\` and adapt:
 
-- **All** (default) — Annotate freely.
-- **Urgent-only** (\`"urgent-only"\`) — Only create \`tandem_flag\` and annotations with \`priority: 'urgent'\`. Continue reading and preparing findings, but hold non-urgent annotations until the mode changes.
-- **Paused** — Hold all new annotations. Keep working (read, outline, prepare) but don't push findings until the mode changes.
+- **Tandem** (\`"tandem"\`, default) — Full collaboration. Annotate freely and react to selections and document changes.
+- **Solo** (\`"solo"\`) — The user wants to write undisturbed. Only respond when the user sends a chat message. Do not proactively annotate or react to document activity.
 
 ## Collaboration Etiquette
 

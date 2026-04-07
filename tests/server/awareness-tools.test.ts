@@ -1,8 +1,10 @@
 import {
-  INTERRUPTION_MODE_DEFAULT,
+  CTRL_ROOM,
+  TANDEM_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { describe, it, expect, beforeEach } from "vitest";
@@ -23,6 +25,7 @@ import {
 } from "../../src/server/mcp/document-service.js";
 import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
 import { generateMessageId } from "../../src/shared/utils.js";
+import { TandemModeSchema } from "../../src/shared/types.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 
 function setupDoc(id: string, text: string) {
@@ -319,25 +322,50 @@ describe("tandem_getSelections — real Y.Map operations", () => {
   });
 });
 
-describe("interruptionMode via Y.Map('userAwareness')", () => {
-  it("defaults to 'all' when no interruptionMode is set", () => {
+describe("tandemMode via Y.Map('userAwareness')", () => {
+  it("defaults to 'tandem' when no mode is set", () => {
     const ydoc = setupDoc("int-1", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    const mode = (userAwareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
-    expect(mode).toBe("all");
+    const mode = (userAwareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
+    expect(mode).toBe("tandem");
   });
 
-  it("reads interruptionMode written by client", () => {
+  it("reads mode written by client", () => {
     const ydoc = setupDoc("int-2", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("interruptionMode", "urgent-only");
-    expect(userAwareness.get("interruptionMode")).toBe("urgent-only");
+    userAwareness.set(Y_MAP_MODE, "solo");
+    expect(userAwareness.get(Y_MAP_MODE)).toBe("solo");
   });
 
-  it("reads 'paused' interruptionMode", () => {
+  it("reads 'solo' mode", () => {
     const ydoc = setupDoc("int-3", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("interruptionMode", "paused");
-    expect(userAwareness.get("interruptionMode")).toBe("paused");
+    userAwareness.set(Y_MAP_MODE, "solo");
+    expect(userAwareness.get(Y_MAP_MODE)).toBe("solo");
+  });
+});
+
+describe("/api/mode endpoint validation", () => {
+  it("returns 'tandem' by default when no mode is set", () => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+    expect(mode).toBe("tandem");
+  });
+
+  it("returns 'solo' when mode is set to solo", () => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set(Y_MAP_MODE, "solo");
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+    expect(mode).toBe("solo");
+  });
+
+  it("falls back to default for invalid mode values", () => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set(Y_MAP_MODE, "garbage-value");
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+    expect(mode).toBe("tandem");
   });
 });

@@ -15,6 +15,7 @@ import {
 import type { TandemEvent } from "../../src/server/events/types.js";
 import {
   CHANNEL_EVENT_BUFFER_SIZE,
+  SELECTION_DWELL_DEFAULT_MS,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
@@ -371,6 +372,7 @@ describe("selection event filtering", () => {
   let doc: Y.Doc;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     doc = new Y.Doc();
     attachObservers("sel-doc", doc);
   });
@@ -378,6 +380,7 @@ describe("selection event filtering", () => {
   afterEach(() => {
     detachObservers("sel-doc");
     doc.destroy();
+    vi.useRealTimers();
   });
 
   it("filters out cursor-only selections (from === to)", () => {
@@ -386,6 +389,7 @@ describe("selection event filtering", () => {
 
     // Simulate a click (cursor position, no range)
     awareness.set("selection", { from: 42, to: 42, timestamp: Date.now() });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS * 2);
 
     expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
     cleanup();
@@ -403,6 +407,9 @@ describe("selection event filtering", () => {
       timestamp: Date.now(),
     });
 
+    // Must advance past dwell timer
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+
     const selEvents = events.filter((e) => e.type === "selection:changed");
     expect(selEvents).toHaveLength(1);
     expect(selEvents[0].payload.from).toBe(10);
@@ -417,6 +424,9 @@ describe("selection event filtering", () => {
 
     // Simulate a selection without selectedText field (backward compat)
     awareness.set("selection", { from: 10, to: 50, timestamp: Date.now() });
+
+    // Must advance past dwell timer
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
     const selEvents = events.filter((e) => e.type === "selection:changed");
     expect(selEvents).toHaveLength(1);
@@ -436,6 +446,8 @@ describe("selection event filtering", () => {
         timestamp: Date.now(),
       });
     }, MCP_ORIGIN);
+
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS * 2);
 
     expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
     cleanup();

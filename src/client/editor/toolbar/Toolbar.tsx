@@ -5,7 +5,7 @@ import { pmPosToFlatOffset } from "../../positions";
 import { toPmPos } from "../../../shared/positions/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
-import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
+import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { InputGroup } from "./InputGroup";
 import { ToolbarButton } from "./ToolbarButton";
 import { FormattingToolbar } from "./FormattingToolbar";
@@ -23,9 +23,20 @@ type ToolbarMode = "idle" | "comment" | "suggest" | "askClaude";
 interface ToolbarProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
+  onSettingsClick?: (rect: DOMRect) => void;
+  tandemMode?: TandemMode;
+  onModeChange?: (mode: TandemMode) => void;
+  heldCount?: number;
 }
 
-export function Toolbar({ editor, ydoc }: ToolbarProps) {
+export function Toolbar({
+  editor,
+  ydoc,
+  onSettingsClick,
+  tandemMode,
+  onModeChange,
+  heldCount,
+}: ToolbarProps) {
   const [hasSelection, setHasSelection] = useState(false);
   const [highlightColor, setHighlightColor] = useState<HighlightColor>("yellow");
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -413,7 +424,116 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       )}
 
       <div style={{ flex: 1 }} />
-      <span style={{ fontSize: "12px", color: "#9ca3af" }}>Review Mode</span>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        {/* heldCount badge */}
+        {(heldCount ?? 0) > 0 && (
+          <span
+            style={{
+              padding: "1px 6px",
+              fontSize: "10px",
+              fontWeight: 600,
+              color: "#92400e",
+              background: "#fef3c7",
+              borderRadius: "9999px",
+            }}
+          >
+            {heldCount} held
+          </span>
+        )}
+        {/* Solo/Tandem mode toggle */}
+        {tandemMode && onModeChange && (
+          <div
+            role="group"
+            aria-label="Claude collaboration mode"
+            style={{
+              display: "flex",
+              border: "1px solid #d1d5db",
+              borderRadius: "4px",
+              overflow: "hidden",
+            }}
+          >
+            <button
+              title="Write undisturbed — Claude only responds when you message"
+              aria-pressed={tandemMode === "solo"}
+              onClick={() => onModeChange("solo")}
+              style={{
+                padding: "3px 10px",
+                fontSize: "12px",
+                border: "none",
+                cursor: "pointer",
+                background: tandemMode === "solo" ? "#6366f1" : "transparent",
+                color: tandemMode === "solo" ? "#fff" : "#6b7280",
+                fontWeight: tandemMode === "solo" ? 600 : 400,
+                borderRight: "1px solid #d1d5db",
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+              }}
+            >
+              {tandemMode === "solo" && (
+                <span
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    background: "#9ca3af",
+                    display: "inline-block",
+                  }}
+                />
+              )}
+              Solo
+            </button>
+            <button
+              title="Full collaboration — Claude reacts to selections and document changes"
+              aria-pressed={tandemMode === "tandem"}
+              onClick={() => onModeChange("tandem")}
+              style={{
+                padding: "3px 10px",
+                fontSize: "12px",
+                border: "none",
+                cursor: "pointer",
+                background: tandemMode === "tandem" ? "#6366f1" : "transparent",
+                color: tandemMode === "tandem" ? "#fff" : "#6b7280",
+                fontWeight: tandemMode === "tandem" ? 600 : 400,
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+              }}
+            >
+              {tandemMode === "tandem" && (
+                <span
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    background: "#22c55e",
+                    display: "inline-block",
+                  }}
+                />
+              )}
+              Tandem
+            </button>
+          </div>
+        )}
+        {onSettingsClick && (
+          <button
+            onClick={(e) => onSettingsClick(e.currentTarget.getBoundingClientRect())}
+            title="Layout settings"
+            aria-label="Layout settings"
+            style={{
+              background: "none",
+              border: "1px solid #d1d5db",
+              borderRadius: "4px",
+              cursor: "pointer",
+              color: "#6b7280",
+              fontSize: "13px",
+              padding: "4px 12px",
+            }}
+          >
+            Settings
+          </button>
+        )}
+      </div>
     </div>
   );
 }

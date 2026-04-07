@@ -196,7 +196,7 @@ describe("installSkill", () => {
     const content = readFileSync(skillPath, "utf-8");
     expect(content).toContain("tandem_resolveRange");
     expect(content).toContain("tandem_checkInbox");
-    expect(content).toContain("Interruption Modes");
+    expect(content).toContain("Collaboration Mode");
     expect(content).toContain("Error Recovery");
     expect(content).toContain("Session Handoff");
   });

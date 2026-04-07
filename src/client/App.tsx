@@ -11,19 +11,21 @@ import { HelpModal } from "./components/HelpModal";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import { ToastContainer } from "./components/ToastContainer";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
+import { SettingsPopover } from "./components/SettingsPopover";
+import { useTandemSettings } from "./hooks/useTandemSettings";
 import {
   DISCONNECT_DEBOUNCE_MS,
-  EDITOR_WIDTH_MODE_KEY,
-  INTERRUPTION_MODE_DEFAULT,
-  INTERRUPTION_MODE_KEY,
+  TANDEM_MODE_DEFAULT,
+  TANDEM_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
-import type { InterruptionMode, WidthMode, CapturedAnchor } from "../shared/types";
-import { InterruptionModeSchema } from "../shared/types";
+import type { TandemMode, CapturedAnchor } from "../shared/types";
+import { TandemModeSchema } from "../shared/types";
 import { pmSelectionToFlat } from "./positions";
 import { toPmPos } from "../shared/positions/types";
-import { useAnnotationGate } from "./hooks/useAnnotationGate";
+import { useModeGate } from "./hooks/useModeGate";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
@@ -117,8 +119,6 @@ const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
 const PANEL_WIDTH_KEY = "tandem-panel-width";
 
-const EDITOR_READING_WIDTH_PX = 740;
-
 export default function App() {
   const {
     tabs,
@@ -140,32 +140,31 @@ export default function App() {
 
   const { orderedTabs, reorder } = useTabOrder(tabs);
 
-  // Interruption mode — persisted to localStorage
-  const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
+  // Tandem mode — persisted to localStorage
+  const [tandemMode, setTandemMode] = useState<TandemMode>(() => {
     try {
-      const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
-      return InterruptionModeSchema.safeParse(saved).success
-        ? (saved as InterruptionMode)
-        : INTERRUPTION_MODE_DEFAULT;
+      const saved = localStorage.getItem(TANDEM_MODE_KEY);
+      return TandemModeSchema.safeParse(saved).success
+        ? (saved as TandemMode)
+        : TANDEM_MODE_DEFAULT;
     } catch {
-      return INTERRUPTION_MODE_DEFAULT;
+      return TANDEM_MODE_DEFAULT;
     }
   });
   useEffect(() => {
     try {
-      localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode);
+      localStorage.setItem(TANDEM_MODE_KEY, tandemMode);
     } catch {
       // localStorage unavailable (incognito/storage-disabled)
     }
-  }, [interruptionMode]);
+  }, [tandemMode]);
 
-  // Broadcast interruption mode to Y.Map so the server (and Claude) can see it
-  const activeYdoc = tabs.find((t) => t.id === activeTabId)?.ydoc;
+  // Broadcast tandem mode to CTRL_ROOM Y.Map so the server (and Claude) can see it
   useEffect(() => {
-    if (!activeYdoc) return;
-    const awareness = activeYdoc.getMap(Y_MAP_USER_AWARENESS);
-    awareness.set("interruptionMode", interruptionMode);
-  }, [interruptionMode, activeYdoc]);
+    if (!bootstrapYdoc) return;
+    const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set(Y_MAP_MODE, tandemMode);
+  }, [tandemMode, bootstrapYdoc]);
 
   // Prolonged disconnect banner — shown after PROLONGED_DISCONNECT_MS of being disconnected
   const [showDisconnectBanner, setShowDisconnectBanner] = useState(false);
@@ -186,7 +185,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [disconnectedSince]);
 
-  const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
+  const { visibleAnnotations, heldCount } = useModeGate(annotations, tandemMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
   const { toasts, dismiss: dismissToast } = useNotifications();
@@ -195,15 +194,32 @@ export default function App() {
   const { showReviewSummary, reviewSummaryData, dismissReviewSummary } =
     useReviewCompletion(annotations);
 
+  const { settings, updateSettings } = useTandemSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
+
   const [reviewMode, setReviewMode] = useState(false);
-  const [showChat, setShowChat] = useState(false);
+  const [showChat, setShowChat] = useState(() => settings.primaryTab === "chat");
+
+  // Badge counts for the tab toggle buttons
+  const pendingAnnotationBadge = useMemo(() => {
+    if (!showChat) return 0;
+    return visibleAnnotations.filter((a) => a.status === "pending").length;
+  }, [visibleAnnotations, showChat]);
+
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [capturedAnchor, setCapturedAnchor] = useState<CapturedAnchor | null>(null);
   const editorRef = useRef<TiptapEditor | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
+  }, []);
+
+  const handleAnnotationClick = useCallback((annotationId: string) => {
+    setShowChat(false);
+    setActiveAnnotationId(annotationId);
   }, []);
 
   const [panelWidth, setPanelWidth] = useState<number>(() => {
@@ -221,25 +237,9 @@ export default function App() {
     return PANEL_DEFAULT_WIDTH;
   });
 
-  const [widthMode, setWidthMode] = useState<WidthMode>(() => {
-    try {
-      return localStorage.getItem(EDITOR_WIDTH_MODE_KEY) === "reading" ? "reading" : "full";
-    } catch {
-      return "full";
-    }
-  });
-
-  const toggleWidthMode = useCallback(() => {
-    setWidthMode((prev) => {
-      const next = prev === "reading" ? "full" : "reading";
-      try {
-        localStorage.setItem(EDITOR_WIDTH_MODE_KEY, next);
-      } catch {
-        // localStorage unavailable
-      }
-      return next;
-    });
-  }, []);
+  const editorMaxWidth =
+    settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;
+  const editorMargin = settings.editorWidthPercent < 100 ? "0 auto" : undefined;
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
@@ -330,6 +330,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  const useThreePanel = settings.layout === "three-panel";
+
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
   const { tutorialActive, currentStep, dismissTutorial, nextStep } = useTutorial(
@@ -373,7 +375,17 @@ export default function App() {
       {showDisconnectBanner && !disconnectBannerDismissed && (
         <ConnectionBanner onDismiss={() => setDisconnectBannerDismissed(true)} />
       )}
-      <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
+      <Toolbar
+        editor={editorRef.current}
+        ydoc={activeTab?.ydoc ?? null}
+        onSettingsClick={(rect) => {
+          setSettingsAnchor(rect);
+          setSettingsOpen(true);
+        }}
+        tandemMode={tandemMode}
+        onModeChange={setTandemMode}
+        heldCount={heldCount}
+      />
       <DocumentTabs
         tabs={orderedTabs}
         activeTabId={activeTabId}
@@ -381,164 +393,390 @@ export default function App() {
         onTabClose={handleTabClose}
         reorder={reorder}
       />
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <div
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: "24px 48px",
-            border: fileDragOver ? "2px dashed #6366f1" : "2px solid transparent",
-            background: fileDragOver ? "#eef2ff" : undefined,
-            transition: "border-color 0.15s, background 0.15s",
-          }}
-          onDragOver={handleEditorDragOver}
-          onDragLeave={handleEditorDragLeave}
-          onDrop={handleEditorDrop}
-        >
-          <ReviewOnlyBanner
-            visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
-            documentId={activeTab?.id}
-          />
-          <div
-            style={{
-              maxWidth: widthMode === "reading" ? `${EDITOR_READING_WIDTH_PX}px` : undefined,
-              margin: widthMode === "reading" ? "0 auto" : undefined,
-            }}
-          >
-            {activeTab ? (
-              <Editor
-                key={activeTab.id}
-                ydoc={activeTab.ydoc}
-                provider={activeTab.provider}
-                readOnly={readOnly}
-                reviewMode={reviewMode}
-                activeAnnotationId={activeAnnotationId}
-                onEditorReady={handleEditorReady}
-              />
-            ) : (
-              <EmptyState connected={connected} claudeActive={claudeActive} />
-            )}
-          </div>
-        </div>
-        {/* Resize handle */}
-        <div
-          data-testid="panel-resize-handle"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize panel"
-          tabIndex={0}
-          onMouseDown={handleResizeStart}
-          style={{
-            width: "4px",
-            cursor: "col-resize",
-            background: "transparent",
-            flexShrink: 0,
-            transition: "background 0.15s",
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLDivElement).style.background = "transparent";
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            width: `${panelWidth}px`,
-            borderLeft: "1px solid #e5e7eb",
-          }}
-        >
-          {/* Panel toggle tabs */}
+      {useThreePanel ? (
+        /* ── Three-panel layout: Left | Editor | Right ── */
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          {/* Left panel */}
           <div
             style={{
               display: "flex",
-              borderBottom: "1px solid #e5e7eb",
-              background: "#f9fafb",
+              flexDirection: "column",
+              width: `${panelWidth}px`,
+              borderRight: "1px solid #e5e7eb",
             }}
           >
-            <button
-              onClick={() => setShowChat(false)}
+            <div
               style={{
-                flex: 1,
-                padding: "8px",
-                fontSize: "12px",
-                fontWeight: showChat ? 400 : 600,
-                border: "none",
-                borderBottom: showChat ? "none" : "2px solid #6366f1",
-                background: "transparent",
-                cursor: "pointer",
-                color: showChat ? "#6b7280" : "#6366f1",
+                padding: "6px 12px",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "#6b7280",
+                borderBottom: "1px solid #e5e7eb",
+                background: "#f9fafb",
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
               }}
             >
-              Annotations
-            </button>
-            <button
-              onMouseDown={captureSelectionForChat}
-              onClick={() => setShowChat(true)}
-              style={{
-                flex: 1,
-                padding: "8px",
-                fontSize: "12px",
-                fontWeight: showChat ? 600 : 400,
-                border: "none",
-                borderBottom: showChat ? "2px solid #6366f1" : "none",
-                background: "transparent",
-                cursor: "pointer",
-                color: showChat ? "#6366f1" : "#6b7280",
-              }}
-            >
-              Chat
-            </button>
+              {settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+              {settings.panelOrder === "chat-editor-annotations" ? (
+                <ChatPanel
+                  ctrlYdoc={bootstrapYdoc}
+                  editor={editorRef.current}
+                  activeDocId={activeTabId}
+                  openDocs={openDocs}
+                  claudeActive={claudeActive}
+                  claudeStatus={claudeStatus}
+                  visible={true}
+                  capturedAnchor={capturedAnchor}
+                  onCapturedAnchorChange={setCapturedAnchor}
+                  inputRef={chatInputRef}
+                />
+              ) : (
+                <SidePanel
+                  annotations={visibleAnnotations}
+                  editor={editorRef.current}
+                  ydoc={activeTab?.ydoc ?? null}
+                  heldCount={heldCount}
+                  tandemMode={tandemMode}
+                  onModeChange={setTandemMode}
+                  activeDocFormat={activeTab?.format}
+                  documentId={activeTab?.id}
+                  reviewMode={reviewMode}
+                  onToggleReviewMode={toggleReviewMode}
+                  onExitReviewMode={exitReviewMode}
+                  activeAnnotationId={activeAnnotationId}
+                  onActiveAnnotationChange={setActiveAnnotationId}
+                />
+              )}
+            </div>
           </div>
-          {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
+          {/* Left resize handle */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize left panel"
+            tabIndex={0}
+            onMouseDown={handleResizeStart}
+            style={{
+              width: "4px",
+              cursor: "col-resize",
+              background: "transparent",
+              flexShrink: 0,
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = "transparent";
+            }}
+          />
+          {/* Editor (center) */}
           <div
             style={{
-              display: showChat ? "flex" : "none",
-              flexDirection: "column",
               flex: 1,
-              minHeight: 0,
+              overflow: "auto",
+              padding: "24px 48px",
+              border: fileDragOver ? "2px dashed #6366f1" : "2px solid transparent",
+              background: fileDragOver ? "#eef2ff" : undefined,
+              transition: "border-color 0.15s, background 0.15s",
             }}
+            onDragOver={handleEditorDragOver}
+            onDragLeave={handleEditorDragLeave}
+            onDrop={handleEditorDrop}
           >
-            <ChatPanel
-              ctrlYdoc={bootstrapYdoc}
-              editor={editorRef.current}
-              activeDocId={activeTabId}
-              openDocs={openDocs}
-              claudeActive={claudeActive}
-              claudeStatus={claudeStatus}
-              visible={showChat}
-              capturedAnchor={capturedAnchor}
-              onCapturedAnchorChange={setCapturedAnchor}
-            />
-          </div>
-          <div
-            style={{
-              display: showChat ? "none" : "flex",
-              flexDirection: "column",
-              flex: 1,
-              minHeight: 0,
-            }}
-          >
-            <SidePanel
-              annotations={visibleAnnotations}
-              editor={editorRef.current}
-              ydoc={activeTab?.ydoc ?? null}
-              heldCount={heldCount}
-              interruptionMode={interruptionMode}
-              onModeChange={setInterruptionMode}
-              activeDocFormat={activeTab?.format}
+            <ReviewOnlyBanner
+              visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
               documentId={activeTab?.id}
-              reviewMode={reviewMode}
-              onToggleReviewMode={toggleReviewMode}
-              onExitReviewMode={exitReviewMode}
-              activeAnnotationId={activeAnnotationId}
-              onActiveAnnotationChange={setActiveAnnotationId}
             />
+            <div
+              style={{
+                maxWidth: editorMaxWidth,
+                margin: editorMargin,
+              }}
+            >
+              {activeTab ? (
+                <Editor
+                  key={activeTab.id}
+                  ydoc={activeTab.ydoc}
+                  provider={activeTab.provider}
+                  readOnly={readOnly}
+                  reviewMode={reviewMode}
+                  activeAnnotationId={activeAnnotationId}
+                  onEditorReady={handleEditorReady}
+                  onAnnotationClick={handleAnnotationClick}
+                />
+              ) : (
+                <EmptyState connected={connected} claudeActive={claudeActive} />
+              )}
+            </div>
+          </div>
+          {/* Right resize handle */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize right panel"
+            tabIndex={0}
+            onMouseDown={handleResizeStart}
+            style={{
+              width: "4px",
+              cursor: "col-resize",
+              background: "transparent",
+              flexShrink: 0,
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = "transparent";
+            }}
+          />
+          {/* Right panel */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: `${panelWidth}px`,
+              borderLeft: "1px solid #e5e7eb",
+            }}
+          >
+            <div
+              style={{
+                padding: "6px 12px",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "#6b7280",
+                borderBottom: "1px solid #e5e7eb",
+                background: "#f9fafb",
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
+              }}
+            >
+              {settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+              {settings.panelOrder === "chat-editor-annotations" ? (
+                <SidePanel
+                  annotations={visibleAnnotations}
+                  editor={editorRef.current}
+                  ydoc={activeTab?.ydoc ?? null}
+                  heldCount={heldCount}
+                  tandemMode={tandemMode}
+                  onModeChange={setTandemMode}
+                  activeDocFormat={activeTab?.format}
+                  documentId={activeTab?.id}
+                  reviewMode={reviewMode}
+                  onToggleReviewMode={toggleReviewMode}
+                  onExitReviewMode={exitReviewMode}
+                  activeAnnotationId={activeAnnotationId}
+                  onActiveAnnotationChange={setActiveAnnotationId}
+                />
+              ) : (
+                <ChatPanel
+                  ctrlYdoc={bootstrapYdoc}
+                  editor={editorRef.current}
+                  activeDocId={activeTabId}
+                  openDocs={openDocs}
+                  claudeActive={claudeActive}
+                  claudeStatus={claudeStatus}
+                  visible={true}
+                  capturedAnchor={capturedAnchor}
+                  onCapturedAnchorChange={setCapturedAnchor}
+                  inputRef={chatInputRef}
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        /* ── Tabbed layout (default): Editor | Tabs+Panel ── */
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          <div
+            style={{
+              flex: 1,
+              overflow: "auto",
+              padding: "24px 48px",
+              border: fileDragOver ? "2px dashed #6366f1" : "2px solid transparent",
+              background: fileDragOver ? "#eef2ff" : undefined,
+              transition: "border-color 0.15s, background 0.15s",
+            }}
+            onDragOver={handleEditorDragOver}
+            onDragLeave={handleEditorDragLeave}
+            onDrop={handleEditorDrop}
+          >
+            <ReviewOnlyBanner
+              visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+              documentId={activeTab?.id}
+            />
+            <div
+              style={{
+                maxWidth: editorMaxWidth,
+                margin: editorMargin,
+              }}
+            >
+              {activeTab ? (
+                <Editor
+                  key={activeTab.id}
+                  ydoc={activeTab.ydoc}
+                  provider={activeTab.provider}
+                  readOnly={readOnly}
+                  reviewMode={reviewMode}
+                  activeAnnotationId={activeAnnotationId}
+                  onEditorReady={handleEditorReady}
+                  onAnnotationClick={handleAnnotationClick}
+                />
+              ) : (
+                <EmptyState connected={connected} claudeActive={claudeActive} />
+              )}
+            </div>
+          </div>
+          {/* Resize handle */}
+          <div
+            data-testid="panel-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize panel"
+            tabIndex={0}
+            onMouseDown={handleResizeStart}
+            style={{
+              width: "4px",
+              cursor: "col-resize",
+              background: "transparent",
+              flexShrink: 0,
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = "transparent";
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: `${panelWidth}px`,
+              borderLeft: "1px solid #e5e7eb",
+            }}
+          >
+            {/* Panel toggle tabs */}
+            <div
+              style={{
+                display: "flex",
+                borderBottom: "1px solid #e5e7eb",
+                background: "#f9fafb",
+              }}
+            >
+              <button
+                onClick={() => setShowChat(false)}
+                style={{
+                  flex: 1,
+                  padding: "8px",
+                  fontSize: "12px",
+                  fontWeight: showChat ? 400 : 600,
+                  border: "none",
+                  borderBottom: showChat ? "none" : "2px solid #6366f1",
+                  background: "transparent",
+                  cursor: "pointer",
+                  color: showChat ? "#6b7280" : "#6366f1",
+                  position: "relative",
+                }}
+              >
+                Annotations
+                {showChat && pendingAnnotationBadge > 0 && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: "2px",
+                      right: "6px",
+                      background: "#ef4444",
+                      color: "#fff",
+                      fontSize: "9px",
+                      width: "16px",
+                      height: "16px",
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+                  </span>
+                )}
+              </button>
+              <button
+                onMouseDown={captureSelectionForChat}
+                onClick={() => setShowChat(true)}
+                style={{
+                  flex: 1,
+                  padding: "8px",
+                  fontSize: "12px",
+                  fontWeight: showChat ? 600 : 400,
+                  border: "none",
+                  borderBottom: showChat ? "2px solid #6366f1" : "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  color: showChat ? "#6366f1" : "#6b7280",
+                  position: "relative",
+                }}
+              >
+                Chat
+              </button>
+            </div>
+            {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
+            <div
+              style={{
+                display: showChat ? "flex" : "none",
+                flexDirection: "column",
+                flex: 1,
+                minHeight: 0,
+              }}
+            >
+              <ChatPanel
+                ctrlYdoc={bootstrapYdoc}
+                editor={editorRef.current}
+                activeDocId={activeTabId}
+                openDocs={openDocs}
+                claudeActive={claudeActive}
+                claudeStatus={claudeStatus}
+                visible={showChat}
+                capturedAnchor={capturedAnchor}
+                onCapturedAnchorChange={setCapturedAnchor}
+                inputRef={chatInputRef}
+              />
+            </div>
+            <div
+              style={{
+                display: showChat ? "none" : "flex",
+                flexDirection: "column",
+                flex: 1,
+                minHeight: 0,
+              }}
+            >
+              <SidePanel
+                annotations={visibleAnnotations}
+                editor={editorRef.current}
+                ydoc={activeTab?.ydoc ?? null}
+                heldCount={heldCount}
+                tandemMode={tandemMode}
+                onModeChange={setTandemMode}
+                activeDocFormat={activeTab?.format}
+                documentId={activeTab?.id}
+                reviewMode={reviewMode}
+                onToggleReviewMode={toggleReviewMode}
+                onExitReviewMode={exitReviewMode}
+                activeAnnotationId={activeAnnotationId}
+                onActiveAnnotationChange={setActiveAnnotationId}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       <StatusBar
         connected={connected}
         connectionStatus={connectionStatus}
@@ -548,11 +786,6 @@ export default function App() {
         claudeActive={claudeActive}
         readOnly={readOnly}
         documentCount={tabs.length}
-        interruptionMode={interruptionMode}
-        onModeChange={setInterruptionMode}
-        heldCount={heldCount}
-        widthMode={widthMode}
-        onToggleWidthMode={toggleWidthMode}
       />
       {showReviewSummary && reviewSummaryData && (
         <ReviewSummary
@@ -562,6 +795,13 @@ export default function App() {
           onDismiss={dismissReviewSummary}
         />
       )}
+      <SettingsPopover
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        anchorRect={settingsAnchor}
+        settings={settings}
+        onUpdate={updateSettings}
+      />
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       {tutorialActive && (
