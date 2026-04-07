@@ -1,5 +1,5 @@
 import {
-  INTERRUPTION_MODE_DEFAULT,
+  TANDEM_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
@@ -319,25 +319,25 @@ describe("tandem_getSelections — real Y.Map operations", () => {
   });
 });
 
-describe("interruptionMode via Y.Map('userAwareness')", () => {
-  it("defaults to 'all' when no interruptionMode is set", () => {
+describe("tandemMode via Y.Map('userAwareness')", () => {
+  it("defaults to 'tandem' when no mode is set", () => {
     const ydoc = setupDoc("int-1", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    const mode = (userAwareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
-    expect(mode).toBe("all");
+    const mode = (userAwareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
+    expect(mode).toBe("tandem");
   });
 
-  it("reads interruptionMode written by client", () => {
+  it("reads mode written by client", () => {
     const ydoc = setupDoc("int-2", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("interruptionMode", "urgent-only");
-    expect(userAwareness.get("interruptionMode")).toBe("urgent-only");
+    userAwareness.set("mode", "solo");
+    expect(userAwareness.get("mode")).toBe("solo");
   });
 
-  it("reads 'paused' interruptionMode", () => {
+  it("reads 'tandem' mode", () => {
     const ydoc = setupDoc("int-3", "Hello world");
     const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("interruptionMode", "paused");
-    expect(userAwareness.get("interruptionMode")).toBe("paused");
+    userAwareness.set("mode", "tandem");
+    expect(userAwareness.get("mode")).toBe("tandem");
   });
 });

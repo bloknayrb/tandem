@@ -23,7 +23,6 @@ export const AnnotationTypeSchema = z.enum([
 ]);
 export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
 export const AnnotationPrioritySchema = z.enum(["normal", "urgent"]);
-export const InterruptionModeSchema = z.enum(["all", "urgent-only", "paused"]);
 export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
 export const TandemModeSchema = z.enum(["solo", "tandem"]);
@@ -47,7 +46,6 @@ export const ToolErrorCodeSchema = z.enum([
 export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
 export type AnnotationPriority = z.infer<typeof AnnotationPrioritySchema>;
-export type InterruptionMode = z.infer<typeof InterruptionModeSchema>;
 export type TandemMode = z.infer<typeof TandemModeSchema>;
 export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;

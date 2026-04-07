@@ -21,9 +21,6 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
   purple: "rgba(156, 39, 176, 0.3)",
 };
 
-export const INTERRUPTION_MODE_DEFAULT = "all" as const;
-export const INTERRUPTION_MODE_KEY = "tandem:interruptionMode";
-
 export const TANDEM_MODE_DEFAULT = "tandem" as const;
 export const TANDEM_MODE_KEY = "tandem:mode";
 export const TANDEM_SETTINGS_KEY = "tandem:settings";
