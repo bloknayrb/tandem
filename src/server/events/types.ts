@@ -184,6 +184,14 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
     case "selection:changed":
       meta.respond_via = "tandem_reply";
       break;
+    case "document:opened":
+    case "document:closed":
+    case "document:switched":
+      break;
+    default: {
+      const _exhaustive: never = event;
+      break;
+    }
   }
 
   return meta;

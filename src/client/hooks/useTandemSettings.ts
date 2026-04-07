@@ -45,7 +45,12 @@ export function useTandemSettings() {
 
   const updateSettings = useCallback((partial: Partial<TandemSettings>) => {
     setSettingsState((prev) => {
-      const next = { ...prev, ...partial };
+      const merged = { ...prev, ...partial };
+      // Clamp numeric values on write (same rules as loadSettings)
+      const next: TandemSettings = {
+        ...merged,
+        editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
+      };
       try {
         localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
       } catch {
