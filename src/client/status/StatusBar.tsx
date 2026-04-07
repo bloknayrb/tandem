@@ -17,6 +17,7 @@ interface StatusBarProps {
   heldCount: number;
   widthMode: WidthMode;
   onToggleWidthMode: () => void;
+  onSettingsClick?: (rect: DOMRect) => void;
 }
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -35,6 +36,7 @@ export function StatusBar({
   heldCount,
   widthMode,
   onToggleWidthMode,
+  onSettingsClick,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(() => {
     try {
@@ -228,6 +230,23 @@ export function StatusBar({
           }}
         >
           Reading Width
+        </button>
+        <button
+          title="Layout settings"
+          aria-label="Layout settings"
+          onClick={(e) => onSettingsClick?.(e.currentTarget.getBoundingClientRect())}
+          style={{
+            padding: "1px 6px",
+            fontSize: "13px",
+            border: "1px solid #d1d5db",
+            borderRadius: "4px",
+            cursor: "pointer",
+            background: "transparent",
+            color: "#6b7280",
+            lineHeight: 1,
+          }}
+        >
+          {"\u2699"}
         </button>
       </div>
 
