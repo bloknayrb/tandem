@@ -52,6 +52,59 @@ const OrderedListIcon = (
   </svg>
 );
 
+const LinkIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M6.5 8.5a3.5 3.5 0 0 0 5 0l2-2a3.5 3.5 0 0 0-5-5l-1 1"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9.5 7.5a3.5 3.5 0 0 0-5 0l-2 2a3.5 3.5 0 0 0 5 5l1-1"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const CodeBlockIcon = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M5 4L1 8l4 4"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M11 4l4 4-4 4"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M9 2l-2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+
 const BlockquoteIcon = (
   <svg
     width="14"
@@ -345,6 +398,45 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         disabled={isDisabled}
         active={editor.isActive("blockquote")}
         onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBlockquote().run())}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
+      />
+
+      <div style={{ width: "1px", height: "16px", background: "#e5e7eb", margin: "0 2px" }} />
+
+      <ToolbarButton
+        label={LinkIcon}
+        ariaLabel="Link"
+        shortcut="Ctrl+K"
+        disabled={
+          isDisabled ||
+          (!editor.isActive("link") && editor.state.selection.from === editor.state.selection.to)
+        }
+        active={editor.isActive("link")}
+        onMouseDown={withPreventDefault(() => {
+          if (editor.isActive("link")) {
+            editor.chain().focus().unsetLink().run();
+          } else {
+            const url = window.prompt("Enter URL:");
+            if (url) {
+              editor.chain().focus().setLink({ href: url }).run();
+            }
+          }
+        })}
+        style={{ minWidth: "30px", padding: "4px 6px" }}
+      />
+      <ToolbarButton
+        label="—"
+        ariaLabel="Horizontal rule"
+        disabled={isDisabled}
+        onMouseDown={withPreventDefault(() => editor.chain().focus().setHorizontalRule().run())}
+        style={{ minWidth: "30px" }}
+      />
+      <ToolbarButton
+        label={CodeBlockIcon}
+        ariaLabel="Code block"
+        disabled={isDisabled}
+        active={editor.isActive("codeBlock")}
+        onMouseDown={withPreventDefault(() => editor.chain().focus().toggleCodeBlock().run())}
         style={{ minWidth: "30px", padding: "4px 6px" }}
       />
     </div>

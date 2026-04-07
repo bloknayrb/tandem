@@ -212,8 +212,10 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
     <div
       style={{
         display: "flex",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: "8px",
+        minHeight: "42px",
         padding: "8px 16px",
         borderBottom: "1px solid #e5e7eb",
         background: "#fafafa",
@@ -379,7 +381,8 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
                 border: "1px solid #d1d5db",
                 borderRadius: "4px",
                 outline: "none",
-                width: "140px",
+                minWidth: "100px",
+                flex: "1 1 140px",
               }}
             />
           }

@@ -479,7 +479,7 @@ export function SidePanel({
             {allPending.length} pending annotation{allPending.length !== 1 ? "s" : ""}
           </span>
           {allPending.length > 0 && (
-            <>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
               <button
                 data-testid="review-mode-btn"
                 onClick={onToggleReviewMode}
@@ -506,9 +506,9 @@ export function SidePanel({
                   marginTop: "2px",
                 }}
               >
-                Y = accept, N = dismiss, ↑↓ = navigate, Z = undo
+                Y / N / ↑↓ / Z
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
