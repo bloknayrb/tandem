@@ -100,7 +100,7 @@ These WILL break things if violated:
 
 ## Status
 
-Core complete: 30 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), 860 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining phases (2-5: cowork integration, .docx export, distribution, discovery).
+Core complete: 30 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), 896 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining phases (2-5: cowork integration, .docx export, distribution, discovery).
 
 ## Security
 - Server binds to 127.0.0.1 only

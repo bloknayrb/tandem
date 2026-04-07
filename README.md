@@ -80,7 +80,7 @@ Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatical
 
 ![Side panel showing annotation cards with filtering, bulk actions, and text previews](docs/screenshots/03-side-panel.png)
 
-Claude adds highlights, comments, suggestions, and flags directly in the document. The side panel lists all annotations with filtering by type, author, and status. Accept, dismiss, or edit each one individually — or use bulk actions to process them in batches.
+Claude adds highlights, comments, suggestions, and flags directly in the document. Suggestion cards show a visual diff — original text in red strikethrough, replacement in green. The side panel lists all annotations with filtering by type, author, and status. Accept, dismiss, or edit each one individually — or use bulk actions to process them in batches.
 
 ### Chat
 
@@ -92,7 +92,7 @@ Send freeform messages to Claude alongside annotation review. Select text before
 
 ![Review mode with dimmed editor and active annotation highlighted](docs/screenshots/05-review-mode.png)
 
-Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, accept with **Y**, dismiss with **N**, examine with **E**. A 10-second undo window lets you reverse accidental accepts. The side panel tracks your position.
+Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, accept with **Y**, dismiss with **N**, examine with **E**. A 10-second undo window with a visual countdown lets you reverse accidental accepts. Shortcut hints appear below the Review button.
 
 ### More
 
@@ -128,7 +128,7 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 
 ## MCP Configuration
 
-Tandem uses two MCP connections: **HTTP** for document tools (28 tools including annotation editing), and a **channel shim** for real-time push notifications.
+Tandem uses two MCP connections: **HTTP** for document tools (30 tools including annotation editing), and a **channel shim** for real-time push notifications.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 

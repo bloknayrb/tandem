@@ -42,17 +42,19 @@ Open documents appear as tabs along the top. Each tab shows the file name and a 
 
 ### Formatting Toolbar
 
-Select text to reveal formatting buttons: **Bold**, **Italic**, **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, **Code**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.).
+Select text to reveal formatting buttons: **Bold**, **Italic**, **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, **Code**, **Link** (`Ctrl+K`), **Horizontal Rule**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
 
 ### Annotation Toolbar
 
 When text is selected, annotation buttons appear alongside the formatting toolbar:
 
-- **Highlight** — Mark text with a colored background. A dropdown lets you pick from 5 colors: yellow, red, green, blue, or purple.
+- **Highlight** — Mark text with a colored background. A dropdown lets you pick from 5 colors: yellow, red, green, blue, or purple. An explicit ✕ button closes the color picker.
 - **Comment** — Attach a note to the selected text.
 - **Suggest** — Propose a text replacement. A text input appears for the new wording.
 - **Flag** — Mark text for urgent attention.
 - **Ask Claude** — Send a question about the selected text to Claude (also available via `Ctrl+Shift+A`).
+
+When no text is selected, annotation buttons show a "Select text first" tooltip explaining why they're disabled.
 
 ### Side Panel
 
@@ -125,7 +127,7 @@ Dashed underline on the annotated text. Attach observations, questions, or notes
 
 ### Suggestion
 
-Wavy underline on the annotated text. Proposes a text replacement. The side panel card shows both the current text and the proposed replacement. Accepting a suggestion applies the text change automatically.
+Wavy underline on the annotated text. Proposes a text replacement. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting a suggestion applies the text change automatically.
 
 ### Flag
 
@@ -143,7 +145,7 @@ Select text in the editor to reveal the annotation toolbar. Click the desired ty
 
 ### Editing Annotations
 
-Click the pencil icon on any pending annotation card to edit it:
+Click the **✎ Edit** button on any pending annotation card to edit it:
 
 - **Highlights, comments, and flags** — A textarea appears with the current note.
 - **Suggestions** — Two textareas appear: one for the proposed replacement text, one for the reason.
@@ -158,13 +160,13 @@ Each annotation card in the side panel has **Accept** and **Dismiss** buttons. A
 
 ### Undo
 
-After accepting or dismissing, a 10-second undo window opens. An "Undo" link appears on the card. In review mode, press `Z`. For accepted suggestions, undo atomically reverts both the text change and the annotation status.
+After accepting or dismissing, a 10-second undo window opens. An "Undo" link appears on the card with a shrinking progress bar showing the remaining time. In review mode, press `Z`. For accepted suggestions, undo atomically reverts both the text change and the annotation status.
 
 ### Review Mode
 
 ![Review mode with dimmed editor and active annotation highlighted](screenshots/05-review-mode.png)
 
-Press `Ctrl+Shift+R` or click "Review in sequence" to enter review mode. The editor dims non-annotated text so annotations stand out. The side panel tracks your position ("Reviewing 3 / 15").
+Press `Ctrl+Shift+R` or click "Review" to enter review mode. Shortcut hints (`Y / N / ↑↓ / Z`) appear below the button. The editor dims non-annotated text so annotations stand out. The side panel tracks your position ("Reviewing 3 / 15").
 
 | Key | Action |
 |-----|--------|
@@ -206,7 +208,7 @@ Type in the input box and press `Enter` to send. Messages go to Claude via the s
 
 ### Text Anchors
 
-If you have text selected in the editor when you send a message, the selection is attached as a clickable anchor. Clicking the anchor later scrolls the editor back to that passage. This is useful for asking Claude about specific parts of the document.
+If you have text selected in the editor when you send a message, the selection is attached as a clickable anchor. The anchor quote shows a preview that expands on hover to reveal the full text. Clicking the anchor scrolls the editor back to that passage.
 
 ### Claude's Responses
 
@@ -226,6 +228,7 @@ Press `?` to open the in-app shortcuts reference at any time.
 |----------|--------|
 | `Ctrl+B` | Bold |
 | `Ctrl+I` | Italic |
+| `Ctrl+K` | Insert/remove link |
 | `Ctrl+S` | Save document |
 
 > **Note:** Undo/redo is not yet available in collaborative mode (tracked as a future enhancement).
@@ -255,7 +258,7 @@ Press `?` to open the in-app shortcuts reference at any time.
 
 ## Working with Claude Code
 
-Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 28 tools for reading documents, creating annotations, searching text, managing files, and communicating with you.
+Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 30 tools for reading documents, creating annotations, searching text, managing files, and communicating with you.
 
 ### Connection
 
@@ -314,7 +317,7 @@ Previously-open documents are auto-restored when the server starts — no manual
 
 ### Further Reading
 
-- [MCP Tool Reference](mcp-tools.md) — Full documentation for all 28 tools
+- [MCP Tool Reference](mcp-tools.md) — Full documentation for all 30 tools
 - [Workflows](workflows.md) — Advanced Claude Code patterns: cross-referencing documents, multi-model review, RFP drafting, session handoff details
 - [Architecture](architecture.md) — System design, coordinate systems, data flows
 

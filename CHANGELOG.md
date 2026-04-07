@@ -5,6 +5,23 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Link (Ctrl+K), Horizontal Rule, and Code Block buttons in the formatting toolbar (#204)
+- Suggestion cards show a visual diff — original text in red strikethrough → replacement in green (#195)
+- Undo countdown progress bar — a shrinking indicator shows the 10-second undo window (#196)
+- Review mode shortcut hints (Y / N / ↑↓ / Z) shown below the Review button (#200)
+- Chat anchor previews expand on hover to show full text (#198)
+- `disabledTitle` prop on toolbar buttons — annotation buttons show "Select text first" when no text is selected (#197)
+- Explicit ✕ close button on the highlight color picker (#203)
+
+### Fixed
+
+- Toolbar wraps to a second row on narrow windows instead of overflowing; inline inputs shrink responsively (#192)
+- Edit button on annotation cards now shows a visible "✎ Edit" label instead of icon-only (#201)
+
 ## [0.2.12] - 2026-04-06
 
 ### Added
