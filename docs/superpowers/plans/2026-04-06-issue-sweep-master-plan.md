@@ -2,8 +2,10 @@
 
 ## Status (as of 2026-04-06)
 - **Wave 1: MERGED** (PR #213) -- #212 localStorage guards, #202 scroll reset, pre-existing lint fixes
-- **#211** (tool count) -- already correct (30 tools), likely stale issue. Verify and close.
-- **Waves 2-7: NOT STARTED**
+- **#211** (tool count) -- verified correct, closed.
+- **Wave 2a: MERGED** (PR #215) -- #195 suggestion diff display, #196 undo countdown, #201 edit button label
+- **Wave 2b: MERGED** (PR #216) -- #197 disabled tooltips, #198 chat anchor expand, #200 review shortcut hints, #203 color picker cancel. Review caught wrong keybindings (A/D→Y/N) and conditional guard issue, both fixed before merge.
+- **Waves 3-7: NOT STARTED**
 
 ## Wave 2a: Annotation Card UX (1 PR)
 **Issues:** #195, #196, #201 -- all touch `AnnotationCard.tsx`
