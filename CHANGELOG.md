@@ -5,15 +5,19 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Wave 4: Notification & Interruption Redesign
+## [0.3.0] - 2026-04-07
 
-- **Solo/Tandem mode** replaces All/Urgent/Paused interruption controls (#207)
-- **Dwell-time selection events** — selections fire after 1s hold, configurable (#188)
+### Wave 4: Notification & Interruption Redesign
+
+- **Solo/Tandem mode** replaces All/Urgent/Paused interruption controls (#207, #226)
+- **Dwell-time selection events** — selections fire after 1s hold (#188)
 - **Configurable layout** — tabbed or three-panel, with settings popover (#206)
 - **Click-to-navigate** — click annotated text to jump to annotation card
 - **Tab badges** — notification counts on inactive panel tabs
 - **Skill-directed response routing** — Claude responds in chat panel, not terminal
 - Review banner replaced with per-annotation toasts (#208, landed earlier)
+- `Y_MAP_MODE` constant, Zod validation for mode reads, error logging in channel event bridge
+- 894 tests passing
 
 ## [Unreleased]
 
