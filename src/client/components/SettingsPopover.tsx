@@ -218,10 +218,14 @@ export function SettingsPopover({
       {/* Selection dwell time */}
       <div>
         <div style={sectionLabelStyle}>
-          Selection Dwell Time:{" "}
+          Selection Response Delay:{" "}
           <span style={{ fontWeight: 400, textTransform: "none" }}>
             {(settings.selectionDwellMs / 1000).toFixed(1)}s
           </span>
+        </div>
+        <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
+          How long you hold a text selection before Claude responds to it. Shorter = faster
+          reactions, longer = fewer interruptions while reading.
         </div>
         <input
           type="range"
@@ -248,11 +252,14 @@ export function SettingsPopover({
 
       {/* Editor width */}
       <div>
-        <div style={{ fontSize: "11px", fontWeight: 600, color: "#374151", marginBottom: "4px" }}>
-          EDITOR WIDTH: {settings.editorWidthPercent}%
+        <div style={sectionLabelStyle}>
+          Editor Width:{" "}
+          <span style={{ fontWeight: 400, textTransform: "none" }}>
+            {settings.editorWidthPercent}%
+          </span>
         </div>
         <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
-          Percentage of available space used for text
+          How much of the available space the editor text fills
         </div>
         <input
           type="range"
