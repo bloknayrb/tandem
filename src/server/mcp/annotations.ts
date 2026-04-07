@@ -110,6 +110,19 @@ export function createAnnotation(
     ...extras,
   };
   ydoc.transact(() => map.set(id, annotation), MCP_ORIGIN);
+
+  const snippet = annotation.textSnapshot
+    ? `: "${annotation.textSnapshot.slice(0, 60)}${annotation.textSnapshot.length > 60 ? "…" : ""}"`
+    : "";
+  pushNotification({
+    id: generateNotificationId(),
+    type: "review-pending",
+    severity: "info",
+    message: `New ${type[0].toUpperCase() + type.slice(1)}${snippet}`,
+    dedupKey: `review-pending:${type}`,
+    timestamp: Date.now(),
+  });
+
   return id;
 }
 
