@@ -24,6 +24,13 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
 export const INTERRUPTION_MODE_DEFAULT = "all" as const;
 export const INTERRUPTION_MODE_KEY = "tandem:interruptionMode";
 
+export const TANDEM_MODE_DEFAULT = "tandem" as const;
+export const TANDEM_MODE_KEY = "tandem:mode";
+export const TANDEM_SETTINGS_KEY = "tandem:settings";
+export const SELECTION_DWELL_DEFAULT_MS = 1000;
+export const SELECTION_DWELL_MIN_MS = 500;
+export const SELECTION_DWELL_MAX_MS = 3000;
+
 // Large file thresholds
 export const CHARS_PER_PAGE = 3_000;
 export const LARGE_FILE_PAGE_THRESHOLD = 50;
