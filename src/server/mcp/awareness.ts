@@ -5,6 +5,7 @@ import { getCurrentDoc, extractText } from "./document.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
 import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
+import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import {
   CTRL_ROOM,
@@ -178,7 +179,7 @@ export function registerAwarenessTools(server: McpServer): void {
         | undefined;
 
       const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-      const mode = (ctrlAwareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
+      const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(ctrlAwareness.get(Y_MAP_MODE));
 
       const hasSelection = selection && selection.from !== selection.to;
       const selectedText = hasSelection

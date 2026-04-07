@@ -25,7 +25,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { toFlatOffset } from "../../shared/types.js";
+import { toFlatOffset, TandemModeSchema } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 
 // Document model (pure logic)
@@ -478,7 +478,7 @@ export function registerDocumentTools(server: McpServer): void {
       // Read the user's tandem mode from CTRL_ROOM Y.Map
       const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
       const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-      const mode = (ctrlAwareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
+      const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(ctrlAwareness.get(Y_MAP_MODE));
 
       return mcpSuccess({
         running: true,

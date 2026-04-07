@@ -8,6 +8,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
+import { TandemModeSchema } from "../../shared/types.js";
 import { detectFormat } from "./document-model.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
 import { closeDocumentById } from "./document-service.js";
@@ -249,7 +250,7 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
   app.get("/api/mode", apiMiddleware, (_req: Request, res: Response) => {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-    const mode = (awareness.get(Y_MAP_MODE) as string) ?? TANDEM_MODE_DEFAULT;
+    const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
     res.json({ mode });
   });
 
