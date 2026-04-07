@@ -245,6 +245,37 @@ export function SettingsPopover({
           <span>{(SELECTION_DWELL_MAX_MS / 1000).toFixed(1)}s</span>
         </div>
       </div>
+
+      {/* Editor width */}
+      <div>
+        <div style={{ fontSize: "11px", fontWeight: 600, color: "#374151", marginBottom: "4px" }}>
+          EDITOR WIDTH: {settings.editorWidthPercent}%
+        </div>
+        <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
+          Percentage of available space used for text
+        </div>
+        <input
+          type="range"
+          min={50}
+          max={100}
+          step={5}
+          value={settings.editorWidthPercent}
+          onChange={(e) => onUpdate({ editorWidthPercent: Number(e.target.value) })}
+          style={{ width: "100%", accentColor: "#6366f1" }}
+          aria-label="Editor width"
+        />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: "10px",
+            color: "#9ca3af",
+          }}
+        >
+          <span>50%</span>
+          <span>100%</span>
+        </div>
+      </div>
     </div>
   );
 }

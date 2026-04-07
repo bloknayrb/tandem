@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
-import type { TandemMode, WidthMode } from "../../shared/types";
+import type { TandemMode } from "../../shared/types";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -15,8 +15,6 @@ interface StatusBarProps {
   tandemMode: TandemMode;
   onModeChange: (mode: TandemMode) => void;
   heldCount: number;
-  widthMode: WidthMode;
-  onToggleWidthMode: () => void;
   onSettingsClick?: (rect: DOMRect) => void;
 }
 
@@ -34,8 +32,6 @@ export function StatusBar({
   tandemMode,
   onModeChange,
   heldCount,
-  widthMode,
-  onToggleWidthMode,
   onSettingsClick,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(() => {
@@ -210,43 +206,21 @@ export function StatusBar({
           </span>
         </span>
         <button
-          title={
-            widthMode === "reading"
-              ? "Switch to full width layout"
-              : "Switch to narrow reading width layout"
-          }
-          aria-label="Toggle reading width"
-          aria-pressed={widthMode === "reading"}
-          onClick={onToggleWidthMode}
+          title="Layout settings"
+          aria-label="Layout settings"
+          onClick={(e) => onSettingsClick?.(e.currentTarget.getBoundingClientRect())}
           style={{
             padding: "1px 8px",
             fontSize: "11px",
             border: "1px solid #d1d5db",
             borderRadius: "4px",
             cursor: "pointer",
-            background: widthMode === "reading" ? "#6366f1" : "transparent",
-            color: widthMode === "reading" ? "#fff" : "#6b7280",
-            fontWeight: widthMode === "reading" ? 600 : 400,
-          }}
-        >
-          Reading Width
-        </button>
-        <button
-          title="Layout settings"
-          aria-label="Layout settings"
-          onClick={(e) => onSettingsClick?.(e.currentTarget.getBoundingClientRect())}
-          style={{
-            padding: "1px 6px",
-            fontSize: "13px",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-            cursor: "pointer",
             background: "transparent",
             color: "#6b7280",
-            lineHeight: 1,
+            fontWeight: 400,
           }}
         >
-          {"\u2699"}
+          Settings
         </button>
       </div>
 

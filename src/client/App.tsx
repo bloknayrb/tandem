@@ -15,13 +15,12 @@ import { SettingsPopover } from "./components/SettingsPopover";
 import { useTandemSettings } from "./hooks/useTandemSettings";
 import {
   DISCONNECT_DEBOUNCE_MS,
-  EDITOR_WIDTH_MODE_KEY,
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
-import type { TandemMode, WidthMode, CapturedAnchor } from "../shared/types";
+import type { TandemMode, CapturedAnchor } from "../shared/types";
 import { TandemModeSchema } from "../shared/types";
 import { pmSelectionToFlat } from "./positions";
 import { toPmPos } from "../shared/positions/types";
@@ -118,8 +117,6 @@ const PANEL_MIN_WIDTH = 200;
 const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
 const PANEL_WIDTH_KEY = "tandem-panel-width";
-
-const EDITOR_READING_WIDTH_PX = 740;
 
 export default function App() {
   const {
@@ -247,25 +244,9 @@ export default function App() {
     return PANEL_DEFAULT_WIDTH;
   });
 
-  const [widthMode, setWidthMode] = useState<WidthMode>(() => {
-    try {
-      return localStorage.getItem(EDITOR_WIDTH_MODE_KEY) === "reading" ? "reading" : "full";
-    } catch {
-      return "full";
-    }
-  });
-
-  const toggleWidthMode = useCallback(() => {
-    setWidthMode((prev) => {
-      const next = prev === "reading" ? "full" : "reading";
-      try {
-        localStorage.setItem(EDITOR_WIDTH_MODE_KEY, next);
-      } catch {
-        // localStorage unavailable
-      }
-      return next;
-    });
-  }, []);
+  const editorMaxWidth =
+    settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;
+  const editorMargin = settings.editorWidthPercent < 100 ? "0 auto" : undefined;
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
@@ -509,8 +490,8 @@ export default function App() {
             />
             <div
               style={{
-                maxWidth: widthMode === "reading" ? `${EDITOR_READING_WIDTH_PX}px` : undefined,
-                margin: widthMode === "reading" ? "0 auto" : undefined,
+                maxWidth: editorMaxWidth,
+                margin: editorMargin,
               }}
             >
               {activeTab ? (
@@ -629,8 +610,8 @@ export default function App() {
             />
             <div
               style={{
-                maxWidth: widthMode === "reading" ? `${EDITOR_READING_WIDTH_PX}px` : undefined,
-                margin: widthMode === "reading" ? "0 auto" : undefined,
+                maxWidth: editorMaxWidth,
+                margin: editorMargin,
               }}
             >
               {activeTab ? (
@@ -826,8 +807,6 @@ export default function App() {
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
         heldCount={heldCount}
-        widthMode={widthMode}
-        onToggleWidthMode={toggleWidthMode}
         onSettingsClick={(rect) => {
           setSettingsAnchor(rect);
           setSettingsOpen(true);

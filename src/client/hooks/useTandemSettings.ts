@@ -15,6 +15,7 @@ export interface TandemSettings {
   primaryTab: PrimaryTab;
   panelOrder: PanelOrder;
   selectionDwellMs: number;
+  editorWidthPercent: number;
 }
 
 const DEFAULTS: TandemSettings = {
@@ -22,6 +23,7 @@ const DEFAULTS: TandemSettings = {
   primaryTab: "chat",
   panelOrder: "chat-editor-annotations",
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
+  editorWidthPercent: 100,
 };
 
 function loadSettings(): TandemSettings {
@@ -43,6 +45,7 @@ function loadSettings(): TandemSettings {
             Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
           ),
         ),
+        editorWidthPercent: Math.max(50, Math.min(100, Number(parsed.editorWidthPercent) || 100)),
       };
     }
   } catch {
