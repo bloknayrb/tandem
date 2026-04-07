@@ -479,35 +479,37 @@ export function SidePanel({
             {allPending.length} pending annotation{allPending.length !== 1 ? "s" : ""}
           </span>
           {allPending.length > 0 && (
-            <button
-              data-testid="review-mode-btn"
-              onClick={onToggleReviewMode}
-              title="Keyboard review mode (Ctrl+Shift+R)"
-              aria-pressed={reviewMode}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: `1px solid ${reviewMode ? "#6366f1" : "#d1d5db"}`,
-                borderRadius: "3px",
-                background: reviewMode ? "#eef2ff" : "#fff",
-                color: reviewMode ? "#6366f1" : "#6b7280",
-                cursor: "pointer",
-                fontWeight: reviewMode ? 600 : 400,
-              }}
-            >
-              {reviewMode ? "Exit Review" : "Review"}
-            </button>
+            <>
+              <button
+                data-testid="review-mode-btn"
+                onClick={onToggleReviewMode}
+                title="Keyboard review mode (Ctrl+Shift+R)"
+                aria-pressed={reviewMode}
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  border: `1px solid ${reviewMode ? "#6366f1" : "#d1d5db"}`,
+                  borderRadius: "3px",
+                  background: reviewMode ? "#eef2ff" : "#fff",
+                  color: reviewMode ? "#6366f1" : "#6b7280",
+                  cursor: "pointer",
+                  fontWeight: reviewMode ? 600 : 400,
+                }}
+              >
+                {reviewMode ? "Exit Review" : "Review"}
+              </button>
+              <div
+                data-testid="review-shortcut-hints"
+                style={{
+                  fontSize: "10px",
+                  color: "#9ca3af",
+                  marginTop: "2px",
+                }}
+              >
+                Y = accept, N = dismiss, ↑↓ = navigate, Z = undo
+              </div>
+            </>
           )}
-          <div
-            data-testid="review-shortcut-hints"
-            style={{
-              fontSize: "10px",
-              color: "#9ca3af",
-              marginTop: "2px",
-            }}
-          >
-            A = accept, D = dismiss, ↑↓ = navigate, Z = undo
-          </div>
         </div>
       </div>
 
