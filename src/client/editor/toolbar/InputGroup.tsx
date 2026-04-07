@@ -44,7 +44,8 @@ export function InputGroup({
           border: `1px solid ${borderColor}`,
           borderRadius: "4px",
           outline: "none",
-          width: "200px",
+          minWidth: "120px",
+          flex: "1 1 200px",
         }}
       />
       {secondaryInput}
