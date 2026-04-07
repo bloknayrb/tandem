@@ -159,7 +159,7 @@ Remaining:
 
 - Claude never interrupts while user is actively typing (3-second debounce — already implemented)
 - Three modes implemented in StatusBar: All, Urgent, Paused
-- Client broadcasts `interruptionMode` to Y.Map('userAwareness') — Claude reads it via `tandem_status` and `tandem_checkInbox`
+- Client broadcasts `mode` to `CTRL_ROOM`'s Y.Map('userAwareness') — Claude reads it via `tandem_status` and `tandem_checkInbox`
 - Queued annotations delivered on pause via side panel badge
 - High-priority findings (factual errors) use distinct yellow caution indicator
 

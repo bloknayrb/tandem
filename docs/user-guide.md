@@ -186,15 +186,14 @@ Press `Ctrl+Shift+R` or click "Review" to enter review mode. Shortcut hints (`Y 
 
 When all annotations are resolved, a summary overlay appears showing: total reviewed, accepted count, dismissed count, and accept rate.
 
-### Interruption Modes
+### Solo / Tandem Mode
 
-The status bar includes an interruption mode selector with three settings:
+The toolbar includes a **Solo / Tandem** toggle that controls whether Claude's annotations appear as they arrive.
 
-- **All** (default) — Show all annotations immediately as they arrive.
-- **Urgent-only** — Only show flags, Ask Claude questions, and any annotation with urgent priority. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
-- **Paused** — Hold all new pending annotations. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Tandem** (default) — Claude's annotations appear immediately as they arrive.
+- **Solo** — Claude's pending annotations are held back. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
-Use **Paused** during focused writing to avoid interruption. Switch back to **All** when you're ready to review Claude's work.
+Use **Solo** during focused writing to avoid interruption. Switch to **Tandem** when you're ready to review Claude's work — all held annotations appear at once.
 
 ## Chat
 
@@ -264,7 +263,7 @@ Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets
 
 Start the Tandem server first (`tandem` for global install, `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available automatically via the MCP configuration written by `tandem setup` (global) or `.mcp.json` (development).
 
-Claude can check the connection with `tandem_status`, which reports open documents, connection state, and your current interruption mode.
+Claude can check the connection with `tandem_status`, which reports open documents, connection state, and your current mode (Solo or Tandem).
 
 ### Real-Time Push (Recommended)
 
@@ -335,7 +334,7 @@ The message appears after 3 seconds of failed connection. If the server was rest
 
 Check the connection indicator in the status bar. If it shows "Reconnecting...", the WebSocket connection dropped — it will auto-reconnect.
 
-If connected but annotations still aren't showing, check your **interruption mode** in the status bar. **Paused** mode holds all new annotations. Switch to **All** to see everything.
+If connected but annotations still aren't showing, check your **mode** in the toolbar. **Solo** mode holds Claude's pending annotations. Switch to **Tandem** to see everything.
 
 Check the browser console for CRDT fallback warnings (`buildDecorations()` warnings indicate annotations falling back from CRDT-anchored to flat offsets).
 

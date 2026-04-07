@@ -45,7 +45,7 @@ Choose the right type for each finding:
 - **\`tandem_highlight\`** — Visual marker with a short note. Colors: green (verified/good), red (problem), yellow (needs attention). Use when the finding is self-evident from the color and a brief note.
 - **\`tandem_comment\`** — Observation requiring explanation. Use when you need more than one sentence to convey reasoning.
 - **\`tandem_suggest\`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
-- **\`tandem_flag\`** — Blocking issue the user must address before the document ships. Factual errors, compliance risks, missing required content. Always visible in urgent-only interruption mode.
+- **\`tandem_flag\`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
 
 **Priority:** Set \`priority: 'urgent'\` on any annotation type when the finding is critical.
 

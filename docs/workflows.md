@@ -30,7 +30,7 @@ Setup complete! Start Tandem with: tandem
 Then in Claude, your tandem_* tools will be available.
 ```
 
-The skill teaches Claude how to use Tandem's 30 MCP tools effectively — workflow patterns, annotation strategy, interruption mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
+The skill teaches Claude how to use Tandem's 30 MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
 Start Tandem from any directory:
 ```bash
@@ -273,15 +273,14 @@ When all annotations are resolved, a **Review Summary** overlay appears showing:
 
 For bulk operations, use **Accept All** or **Dismiss All** buttons in the side panel header. These require a confirmation step before executing. When filters are active, bulk actions only affect the filtered annotations (e.g., "Accept 3 of 12 pending?").
 
-### Interruption Modes
+### Solo / Tandem Mode
 
-The status bar includes an interruption mode selector with three settings:
+The toolbar includes a **Solo / Tandem** toggle that controls how Claude's annotations appear.
 
-- **All** — Show all annotations immediately (default)
-- **Urgent** — Only show flags, questions, and annotations with `priority: 'urgent'`. Comments, highlights, and suggestions are held until the mode changes. The held count appears in the status bar.
-- **Paused** — Hold all new pending annotations. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Tandem** (default) — Claude's annotations appear as they arrive.
+- **Solo** — Claude's pending annotations are held back. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
-This lets Bryan control how aggressively Claude's annotations interrupt the editing flow. During focused writing, switch to Paused; when ready to review, switch back to All.
+This lets Bryan control how aggressively Claude's output interrupts the editing flow. During focused writing, switch to Solo; when ready to review, switch to Tandem to release all held annotations at once.
 
 ## Reviewing a .docx with Imported Word Comments
 
