@@ -2,6 +2,10 @@
   "name": "tandem-editor",
   "version": "0.2.12",
   "description": "Collaborative AI-human document editor with MCP tool integration for Claude",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bloknayrb/tandem"
+  },
   "keywords": [
     "tandem",
     "mcp",
