@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
-import type { InterruptionMode, WidthMode } from "../../shared/types";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -12,22 +11,7 @@ interface StatusBarProps {
   claudeActive: boolean;
   readOnly?: boolean;
   documentCount?: number;
-  interruptionMode: InterruptionMode;
-  onModeChange: (mode: InterruptionMode) => void;
-  heldCount: number;
-  widthMode: WidthMode;
-  onToggleWidthMode: () => void;
 }
-
-const MODES: { value: InterruptionMode; label: string; title: string }[] = [
-  { value: "all", label: "All", title: "Show all annotations immediately" },
-  {
-    value: "urgent-only",
-    label: "Urgent",
-    title: "Show flags, questions, and explicitly urgent annotations",
-  },
-  { value: "paused", label: "Paused", title: "Hold all new annotations" },
-];
 
 const RECONNECTED_FLASH_MS = 2_000;
 
@@ -40,11 +24,6 @@ export function StatusBar({
   claudeActive,
   readOnly,
   documentCount = 0,
-  interruptionMode,
-  onModeChange,
-  heldCount,
-  widthMode,
-  onToggleWidthMode,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(() => {
     try {
@@ -145,74 +124,6 @@ export function StatusBar({
             {documentCount} doc{documentCount !== 1 ? "s" : ""} open
           </span>
         )}
-      </div>
-
-      {/* Mode switcher */}
-      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-        {heldCount > 0 && (
-          <span
-            style={{
-              padding: "1px 6px",
-              fontSize: "10px",
-              fontWeight: 600,
-              color: "#92400e",
-              background: "#fef3c7",
-              borderRadius: "9999px",
-            }}
-          >
-            {heldCount} held
-          </span>
-        )}
-        <div
-          style={{
-            display: "flex",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-            overflow: "hidden",
-          }}
-        >
-          {MODES.map(({ value, label, title }) => (
-            <button
-              key={value}
-              title={title}
-              onClick={() => onModeChange(value)}
-              style={{
-                padding: "1px 8px",
-                fontSize: "11px",
-                border: "none",
-                cursor: "pointer",
-                background: interruptionMode === value ? "#6366f1" : "transparent",
-                color: interruptionMode === value ? "#fff" : "#6b7280",
-                fontWeight: interruptionMode === value ? 600 : 400,
-                borderRight: value !== "paused" ? "1px solid #d1d5db" : "none",
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <button
-          title={
-            widthMode === "reading"
-              ? "Switch to full width layout"
-              : "Switch to narrow reading width layout"
-          }
-          aria-label="Toggle reading width"
-          aria-pressed={widthMode === "reading"}
-          onClick={onToggleWidthMode}
-          style={{
-            padding: "1px 8px",
-            fontSize: "11px",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-            cursor: "pointer",
-            background: widthMode === "reading" ? "#6366f1" : "transparent",
-            color: widthMode === "reading" ? "#fff" : "#6b7280",
-            fontWeight: widthMode === "reading" ? 600 : 400,
-          }}
-        >
-          Reading Width
-        </button>
       </div>
 
       <div

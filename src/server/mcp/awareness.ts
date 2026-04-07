@@ -5,12 +5,14 @@ import { getCurrentDoc, extractText } from "./document.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
 import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
+import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import {
   CTRL_ROOM,
-  INTERRUPTION_MODE_DEFAULT,
+  TANDEM_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
@@ -176,8 +178,8 @@ export function registerAwarenessTools(server: McpServer): void {
           }
         | undefined;
 
-      const interruptionMode =
-        (userAwareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
+      const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+      const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(ctrlAwareness.get(Y_MAP_MODE));
 
       const hasSelection = selection && selection.from !== selection.to;
       const selectedText = hasSelection
@@ -216,7 +218,7 @@ export function registerAwarenessTools(server: McpServer): void {
       return mcpSuccess({
         summary,
         hasNew,
-        interruptionMode,
+        mode,
         userActions,
         userResponses,
         chatMessages,
