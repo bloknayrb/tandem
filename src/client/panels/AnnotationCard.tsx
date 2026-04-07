@@ -29,7 +29,7 @@ function getBorderColor(annotation: Annotation): string {
 }
 
 /** Parse suggestion content JSON, returning { newText, reason } or null on failure */
-function parseSuggestion(content: string): { newText: string; reason: string } | null {
+export function parseSuggestion(content: string): { newText: string; reason: string } | null {
   try {
     const parsed = JSON.parse(content);
     if (typeof parsed.newText === "string") {
@@ -176,9 +176,9 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 enterEditMode();
               }}
               style={editBtnStyle}
-              title="Edit annotation"
+              title="Edit this annotation's content"
             >
-              ✎
+              ✎ Edit
             </button>
           )}
         </span>
@@ -313,14 +313,59 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           </div>
         </div>
       ) : (
-        <p style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
-          {annotation.type === "suggestion"
-            ? (() => {
-                const parsed = parseSuggestion(annotation.content);
-                return parsed ? parsed.reason || parsed.newText : annotation.content;
-              })()
-            : annotation.content || "(no note)"}
-        </p>
+        <div style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
+          {annotation.type === "suggestion" ? (
+            (() => {
+              const parsed = parseSuggestion(annotation.content);
+              if (!parsed) return <p style={{ margin: 0 }}>{annotation.content}</p>;
+              return (
+                <>
+                  <div
+                    data-testid={`suggestion-diff-${annotation.id}`}
+                    style={{
+                      padding: "4px 8px",
+                      marginBottom: parsed.reason ? "4px" : 0,
+                      backgroundColor: "#f9fafb",
+                      borderRadius: "3px",
+                      fontSize: "12px",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    {annotation.textSnapshot && (
+                      <span
+                        style={{
+                          textDecoration: "line-through",
+                          color: "#dc2626",
+                          backgroundColor: "#fef2f2",
+                          padding: "0 2px",
+                          borderRadius: "2px",
+                        }}
+                      >
+                        {annotation.textSnapshot}
+                      </span>
+                    )}
+                    {annotation.textSnapshot && " → "}
+                    <span
+                      style={{
+                        color: "#166534",
+                        backgroundColor: "#f0fdf4",
+                        padding: "0 2px",
+                        borderRadius: "2px",
+                      }}
+                    >
+                      {parsed.newText}
+                    </span>
+                  </div>
+                  {parsed.reason && (
+                    <p style={{ margin: 0, fontSize: "12px", color: "#6b7280" }}>{parsed.reason}</p>
+                  )}
+                </>
+              );
+            })()
+          ) : (
+            <p style={{ margin: 0 }}>{annotation.content || "(no note)"}</p>
+          )}
+        </div>
       )}
       {isPending && !isEditing && (onAccept || onDismiss) && (
         <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
@@ -367,7 +412,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         </div>
       )}
       {!isPending && undoable && onUndo && (
-        <div style={{ marginTop: "4px" }}>
+        <div style={{ marginTop: "4px", position: "relative" }}>
           <button
             data-testid="undo-btn"
             onClick={(e) => {
@@ -386,6 +431,22 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           >
             Undo
           </button>
+          <div
+            data-testid="undo-countdown"
+            style={{
+              height: "2px",
+              marginTop: "2px",
+              borderRadius: "1px",
+              backgroundColor: "#6366f1",
+              animation: "undo-countdown-shrink 10s linear forwards",
+            }}
+          />
+          <style>
+            {`@keyframes undo-countdown-shrink {
+              from { width: 100%; }
+              to { width: 0%; }
+            }`}
+          </style>
         </div>
       )}
     </div>
