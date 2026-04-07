@@ -11,6 +11,7 @@ import {
   CHANNEL_EVENT_BUFFER_AGE_MS,
   CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
+  SELECTION_DWELL_DEFAULT_MS,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_DOCUMENT_META,
@@ -170,6 +171,8 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
 
   // 2. User awareness observer (selection changes)
   const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+  let selectionDwellTimer: ReturnType<typeof setTimeout> | null = null;
+
   const awarenessObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
     if (txn.origin === MCP_ORIGIN) return;
 
@@ -177,23 +180,38 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
       const selection = userAwareness.get("selection") as
         | { from: FlatOffset; to: FlatOffset; selectedText?: string }
         | undefined;
-      // Skip cleared selections (cursor moves without selecting text) — they flood the channel
+
+      // Cancel any pending dwell timer
+      if (selectionDwellTimer) {
+        clearTimeout(selectionDwellTimer);
+        selectionDwellTimer = null;
+      }
+
+      // Skip cleared selections
       if (!selection || selection.from === selection.to) return;
-      pushEvent({
-        id: generateEventId(),
-        type: "selection:changed",
-        timestamp: Date.now(),
-        documentId: docName,
-        payload: {
-          from: selection.from,
-          to: selection.to,
-          selectedText: selection.selectedText ?? "",
-        },
-      });
+
+      // Start dwell timer — only emit after user holds selection steady
+      selectionDwellTimer = setTimeout(() => {
+        selectionDwellTimer = null;
+        pushEvent({
+          id: generateEventId(),
+          type: "selection:changed",
+          timestamp: Date.now(),
+          documentId: docName,
+          payload: {
+            from: selection.from,
+            to: selection.to,
+            selectedText: selection.selectedText ?? "",
+          },
+        });
+      }, SELECTION_DWELL_DEFAULT_MS);
     }
   };
   userAwareness.observe(awarenessObs);
-  cleanups.push(() => userAwareness.unobserve(awarenessObs));
+  cleanups.push(() => {
+    userAwareness.unobserve(awarenessObs);
+    if (selectionDwellTimer) clearTimeout(selectionDwellTimer);
+  });
 
   docObservers.set(docName, cleanups);
   console.error(`[EventQueue] Attached observers for document: ${docName}`);

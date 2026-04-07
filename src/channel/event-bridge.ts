@@ -9,7 +9,7 @@ import { formatEventContent, formatEventMeta, parseTandemEvent } from "../server
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
-const SELECTION_DEBOUNCE_MS = 1500;
+const SELECTION_DEBOUNCE_MS = 300;
 
 export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<void> {
   let retries = 0;
@@ -180,6 +180,22 @@ async function connectAndStream(
       if (!event) {
         console.error("[Channel] Received invalid SSE event, skipping");
         continue;
+      }
+
+      // Solo mode suppression: drop non-chat events when mode is "solo"
+      if (event.type !== "chat:message") {
+        try {
+          const modeRes = await fetch(`${tandemUrl}/api/mode`);
+          if (modeRes.ok) {
+            const { mode } = (await modeRes.json()) as { mode: string };
+            if (mode === "solo") {
+              if (eventId) onEventId(eventId);
+              continue;
+            }
+          }
+        } catch {
+          // If mode check fails, deliver the event (fail-open)
+        }
       }
 
       // Selection events: drop cleared selections, debounce the rest

@@ -1,6 +1,11 @@
 import type { Express, Request, Response, NextFunction } from "express";
 
-import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
+import {
+  CHANNEL_SSE_KEEPALIVE_MS,
+  CTRL_ROOM,
+  TANDEM_MODE_DEFAULT,
+  Y_MAP_USER_AWARENESS,
+} from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 import { detectFormat } from "./document-model.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
@@ -8,6 +13,7 @@ import { closeDocumentById } from "./document-service.js";
 import { subscribe as subscribeNotifications } from "../notifications.js";
 import { convertToMarkdown } from "./convert.js";
 import { applyChangesCore } from "./docx-apply.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
@@ -237,6 +243,13 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
     } catch (err: unknown) {
       sendApiError(res, err);
     }
+  });
+
+  app.get("/api/mode", apiMiddleware, (_req: Request, res: Response) => {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    const mode = (awareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
+    res.json({ mode });
   });
 
   app.options("/api/apply-changes", apiMiddleware);

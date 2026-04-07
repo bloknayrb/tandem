@@ -76,7 +76,9 @@ describe("formatEventContent", () => {
       { from: 5, to: 10, selectedText: "world" },
       "doc1",
     );
-    expect(formatEventContent(event)).toBe('User selected text (5-10): "world" [doc: doc1]');
+    expect(formatEventContent(event)).toBe(
+      'User is pointing at text (5-10): "world" [doc: doc1] — respond via tandem_reply',
+    );
   });
 
   it("selection:changed cleared", () => {
@@ -91,7 +93,7 @@ describe("formatEventContent", () => {
       { from: 0, to: 250, selectedText: longText },
       "doc1",
     );
-    const expected = `User selected text (0-250): "${"a".repeat(250)}" [doc: doc1]`;
+    const expected = `User is pointing at text (0-250): "${"a".repeat(250)}" [doc: doc1] — respond via tandem_reply`;
     expect(formatEventContent(event)).toBe(expected);
   });
 
@@ -158,6 +160,15 @@ describe("formatEventMeta", () => {
     const meta = formatEventMeta(event);
     expect(meta).not.toHaveProperty("annotation_id");
     expect(meta).not.toHaveProperty("message_id");
+  });
+
+  it("selection:changed includes respond_via tandem_reply", () => {
+    const event = makeEvent(
+      "selection:changed",
+      { from: 5, to: 10, selectedText: "world" },
+      "doc1",
+    );
+    expect(formatEventMeta(event).respond_via).toBe("tandem_reply");
   });
 
   it("all keys use underscores (no hyphens)", () => {
