@@ -237,6 +237,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
         <ToolbarButton
           label="Highlight"
           disabled={!canAnnotate || inInputMode}
+          disabledTitle="Select text first"
           onMouseDown={handleHighlight}
           style={{ borderRadius: "4px 0 0 4px", borderRight: "none" }}
         />
@@ -301,6 +302,27 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
                 }}
               />
             ))}
+            <button
+              data-testid="color-picker-close"
+              title="Close"
+              onClick={() => setShowColorPicker(false)}
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "4px",
+                border: "1px solid rgba(0,0,0,0.15)",
+                background: "#f3f4f6",
+                cursor: "pointer",
+                padding: 0,
+                fontSize: "13px",
+                color: "#6b7280",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              ✕
+            </button>
           </div>
         )}
       </div>
@@ -308,6 +330,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       <ToolbarButton
         label="Comment"
         disabled={!canAnnotate || inInputMode}
+        disabledTitle="Select text first"
         onMouseDown={startComment}
       />
       {mode === "comment" && (
@@ -328,6 +351,7 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       <ToolbarButton
         label="Suggest"
         disabled={!canAnnotate || inInputMode}
+        disabledTitle="Select text first"
         onMouseDown={startSuggest}
       />
       {mode === "suggest" && (

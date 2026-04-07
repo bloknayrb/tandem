@@ -263,6 +263,7 @@ export function ChatPanel({
             {msg.anchor && (
               <div
                 onClick={() => scrollToAnchor(msg.anchor!, msg.documentId)}
+                className="chat-anchor-quote"
                 style={{
                   padding: "4px 8px",
                   marginBottom: "6px",
@@ -274,11 +275,17 @@ export function ChatPanel({
                   borderRadius: "0 4px 4px 0",
                   maxHeight: "60px",
                   overflow: "hidden",
+                  transition: "max-height 0.3s ease",
                 }}
                 title="Click to scroll to this text"
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.maxHeight = "500px";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.maxHeight = "60px";
+                }}
               >
-                {msg.anchor.textSnapshot.slice(0, 80)}
-                {msg.anchor.textSnapshot.length > 80 ? "..." : ""}
+                {msg.anchor.textSnapshot}
               </div>
             )}
 
