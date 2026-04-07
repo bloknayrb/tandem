@@ -14,16 +14,16 @@ import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import {
   DISCONNECT_DEBOUNCE_MS,
   EDITOR_WIDTH_MODE_KEY,
-  INTERRUPTION_MODE_DEFAULT,
-  INTERRUPTION_MODE_KEY,
+  TANDEM_MODE_DEFAULT,
+  TANDEM_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
-import type { InterruptionMode, WidthMode, CapturedAnchor } from "../shared/types";
-import { InterruptionModeSchema } from "../shared/types";
+import type { TandemMode, WidthMode, CapturedAnchor } from "../shared/types";
+import { TandemModeSchema } from "../shared/types";
 import { pmSelectionToFlat } from "./positions";
 import { toPmPos } from "../shared/positions/types";
-import { useAnnotationGate } from "./hooks/useAnnotationGate";
+import { useModeGate } from "./hooks/useModeGate";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
@@ -140,32 +140,31 @@ export default function App() {
 
   const { orderedTabs, reorder } = useTabOrder(tabs);
 
-  // Interruption mode — persisted to localStorage
-  const [interruptionMode, setInterruptionMode] = useState<InterruptionMode>(() => {
+  // Tandem mode — persisted to localStorage
+  const [tandemMode, setTandemMode] = useState<TandemMode>(() => {
     try {
-      const saved = localStorage.getItem(INTERRUPTION_MODE_KEY);
-      return InterruptionModeSchema.safeParse(saved).success
-        ? (saved as InterruptionMode)
-        : INTERRUPTION_MODE_DEFAULT;
+      const saved = localStorage.getItem(TANDEM_MODE_KEY);
+      return TandemModeSchema.safeParse(saved).success
+        ? (saved as TandemMode)
+        : TANDEM_MODE_DEFAULT;
     } catch {
-      return INTERRUPTION_MODE_DEFAULT;
+      return TANDEM_MODE_DEFAULT;
     }
   });
   useEffect(() => {
     try {
-      localStorage.setItem(INTERRUPTION_MODE_KEY, interruptionMode);
+      localStorage.setItem(TANDEM_MODE_KEY, tandemMode);
     } catch {
       // localStorage unavailable (incognito/storage-disabled)
     }
-  }, [interruptionMode]);
+  }, [tandemMode]);
 
-  // Broadcast interruption mode to Y.Map so the server (and Claude) can see it
-  const activeYdoc = tabs.find((t) => t.id === activeTabId)?.ydoc;
+  // Broadcast tandem mode to CTRL_ROOM Y.Map so the server (and Claude) can see it
   useEffect(() => {
-    if (!activeYdoc) return;
-    const awareness = activeYdoc.getMap(Y_MAP_USER_AWARENESS);
-    awareness.set("interruptionMode", interruptionMode);
-  }, [interruptionMode, activeYdoc]);
+    if (!bootstrapYdoc) return;
+    const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("mode", tandemMode);
+  }, [tandemMode, bootstrapYdoc]);
 
   // Prolonged disconnect banner — shown after PROLONGED_DISCONNECT_MS of being disconnected
   const [showDisconnectBanner, setShowDisconnectBanner] = useState(false);
@@ -186,7 +185,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [disconnectedSince]);
 
-  const { visibleAnnotations, heldCount } = useAnnotationGate(annotations, interruptionMode);
+  const { visibleAnnotations, heldCount } = useModeGate(annotations, tandemMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
   const { toasts, dismiss: dismissToast } = useNotifications();
@@ -526,8 +525,8 @@ export default function App() {
               editor={editorRef.current}
               ydoc={activeTab?.ydoc ?? null}
               heldCount={heldCount}
-              interruptionMode={interruptionMode}
-              onModeChange={setInterruptionMode}
+              tandemMode={tandemMode}
+              onModeChange={setTandemMode}
               activeDocFormat={activeTab?.format}
               documentId={activeTab?.id}
               reviewMode={reviewMode}
@@ -548,8 +547,8 @@ export default function App() {
         claudeActive={claudeActive}
         readOnly={readOnly}
         documentCount={tabs.length}
-        interruptionMode={interruptionMode}
-        onModeChange={setInterruptionMode}
+        tandemMode={tandemMode}
+        onModeChange={setTandemMode}
         heldCount={heldCount}
         widthMode={widthMode}
         onToggleWidthMode={toggleWidthMode}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import * as Y from "yjs";
-import type { Annotation, AnnotationType, InterruptionMode } from "../../shared/types";
+import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { annotationToPmRange } from "../positions";
 import { AnnotationCard } from "./AnnotationCard";
@@ -14,8 +14,8 @@ interface SidePanelProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
   heldCount?: number;
-  interruptionMode?: InterruptionMode;
-  onModeChange?: (mode: InterruptionMode) => void;
+  tandemMode?: TandemMode;
+  onModeChange?: (mode: TandemMode) => void;
   activeDocFormat?: string;
   documentId?: string;
   reviewMode: boolean;
@@ -77,7 +77,7 @@ export function SidePanel({
   editor,
   ydoc,
   heldCount = 0,
-  interruptionMode: _interruptionMode,
+  tandemMode: _tandemMode,
   onModeChange,
   activeDocFormat,
   documentId,
@@ -430,7 +430,7 @@ export function SidePanel({
             {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
           </span>
           <button
-            onClick={() => onModeChange?.("all")}
+            onClick={() => onModeChange?.("tandem")}
             style={{
               fontSize: "11px",
               padding: "1px 8px",

@@ -18,7 +18,8 @@ import { convertToMarkdown } from "./convert.js";
 import { saveSession } from "../session/manager.js";
 import { openFileByPath } from "./file-opener.js";
 import {
-  INTERRUPTION_MODE_DEFAULT,
+  CTRL_ROOM,
+  TANDEM_MODE_DEFAULT,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
@@ -473,18 +474,14 @@ export function registerDocumentTools(server: McpServer): void {
       const activeId = getActiveDocId();
       const active = activeId ? openDocs.get(activeId) : null;
 
-      // Read the user's interruption mode from the active document's Y.Map
-      let interruptionMode: string = INTERRUPTION_MODE_DEFAULT;
-      if (activeId) {
-        const doc = getOrCreateDocument(activeId);
-        const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
-        interruptionMode =
-          (awareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
-      }
+      // Read the user's tandem mode from CTRL_ROOM Y.Map
+      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+      const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+      const mode = (ctrlAwareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
 
       return mcpSuccess({
         running: true,
-        interruptionMode,
+        mode,
         activeDocument: active
           ? { documentId: active.id, filePath: active.filePath, format: active.format }
           : null,

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
-import type { InterruptionMode, WidthMode } from "../../shared/types";
+import type { TandemMode, WidthMode } from "../../shared/types";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -12,22 +12,12 @@ interface StatusBarProps {
   claudeActive: boolean;
   readOnly?: boolean;
   documentCount?: number;
-  interruptionMode: InterruptionMode;
-  onModeChange: (mode: InterruptionMode) => void;
+  tandemMode: TandemMode;
+  onModeChange: (mode: TandemMode) => void;
   heldCount: number;
   widthMode: WidthMode;
   onToggleWidthMode: () => void;
 }
-
-const MODES: { value: InterruptionMode; label: string; title: string }[] = [
-  { value: "all", label: "All", title: "Show all annotations immediately" },
-  {
-    value: "urgent-only",
-    label: "Urgent",
-    title: "Show flags, questions, and explicitly urgent annotations",
-  },
-  { value: "paused", label: "Paused", title: "Hold all new annotations" },
-];
 
 const RECONNECTED_FLASH_MS = 2_000;
 
@@ -40,7 +30,7 @@ export function StatusBar({
   claudeActive,
   readOnly,
   documentCount = 0,
-  interruptionMode,
+  tandemMode,
   onModeChange,
   heldCount,
   widthMode,
@@ -171,26 +161,52 @@ export function StatusBar({
             overflow: "hidden",
           }}
         >
-          {MODES.map(({ value, label, title }) => (
-            <button
-              key={value}
-              title={title}
-              onClick={() => onModeChange(value)}
-              style={{
-                padding: "1px 8px",
-                fontSize: "11px",
-                border: "none",
-                cursor: "pointer",
-                background: interruptionMode === value ? "#6366f1" : "transparent",
-                color: interruptionMode === value ? "#fff" : "#6b7280",
-                fontWeight: interruptionMode === value ? 600 : 400,
-                borderRight: value !== "paused" ? "1px solid #d1d5db" : "none",
-              }}
-            >
-              {label}
-            </button>
-          ))}
+          <button
+            title="Write undisturbed — Claude only responds when you message"
+            onClick={() => onModeChange("solo")}
+            style={{
+              padding: "1px 8px",
+              fontSize: "11px",
+              border: "none",
+              borderRight: "1px solid #d1d5db",
+              cursor: "pointer",
+              background: tandemMode === "solo" ? "#6366f1" : "transparent",
+              color: tandemMode === "solo" ? "#fff" : "#6b7280",
+              fontWeight: tandemMode === "solo" ? 600 : 400,
+            }}
+          >
+            Solo
+          </button>
+          <button
+            title="Full collaboration — Claude reacts to selections and document changes"
+            onClick={() => onModeChange("tandem")}
+            style={{
+              padding: "1px 8px",
+              fontSize: "11px",
+              border: "none",
+              cursor: "pointer",
+              background: tandemMode === "tandem" ? "#6366f1" : "transparent",
+              color: tandemMode === "tandem" ? "#fff" : "#6b7280",
+              fontWeight: tandemMode === "tandem" ? 600 : 400,
+            }}
+          >
+            Tandem
+          </button>
         </div>
+        <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px" }}>
+          <span
+            style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              background: tandemMode === "tandem" ? "#22c55e" : "#9ca3af",
+              display: "inline-block",
+            }}
+          />
+          <span style={{ color: "#9ca3af" }}>
+            {tandemMode === "tandem" ? "Claude is active" : "Claude is listening"}
+          </span>
+        </span>
         <button
           title={
             widthMode === "reading"

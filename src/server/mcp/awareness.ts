@@ -8,7 +8,7 @@ import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js"
 import { generateMessageId } from "../../shared/utils.js";
 import {
   CTRL_ROOM,
-  INTERRUPTION_MODE_DEFAULT,
+  TANDEM_MODE_DEFAULT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
@@ -176,8 +176,8 @@ export function registerAwarenessTools(server: McpServer): void {
           }
         | undefined;
 
-      const interruptionMode =
-        (userAwareness.get("interruptionMode") as string) ?? INTERRUPTION_MODE_DEFAULT;
+      const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+      const mode = (ctrlAwareness.get("mode") as string) ?? TANDEM_MODE_DEFAULT;
 
       const hasSelection = selection && selection.from !== selection.to;
       const selectedText = hasSelection
@@ -216,7 +216,7 @@ export function registerAwarenessTools(server: McpServer): void {
       return mcpSuccess({
         summary,
         hasNew,
-        interruptionMode,
+        mode,
         userActions,
         userResponses,
         chatMessages,
