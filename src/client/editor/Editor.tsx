@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useCallback } from "react";
 import { USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
@@ -24,6 +24,7 @@ interface EditorProps {
   reviewMode?: boolean;
   activeAnnotationId?: string | null;
   onEditorReady?: (editor: TiptapEditor | null) => void;
+  onAnnotationClick?: (annotationId: string) => void;
 }
 
 export function Editor({
@@ -33,6 +34,7 @@ export function Editor({
   reviewMode,
   activeAnnotationId,
   onEditorReady,
+  onAnnotationClick,
 }: EditorProps) {
   const editor = useEditor(
     {
@@ -111,10 +113,22 @@ export function Editor({
     }
   }, [editor, activeAnnotationId, reviewMode]);
 
+  const handleEditorClick = useCallback(
+    (e: React.MouseEvent) => {
+      const target = (e.target as HTMLElement).closest("[data-annotation-id]");
+      if (!target) return;
+      const annotationId = target.getAttribute("data-annotation-id");
+      if (annotationId && onAnnotationClick) {
+        onAnnotationClick(annotationId);
+      }
+    },
+    [onAnnotationClick],
+  );
+
   const containerClass = reviewMode ? "tandem-review-dimmed" : "";
 
   return (
-    <div className={containerClass}>
+    <div className={containerClass} onClick={handleEditorClick}>
       <EditorContent editor={editor} />
       <style>{`
         .tandem-editor h1 { font-size: 2em; font-weight: 700; margin: 0.67em 0; }

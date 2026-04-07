@@ -200,9 +200,17 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [capturedAnchor, setCapturedAnchor] = useState<CapturedAnchor | null>(null);
   const editorRef = useRef<TiptapEditor | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const handleEditorReady = useCallback((editor: TiptapEditor | null) => {
     editorRef.current = editor;
+  }, []);
+
+  const handleAnnotationClick = useCallback((annotationId: string) => {
+    // Guard: don't swap if user has unsent text in chat
+    if (chatInputRef.current && chatInputRef.current.value.trim() !== "") return;
+    setShowChat(false); // Switch to Annotations tab
+    setActiveAnnotationId(annotationId);
   }, []);
 
   const [panelWidth, setPanelWidth] = useState<number>(() => {
@@ -413,6 +421,7 @@ export default function App() {
                 reviewMode={reviewMode}
                 activeAnnotationId={activeAnnotationId}
                 onEditorReady={handleEditorReady}
+                onAnnotationClick={handleAnnotationClick}
               />
             ) : (
               <EmptyState connected={connected} claudeActive={claudeActive} />
@@ -510,6 +519,7 @@ export default function App() {
               visible={showChat}
               capturedAnchor={capturedAnchor}
               onCapturedAnchorChange={setCapturedAnchor}
+              inputRef={chatInputRef}
             />
           </div>
           <div

@@ -84,7 +84,7 @@ export function SidePanel({
   reviewMode,
   onToggleReviewMode,
   onExitReviewMode,
-  activeAnnotationId: _activeAnnotationId,
+  activeAnnotationId,
   onActiveAnnotationChange,
 }: SidePanelProps) {
   const [filterType, setFilterType] = useState<FilterType>("all");
@@ -396,6 +396,22 @@ export function SidePanel({
       onExitReviewMode();
     }
   }, [reviewMode, reviewTargets.length, onExitReviewMode]);
+
+  // Scroll to and flash the annotation card when activeAnnotationId changes externally
+  useEffect(() => {
+    if (!activeAnnotationId) return;
+    // Small delay to let the panel become visible if the tab was just switched
+    const timer = setTimeout(() => {
+      const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        card.classList.add("tandem-annotation-flash");
+        const onEnd = () => card.classList.remove("tandem-annotation-flash");
+        card.addEventListener("animationend", onEnd, { once: true });
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [activeAnnotationId]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
@@ -719,6 +735,15 @@ export function SidePanel({
           </>
         )}
       </div>
+      <style>{`
+        @keyframes tandem-annotation-flash {
+          0% { background-color: rgba(99, 102, 241, 0.2); }
+          100% { background-color: transparent; }
+        }
+        .tandem-annotation-flash {
+          animation: tandem-annotation-flash 0.8s ease-out;
+        }
+      `}</style>
     </div>
   );
 }
