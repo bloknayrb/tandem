@@ -425,7 +425,7 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         style={{ minWidth: "30px", padding: "4px 6px" }}
       />
       <ToolbarButton
-        label="\u2014"
+        label="—"
         ariaLabel="Horizontal rule"
         disabled={isDisabled}
         onMouseDown={withPreventDefault(() => editor.chain().focus().setHorizontalRule().run())}
