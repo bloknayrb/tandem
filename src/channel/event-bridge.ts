@@ -187,6 +187,7 @@ async function connectAndStream(
       if (event.type !== "chat:message") {
         const mode = await getCachedMode(tandemUrl);
         if (mode === "solo") {
+          console.error(`[Channel] Solo mode: suppressed ${event.type} event`);
           if (eventId) onEventId(eventId);
           continue;
         }
@@ -234,10 +235,16 @@ async function getCachedMode(tandemUrl: string): Promise<string> {
     if (res.ok) {
       const { mode } = (await res.json()) as { mode: string };
       cachedMode = mode;
-      cachedModeAt = now;
+    } else {
+      console.error(`[Channel] Mode check returned ${res.status}, using cached: "${cachedMode}"`);
     }
-  } catch {
-    // fail-open: deliver events if mode check fails
+    cachedModeAt = now;
+  } catch (err) {
+    console.error(
+      "[Channel] Mode check failed, delivering event (fail-open):",
+      err instanceof Error ? err.message : err,
+    );
+    cachedModeAt = now;
   }
   return cachedMode;
 }
