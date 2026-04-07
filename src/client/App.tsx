@@ -382,7 +382,14 @@ export default function App() {
       {showDisconnectBanner && !disconnectBannerDismissed && (
         <ConnectionBanner onDismiss={() => setDisconnectBannerDismissed(true)} />
       )}
-      <Toolbar editor={editorRef.current} ydoc={activeTab?.ydoc ?? null} />
+      <Toolbar
+        editor={editorRef.current}
+        ydoc={activeTab?.ydoc ?? null}
+        onSettingsClick={(rect) => {
+          setSettingsAnchor(rect);
+          setSettingsOpen(true);
+        }}
+      />
       <DocumentTabs
         tabs={orderedTabs}
         activeTabId={activeTabId}
@@ -807,10 +814,6 @@ export default function App() {
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
         heldCount={heldCount}
-        onSettingsClick={(rect) => {
-          setSettingsAnchor(rect);
-          setSettingsOpen(true);
-        }}
       />
       {showReviewSummary && reviewSummaryData && (
         <ReviewSummary

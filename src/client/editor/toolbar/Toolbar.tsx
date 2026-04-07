@@ -23,9 +23,10 @@ type ToolbarMode = "idle" | "comment" | "suggest" | "askClaude";
 interface ToolbarProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
+  onSettingsClick?: (rect: DOMRect) => void;
 }
 
-export function Toolbar({ editor, ydoc }: ToolbarProps) {
+export function Toolbar({ editor, ydoc, onSettingsClick }: ToolbarProps) {
   const [hasSelection, setHasSelection] = useState(false);
   const [highlightColor, setHighlightColor] = useState<HighlightColor>("yellow");
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -413,7 +414,29 @@ export function Toolbar({ editor, ydoc }: ToolbarProps) {
       )}
 
       <div style={{ flex: 1 }} />
-      <span style={{ fontSize: "12px", color: "#9ca3af" }}>Review Mode</span>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span style={{ fontSize: "12px", color: "#9ca3af" }}>Review Mode</span>
+        {onSettingsClick && (
+          <button
+            onClick={(e) => {
+              onSettingsClick(e.currentTarget.getBoundingClientRect());
+            }}
+            title="Layout settings"
+            aria-label="Layout settings"
+            style={{
+              background: "none",
+              border: "1px solid #d1d5db",
+              borderRadius: "4px",
+              cursor: "pointer",
+              color: "#6b7280",
+              fontSize: "13px",
+              padding: "4px 12px",
+            }}
+          >
+            Settings
+          </button>
+        )}
+      </div>
     </div>
   );
 }

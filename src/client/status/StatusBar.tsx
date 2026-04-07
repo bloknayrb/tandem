@@ -15,7 +15,6 @@ interface StatusBarProps {
   tandemMode: TandemMode;
   onModeChange: (mode: TandemMode) => void;
   heldCount: number;
-  onSettingsClick?: (rect: DOMRect) => void;
 }
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -32,7 +31,6 @@ export function StatusBar({
   tandemMode,
   onModeChange,
   heldCount,
-  onSettingsClick,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(() => {
     try {
@@ -205,23 +203,6 @@ export function StatusBar({
             {tandemMode === "tandem" ? "Claude is active" : "Claude is listening"}
           </span>
         </span>
-        <button
-          title="Layout settings"
-          aria-label="Layout settings"
-          onClick={(e) => onSettingsClick?.(e.currentTarget.getBoundingClientRect())}
-          style={{
-            padding: "1px 8px",
-            fontSize: "11px",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-            cursor: "pointer",
-            background: "transparent",
-            color: "#6b7280",
-            fontWeight: 400,
-          }}
-        >
-          Settings
-        </button>
       </div>
 
       <div

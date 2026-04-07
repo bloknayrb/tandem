@@ -59,7 +59,7 @@ export function SettingsPopover({
 
   const threePanelDisabled = viewportWidth < 768;
 
-  // Position above the anchor, centered horizontally
+  // Position below the anchor, centered horizontally
   const left = Math.max(
     8,
     Math.min(
@@ -67,7 +67,7 @@ export function SettingsPopover({
       window.innerWidth - POPOVER_WIDTH - 8,
     ),
   );
-  const bottom = window.innerHeight - anchorRect.top + 6;
+  const top = anchorRect.bottom + 6;
 
   const sectionLabelStyle: React.CSSProperties = {
     fontSize: "11px",
@@ -99,7 +99,7 @@ export function SettingsPopover({
       style={{
         position: "fixed",
         left: `${left}px`,
-        bottom: `${bottom}px`,
+        top: `${top}px`,
         width: `${POPOVER_WIDTH}px`,
         background: "#fff",
         border: "1px solid #e5e7eb",
