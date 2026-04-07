@@ -10,6 +10,7 @@ import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants
 
 const AWARENESS_DEBOUNCE_MS = 500;
 const SELECTION_DEBOUNCE_MS = 300;
+const MODE_CACHE_TTL_MS = 2000;
 
 export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<void> {
   let retries = 0;
@@ -184,17 +185,10 @@ async function connectAndStream(
 
       // Solo mode suppression: drop non-chat events when mode is "solo"
       if (event.type !== "chat:message") {
-        try {
-          const modeRes = await fetch(`${tandemUrl}/api/mode`);
-          if (modeRes.ok) {
-            const { mode } = (await modeRes.json()) as { mode: string };
-            if (mode === "solo") {
-              if (eventId) onEventId(eventId);
-              continue;
-            }
-          }
-        } catch {
-          // If mode check fails, deliver the event (fail-open)
+        const mode = await getCachedMode(tandemUrl);
+        if (mode === "solo") {
+          if (eventId) onEventId(eventId);
+          continue;
         }
       }
 
@@ -226,4 +220,24 @@ async function connectAndStream(
       scheduleAwareness(event);
     }
   }
+}
+
+// Cached mode lookup — avoids an HTTP fetch per event
+let cachedMode: string = "tandem";
+let cachedModeAt = 0;
+
+async function getCachedMode(tandemUrl: string): Promise<string> {
+  const now = Date.now();
+  if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
+  try {
+    const res = await fetch(`${tandemUrl}/api/mode`);
+    if (res.ok) {
+      const { mode } = (await res.json()) as { mode: string };
+      cachedMode = mode;
+      cachedModeAt = now;
+    }
+  } catch {
+    // fail-open: deliver events if mode check fails
+  }
+  return cachedMode;
 }

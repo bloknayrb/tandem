@@ -52,7 +52,7 @@ export function ChatPanel({
     if (externalInputRef) {
       externalInputRef.current = inputRef.current;
     }
-  });
+  }, [externalInputRef]);
 
   // Observe Y.Map('chat') for changes
   useEffect(() => {

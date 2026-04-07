@@ -22,12 +22,14 @@ export function SettingsPopover({
   const popoverRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
 
-  // Track viewport width for three-panel availability
+  // Track viewport width for three-panel availability (only while open)
   useEffect(() => {
+    if (!open) return;
+    setViewportWidth(window.innerWidth);
     const handler = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
-  }, []);
+  }, [open]);
 
   // Dismiss on outside click
   useEffect(() => {

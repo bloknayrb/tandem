@@ -206,12 +206,6 @@ export default function App() {
     return visibleAnnotations.filter((a) => a.status === "pending").length;
   }, [visibleAnnotations, showChat]);
 
-  const [unreadChatBadge, setUnreadChatBadge] = useState(0);
-  // Reset unread chat badge when switching to chat tab
-  useEffect(() => {
-    if (showChat) setUnreadChatBadge(0);
-  }, [showChat]);
-
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [capturedAnchor, setCapturedAnchor] = useState<CapturedAnchor | null>(null);
@@ -733,27 +727,6 @@ export default function App() {
                 }}
               >
                 Chat
-                {!showChat && unreadChatBadge > 0 && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      top: "2px",
-                      right: "6px",
-                      background: "#6366f1",
-                      color: "#fff",
-                      fontSize: "9px",
-                      width: "16px",
-                      height: "16px",
-                      borderRadius: "50%",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: 700,
-                    }}
-                  >
-                    {unreadChatBadge > 9 ? "9+" : unreadChatBadge}
-                  </span>
-                )}
               </button>
             </div>
             {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
