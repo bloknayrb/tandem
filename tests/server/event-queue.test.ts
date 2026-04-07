@@ -5,6 +5,7 @@ import {
   attachObservers,
   detachObservers,
   MCP_ORIGIN,
+  openSelectionGateForTesting,
   reattachObservers,
   replaySince,
   resetForTesting,
@@ -373,6 +374,8 @@ describe("selection event filtering", () => {
   beforeEach(() => {
     doc = new Y.Doc();
     attachObservers("sel-doc", doc);
+    // Open the selection gate so these tests focus on from/to filtering, not the gate
+    openSelectionGateForTesting();
   });
 
   afterEach(() => {
@@ -613,6 +616,110 @@ vi.mock("../../src/server/yjs/provider.js", () => ({
 vi.mock("../../src/server/mcp/document-service.js", () => ({
   getOpenDocs: () => new Map(),
 }));
+
+// --- Selection gate (#188): suppress selection events until first chat message ---
+
+describe("selection gate (#188)", () => {
+  let doc: Y.Doc;
+
+  beforeEach(() => {
+    doc = new Y.Doc();
+    attachObservers("gate-doc", doc);
+  });
+
+  afterEach(() => {
+    detachObservers("gate-doc");
+    doc.destroy();
+  });
+
+  it("suppresses selection:changed events before any chat message", () => {
+    const { events, cleanup } = collectEvents();
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    awareness.set("selection", {
+      from: 10,
+      to: 50,
+      selectedText: "selected text",
+      timestamp: Date.now(),
+    });
+
+    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
+    cleanup();
+  });
+
+  it("emits selection:changed events after first chat message opens the gate", () => {
+    const { events, cleanup } = collectEvents();
+
+    // Attach CTRL_ROOM observers so chat messages are processed
+    _ctrlTestDoc = new Y.Doc();
+    attachCtrlObservers();
+
+    // Send a chat message to open the gate
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_gate", {
+      id: "msg_gate",
+      author: "user",
+      text: "Hello",
+      timestamp: Date.now(),
+      documentId: "gate-doc",
+      read: false,
+    });
+
+    // Now selection events should flow
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("selection", {
+      from: 10,
+      to: 50,
+      selectedText: "now visible",
+      timestamp: Date.now(),
+    });
+
+    const selEvents = events.filter((e) => e.type === "selection:changed");
+    expect(selEvents).toHaveLength(1);
+    expect(selEvents[0].payload.selectedText).toBe("now visible");
+
+    _ctrlTestDoc.destroy();
+    cleanup();
+  });
+
+  it("resetForTesting closes the selection gate", () => {
+    const { cleanup } = collectEvents();
+
+    // Manually open the gate via a chat message
+    _ctrlTestDoc = new Y.Doc();
+    attachCtrlObservers();
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_reset", {
+      id: "msg_reset",
+      author: "user",
+      text: "open gate",
+      timestamp: Date.now(),
+      documentId: "gate-doc",
+      read: false,
+    });
+
+    _ctrlTestDoc.destroy();
+    cleanup();
+
+    // Reset should close the gate
+    resetForTesting();
+
+    // Reattach after reset
+    doc = new Y.Doc();
+    attachObservers("gate-doc", doc);
+    const { events: events2, cleanup: cleanup2 } = collectEvents();
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("selection", {
+      from: 10,
+      to: 50,
+      selectedText: "should be suppressed",
+      timestamp: Date.now(),
+    });
+
+    expect(events2.filter((e) => e.type === "selection:changed")).toHaveLength(0);
+    cleanup2();
+  });
+});
 
 describe("attachCtrlObservers (CTRL_ROOM)", () => {
   beforeEach(() => {

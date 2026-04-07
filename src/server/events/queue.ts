@@ -35,6 +35,13 @@ const emittedPayloadIds = new Map<string, number>();
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
 
+/**
+ * Selection gate: suppress selection:changed channel events until the user
+ * sends their first chat message. Once the gate opens it stays open for the
+ * lifetime of the server process (reset only via resetForTesting).
+ */
+let selectionGateOpen = false;
+
 function getTrackableId(event: TandemEvent): string | undefined {
   switch (event.type) {
     case "annotation:created":
@@ -179,6 +186,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
         | undefined;
       // Skip cleared selections (cursor moves without selecting text) — they flood the channel
       if (!selection || selection.from === selection.to) return;
+      if (!selectionGateOpen) return;
       pushEvent({
         id: generateEventId(),
         type: "selection:changed",
@@ -235,6 +243,9 @@ export function attachCtrlObservers(): void {
       if (change.action !== "add") continue;
       const msg = chatMap.get(key) as ChatMessage | undefined;
       if (!msg || msg.author !== "user") continue;
+
+      // Open the selection gate on first user chat message (#188)
+      selectionGateOpen = true;
 
       pushEvent({
         id: generateEventId(),
@@ -331,11 +342,17 @@ export function reattachCtrlObservers(): void {
   attachCtrlObservers();
 }
 
+/** Open the selection gate manually. For tests only — production code opens it via chat messages. */
+export function openSelectionGateForTesting(): void {
+  selectionGateOpen = true;
+}
+
 /** Reset all module state. For tests only — do not call in production. */
 export function resetForTesting(): void {
   buffer.length = 0;
   subscribers.clear();
   emittedPayloadIds.clear();
+  selectionGateOpen = false;
   for (const cleanups of docObservers.values()) {
     for (const cleanup of cleanups) cleanup();
   }
