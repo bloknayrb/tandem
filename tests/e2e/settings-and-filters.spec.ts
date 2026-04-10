@@ -375,6 +375,80 @@ test("panel-width drags clamp to [200, 600]", async ({ page }) => {
   expect(await readRight()).toBe(200);
 });
 
+test("three-panel left width survives a tabbed-layout round trip", async ({ page }) => {
+  // Scenario: user resizes left panel in three-panel mode, switches to
+  // tabbed (only the right key gets touched), switches back to three-panel.
+  // The left width must still be what the user set. Guards against a
+  // regression where the tabbed handle accidentally writes to the left key
+  // or the layout switch clobbers left state.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  // Clear all width state before starting.
+  await page.evaluate(
+    ([leftKey, rightKey]) => {
+      localStorage.removeItem(leftKey);
+      localStorage.removeItem(rightKey);
+    },
+    [LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY],
+  );
+  await page.reload();
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  // Enter three-panel mode.
+  await page.locator("[data-testid='settings-btn']").click();
+  await page.locator("[data-testid='layout-three-panel-btn']").click();
+  await page.keyboard.press("Escape");
+
+  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  await expect(leftHandle).toBeVisible();
+
+  async function dragHandleBy(
+    handle: ReturnType<typeof page.locator>,
+    deltaX: number,
+  ): Promise<void> {
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + deltaX, cy, { steps: 10 });
+    await page.mouse.up();
+  }
+
+  // Drag the left handle +80 → left ≈ 380.
+  await dragHandleBy(leftHandle, 80);
+  const leftAfterDrag = await page.evaluate((k) => localStorage.getItem(k), LEFT_PANEL_WIDTH_KEY);
+  expect(Number(leftAfterDrag)).toBeGreaterThanOrEqual(370);
+  expect(Number(leftAfterDrag)).toBeLessThanOrEqual(390);
+
+  // Switch to tabbed layout.
+  await page.locator("[data-testid='settings-btn']").click();
+  await page.locator("[data-testid='layout-tabbed-btn']").click();
+  await page.keyboard.press("Escape");
+
+  // Drag the tabbed handle so the right key changes.
+  const tabbedHandle = page.locator("[data-testid='panel-resize-handle']");
+  await expect(tabbedHandle).toBeVisible();
+  await dragHandleBy(tabbedHandle, -60);
+
+  // Left key must still be what we set earlier — tabbed mode must not
+  // touch it.
+  const leftAfterTabbed = await page.evaluate((k) => localStorage.getItem(k), LEFT_PANEL_WIDTH_KEY);
+  expect(leftAfterTabbed).toBe(leftAfterDrag);
+
+  // Switch back to three-panel and verify the left handle is still at the
+  // original value.
+  await page.locator("[data-testid='settings-btn']").click();
+  await page.locator("[data-testid='layout-three-panel-btn']").click();
+  await page.keyboard.press("Escape");
+  const leftAfterBack = await page.evaluate((k) => localStorage.getItem(k), LEFT_PANEL_WIDTH_KEY);
+  expect(leftAfterBack).toBe(leftAfterDrag);
+});
+
 test("side panel resets scroll to top on filter change (no active annotation)", async ({
   page,
 }) => {
