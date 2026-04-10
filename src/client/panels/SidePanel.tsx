@@ -452,6 +452,8 @@ export function SidePanel({
 
   return (
     <div
+      ref={listRef}
+      data-testid="annotation-list-scroll-container"
       style={{
         width: "100%",
         background: "#fafafa",
@@ -727,12 +729,7 @@ export function SidePanel({
       )}
 
       {/* Annotation list */}
-      <div
-        ref={listRef}
-        style={{ padding: "8px 16px", flex: 1 }}
-        role="list"
-        aria-label="Annotations"
-      >
+      <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
         {filtered.length === 0 ? (
           <p role="status" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
             {hasFilters

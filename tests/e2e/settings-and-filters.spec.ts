@@ -296,8 +296,7 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
   // down, change a filter, and assert the list is back at the top. Guards
   // SidePanel.tsx's filter-change scroll-reset effect.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  // 15 comments on the title — same range is fine, each gets a unique id.
-  // Parallel seeding: the HTTP MCP transport supports concurrent calls.
+  // 15 comments on the title — parallel seeding over HTTP MCP.
   await Promise.all(
     Array.from({ length: 15 }, (_, i) =>
       mcp.callTool("tandem_comment", {
@@ -312,24 +311,27 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
   await page.goto("/");
   await switchToAnnotationsTab(page);
 
-  const list = page.locator('[role="list"][aria-label="Annotations"]');
-  await expect(list).toBeVisible();
-  // Wait for all 15 cards to render.
+  // The scroll container is the SidePanel's outer wrapper, not the inner
+  // role="list" div. Production scrollTo() is wired to this element.
+  const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
+  await expect(scrollContainer).toBeVisible();
+  // Wait for all 15 cards to render inside it.
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(15);
 
-  // Constrain the list height so the cards definitely overflow, regardless
-  // of the Playwright viewport size. Then scroll to the bottom.
-  await list.evaluate((el) => {
-    (el as HTMLElement).style.maxHeight = "200px";
-    (el as HTMLElement).style.overflowY = "auto";
+  // Scroll to the bottom of the real scroll container.
+  await scrollContainer.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
   });
-  const scrollBefore = await list.evaluate((el) => el.scrollTop);
+  const scrollBefore = await scrollContainer.evaluate((el) => el.scrollTop);
   expect(scrollBefore).toBeGreaterThan(0);
 
-  // Change the type filter — effect should scroll the list back to 0.
+  // Change the type filter — effect should scroll back to 0.
   await page.locator("[data-testid='filter-type']").selectOption("comment");
-  await expect.poll(async () => list.evaluate((el) => el.scrollTop), { timeout: 2_000 }).toBe(0);
+  await expect
+    .poll(async () => scrollContainer.evaluate((el) => el.scrollTop), {
+      timeout: 2_000,
+    })
+    .toBe(0);
 });
 
 test("side panel keeps active annotation in view on filter change", async ({ page }) => {
