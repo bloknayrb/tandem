@@ -25,25 +25,44 @@ tandem           # starts server + opens browser
 
 ### Connect Claude Code
 
-Start Claude Code with channel push for real-time notifications:
+You don't need any experimental flags — `tandem setup` has already registered the MCP tools globally, so just start Claude Code normally from any directory:
 
 ```bash
-claude --dangerously-load-development-channels server:tandem-channel
+claude
 ```
+
+**Recommended layout:** snap the Claude Code terminal to one side of your screen and the Tandem browser window to the other. You'll be flipping attention between them constantly, and having both visible makes the loop feel natural — almost like sitting next to another editor.
 
 Then try:
 
 ```
-"Review the welcome document with me"
+"Open sample/welcome.md and review it with me"
 ```
 
-Claude calls `tandem_open`, the document appears in the browser, and annotations start flowing. Chat messages, annotation actions, and text selections push to Claude instantly.
+Claude calls `tandem_open`, the document appears in the browser, and you're ready to collaborate.
 
-**Without channels:** Use the `/loop` skill in Claude Code to poll:
+#### The core loop — no copy/paste
 
-```
-/loop 30s check tandem inbox and respond to any new messages
-```
+1. Highlight a paragraph in the browser editor.
+2. In the terminal, just type what you want: *"what do you think of this paragraph?"* or *"rewrite this to be more concise"*.
+3. Claude calls `tandem_checkInbox`, which returns the currently-selected text under `activity.selectedText`. Claude reads it directly — you never paste the passage into the terminal.
+4. Claude replies in the Tandem chat sidebar (`tandem_reply`) or drops annotations on the document (`tandem_annotate` / `tandem_suggestEdit`), which you can accept, dismiss, or edit in the side panel.
+
+#### How Claude knows when you've done something
+
+There are three ways Claude picks up your selections, chat messages, and annotation actions. They differ only in *when* Claude finds out — all three can see the same information.
+
+1. **Talk in the terminal (simplest, default).** Every time you send Claude a message, it has a chance to call `tandem_checkInbox` and pick up your latest selection, any annotations you accepted or dismissed, and any chat messages from the Tandem sidebar. Zero setup — this is how it works out of the box. The only "cost" is that Claude reacts when you nudge it, not spontaneously. With Tandem and the terminal snapped side by side, this feels completely natural.
+2. **Background polling with `/loop` (hands-off, higher latency).** If you want Claude to check in on its own without you typing anything, use the `/loop` skill:
+   ```
+   /loop 30s check tandem inbox and respond to any new messages
+   ```
+   Claude polls every 30 seconds — responses lag by up to that interval, but you don't have to prompt it yourself.
+3. **Real-time channel push (instant, experimental).** If you're comfortable opting into an experimental Claude Code flag, start Claude with:
+   ```bash
+   claude --dangerously-load-development-channels server:tandem-channel
+   ```
+   Events (selections, annotations, chat) then push to Claude over SSE the moment they happen — no polling, no manual nudging. This is the mode that makes Tandem feel like there's another person on the other end of the document, watching what you're highlighting and reacting to it in real time, the same way a collaborator on a Google Doc would. Everything else works the same; only the latency changes. See [MCP Configuration](#mcp-configuration) for details.
 
 ### Verify
 
@@ -55,7 +74,7 @@ Or check the raw health endpoint:
 
 ```bash
 curl http://localhost:3479/health
-# → {"status":"ok","version":"0.1.2","transport":"http","hasSession":false}
+# → {"status":"ok","version":"0.3.0","transport":"http","hasSession":false}
 ```
 
 `hasSession` becomes `true` once Claude Code connects.
@@ -73,6 +92,16 @@ npm run dev:standalone   # starts server (:3478/:3479) + browser client (:5173)
 Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
 
 </details>
+
+## Using Tandem
+
+A one-minute mental model of the daily loop:
+
+- **Open a document.** Ask Claude (`"open notes.md"`), drag a file onto the browser, or click the **+** in the tab bar. `.md`, `.txt`, `.html`, and `.docx` (review-only) are supported.
+- **Talk about specific text.** Select it in the browser editor, then ask Claude about "this paragraph" in the terminal. Claude reads your selection from `tandem_checkInbox` — no copy/paste. Hold the selection still for about a second so it registers (dwell-time gating filters out incidental clicks).
+- **Review what Claude suggests.** Annotations appear in the side panel. Press **Ctrl+Shift+R** to enter keyboard review mode: **Tab** to navigate, **Y** accept, **N** dismiss, **E** edit, **Z** undo within a 10-second window.
+- **Heads-down vs collaborative.** Toggle **Solo** mode when you want to write without interruptions — Tandem queues non-urgent annotations until you flip back to **Tandem** mode. Both `tandem_status` and `tandem_checkInbox` return the current mode so Claude adapts its behavior automatically.
+- **Save.** Ask Claude ("save the file"), press the save button, or let session auto-persistence take over — your documents and annotations survive server restarts either way.
 
 ## Features
 
@@ -96,15 +125,30 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 
 ### More
 
-- **Multi-document tabs** — open `.md`, `.txt`, `.docx` files side by side; drag to reorder
+- **Multi-document tabs** — open `.md`, `.txt`, `.html`, `.docx` files side by side; drag to reorder
 - **.docx review-only mode** — open Word documents for annotation; imported Word comments appear alongside Claude's
 - **Session persistence** — documents and annotations survive server restarts
-- **Real-time channel push** — annotation actions, chat, and selections push to Claude instantly
+- **Solo / Tandem mode** — flip to Solo when you want to write heads-down; Tandem queues non-urgent annotations until you're ready
+- **Selection-aware chat** — highlight text in the browser, ask Claude about "this" in the terminal; Claude reads your selection directly, no copy/paste
+- **Optional real-time push** — opt into the channel shim for instant notifications instead of polling (experimental flag required)
 - **Keyboard shortcuts** — press `?` for the full reference
 - **Unsaved-changes indicator** — dot on tab title when a document has pending edits
 - **Configurable display name** — set your name so Claude knows who's reviewing
 - **Atomic file saves** — write to temp, then rename, preventing partial writes
 - **E2E tested** — Playwright tests cover the annotation lifecycle end-to-end
+
+## Where Tandem is headed
+
+Tandem v1 covers the core loop well — single user editing prose with Claude, with `.md`/`.txt`/`.html` round-trip and `.docx` review. A few directions on the radar for later releases:
+
+- **Progressive Web App** — install Tandem from the browser for a real app window, taskbar icon, and offline-capable shell.
+- **High-fidelity .docx round-trip** — current `.docx` support is review-only; LibreOffice-headless-based production export is planned so you can stay in Tandem through the final draft.
+- **Claude Desktop parity** — the MCP server already works with Claude Desktop; polish and documentation for a first-class experience there is in the works.
+- **Exportable annotated documents** — PDF (and eventually `.docx`) with annotations baked in, so you can share reviewed drafts outside Tandem.
+- **Code editing mode** — CodeMirror 6 surface for reviewing code the same way you review prose.
+- **Standalone mode** — direct Anthropic API connection so Tandem can run without Claude Code in the loop, for users who want a pure browser-based experience.
+
+See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#known-limitations-v1) for the complete picture, including items that are explicitly out of scope for v1.
 
 ## Documentation
 
@@ -128,7 +172,7 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 
 ## MCP Configuration
 
-Tandem uses two MCP connections: **HTTP** for document tools (30 tools including annotation editing), and a **channel shim** for real-time push notifications.
+Tandem registers two MCP connections: **HTTP** for document tools (30 tools including annotation editing — always on), and an **optional channel shim** for real-time push notifications. The channel shim is only active when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`; if you don't pass that flag, the entry sits idle and everything still works through polling on the HTTP connection.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 
