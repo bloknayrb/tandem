@@ -410,6 +410,13 @@ export function SidePanel({
         card.scrollIntoView({ block: "center" });
         return;
       }
+      // Card not in the DOM after a filter change — either the active
+      // annotation was filtered out or the render hasn't committed yet.
+      // Fall through to scroll-to-top but log so "scroll jumped
+      // unexpectedly" bug reports are diagnosable.
+      console.warn(
+        `[tandem] SidePanel: active annotation ${currentActive} not found on filter change; scrolling to top`,
+      );
     }
     listRef.current?.scrollTo({ top: 0 });
   }, [filterType, filterAuthor, filterStatus]);

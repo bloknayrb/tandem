@@ -131,9 +131,12 @@ function loadPanelWidth(key: string): number {
       if (Number.isFinite(parsed)) {
         return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
       }
+      // Non-finite saved value — fall through and warn so corrupt storage
+      // is diagnosable instead of silently reverting to the default.
+      console.warn(`[tandem] ignoring non-numeric panel width for ${key}: ${saved}`);
     }
-  } catch {
-    // localStorage unavailable (incognito/storage-disabled)
+  } catch (err) {
+    console.warn(`[tandem] localStorage unavailable reading ${key}:`, err);
   }
   return PANEL_DEFAULT_WIDTH;
 }
@@ -306,8 +309,8 @@ export default function App() {
       document.body.style.cursor = "";
       try {
         localStorage.setItem(storageKey, String(latestWidth));
-      } catch {
-        // localStorage unavailable
+      } catch (err) {
+        console.warn(`[tandem] failed to persist ${storageKey}:`, err);
       }
     };
 
