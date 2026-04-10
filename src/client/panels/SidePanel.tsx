@@ -386,6 +386,33 @@ export function SidePanel({
     setBulkConfirm(null);
   }, [filterType, filterAuthor, filterStatus]);
 
+  // When filters change, reset the annotation list scroll. If a review
+  // annotation is active, scroll it into view instead of jumping to the top,
+  // so the user doesn't lose their place mid-review (#202).
+  //
+  // Using refs to skip the initial mount and to read activeAnnotationId
+  // without making the effect depend on it — activeAnnotationId changes
+  // already have their own scroll effect below, and we don't want to
+  // double-fire scrolls on annotation click.
+  const didMountFiltersRef = useRef(false);
+  const activeAnnotationIdRef = useRef(activeAnnotationId);
+  activeAnnotationIdRef.current = activeAnnotationId;
+  useEffect(() => {
+    if (!didMountFiltersRef.current) {
+      didMountFiltersRef.current = true;
+      return;
+    }
+    const currentActive = activeAnnotationIdRef.current;
+    if (currentActive) {
+      const card = document.querySelector(`[data-testid="annotation-card-${currentActive}"]`);
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        return;
+      }
+    }
+    listRef.current?.scrollTo({ top: 0 });
+  }, [filterType, filterAuthor, filterStatus]);
+
   // Keep review index in bounds when annotations change
   useEffect(() => {
     if (reviewMode && reviewIndexRef.current >= reviewTargets.length) {
@@ -606,7 +633,9 @@ export function SidePanel({
               setFilterType("all");
               setFilterAuthor("all");
               setFilterStatus("all");
-              listRef.current?.scrollTo({ top: 0 });
+              // Scroll reset is handled centrally by the filter-change
+              // useEffect above — it also scrolls active review annotations
+              // into view instead of jumping to the top.
             }}
             style={{
               background: "none",
