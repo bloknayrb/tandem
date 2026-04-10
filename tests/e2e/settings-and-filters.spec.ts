@@ -215,12 +215,13 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   const slider = page.locator("[data-testid='dwell-time-slider']");
   await expect(slider).toBeVisible({ timeout: 2_000 });
 
-  // Programmatically set the slider to a known value and fire the input event.
-  // Playwright's fill() works for range inputs, but a native event dispatch
-  // is more reliable since some handlers listen on "input" rather than "change".
+  // Set the range input value and fire a React-compatible change event.
+  // React tracks controlled-input values through a native setter; calling
+  // that setter before dispatching the event ensures React's onChange fires.
   await slider.evaluate((el) => {
     const input = el as HTMLInputElement;
-    input.value = "2000";
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    nativeSetter?.call(input, "2000");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
