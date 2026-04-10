@@ -74,6 +74,7 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
   await mcp.callTool("tandem_highlight", {
     from: 17,
     to: 65,
+    color: "yellow",
     textSnapshot: "This is the first paragraph of the test document",
   });
   // Sanity check: confirm both annotations exist before navigating.
@@ -118,6 +119,7 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   await mcp.callTool("tandem_highlight", {
     from: 17,
     to: 65,
+    color: "yellow",
     textSnapshot: "This is the first paragraph of the test document",
   });
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
