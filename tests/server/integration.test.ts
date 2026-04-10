@@ -1,12 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import * as Y from 'yjs';
-import {
-  extractText,
-  resolveOffset,
-  getOrCreateXmlText,
-} from '../../src/server/mcp/document.js';
-import { escapeRegex } from '../../src/server/mcp/response.js';
-import { makeDoc } from '../helpers/ydoc-factory.js';
+import { describe, it, expect, afterEach } from "vitest";
+import * as Y from "yjs";
+import { extractText, resolveOffset, getOrCreateXmlText } from "../../src/server/mcp/document.js";
+import { escapeRegex } from "../../src/server/mcp/response.js";
+import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 
@@ -16,7 +12,7 @@ afterEach(() => {
 
 /** Find text like tandem_resolveRange */
 function findText(fullText: string, pattern: string, occurrence = 1) {
-  const regex = new RegExp(escapeRegex(pattern), 'g');
+  const regex = new RegExp(escapeRegex(pattern), "g");
   let match;
   let count = 0;
   while ((match = regex.exec(fullText)) !== null) {
@@ -30,7 +26,7 @@ function findText(fullText: string, pattern: string, occurrence = 1) {
 
 /** Apply edit like tandem_edit */
 function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): boolean {
-  const fragment = doc.getXmlFragment('default');
+  const fragment = doc.getXmlFragment("default");
   const startPos = resolveOffset(fragment, from);
   const endPos = resolveOffset(fragment, to);
   if (!startPos || !endPos) return false;
@@ -76,47 +72,47 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): boole
   return true;
 }
 
-describe('resolveRange → edit pipeline', () => {
-  it('find text, replace it, verify result', () => {
-    doc = makeDoc('The quick brown fox jumps over the lazy dog');
+describe("resolveRange → edit pipeline", () => {
+  it("find text, replace it, verify result", () => {
+    doc = makeDoc("The quick brown fox jumps over the lazy dog");
     const text = extractText(doc);
-    const range = findText(text, 'brown fox');
+    const range = findText(text, "brown fox");
     expect(range).not.toBeNull();
 
-    const success = applyEdit(doc, range!.from, range!.to, 'red cat');
+    const success = applyEdit(doc, range!.from, range!.to, "red cat");
     expect(success).toBe(true);
-    expect(extractText(doc)).toBe('The quick red cat jumps over the lazy dog');
+    expect(extractText(doc)).toBe("The quick red cat jumps over the lazy dog");
   });
 
-  it('find and edit text in document with headings', () => {
-    doc = makeDoc('# Title\nThe old paragraph\n## Section\nMore content');
+  it("find and edit text in document with headings", () => {
+    doc = makeDoc("# Title\nThe old paragraph\n## Section\nMore content");
     const text = extractText(doc);
-    const range = findText(text, 'old paragraph');
+    const range = findText(text, "old paragraph");
     expect(range).not.toBeNull();
 
-    const success = applyEdit(doc, range!.from, range!.to, 'new paragraph');
+    const success = applyEdit(doc, range!.from, range!.to, "new paragraph");
     expect(success).toBe(true);
 
     const result = extractText(doc);
-    expect(result).toBe('# Title\nThe new paragraph\n## Section\nMore content');
+    expect(result).toBe("# Title\nThe new paragraph\n## Section\nMore content");
     // Heading structure preserved
-    expect(result).toContain('# Title');
-    expect(result).toContain('## Section');
+    expect(result).toContain("# Title");
+    expect(result).toContain("## Section");
   });
 
-  it('search → edit → search again at new position', () => {
-    doc = makeDoc('Replace OLD with something NEW');
+  it("search → edit → search again at new position", () => {
+    doc = makeDoc("Replace OLD with something NEW");
     let text = extractText(doc);
 
-    const range = findText(text, 'OLD');
+    const range = findText(text, "OLD");
     expect(range).not.toBeNull();
-    applyEdit(doc, range!.from, range!.to, 'FRESH');
+    applyEdit(doc, range!.from, range!.to, "FRESH");
 
     text = extractText(doc);
-    expect(text).toBe('Replace FRESH with something NEW');
+    expect(text).toBe("Replace FRESH with something NEW");
 
     // "FRESH" should be findable at the expected position
-    const newRange = findText(text, 'FRESH');
+    const newRange = findText(text, "FRESH");
     expect(newRange).not.toBeNull();
     expect(newRange!.from).toBe(8); // "Replace " is 8 chars
     expect(newRange!.to).toBe(13); // "FRESH" is 5 chars

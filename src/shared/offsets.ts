@@ -10,7 +10,7 @@
  */
 
 /** Flat-text separator between block elements. */
-export const FLAT_SEPARATOR = '\n';
+export const FLAT_SEPARATOR = "\n";
 
 /**
  * Length of the heading prefix in flat text for a given heading level.
@@ -27,5 +27,5 @@ export function headingPrefixLength(level: number | null | undefined): number {
  * Level 1 → "# ", level 2 → "## ", etc.
  */
 export function headingPrefix(level: number): string {
-  return '#'.repeat(level) + ' ';
+  return "#".repeat(level) + " ";
 }
