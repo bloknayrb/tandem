@@ -147,7 +147,12 @@ export function SidePanel({
     const ann = map.get(id) as Annotation | undefined;
     if (!ann) return;
     map.set(id, { ...ann, status });
-    if (status === "accepted" && editorRef.current) {
+    // Only suggestions trigger a text replacement when accepted. For other
+    // annotation types (comment/highlight/question/flag), accepting is just
+    // a status change. Previously this branch called applySuggestion
+    // unconditionally — which returns false for non-suggestions — and the
+    // revert-on-failure path would silently flip the status back to pending.
+    if (status === "accepted" && ann.type === "suggestion" && editorRef.current) {
       const applied = applySuggestion(ann, editorRef.current, ydocRef.current);
       if (!applied) {
         // Revert annotation status — text replacement failed

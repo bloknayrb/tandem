@@ -80,7 +80,11 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
-  await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
+  // Wait for BOTH annotations to sync over Hocuspocus — the bulk-accept
+  // button only mounts when pending.length > 1, so asserting on just the
+  // first card leaves a race where we query bulk-accept before the second
+  // card arrives.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
     timeout: 10_000,
   });
 
@@ -122,7 +126,8 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
-  await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
+  // Wait for both annotations to sync — bulk-dismiss-btn requires pending > 1
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
     timeout: 10_000,
   });
 
