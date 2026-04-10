@@ -15,3 +15,4 @@ gha-creds-*.json
 .superpowers/
 skills-lock.json
 test-results/
+.pipeline-state/
