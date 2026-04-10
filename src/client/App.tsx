@@ -2,6 +2,8 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DISCONNECT_DEBOUNCE_MS,
+  LEFT_PANEL_WIDTH_KEY,
+  PANEL_WIDTH_KEY,
   PROLONGED_DISCONNECT_MS,
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
@@ -118,11 +120,6 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
 const PANEL_MIN_WIDTH = 200;
 const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
-// PANEL_WIDTH_KEY persists the right-side panel's width (shared between the
-// tabbed layout's single panel and three-panel mode's right panel). The left
-// panel has its own key so three-panel widths are independent.
-const PANEL_WIDTH_KEY = "tandem-panel-width";
-const LEFT_PANEL_WIDTH_KEY = "tandem-left-panel-width";
 
 type PanelSide = "left" | "right";
 

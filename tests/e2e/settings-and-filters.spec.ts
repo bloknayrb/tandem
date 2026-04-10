@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
-import { TANDEM_MODE_KEY, TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
+import {
+  LEFT_PANEL_WIDTH_KEY,
+  PANEL_WIDTH_KEY,
+  TANDEM_MODE_KEY,
+  TANDEM_SETTINGS_KEY,
+} from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -214,10 +219,13 @@ test("three-panel layout resizes left/right widths independently", async ({ page
   await expect(page.locator("[data-testid='settings-popover']")).toBeVisible();
   await page.locator("[data-testid='layout-three-panel-btn']").click();
   await page.keyboard.press("Escape");
-  await page.evaluate(() => {
-    localStorage.removeItem("tandem-panel-width");
-    localStorage.removeItem("tandem-left-panel-width");
-  });
+  await page.evaluate(
+    ([leftKey, rightKey]) => {
+      localStorage.removeItem(leftKey);
+      localStorage.removeItem(rightKey);
+    },
+    [LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY],
+  );
   await page.reload();
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
 
@@ -226,54 +234,59 @@ test("three-panel layout resizes left/right widths independently", async ({ page
   await expect(leftHandle).toBeVisible();
   await expect(rightHandle).toBeVisible();
 
+  // One-shot evaluate returning both keys at once.
+  const readWidths = () =>
+    page.evaluate(
+      ([leftKey, rightKey]) => ({
+        left: localStorage.getItem(leftKey),
+        right: localStorage.getItem(rightKey),
+      }),
+      [LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY],
+    );
+
+  async function dragHandleBy(
+    handle: ReturnType<typeof page.locator>,
+    deltaX: number,
+  ): Promise<void> {
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + deltaX, cy, { steps: 10 });
+    await page.mouse.up();
+  }
+
   // Drag the left handle right by +80px. Left panel's handle is on its right
   // edge, so drag-right widens it: 300 → 380.
-  const leftBox = await leftHandle.boundingBox();
-  if (!leftBox) throw new Error("left-panel-resize-handle has no bounding box");
-  const leftCenterX = leftBox.x + leftBox.width / 2;
-  const leftCenterY = leftBox.y + leftBox.height / 2;
-  await page.mouse.move(leftCenterX, leftCenterY);
-  await page.mouse.down();
-  await page.mouse.move(leftCenterX + 80, leftCenterY, { steps: 10 });
-  await page.mouse.up();
+  await dragHandleBy(leftHandle, 80);
 
   // Left width moves, right width must not.
-  const leftAfterDrag = await page.evaluate(() => localStorage.getItem("tandem-left-panel-width"));
-  const rightAfterLeftDrag = await page.evaluate(() => localStorage.getItem("tandem-panel-width"));
-  expect(Number(leftAfterDrag)).toBeGreaterThanOrEqual(370);
-  expect(Number(leftAfterDrag)).toBeLessThanOrEqual(390);
+  const afterLeftDrag = await readWidths();
+  expect(Number(afterLeftDrag.left)).toBeGreaterThanOrEqual(370);
+  expect(Number(afterLeftDrag.left)).toBeLessThanOrEqual(390);
   // Right panel key is written only when that handle is dragged. Null = default.
-  if (rightAfterLeftDrag !== null) {
-    expect(Number(rightAfterLeftDrag)).toBe(300);
+  if (afterLeftDrag.right !== null) {
+    expect(Number(afterLeftDrag.right)).toBe(300);
   }
 
   // Drag the right handle right by +80px. Right panel's handle is on its
   // left edge, so drag-right NARROWS it (App.tsx sign inversion): 300 → 220.
-  const rightBox = await rightHandle.boundingBox();
-  if (!rightBox) throw new Error("right-panel-resize-handle has no bounding box");
-  const rightCenterX = rightBox.x + rightBox.width / 2;
-  const rightCenterY = rightBox.y + rightBox.height / 2;
-  await page.mouse.move(rightCenterX, rightCenterY);
-  await page.mouse.down();
-  await page.mouse.move(rightCenterX + 80, rightCenterY, { steps: 10 });
-  await page.mouse.up();
+  await dragHandleBy(rightHandle, 80);
 
-  const rightAfterDrag = await page.evaluate(() => localStorage.getItem("tandem-panel-width"));
-  expect(Number(rightAfterDrag)).toBeGreaterThanOrEqual(210);
-  expect(Number(rightAfterDrag)).toBeLessThanOrEqual(230);
+  const afterRightDrag = await readWidths();
+  expect(Number(afterRightDrag.right)).toBeGreaterThanOrEqual(210);
+  expect(Number(afterRightDrag.right)).toBeLessThanOrEqual(230);
   // Left width must still be the value we set earlier.
-  const leftAfterRightDrag = await page.evaluate(() =>
-    localStorage.getItem("tandem-left-panel-width"),
-  );
-  expect(leftAfterRightDrag).toBe(leftAfterDrag);
+  expect(afterRightDrag.left).toBe(afterLeftDrag.left);
 
   // Round-trip through reload — both keys must persist.
   await page.reload();
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
-  const leftReloaded = await page.evaluate(() => localStorage.getItem("tandem-left-panel-width"));
-  const rightReloaded = await page.evaluate(() => localStorage.getItem("tandem-panel-width"));
-  expect(leftReloaded).toBe(leftAfterDrag);
-  expect(rightReloaded).toBe(rightAfterDrag);
+  const afterReload = await readWidths();
+  expect(afterReload.left).toBe(afterLeftDrag.left);
+  expect(afterReload.right).toBe(afterRightDrag.right);
 });
 
 test("side panel resets scroll to top on filter change (no active annotation)", async ({
@@ -284,14 +297,17 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
   // SidePanel.tsx's filter-change scroll-reset effect.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   // 15 comments on the title — same range is fine, each gets a unique id.
-  for (let i = 0; i < 15; i++) {
-    await mcp.callTool("tandem_comment", {
-      from: 2,
-      to: 6,
-      text: `note ${i}`,
-      textSnapshot: "Test",
-    });
-  }
+  // Parallel seeding: the HTTP MCP transport supports concurrent calls.
+  await Promise.all(
+    Array.from({ length: 15 }, (_, i) =>
+      mcp.callTool("tandem_comment", {
+        from: 2,
+        to: 6,
+        text: `note ${i}`,
+        textSnapshot: "Test",
+      }),
+    ),
+  );
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
@@ -321,14 +337,16 @@ test("side panel keeps active annotation in view on filter change", async ({ pag
   // active (review mode), the list should scroll *it* into view instead of
   // jumping to the top (#202).
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  for (let i = 0; i < 15; i++) {
-    await mcp.callTool("tandem_comment", {
-      from: 2,
-      to: 6,
-      text: `note ${i}`,
-      textSnapshot: "Test",
-    });
-  }
+  await Promise.all(
+    Array.from({ length: 15 }, (_, i) =>
+      mcp.callTool("tandem_comment", {
+        from: 2,
+        to: 6,
+        text: `note ${i}`,
+        textSnapshot: "Test",
+      }),
+    ),
+  );
 
   await page.goto("/");
   await switchToAnnotationsTab(page);

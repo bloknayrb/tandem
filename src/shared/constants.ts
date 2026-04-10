@@ -24,6 +24,10 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
 export const TANDEM_MODE_DEFAULT = "tandem" as const;
 export const TANDEM_MODE_KEY = "tandem:mode";
 export const TANDEM_SETTINGS_KEY = "tandem:settings";
+// Right-side panel width (shared between tabbed layout and three-panel right panel).
+export const PANEL_WIDTH_KEY = "tandem-panel-width";
+// Left-side panel width (three-panel layout only — independent of the right).
+export const LEFT_PANEL_WIDTH_KEY = "tandem-left-panel-width";
 export const SELECTION_DWELL_DEFAULT_MS = 1000;
 export const SELECTION_DWELL_MIN_MS = 500;
 export const SELECTION_DWELL_MAX_MS = 3000;
