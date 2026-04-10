@@ -1,19 +1,19 @@
-import React, { useEffect, useCallback } from "react";
-import { USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants.js";
-import { useEditor, EditorContent } from "@tiptap/react";
-import type { Editor as TiptapEditor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
+import { HocuspocusProvider } from "@hocuspocus/provider";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import Table from "@tiptap/extension-table";
-import TableRow from "@tiptap/extension-table-row";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
+import type { Editor as TiptapEditor } from "@tiptap/react";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import React, { useCallback, useEffect } from "react";
 import * as Y from "yjs";
-import { HocuspocusProvider } from "@hocuspocus/provider";
+import { USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants.js";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AwarenessExtension } from "./extensions/awareness";
 

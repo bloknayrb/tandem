@@ -1,26 +1,26 @@
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
-import { getOrCreateDocument } from "../yjs/provider.js";
-import { getCurrentDoc, extractText } from "./document.js";
-import { mcpSuccess, mcpError, noDocumentError, withErrorBoundary } from "./response.js";
-import { exportAnnotations } from "../file-io/docx.js";
 import * as Y from "yjs";
+import { z } from "zod";
+import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import {
-  AnnotationTypeSchema,
-  AnnotationStatusSchema,
-  HighlightColorSchema,
-  AuthorSchema,
   AnnotationActionSchema,
+  AnnotationStatusSchema,
+  AnnotationTypeSchema,
+  AuthorSchema,
   ExportFormatSchema,
+  HighlightColorSchema,
   toFlatOffset,
 } from "../../shared/types.js";
-import { anchoredRange, refreshAllRanges } from "../positions.js";
-import type { RangeValidation, AnchoredRangeResult } from "../../shared/positions/index.js";
-import { pushNotification } from "../notifications.js";
 import { generateAnnotationId, generateNotificationId } from "../../shared/utils.js";
+import { MCP_ORIGIN } from "../events/queue.js";
+import { exportAnnotations } from "../file-io/docx.js";
+import { pushNotification } from "../notifications.js";
+import { anchoredRange, refreshAllRanges } from "../positions.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
+import { extractText, getCurrentDoc } from "./document.js";
+import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
@@ -148,7 +148,7 @@ export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
   return result;
 }
 
-export { refreshRange, refreshAllRanges } from "../positions.js";
+export { refreshAllRanges, refreshRange } from "../positions.js";
 
 export function registerAnnotationTools(server: McpServer): void {
   server.tool(

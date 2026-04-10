@@ -1,12 +1,12 @@
-import { Y_MAP_CHAT, CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
-import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import * as Y from "yjs";
-import { flatOffsetToPmPos } from "../positions";
+import { CLAUDE_PRESENCE_COLOR, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
+import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
-import type { ChatMessage, CapturedAnchor } from "../../shared/types";
+import { flatOffsetToPmPos } from "../positions";
 
 const TYPING_DOT_STYLE: React.CSSProperties = {
   width: "5px",

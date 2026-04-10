@@ -1,5 +1,5 @@
-import type * as Y from "yjs";
 import type { HocuspocusProvider } from "@hocuspocus/provider";
+import type * as Y from "yjs";
 
 export interface DocListEntry {
   id: string;

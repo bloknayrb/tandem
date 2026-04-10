@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { escapeRegex } from "../../src/server/mcp/response.js";
 import { extractText } from "../../src/server/mcp/document.js";
 import { searchText } from "../../src/server/mcp/navigation.js";
+import { escapeRegex } from "../../src/server/mcp/response.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;

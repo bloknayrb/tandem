@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { pmPosToFlatOffset } from "../../positions";
-import { toPmPos } from "../../../shared/positions/types";
-import { generateAnnotationId } from "../../../shared/utils";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
+import { generateAnnotationId } from "../../../shared/utils";
+import { pmPosToFlatOffset } from "../../positions";
+import { FormattingToolbar } from "./FormattingToolbar";
 import { InputGroup } from "./InputGroup";
 import { ToolbarButton } from "./ToolbarButton";
-import { FormattingToolbar } from "./FormattingToolbar";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
   { value: "yellow", label: "Yellow" },

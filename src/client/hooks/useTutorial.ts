@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-
 import type { Editor } from "@tiptap/core";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { TUTORIAL_COMPLETED_KEY, TUTORIAL_ANNOTATION_PREFIX } from "../../shared/constants";
+import { TUTORIAL_ANNOTATION_PREFIX, TUTORIAL_COMPLETED_KEY } from "../../shared/constants";
 import type { Annotation } from "../../shared/types";
 
 interface UseTutorialResult {

@@ -1,10 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  mcpSuccess,
-  mcpError,
-  noDocumentError,
-  getErrorMessage,
   escapeRegex,
+  getErrorMessage,
+  mcpError,
+  mcpSuccess,
+  noDocumentError,
   withErrorBoundary,
 } from "../../src/server/mcp/response.js";
 

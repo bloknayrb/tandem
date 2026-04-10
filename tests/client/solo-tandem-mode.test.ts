@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { shouldShowInMode } from "../../src/client/hooks/useModeGate.js";
 import type { Annotation, TandemMode } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";

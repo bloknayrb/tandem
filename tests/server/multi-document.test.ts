@@ -1,12 +1,12 @@
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { describe, it, expect } from "vitest";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { describe, expect, it } from "vitest";
 import {
   docIdFromPath,
+  extractText,
   getCurrentDoc,
   populateYDoc,
-  extractText,
 } from "../../src/server/mcp/document.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 
 describe("docIdFromPath", () => {
   it("generates stable IDs from the same path", () => {

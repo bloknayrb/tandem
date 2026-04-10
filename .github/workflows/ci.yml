@@ -14,13 +14,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
 
       - name: Lint
         run: npm run lint
+
+      - name: Biome format check
+        run: npx biome check .
 
       - name: Typecheck (client)
         run: npx tsc --noEmit -p tsconfig.client.json

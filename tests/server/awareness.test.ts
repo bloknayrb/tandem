@@ -1,9 +1,9 @@
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { resetInbox } from "../../src/server/mcp/awareness.js";
 import { collectAnnotations } from "../../src/server/mcp/annotations.js";
-import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
+import { resetInbox } from "../../src/server/mcp/awareness.js";
+import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 
 let doc: Y.Doc;

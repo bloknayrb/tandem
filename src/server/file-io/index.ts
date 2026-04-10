@@ -1,22 +1,22 @@
 import fs from "fs/promises";
 import path from "path";
-import type { FormatAdapter } from "./types.js";
-import { loadMarkdown, saveMarkdown } from "./markdown.js";
+import { extractText, populateYDoc } from "../mcp/document-model.js";
 import { htmlToYDoc, loadDocx } from "./docx.js";
 import {
+  type DocxComment,
   extractDocxComments,
   injectCommentsAsAnnotations,
-  type DocxComment,
 } from "./docx-comments.js";
-import { populateYDoc, extractText } from "../mcp/document-model.js";
+import { loadMarkdown, saveMarkdown } from "./markdown.js";
+import type { FormatAdapter } from "./types.js";
 
-export type { FormatAdapter } from "./types.js";
 export {
-  applyTrackedChanges,
   type AcceptedSuggestion,
   type ApplyOptions,
   type ApplyOutput,
+  applyTrackedChanges,
 } from "./docx-apply.js";
+export type { FormatAdapter } from "./types.js";
 
 // -- Adapter implementations --
 

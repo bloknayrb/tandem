@@ -4,20 +4,20 @@
  * refreshAllRanges + textSnapshot-based relocation.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { makeDoc, getAnnotationsMap, makeAnnotation } from "../helpers/ydoc-factory.js";
-import { populateYDoc, extractText } from "../../src/server/mcp/document-model.js";
+import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
+import { extractText, populateYDoc } from "../../src/server/mcp/document-model.js";
 import {
+  anchoredRange,
   refreshAllRanges,
   refreshRange,
   validateRange,
-  anchoredRange,
 } from "../../src/server/positions.js";
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
-import type { Annotation } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
+import type { Annotation } from "../../src/shared/types.js";
+import { getAnnotationsMap, makeAnnotation, makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 

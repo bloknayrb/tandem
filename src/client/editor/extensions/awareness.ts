@@ -1,12 +1,12 @@
 import { Extension } from "@tiptap/core";
+import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
 import { TYPING_DEBOUNCE, Y_MAP_AWARENESS, Y_MAP_USER_AWARENESS } from "../../../shared/constants";
+import { toPmPos } from "../../../shared/positions/types";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { pmSelectionToFlat } from "../../positions";
-import { toPmPos } from "../../../shared/positions/types";
 
 const awarenessPluginKey = new PluginKey("tandemAwareness");
 

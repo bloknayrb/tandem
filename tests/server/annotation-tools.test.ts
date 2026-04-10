@@ -1,20 +1,20 @@
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { exportAnnotations } from "../../src/server/file-io/docx.js";
 import {
-  createAnnotation,
   collectAnnotations,
+  createAnnotation,
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
+import { extractText, populateYDoc, verifyAndResolveRange } from "../../src/server/mcp/document.js";
 import {
   addDoc,
+  getOpenDocs,
   removeDoc,
   setActiveDocId,
-  getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
-import { populateYDoc, extractText, verifyAndResolveRange } from "../../src/server/mcp/document.js";
-import { exportAnnotations } from "../../src/server/file-io/docx.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 

@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
 import {
   addDoc,
+  getOpenDocs,
   removeDoc,
   setActiveDocId,
-  getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
-import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
-import { searchText, findOccurrence, extractContext } from "../../src/server/mcp/navigation.js";
+import { extractContext, findOccurrence, searchText } from "../../src/server/mcp/navigation.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);

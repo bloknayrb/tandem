@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  pushNotification,
-  subscribe,
   getBuffer,
+  pushNotification,
   resetForTesting,
+  subscribe,
 } from "../../src/server/notifications";
 import type { TandemNotification } from "../../src/shared/types";
 

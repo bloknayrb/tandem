@@ -1,16 +1,16 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "fs/promises";
-import path from "path";
 import os from "os";
+import path from "path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
+import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
 import {
   openFileByPath,
   openFileFromContent,
   SUPPORTED_EXTENSIONS,
 } from "../../src/server/mcp/file-opener.js";
-import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
-import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
-import { extractText, docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,

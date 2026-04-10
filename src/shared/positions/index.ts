@@ -1,14 +1,14 @@
 export type {
+  AnchoredRangeResult,
+  DocumentRange,
+  ElementPosition,
   FlatOffset,
   PmPos,
-  SerializedRelPos,
-  DocumentRange,
-  RelativeRange,
-  RangeValidation,
-  AnchoredRangeResult,
-  ElementPosition,
-  ResolutionMethod,
   PmRangeResult,
+  RangeValidation,
+  RelativeRange,
+  ResolutionMethod,
+  SerializedRelPos,
 } from "./types.js";
 
 export {

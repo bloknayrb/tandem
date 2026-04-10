@@ -1,7 +1,7 @@
 import { execSync } from "child_process";
+import envPaths from "env-paths";
 import net from "net";
 import path from "path";
-import envPaths from "env-paths";
 
 const paths = envPaths("tandem", { suffix: "" });
 

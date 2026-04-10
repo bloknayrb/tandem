@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { extractText } from "../../src/server/mcp/document-model.js";

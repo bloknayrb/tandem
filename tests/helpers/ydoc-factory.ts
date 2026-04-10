@@ -1,10 +1,10 @@
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import * as Y from "yjs";
-import { populateYDoc } from "../../src/server/mcp/document.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
+import { populateYDoc } from "../../src/server/mcp/document.js";
 import { anchoredRange } from "../../src/server/positions.js";
-import type { Annotation } from "../../src/shared/types.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
+import type { Annotation } from "../../src/shared/types.js";
 
 /** Create a Y.Doc populated with text content */
 export function makeDoc(text: string): Y.Doc {

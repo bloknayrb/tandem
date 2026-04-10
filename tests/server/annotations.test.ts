@@ -1,14 +1,14 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  createAnnotation,
   collectAnnotations,
+  createAnnotation,
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
-import { generateAnnotationId } from "../../src/shared/utils.js";
-import { makeDoc, getAnnotationsMap, getFragment, rangeOf } from "../helpers/ydoc-factory.js";
-import { getOrCreateXmlText, extractText } from "../../src/server/mcp/document.js";
+import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { generateAnnotationId } from "../../src/shared/utils.js";
+import { getAnnotationsMap, getFragment, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 

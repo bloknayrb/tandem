@@ -1,0 +1,31 @@
+# Default: treat all files as text, normalize EOLs to LF on checkin and checkout
+* text=auto eol=lf
+
+# Explicit text files (belt and braces)
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.sh    text eol=lf
+*.svg   text eol=lf
+LICENSE text eol=lf
+
+# Binary assets -- never touch
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.docx  binary
+*.pdf   binary
+*.zip   binary

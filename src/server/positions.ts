@@ -17,22 +17,22 @@
  */
 
 import * as Y from "yjs";
-import type { Annotation } from "../shared/types.js";
-import { MCP_ORIGIN } from "./events/queue.js";
 import type {
-  FlatOffset,
-  SerializedRelPos,
-  DocumentRange,
-  RelativeRange,
-  RangeValidation,
   AnchoredRangeResult,
+  DocumentRange,
   ElementPosition,
+  FlatOffset,
+  RangeValidation,
+  RelativeRange,
+  SerializedRelPos,
 } from "../shared/positions/index.js";
 import { toFlatOffset, toSerializedRelPos } from "../shared/positions/index.js";
+import type { Annotation } from "../shared/types.js";
+import { MCP_ORIGIN } from "./events/queue.js";
 import {
-  getElementText,
   extractText,
   findXmlText,
+  getElementText,
   getHeadingPrefixLength,
 } from "./mcp/document-model.js";
 

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import type { Annotation } from "../../shared/types";
 import { HIGHLIGHT_COLORS } from "../../shared/constants";
+import type { Annotation } from "../../shared/types";
 
 export interface AnnotationCardProps {
   annotation: Annotation;

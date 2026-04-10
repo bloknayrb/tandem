@@ -1,7 +1,7 @@
 // HTML → Y.Doc conversion: htmlparser2 DOM traversal → Yjs XmlFragment
 
+import type { ChildNode, Element, Text } from "domhandler";
 import * as htmlparser2 from "htmlparser2";
-import type { Element, Text, ChildNode } from "domhandler";
 import * as Y from "yjs";
 
 /** All marks that can appear on inline text (superset of mdast-ydoc) */

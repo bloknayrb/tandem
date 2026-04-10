@@ -1,5 +1,5 @@
-import * as Y from 'yjs';
-import type { Root, RootContent, PhrasingContent } from 'mdast';
+import type { PhrasingContent, Root, RootContent } from "mdast";
+import * as Y from "yjs";
 
 /**
  * Convert an MDAST tree into Y.Doc XmlFragment elements.
@@ -10,7 +10,7 @@ import type { Root, RootContent, PhrasingContent } from 'mdast';
  * requires this for correct insert ordering on Y.XmlText.
  */
 export function mdastToYDoc(doc: Y.Doc, tree: Root): void {
-  const fragment = doc.getXmlFragment('default');
+  const fragment = doc.getXmlFragment("default");
 
   // Clear existing content in a single operation
   if (fragment.length > 0) {
@@ -47,25 +47,25 @@ function blockToYxml(
   deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
 ): Y.XmlElement[] {
   switch (node.type) {
-    case 'heading': {
-      const el = new Y.XmlElement('heading');
-      el.setAttribute('level', node.depth as any);
+    case "heading": {
+      const el = new Y.XmlElement("heading");
+      el.setAttribute("level", node.depth as any);
       const text = new Y.XmlText();
       el.insert(0, [text]);
       deferred.push({ xmlText: text, nodes: node.children });
       return [el];
     }
 
-    case 'paragraph': {
-      const el = new Y.XmlElement('paragraph');
+    case "paragraph": {
+      const el = new Y.XmlElement("paragraph");
       const text = new Y.XmlText();
       el.insert(0, [text]);
       deferred.push({ xmlText: text, nodes: node.children });
       return [el];
     }
 
-    case 'blockquote': {
-      const el = new Y.XmlElement('blockquote');
+    case "blockquote": {
+      const el = new Y.XmlElement("blockquote");
       for (const child of node.children) {
         const childEls = blockToYxml(child, deferred);
         for (const c of childEls) {
@@ -75,14 +75,14 @@ function blockToYxml(
       return [el];
     }
 
-    case 'list': {
-      const nodeName = node.ordered ? 'orderedList' : 'bulletList';
+    case "list": {
+      const nodeName = node.ordered ? "orderedList" : "bulletList";
       const el = new Y.XmlElement(nodeName);
       if (node.ordered && node.start != null && node.start !== 1) {
-        el.setAttribute('start', node.start as any);
+        el.setAttribute("start", node.start as any);
       }
       for (const item of node.children) {
-        const listItem = new Y.XmlElement('listItem');
+        const listItem = new Y.XmlElement("listItem");
         for (const child of item.children) {
           const childEls = blockToYxml(child, deferred);
           for (const c of childEls) {
@@ -94,10 +94,10 @@ function blockToYxml(
       return [el];
     }
 
-    case 'code': {
-      const el = new Y.XmlElement('codeBlock');
+    case "code": {
+      const el = new Y.XmlElement("codeBlock");
       if (node.lang) {
-        el.setAttribute('language', node.lang);
+        el.setAttribute("language", node.lang);
       }
       const text = new Y.XmlText();
       el.insert(0, [text]);
@@ -105,22 +105,22 @@ function blockToYxml(
       return [el];
     }
 
-    case 'thematicBreak': {
-      return [new Y.XmlElement('horizontalRule')];
+    case "thematicBreak": {
+      return [new Y.XmlElement("horizontalRule")];
     }
 
-    case 'image': {
-      const el = new Y.XmlElement('image');
-      el.setAttribute('src', node.url);
-      if (node.alt) el.setAttribute('alt', node.alt);
-      if (node.title) el.setAttribute('title', node.title);
+    case "image": {
+      const el = new Y.XmlElement("image");
+      el.setAttribute("src", node.url);
+      if (node.alt) el.setAttribute("alt", node.alt);
+      if (node.title) el.setAttribute("title", node.title);
       return [el];
     }
 
     // html blocks, definitions, etc. — wrap as paragraphs to avoid data loss
     default: {
-      if ('value' in node && typeof node.value === 'string') {
-        const el = new Y.XmlElement('paragraph');
+      if ("value" in node && typeof node.value === "string") {
+        const el = new Y.XmlElement("paragraph");
         const text = new Y.XmlText();
         el.insert(0, [text]);
         deferred.push({ xmlText: text, plainText: node.value });
@@ -132,7 +132,7 @@ function blockToYxml(
 }
 
 /** All mark names that can appear on inline text */
-const ALL_MARKS = ['bold', 'italic', 'strike', 'code', 'link'] as const;
+const ALL_MARKS = ["bold", "italic", "strike", "code", "link"] as const;
 
 /**
  * Build Yjs insert attributes from the current mark stack.
@@ -159,42 +159,42 @@ function processInline(
 ): void {
   for (const node of nodes) {
     switch (node.type) {
-      case 'text': {
+      case "text": {
         xmlText.insert(xmlText.length, node.value, buildAttrs(marks));
         break;
       }
 
-      case 'strong':
+      case "strong":
         processInline(xmlText, node.children, { ...marks, bold: {} });
         break;
 
-      case 'emphasis':
+      case "emphasis":
         processInline(xmlText, node.children, { ...marks, italic: {} });
         break;
 
-      case 'delete':
+      case "delete":
         processInline(xmlText, node.children, { ...marks, strike: {} });
         break;
 
-      case 'inlineCode': {
+      case "inlineCode": {
         xmlText.insert(xmlText.length, node.value, buildAttrs({ ...marks, code: {} }));
         break;
       }
 
-      case 'link':
+      case "link":
         processInline(xmlText, node.children, {
           ...marks,
           link: { href: node.url, ...(node.title ? { title: node.title } : {}) },
         });
         break;
 
-      case 'break': {
-        const embed = new Y.XmlElement('hardBreak');
+      case "break": {
+        const embed = new Y.XmlElement("hardBreak");
         xmlText.insertEmbed(xmlText.length, embed);
         break;
       }
 
-      case 'image': {
+      case "image": {
         // Inline images: insert alt text (best-effort)
         xmlText.insert(xmlText.length, node.alt || node.url, buildAttrs(marks));
         break;
@@ -202,7 +202,7 @@ function processInline(
 
       // html inline, footnoteReference, etc. — insert raw value if available
       default:
-        if ('value' in node && typeof node.value === 'string') {
+        if ("value" in node && typeof node.value === "string") {
           xmlText.insert(xmlText.length, node.value, buildAttrs(marks));
         }
         break;
@@ -214,7 +214,7 @@ function processInline(
  * Convert a Y.Doc's XmlFragment back to an MDAST Root tree.
  */
 export function yDocToMdast(doc: Y.Doc): Root {
-  const fragment = doc.getXmlFragment('default');
+  const fragment = doc.getXmlFragment("default");
   const children: RootContent[] = [];
 
   for (let i = 0; i < fragment.length; i++) {
@@ -225,21 +225,21 @@ export function yDocToMdast(doc: Y.Doc): Root {
     }
   }
 
-  return { type: 'root', children };
+  return { type: "root", children };
 }
 
 /** Convert a Y.XmlElement back to an MDAST block node */
 function yxmlToMdast(el: Y.XmlElement): RootContent | null {
   switch (el.nodeName) {
-    case 'heading': {
-      const depth = (Number(el.getAttribute('level') ?? 1)) as 1 | 2 | 3 | 4 | 5 | 6;
-      return { type: 'heading', depth, children: deltaToPhrasingContent(el) };
+    case "heading": {
+      const depth = Number(el.getAttribute("level") ?? 1) as 1 | 2 | 3 | 4 | 5 | 6;
+      return { type: "heading", depth, children: deltaToPhrasingContent(el) };
     }
 
-    case 'paragraph':
-      return { type: 'paragraph', children: deltaToPhrasingContent(el) };
+    case "paragraph":
+      return { type: "paragraph", children: deltaToPhrasingContent(el) };
 
-    case 'blockquote': {
+    case "blockquote": {
       const children: RootContent[] = [];
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
@@ -249,17 +249,17 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
         }
       }
       // blockquote.children is BlockContent[] but RootContent covers it
-      return { type: 'blockquote', children: children as any };
+      return { type: "blockquote", children: children as any };
     }
 
-    case 'bulletList':
-    case 'orderedList': {
-      const ordered = el.nodeName === 'orderedList';
-      const start = ordered ? (Number(el.getAttribute('start')) || 1) : undefined;
+    case "bulletList":
+    case "orderedList": {
+      const ordered = el.nodeName === "orderedList";
+      const start = ordered ? Number(el.getAttribute("start")) || 1 : undefined;
       const listItems: any[] = [];
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
-        if (child instanceof Y.XmlElement && child.nodeName === 'listItem') {
+        if (child instanceof Y.XmlElement && child.nodeName === "listItem") {
           const itemChildren: any[] = [];
           for (let j = 0; j < child.length; j++) {
             const grandchild = child.get(j);
@@ -268,11 +268,11 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
               if (m) itemChildren.push(m);
             }
           }
-          listItems.push({ type: 'listItem', spread: false, children: itemChildren });
+          listItems.push({ type: "listItem", spread: false, children: itemChildren });
         }
       }
       return {
-        type: 'list',
+        type: "list",
         ordered,
         spread: false,
         ...(ordered && start !== 1 ? { start } : {}),
@@ -280,27 +280,27 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
       } as any;
     }
 
-    case 'codeBlock': {
-      const lang = el.getAttribute('language') as string | undefined;
-      let value = '';
+    case "codeBlock": {
+      const lang = el.getAttribute("language") as string | undefined;
+      let value = "";
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
         if (child instanceof Y.XmlText) {
           value += child.toString();
         }
       }
-      return { type: 'code', lang: lang || null, value } as any;
+      return { type: "code", lang: lang || null, value } as any;
     }
 
-    case 'horizontalRule':
-      return { type: 'thematicBreak' };
+    case "horizontalRule":
+      return { type: "thematicBreak" };
 
-    case 'image': {
+    case "image": {
       return {
-        type: 'image',
-        url: (el.getAttribute('src') as string) || '',
-        alt: (el.getAttribute('alt') as string) || undefined,
-        title: (el.getAttribute('title') as string) || null,
+        type: "image",
+        url: (el.getAttribute("src") as string) || "",
+        alt: (el.getAttribute("alt") as string) || undefined,
+        title: (el.getAttribute("title") as string) || null,
       } as any;
     }
 
@@ -308,7 +308,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     default: {
       const phrasing = deltaToPhrasingContent(el);
       if (phrasing.length > 0) {
-        return { type: 'paragraph', children: phrasing };
+        return { type: "paragraph", children: phrasing };
       }
       return null;
     }
@@ -320,7 +320,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
  * y-prosemirror appends "--<hash>" to mark names in delta attributes.
  */
 function stripHashSuffix(key: string): string {
-  const dashIdx = key.indexOf('--');
+  const dashIdx = key.indexOf("--");
   return dashIdx >= 0 ? key.slice(0, dashIdx) : key;
 }
 
@@ -338,9 +338,9 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
       const delta = child.toDelta();
       for (const op of delta) {
         // Embedded elements (hardBreak, etc.)
-        if (typeof op.insert !== 'string') {
-          if (op.insert instanceof Y.XmlElement && op.insert.nodeName === 'hardBreak') {
-            result.push({ type: 'break' });
+        if (typeof op.insert !== "string") {
+          if (op.insert instanceof Y.XmlElement && op.insert.nodeName === "hardBreak") {
+            result.push({ type: "break" });
           }
           continue;
         }
@@ -356,42 +356,42 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
         }
 
         // Build phrasing node, wrapping with marks from inside out
-        let node: PhrasingContent = { type: 'text', value: text };
+        let node: PhrasingContent = { type: "text", value: text };
 
         // link wraps first (innermost), then code, then strike, then italic, then bold
-        if (marks.has('link')) {
-          const linkAttrs = marks.get('link') || {};
+        if (marks.has("link")) {
+          const linkAttrs = marks.get("link") || {};
           node = {
-            type: 'link',
-            url: linkAttrs.href || '',
+            type: "link",
+            url: linkAttrs.href || "",
             ...(linkAttrs.title ? { title: linkAttrs.title } : {}),
             children: [node],
           };
         }
-        if (marks.has('code')) {
+        if (marks.has("code")) {
           // Code is a leaf node — extract text value
-          node = { type: 'inlineCode', value: text };
+          node = { type: "inlineCode", value: text };
         }
-        if (marks.has('strike')) {
-          if (node.type === 'inlineCode') {
+        if (marks.has("strike")) {
+          if (node.type === "inlineCode") {
             // Can't nest inlineCode inside delete — best effort
-            node = { type: 'delete', children: [{ type: 'text', value: text }] } as any;
+            node = { type: "delete", children: [{ type: "text", value: text }] } as any;
           } else {
-            node = { type: 'delete', children: [node] } as any;
+            node = { type: "delete", children: [node] } as any;
           }
         }
-        if (marks.has('italic')) {
-          if (node.type === 'inlineCode') {
-            node = { type: 'emphasis', children: [{ type: 'text', value: text }] };
+        if (marks.has("italic")) {
+          if (node.type === "inlineCode") {
+            node = { type: "emphasis", children: [{ type: "text", value: text }] };
           } else {
-            node = { type: 'emphasis', children: [node] };
+            node = { type: "emphasis", children: [node] };
           }
         }
-        if (marks.has('bold')) {
-          if (node.type === 'inlineCode') {
-            node = { type: 'strong', children: [{ type: 'text', value: text }] };
+        if (marks.has("bold")) {
+          if (node.type === "inlineCode") {
+            node = { type: "strong", children: [{ type: "text", value: text }] };
           } else {
-            node = { type: 'strong', children: [node] };
+            node = { type: "strong", children: [node] };
           }
         }
 
@@ -399,8 +399,8 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
       }
     } else if (child instanceof Y.XmlElement) {
       // Non-text child elements embedded in a block (shouldn't happen often)
-      if (child.nodeName === 'hardBreak') {
-        result.push({ type: 'break' });
+      if (child.nodeName === "hardBreak") {
+        result.push({ type: "break" });
       }
     }
   }

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { reconcileOrder, applyReorder } from "../../src/client/hooks/useTabOrder.js";
+import { describe, expect, it } from "vitest";
+import { applyReorder, reconcileOrder } from "../../src/client/hooks/useTabOrder.js";
 
 describe("reconcileOrder", () => {
   it("initial order matches tabs input order when localOrder is empty", () => {

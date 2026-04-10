@@ -1,7 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
 import fs from "fs/promises";
-import path from "path";
 import os from "os";
+import path from "path";
+import { afterEach, describe, expect, it } from "vitest";
 import { checkVersionChange } from "../../src/server/version-check.js";
 
 let tmpDir: string | null = null;

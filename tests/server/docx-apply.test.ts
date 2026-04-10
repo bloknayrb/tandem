@@ -1,19 +1,19 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import JSZip from "jszip";
 import render from "dom-serializer";
+import JSZip from "jszip";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-  buildOffsetMap,
   applySingleSuggestion,
   applyTrackedChanges,
+  buildOffsetMap,
   resolveWordComments,
 } from "../../src/server/file-io/docx-apply.js";
-import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
 import {
   addDoc,
+  getOpenDocs,
   removeDoc,
   setActiveDocId,
-  getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
+import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
 // ---------------------------------------------------------------------------

@@ -1,21 +1,21 @@
-import * as Y from 'yjs';
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import remarkStringify from 'remark-stringify';
-import type { Root } from 'mdast';
-import { mdastToYDoc, yDocToMdast } from './mdast-ydoc.js';
+import type { Root } from "mdast";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkStringify from "remark-stringify";
+import { unified } from "unified";
+import * as Y from "yjs";
+import { mdastToYDoc, yDocToMdast } from "./mdast-ydoc.js";
 
 // Cached processors — stateless and safe to reuse across calls
 const parser = unified().use(remarkParse).use(remarkGfm).freeze();
 const serializer = unified()
   .use(remarkGfm)
   .use(remarkStringify, {
-    bullet: '-',
-    emphasis: '*',
-    strong: '*',
-    listItemIndent: 'one',
-    rule: '-',
+    bullet: "-",
+    emphasis: "*",
+    strong: "*",
+    listItemIndent: "one",
+    rule: "-",
   })
   .freeze();
 

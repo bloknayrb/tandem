@@ -3,13 +3,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   DISCONNECT_DEBOUNCE_MS,
   PANEL_WIDTH_KEYS,
+  type PanelSide,
   PROLONGED_DISCONNECT_MS,
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
   Y_MAP_DWELL_MS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
-  type PanelSide,
 } from "../shared/constants";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor, TandemMode } from "../shared/types";

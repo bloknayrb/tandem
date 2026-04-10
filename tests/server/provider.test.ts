@@ -1,13 +1,13 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { writeGenerationId } from "../../src/server/mcp/document-service.js";
 import {
-  getOrCreateDocument,
   getDocument,
+  getOrCreateDocument,
   removeDocument,
   setShouldKeepDocument,
 } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
-import { writeGenerationId } from "../../src/server/mcp/document-service.js";
 
 describe("Y.Doc lifecycle (provider)", () => {
   it("getOrCreateDocument creates a new doc if none exists", () => {

@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 
 import {
   CHANNEL_SSE_KEEPALIVE_MS,
@@ -9,13 +9,13 @@ import {
 } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
-import { detectFormat } from "./document-model.js";
-import { openFileByPath, openFileFromContent } from "./file-opener.js";
-import { closeDocumentById } from "./document-service.js";
 import { subscribe as subscribeNotifications } from "../notifications.js";
-import { convertToMarkdown } from "./convert.js";
-import { applyChangesCore } from "./docx-apply.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { convertToMarkdown } from "./convert.js";
+import { detectFormat } from "./document-model.js";
+import { closeDocumentById } from "./document-service.js";
+import { applyChangesCore } from "./docx-apply.js";
+import { openFileByPath, openFileFromContent } from "./file-opener.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;

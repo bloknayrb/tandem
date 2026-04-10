@@ -1,12 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { parseDocument } from "htmlparser2";
+import { describe, expect, it } from "vitest";
 import {
-  walkDocumentBody,
+  type CommentStartHit,
   detectHeadingLevel,
   findAllByName,
   type TextHit,
-  type CommentStartHit,
+  walkDocumentBody,
 } from "../../src/server/file-io/docx-walker.js";
-import { parseDocument } from "htmlparser2";
 
 // ---------------------------------------------------------------------------
 // Helper: wrap body content in a minimal document.xml envelope

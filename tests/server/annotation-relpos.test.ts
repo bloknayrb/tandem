@@ -1,7 +1,10 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { populateYDoc } from "../../src/server/mcp/document.js";
-import { flatOffsetToRelPos, relPosToFlatOffset } from "../../src/server/mcp/document.js";
+import {
+  flatOffsetToRelPos,
+  populateYDoc,
+  relPosToFlatOffset,
+} from "../../src/server/mcp/document.js";
 
 // Tests server-side RelativePosition round-trip logic used by the client's annotation extension.
 // The client-side functions (flatOffsetToPmPos, relRangeToPmPositions) require ProseMirror nodes

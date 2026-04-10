@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  watchFile,
-  unwatchFile,
-  unwatchAll,
   suppressNextChange,
+  unwatchAll,
+  unwatchFile,
   watchedCount,
+  watchFile,
 } from "../../src/server/file-watcher.js";
 
 // We mock fs.watch to avoid touching the real filesystem

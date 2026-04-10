@@ -1,12 +1,12 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  flatOffsetToRelPos,
-  relPosToFlatOffset,
-  getOrCreateXmlText,
   extractText,
+  flatOffsetToRelPos,
+  getOrCreateXmlText,
+  relPosToFlatOffset,
 } from "../../src/server/mcp/document.js";
-import { makeDoc, getFragment } from "../helpers/ydoc-factory.js";
+import { getFragment, makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 

@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -5,9 +8,6 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createRequire } from "module";
 
 import { openBrowser } from "../open-browser.js";
@@ -28,6 +28,7 @@ try {
     `[Tandem] Could not read version from package.json: ${err instanceof Error ? err.message : err}`,
   );
 }
+
 export { APP_VERSION };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

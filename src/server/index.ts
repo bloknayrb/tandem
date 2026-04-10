@@ -1,35 +1,35 @@
 import type { Server } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import {
-  startMcpServerStdio,
-  startMcpServerHttp,
-  closeMcpSession,
-  APP_VERSION,
-} from "./mcp/server.js";
-import { startHocuspocus, setDocLifecycleCallbacks, getOrCreateDocument } from "./yjs/provider.js";
-import { DEFAULT_WS_PORT, DEFAULT_MCP_PORT, CTRL_ROOM } from "../shared/constants.js";
-import { cleanupSessions, stopAutoSave } from "./session/manager.js";
-import {
-  saveCurrentSession,
-  restoreCtrlSession,
-  restoreOpenDocuments,
-  writeGenerationId,
-} from "./mcp/document.js";
-import { freePort, waitForPort, LAST_SEEN_VERSION_FILE } from "./platform.js";
-import { checkVersionChange } from "./version-check.js";
+import { CTRL_ROOM, DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
   attachCtrlObservers,
-  reattachObservers,
-  reattachCtrlObservers,
   detachObservers,
+  reattachCtrlObservers,
+  reattachObservers,
 } from "./events/queue.js";
-import { docCount } from "./mcp/document-service.js";
 import { unwatchAll } from "./file-watcher.js";
-import { openFileByPath } from "./mcp/file-opener.js";
+import {
+  restoreCtrlSession,
+  restoreOpenDocuments,
+  saveCurrentSession,
+  writeGenerationId,
+} from "./mcp/document.js";
 import { docIdFromPath } from "./mcp/document-model.js";
+import { docCount } from "./mcp/document-service.js";
+import { openFileByPath } from "./mcp/file-opener.js";
+import {
+  APP_VERSION,
+  closeMcpSession,
+  startMcpServerHttp,
+  startMcpServerStdio,
+} from "./mcp/server.js";
 import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
+import { freePort, LAST_SEEN_VERSION_FILE, waitForPort } from "./platform.js";
+import { cleanupSessions, stopAutoSave } from "./session/manager.js";
+import { checkVersionChange } from "./version-check.js";
+import { getOrCreateDocument, setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.

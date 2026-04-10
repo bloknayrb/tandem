@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR, USER_NAME_KEY, USER_NAME_DEFAULT } from "../../shared/constants";
+import { CLAUDE_PRESENCE_COLOR, USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
