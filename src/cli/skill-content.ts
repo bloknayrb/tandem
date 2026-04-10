@@ -58,6 +58,10 @@ Check \`mode\` from \`tandem_status\` or \`tandem_checkInbox\` and adapt:
 - **Tandem** (\`"tandem"\`, default) — Full collaboration. Annotate freely and react to selections and document changes.
 - **Solo** (\`"solo"\`) — The user wants to write undisturbed. Only respond when the user sends a chat message. Do not proactively annotate or react to document activity.
 
+## Reacting to Document Events
+
+Selection events arrive via \`tandem_checkInbox\` with \`meta.respond_via = "tandem_reply"\`. When the user holds a selection, briefly acknowledge what they highlighted via \`tandem_reply\` — don't annotate unless asked. Use \`tandem_reply\` for any document-context reaction (chat messages, selections, question annotations); reserve terminal output for non-document work the user explicitly requests. In Solo mode, hold reactions until the user sends a chat message.
+
 ## Collaboration Etiquette
 
 - Check \`tandem_getActivity()\` before annotating near the user's cursor. If \`isTyping\` is true, wait for typing to stop before annotating that area.
