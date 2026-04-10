@@ -25,13 +25,15 @@ tandem           # starts server + opens browser
 
 ### Connect Claude Code
 
-You don't need any experimental flags — `tandem setup` has already registered the MCP tools globally, so just start Claude Code normally from any directory:
+For the full Tandem experience, start Claude Code with the **channel push** flag:
 
 ```bash
-claude
+claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Recommended layout:** snap the Claude Code terminal to one side of your screen and the Tandem browser window to the other. You'll be flipping attention between them constantly, and having both visible makes the loop feel natural — almost like sitting next to another editor.
+This is the magic-sauce mode — and it's the one I'd recommend you run with. The channel shim pushes events (selections, annotations, chat) to Claude over SSE the moment they happen, so Tandem genuinely feels like there's another person on the other end of the document: someone watching what you highlight, reacting to edits you accept, and chiming in on a paragraph the instant you select it, the way a collaborator on a Google Doc would. The `--dangerously-load-development-channels` flag is an experimental Claude Code feature, which is why it isn't on by default — but turning it on is what makes the whole experience click.
+
+**Recommended layout:** snap the Claude Code terminal to one side of your screen and the Tandem browser window to the other. You'll be flipping attention between them constantly, and having both visible is what makes the side-by-side-collaborator feeling land.
 
 Then try:
 
@@ -44,25 +46,28 @@ Claude calls `tandem_open`, the document appears in the browser, and you're read
 #### The core loop — no copy/paste
 
 1. Highlight a paragraph in the browser editor.
-2. In the terminal, just type what you want: *"what do you think of this paragraph?"* or *"rewrite this to be more concise"*.
-3. Claude calls `tandem_checkInbox`, which returns the currently-selected text under `activity.selectedText`. Claude reads it directly — you never paste the passage into the terminal.
+2. With channels on, Claude often reacts before you even say anything. Otherwise, just type what you want in the terminal: *"what do you think of this paragraph?"* or *"rewrite this to be more concise"*.
+3. Claude reads your selection directly from the shared Tandem state (via `activity.selectedText` on `tandem_checkInbox`). You never paste the passage into the terminal.
 4. Claude replies in the Tandem chat sidebar (`tandem_reply`) or drops annotations on the document (`tandem_annotate` / `tandem_suggestEdit`), which you can accept, dismiss, or edit in the side panel.
 
-#### How Claude knows when you've done something
+#### Prefer not to use the experimental flag?
 
-There are three ways Claude picks up your selections, chat messages, and annotation actions. They differ only in *when* Claude finds out — all three can see the same information.
+You don't have to turn on channel push — every feature of Tandem works without it. You lose the "Claude reacts on its own" magic, but Claude still sees every selection, annotation, and chat message. Start Claude Code normally:
 
-1. **Talk in the terminal (simplest, default).** Every time you send Claude a message, it has a chance to call `tandem_checkInbox` and pick up your latest selection, any annotations you accepted or dismissed, and any chat messages from the Tandem sidebar. Zero setup — this is how it works out of the box. The only "cost" is that Claude reacts when you nudge it, not spontaneously. With Tandem and the terminal snapped side by side, this feels completely natural.
-2. **Background polling with `/loop` (hands-off, higher latency).** If you want Claude to check in on its own without you typing anything, use the `/loop` skill:
+```bash
+claude
+```
+
+Then pick one of two ways to keep the conversation flowing:
+
+1. **Just chat in the terminal (simplest).** Every time you send Claude a message, it has a chance to call `tandem_checkInbox` and pick up your latest selection, any annotations you accepted or dismissed, and any chat messages from the Tandem sidebar. Zero setup — this is how it works out of the box. With Tandem and the terminal snapped side by side, the loop feels surprisingly natural; Claude just reacts when you nudge it rather than spontaneously.
+2. **Background polling with `/loop` (hands-off).** Ask Claude to check in on its own using the `/loop` skill:
    ```
    /loop 30s check tandem inbox and respond to any new messages
    ```
    Claude polls every 30 seconds — responses lag by up to that interval, but you don't have to prompt it yourself.
-3. **Real-time channel push (instant, experimental).** If you're comfortable opting into an experimental Claude Code flag, start Claude with:
-   ```bash
-   claude --dangerously-load-development-channels server:tandem-channel
-   ```
-   Events (selections, annotations, chat) then push to Claude over SSE the moment they happen — no polling, no manual nudging. This is the mode that makes Tandem feel like there's another person on the other end of the document, watching what you're highlighting and reacting to it in real time, the same way a collaborator on a Google Doc would. Everything else works the same; only the latency changes. See [MCP Configuration](#mcp-configuration) for details.
+
+Either way, Claude reads the exact same information (selections, annotations, chat) through the same `tandem_checkInbox` tool. The only thing channels change is *when* Claude finds out something happened — not *whether* it can see it.
 
 ### Verify
 
@@ -130,7 +135,7 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 - **Session persistence** — documents and annotations survive server restarts
 - **Solo / Tandem mode** — flip to Solo when you want to write heads-down; Tandem queues non-urgent annotations until you're ready
 - **Selection-aware chat** — highlight text in the browser, ask Claude about "this" in the terminal; Claude reads your selection directly, no copy/paste
-- **Optional real-time push** — opt into the channel shim for instant notifications instead of polling (experimental flag required)
+- **Real-time channel push** *(recommended)* — with the `--dangerously-load-development-channels` Claude Code flag, selections, annotations, and chat push to Claude instantly, making Tandem feel like a live collaborator watching over your shoulder
 - **Keyboard shortcuts** — press `?` for the full reference
 - **Unsaved-changes indicator** — dot on tab title when a document has pending edits
 - **Configurable display name** — set your name so Claude knows who's reviewing
@@ -172,7 +177,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 
 ## MCP Configuration
 
-Tandem registers two MCP connections: **HTTP** for document tools (30 tools including annotation editing — always on), and an **optional channel shim** for real-time push notifications. The channel shim is only active when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`; if you don't pass that flag, the entry sits idle and everything still works through polling on the HTTP connection.
+Tandem registers two MCP connections: **HTTP** for document tools (30 tools including annotation editing — always on), and a **channel shim** for real-time push notifications. The channel shim is what enables the live-collaborator experience described in [Connect Claude Code](#connect-claude-code) and is recommended; it activates when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`. If you'd rather not pass that experimental flag, the entry sits idle and everything still works through polling on the HTTP connection — you just lose spontaneous reactions.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 
