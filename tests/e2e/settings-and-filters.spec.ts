@@ -71,26 +71,24 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
     text: "First",
     textSnapshot: TITLE_TEXT,
   });
-  await mcp.callTool("tandem_comment", {
+  await mcp.callTool("tandem_highlight", {
     from: 17,
     to: 65,
-    text: "Second",
     textSnapshot: "This is the first paragraph of the test document",
   });
+  // Sanity check: confirm both annotations exist before navigating.
+  const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
+    data?: { annotations?: unknown[] };
+  };
+  expect(annotations?.data?.annotations?.length ?? 0).toBeGreaterThanOrEqual(2);
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
-  // Wait for BOTH annotations to sync over Hocuspocus — the bulk-accept
-  // button only mounts when pending.length > 1, so asserting on just the
-  // first card leaves a race where we query bulk-accept before the second
-  // card arrives.
-  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
-    timeout: 10_000,
-  });
-
-  // Open the bulk-accept confirm dialog
+  // Wait for the bulk-accept button directly — it only mounts when
+  // pending.length > 1, which implicitly waits for both annotations
+  // to sync over Hocuspocus.
   const bulkAccept = page.locator("[data-testid='bulk-accept-btn']");
-  await expect(bulkAccept).toBeVisible({ timeout: 5_000 });
+  await expect(bulkAccept).toBeVisible({ timeout: 15_000 });
   await bulkAccept.click();
 
   const confirm = page.locator("[data-testid='bulk-confirm-btn']");
@@ -117,25 +115,27 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
     text: "First",
     textSnapshot: TITLE_TEXT,
   });
-  await mcp.callTool("tandem_comment", {
+  await mcp.callTool("tandem_highlight", {
     from: 17,
     to: 65,
-    text: "Second",
     textSnapshot: "This is the first paragraph of the test document",
   });
+  const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
+    data?: { annotations?: unknown[] };
+  };
+  expect(annotations?.data?.annotations?.length ?? 0).toBeGreaterThanOrEqual(2);
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
-  // Wait for both annotations to sync — bulk-dismiss-btn requires pending > 1
-  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
-    timeout: 10_000,
-  });
-
-  await page.locator("[data-testid='bulk-dismiss-btn']").click();
+  const bulkDismiss = page.locator("[data-testid='bulk-dismiss-btn']");
+  await expect(bulkDismiss).toBeVisible({ timeout: 15_000 });
+  await bulkDismiss.click();
   const confirm = page.locator("[data-testid='bulk-confirm-btn']");
   await expect(confirm).toBeVisible({ timeout: 2_000 });
 
-  // Change type filter — same regression class, different axis
+  // Change type filter — same regression class, different axis.
+  // The first annotation is a comment; filtering to "highlight" changes
+  // what's pending-visible, which must dismiss the stale confirm dialog.
   await page.locator("[data-testid='filter-type']").selectOption("highlight");
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
