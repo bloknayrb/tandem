@@ -199,6 +199,173 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0);
 });
 
+test("three-panel layout resizes left/right widths independently", async ({ page }) => {
+  // Production wires the left handle to `tandem-left-panel-width` and the
+  // right handle to `tandem-panel-width`. The regression this guards against
+  // is #228's bundled-state bug where both handles wrote to the same key.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  // Enter three-panel layout and clear any stale width state so both panels
+  // start at PANEL_DEFAULT_WIDTH (300).
+  await page.locator("[data-testid='settings-btn']").click();
+  await expect(page.locator("[data-testid='settings-popover']")).toBeVisible();
+  await page.locator("[data-testid='layout-three-panel-btn']").click();
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    localStorage.removeItem("tandem-panel-width");
+    localStorage.removeItem("tandem-left-panel-width");
+  });
+  await page.reload();
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  const rightHandle = page.locator("[data-testid='right-panel-resize-handle']");
+  await expect(leftHandle).toBeVisible();
+  await expect(rightHandle).toBeVisible();
+
+  // Drag the left handle right by +80px. Left panel's handle is on its right
+  // edge, so drag-right widens it: 300 → 380.
+  const leftBox = await leftHandle.boundingBox();
+  if (!leftBox) throw new Error("left-panel-resize-handle has no bounding box");
+  const leftCenterX = leftBox.x + leftBox.width / 2;
+  const leftCenterY = leftBox.y + leftBox.height / 2;
+  await page.mouse.move(leftCenterX, leftCenterY);
+  await page.mouse.down();
+  await page.mouse.move(leftCenterX + 80, leftCenterY, { steps: 10 });
+  await page.mouse.up();
+
+  // Left width moves, right width must not.
+  const leftAfterDrag = await page.evaluate(() => localStorage.getItem("tandem-left-panel-width"));
+  const rightAfterLeftDrag = await page.evaluate(() => localStorage.getItem("tandem-panel-width"));
+  expect(Number(leftAfterDrag)).toBeGreaterThanOrEqual(370);
+  expect(Number(leftAfterDrag)).toBeLessThanOrEqual(390);
+  // Right panel key is written only when that handle is dragged. Null = default.
+  if (rightAfterLeftDrag !== null) {
+    expect(Number(rightAfterLeftDrag)).toBe(300);
+  }
+
+  // Drag the right handle right by +80px. Right panel's handle is on its
+  // left edge, so drag-right NARROWS it (App.tsx sign inversion): 300 → 220.
+  const rightBox = await rightHandle.boundingBox();
+  if (!rightBox) throw new Error("right-panel-resize-handle has no bounding box");
+  const rightCenterX = rightBox.x + rightBox.width / 2;
+  const rightCenterY = rightBox.y + rightBox.height / 2;
+  await page.mouse.move(rightCenterX, rightCenterY);
+  await page.mouse.down();
+  await page.mouse.move(rightCenterX + 80, rightCenterY, { steps: 10 });
+  await page.mouse.up();
+
+  const rightAfterDrag = await page.evaluate(() => localStorage.getItem("tandem-panel-width"));
+  expect(Number(rightAfterDrag)).toBeGreaterThanOrEqual(210);
+  expect(Number(rightAfterDrag)).toBeLessThanOrEqual(230);
+  // Left width must still be the value we set earlier.
+  const leftAfterRightDrag = await page.evaluate(() =>
+    localStorage.getItem("tandem-left-panel-width"),
+  );
+  expect(leftAfterRightDrag).toBe(leftAfterDrag);
+
+  // Round-trip through reload — both keys must persist.
+  await page.reload();
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  const leftReloaded = await page.evaluate(() => localStorage.getItem("tandem-left-panel-width"));
+  const rightReloaded = await page.evaluate(() => localStorage.getItem("tandem-panel-width"));
+  expect(leftReloaded).toBe(leftAfterDrag);
+  expect(rightReloaded).toBe(rightAfterDrag);
+});
+
+test("side panel resets scroll to top on filter change (no active annotation)", async ({
+  page,
+}) => {
+  // Seed enough annotations to overflow the side panel, then scroll the list
+  // down, change a filter, and assert the list is back at the top. Guards
+  // SidePanel.tsx's filter-change scroll-reset effect.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  // 15 comments on the title — same range is fine, each gets a unique id.
+  for (let i = 0; i < 15; i++) {
+    await mcp.callTool("tandem_comment", {
+      from: 2,
+      to: 6,
+      text: `note ${i}`,
+      textSnapshot: "Test",
+    });
+  }
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const list = page.locator('[role="list"][aria-label="Annotations"]');
+  await expect(list).toBeVisible();
+  // Wait for all 15 cards to render.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(15);
+
+  // Constrain the list height so the cards definitely overflow, regardless
+  // of the Playwright viewport size. Then scroll to the bottom.
+  await list.evaluate((el) => {
+    (el as HTMLElement).style.maxHeight = "200px";
+    (el as HTMLElement).style.overflowY = "auto";
+    el.scrollTop = el.scrollHeight;
+  });
+  const scrollBefore = await list.evaluate((el) => el.scrollTop);
+  expect(scrollBefore).toBeGreaterThan(0);
+
+  // Change the type filter — effect should scroll the list back to 0.
+  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  await expect.poll(async () => list.evaluate((el) => el.scrollTop), { timeout: 2_000 }).toBe(0);
+});
+
+test("side panel keeps active annotation in view on filter change", async ({ page }) => {
+  // The sibling branch of the filter-change effect: when an annotation is
+  // active (review mode), the list should scroll *it* into view instead of
+  // jumping to the top (#202).
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  for (let i = 0; i < 15; i++) {
+    await mcp.callTool("tandem_comment", {
+      from: 2,
+      to: 6,
+      text: `note ${i}`,
+      textSnapshot: "Test",
+    });
+  }
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const list = page.locator('[role="list"][aria-label="Annotations"]');
+  await expect(list).toBeVisible();
+  const cards = page.locator("[data-testid^='annotation-card-']");
+  await expect(cards).toHaveCount(15);
+
+  // Activate a card near the bottom. Clicking the card sets activeAnnotationId.
+  const targetCard = cards.nth(12);
+  await targetCard.scrollIntoViewIfNeeded();
+  await targetCard.click();
+
+  // Scroll the list far away from the active card.
+  await list.evaluate((el) => {
+    el.scrollTop = 0;
+  });
+
+  // Change the type filter. The effect should scroll the active card into
+  // view instead of resetting to scrollTop=0.
+  await page.locator("[data-testid='filter-type']").selectOption("comment");
+
+  // The active card must end up inside the list's visible area.
+  await expect
+    .poll(
+      async () => {
+        const listBox = await list.boundingBox();
+        const cardBox = await targetCard.boundingBox();
+        if (!listBox || !cardBox) return false;
+        return cardBox.y + cardBox.height > listBox.y && cardBox.y < listBox.y + listBox.height;
+      },
+      { timeout: 2_000 },
+    )
+    .toBe(true);
+});
+
 test("dwell-time slider value persists across reload", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
@@ -218,6 +385,11 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
     nativeSetter?.call(input, "2000");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+
+  // Sanity check: the native-setter dance must actually round-trip through
+  // React's onChange. Without this, the old version of this test silently
+  // passed because the input event fired but React state never updated.
+  await expect(slider).toHaveValue("2000");
 
   const savedDwell = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
