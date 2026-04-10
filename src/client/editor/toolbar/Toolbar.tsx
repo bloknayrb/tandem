@@ -428,6 +428,7 @@ export function Toolbar({
         {/* heldCount badge */}
         {(heldCount ?? 0) > 0 && (
           <span
+            data-testid="held-badge"
             style={{
               padding: "1px 6px",
               fontSize: "10px",
@@ -443,6 +444,7 @@ export function Toolbar({
         {/* Solo/Tandem mode toggle */}
         {tandemMode && onModeChange && (
           <div
+            data-testid="mode-toggle"
             role="group"
             aria-label="Claude collaboration mode"
             style={{
@@ -453,6 +455,7 @@ export function Toolbar({
             }}
           >
             <button
+              data-testid="mode-solo-btn"
               title="Write undisturbed — Claude only responds when you message"
               aria-pressed={tandemMode === "solo"}
               onClick={() => onModeChange("solo")}
@@ -484,6 +487,7 @@ export function Toolbar({
               Solo
             </button>
             <button
+              data-testid="mode-tandem-btn"
               title="Full collaboration — Claude reacts to selections and document changes"
               aria-pressed={tandemMode === "tandem"}
               onClick={() => onModeChange("tandem")}
@@ -517,6 +521,7 @@ export function Toolbar({
         )}
         {onSettingsClick && (
           <button
+            data-testid="settings-btn"
             onClick={(e) => onSettingsClick(e.currentTarget.getBoundingClientRect())}
             title="Layout settings"
             aria-label="Layout settings"

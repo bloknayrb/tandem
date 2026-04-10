@@ -1,5 +1,10 @@
-import { useState, useCallback } from "react";
-import { TANDEM_SETTINGS_KEY } from "../../shared/constants";
+import { useCallback, useState } from "react";
+import {
+  SELECTION_DWELL_DEFAULT_MS,
+  SELECTION_DWELL_MAX_MS,
+  SELECTION_DWELL_MIN_MS,
+  TANDEM_SETTINGS_KEY,
+} from "../../shared/constants";
 
 export type LayoutMode = "tabbed" | "three-panel";
 export type PrimaryTab = "chat" | "annotations";
@@ -10,6 +15,7 @@ export interface TandemSettings {
   primaryTab: PrimaryTab;
   panelOrder: PanelOrder;
   editorWidthPercent: number;
+  selectionDwellMs: number;
 }
 
 const DEFAULTS: TandemSettings = {
@@ -17,9 +23,19 @@ const DEFAULTS: TandemSettings = {
   primaryTab: "chat",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
+  selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
 };
 
-function loadSettings(): TandemSettings {
+/**
+ * Read and normalize settings from localStorage.
+ *
+ * Exported for unit testing. All numeric values are clamped to their valid
+ * ranges on load so corrupted storage cannot wedge the app at an invalid
+ * setting. Non-numeric or missing values fall back to the default via the
+ * `Number(x) || DEFAULT` idiom (note: this treats `0` as falsy, which is
+ * intentional — `0` is not a valid dwell or width anyway).
+ */
+export function loadSettings(): TandemSettings {
   try {
     const saved = localStorage.getItem(TANDEM_SETTINGS_KEY);
     if (saved) {
@@ -32,6 +48,13 @@ function loadSettings(): TandemSettings {
             ? "annotations-editor-chat"
             : "chat-editor-annotations",
         editorWidthPercent: Math.max(50, Math.min(100, Number(parsed.editorWidthPercent) || 100)),
+        selectionDwellMs: Math.max(
+          SELECTION_DWELL_MIN_MS,
+          Math.min(
+            SELECTION_DWELL_MAX_MS,
+            Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
+          ),
+        ),
       };
     }
   } catch {
@@ -50,6 +73,10 @@ export function useTandemSettings() {
       const next: TandemSettings = {
         ...merged,
         editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
+        selectionDwellMs: Math.max(
+          SELECTION_DWELL_MIN_MS,
+          Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
+        ),
       };
       try {
         localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));

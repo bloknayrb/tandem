@@ -2,11 +2,13 @@ export interface FilterSelectProps {
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
+  testId?: string;
 }
 
-export function FilterSelect({ value, onChange, options }: FilterSelectProps) {
+export function FilterSelect({ value, onChange, options, testId }: FilterSelectProps) {
   return (
     <select
+      data-testid={testId}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       style={{
