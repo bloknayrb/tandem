@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../shared/constants";
 import type { TandemSettings } from "../hooks/useTandemSettings";
 
 interface SettingsPopoverProps {
@@ -97,6 +98,7 @@ export function SettingsPopover({
   return (
     <div
       ref={popoverRef}
+      data-testid="settings-popover"
       style={{
         position: "fixed",
         left: `${left}px`,
@@ -144,6 +146,7 @@ export function SettingsPopover({
         <div style={sectionLabelStyle}>Layout</div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button
+            data-testid="layout-tabbed-btn"
             onClick={() => onUpdate({ layout: "tabbed" })}
             style={cardStyle(settings.layout === "tabbed")}
             aria-pressed={settings.layout === "tabbed"}
@@ -152,6 +155,7 @@ export function SettingsPopover({
             Tabbed
           </button>
           <button
+            data-testid="layout-three-panel-btn"
             onClick={() => {
               if (!threePanelDisabled) onUpdate({ layout: "three-panel" });
             }}
@@ -176,6 +180,7 @@ export function SettingsPopover({
           <div style={sectionLabelStyle}>Default Tab</div>
           <div style={{ display: "flex", gap: "8px" }}>
             <button
+              data-testid="default-tab-chat-btn"
               onClick={() => onUpdate({ primaryTab: "chat" })}
               style={cardStyle(settings.primaryTab === "chat")}
               aria-pressed={settings.primaryTab === "chat"}
@@ -183,6 +188,7 @@ export function SettingsPopover({
               Chat
             </button>
             <button
+              data-testid="default-tab-annotations-btn"
               onClick={() => onUpdate({ primaryTab: "annotations" })}
               style={cardStyle(settings.primaryTab === "annotations")}
               aria-pressed={settings.primaryTab === "annotations"}
@@ -199,6 +205,7 @@ export function SettingsPopover({
           <div style={sectionLabelStyle}>Panel Order</div>
           <div style={{ display: "flex", gap: "8px" }}>
             <button
+              data-testid="panel-order-cea-btn"
               onClick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
               style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
               aria-pressed={settings.panelOrder === "chat-editor-annotations"}
@@ -206,6 +213,7 @@ export function SettingsPopover({
               Chat | Editor | Ann.
             </button>
             <button
+              data-testid="panel-order-aec-btn"
               onClick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
               style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
               aria-pressed={settings.panelOrder === "annotations-editor-chat"}
@@ -228,6 +236,7 @@ export function SettingsPopover({
           How much of the available space the editor text fills
         </div>
         <input
+          data-testid="editor-width-slider"
           type="range"
           min={50}
           max={100}
@@ -247,6 +256,41 @@ export function SettingsPopover({
         >
           <span>50%</span>
           <span>100%</span>
+        </div>
+      </div>
+
+      {/* Selection sensitivity (dwell time) */}
+      <div>
+        <div style={sectionLabelStyle}>
+          Selection Sensitivity:{" "}
+          <span style={{ fontWeight: 400, textTransform: "none" }}>
+            {(settings.selectionDwellMs / 1000).toFixed(1)}s
+          </span>
+        </div>
+        <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
+          How long you must hold a selection before Claude notices it
+        </div>
+        <input
+          data-testid="dwell-time-slider"
+          type="range"
+          min={SELECTION_DWELL_MIN_MS}
+          max={SELECTION_DWELL_MAX_MS}
+          step={100}
+          value={settings.selectionDwellMs}
+          onChange={(e) => onUpdate({ selectionDwellMs: Number(e.target.value) })}
+          style={{ width: "100%", accentColor: "#6366f1" }}
+          aria-label="Selection dwell time"
+        />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: "10px",
+            color: "#9ca3af",
+          }}
+        >
+          <span>{(SELECTION_DWELL_MIN_MS / 1000).toFixed(1)}s</span>
+          <span>{(SELECTION_DWELL_MAX_MS / 1000).toFixed(1)}s</span>
         </div>
       </div>
     </div>

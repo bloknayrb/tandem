@@ -18,6 +18,7 @@ import {
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
   PROLONGED_DISCONNECT_MS,
+  Y_MAP_DWELL_MS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
@@ -197,6 +198,13 @@ export default function App() {
   const { settings, updateSettings } = useTandemSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
+
+  // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
+  useEffect(() => {
+    if (!bootstrapYdoc) return;
+    const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set(Y_MAP_DWELL_MS, settings.selectionDwellMs);
+  }, [settings.selectionDwellMs, bootstrapYdoc]);
 
   const [reviewMode, setReviewMode] = useState(false);
   const [showChat, setShowChat] = useState(() => settings.primaryTab === "chat");

@@ -12,8 +12,11 @@ import {
   CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
   SELECTION_DWELL_DEFAULT_MS,
+  SELECTION_DWELL_MAX_MS,
+  SELECTION_DWELL_MIN_MS,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
+  Y_MAP_DWELL_MS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -25,6 +28,21 @@ import { generateEventId } from "./types.js";
 
 /** Origin tag for all MCP-initiated Y.Map writes. Import and use this — never use raw "mcp" strings. */
 export const MCP_ORIGIN = "mcp";
+
+/** Read the user's configured selection dwell time from CTRL_ROOM, falling back to the default. */
+function getDwellMs(): number {
+  try {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+    const val = awareness.get(Y_MAP_DWELL_MS);
+    if (typeof val === "number" && val >= SELECTION_DWELL_MIN_MS && val <= SELECTION_DWELL_MAX_MS) {
+      return val;
+    }
+  } catch {
+    // CTRL_ROOM not yet available — use default
+  }
+  return SELECTION_DWELL_DEFAULT_MS;
+}
 
 type EventCallback = (event: TandemEvent) => void;
 
@@ -204,7 +222,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
             selectedText: selection.selectedText ?? "",
           },
         });
-      }, SELECTION_DWELL_DEFAULT_MS);
+      }, getDwellMs());
     }
   };
   userAwareness.observe(awarenessObs);

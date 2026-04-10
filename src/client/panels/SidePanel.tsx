@@ -376,10 +376,10 @@ export function SidePanel({
     if (bulkConfirm) confirmRef.current?.focus();
   }, [bulkConfirm]);
 
-  // Reset confirmation when filtered pending set changes
+  // Reset confirmation when filters change (prevents stale Accept/Dismiss All)
   useEffect(() => {
     setBulkConfirm(null);
-  }, [pending.length]);
+  }, [filterType, filterAuthor, filterStatus]);
 
   // Keep review index in bounds when annotations change
   useEffect(() => {
