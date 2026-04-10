@@ -118,7 +118,28 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
 const PANEL_MIN_WIDTH = 200;
 const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
+// PANEL_WIDTH_KEY persists the right-side panel's width (shared between the
+// tabbed layout's single panel and three-panel mode's right panel). The left
+// panel has its own key so three-panel widths are independent.
 const PANEL_WIDTH_KEY = "tandem-panel-width";
+const LEFT_PANEL_WIDTH_KEY = "tandem-left-panel-width";
+
+type PanelSide = "left" | "right";
+
+function loadPanelWidth(key: string): number {
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (Number.isFinite(parsed)) {
+        return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
+      }
+    }
+  } catch {
+    // localStorage unavailable (incognito/storage-disabled)
+  }
+  return PANEL_DEFAULT_WIDTH;
+}
 
 export default function App() {
   const {
@@ -230,20 +251,10 @@ export default function App() {
     setActiveAnnotationId(annotationId);
   }, []);
 
-  const [panelWidth, setPanelWidth] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(PANEL_WIDTH_KEY);
-      if (saved) {
-        const parsed = parseInt(saved, 10);
-        if (Number.isFinite(parsed)) {
-          return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
-        }
-      }
-    } catch {
-      // localStorage unavailable (incognito/storage-disabled)
-    }
-    return PANEL_DEFAULT_WIDTH;
-  });
+  const [panelWidth, setPanelWidth] = useState<number>(() => loadPanelWidth(PANEL_WIDTH_KEY));
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() =>
+    loadPanelWidth(LEFT_PANEL_WIDTH_KEY),
+  );
 
   const editorMaxWidth =
     settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;
@@ -251,6 +262,8 @@ export default function App() {
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
+  const leftPanelWidthRef = useRef(leftPanelWidth);
+  leftPanelWidthRef.current = leftPanelWidth;
   const dragListenersRef = useRef<{
     move: (e: MouseEvent) => void;
     up: () => void;
@@ -268,21 +281,24 @@ export default function App() {
     };
   }, []);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+  const handleResizeStart = useCallback((e: React.MouseEvent, side: PanelSide) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = panelWidthRef.current;
+    const startWidth = side === "left" ? leftPanelWidthRef.current : panelWidthRef.current;
+    const setter = side === "left" ? setLeftPanelWidth : setPanelWidth;
+    const storageKey = side === "left" ? LEFT_PANEL_WIDTH_KEY : PANEL_WIDTH_KEY;
     let latestWidth = startWidth;
 
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
 
     const onMouseMove = (ev: MouseEvent) => {
-      latestWidth = Math.max(
-        PANEL_MIN_WIDTH,
-        Math.min(PANEL_MAX_WIDTH, startWidth - (ev.clientX - startX)),
-      );
-      setPanelWidth(latestWidth);
+      const delta = ev.clientX - startX;
+      // The left panel's handle sits on its right edge (drag right = wider).
+      // The right panel's handle sits on its left edge (drag right = narrower).
+      const next = side === "left" ? startWidth + delta : startWidth - delta;
+      latestWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, next));
+      setter(latestWidth);
     };
 
     const onMouseUp = () => {
@@ -292,7 +308,7 @@ export default function App() {
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
       try {
-        localStorage.setItem(PANEL_WIDTH_KEY, String(latestWidth));
+        localStorage.setItem(storageKey, String(latestWidth));
       } catch {
         // localStorage unavailable
       }
@@ -409,7 +425,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${panelWidth}px`,
+              width: `${leftPanelWidth}px`,
               borderRight: "1px solid #e5e7eb",
             }}
           >
@@ -462,11 +478,12 @@ export default function App() {
           </div>
           {/* Left resize handle */}
           <div
+            data-testid="left-panel-resize-handle"
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize left panel"
             tabIndex={0}
-            onMouseDown={handleResizeStart}
+            onMouseDown={(e) => handleResizeStart(e, "left")}
             style={{
               width: "4px",
               cursor: "col-resize",
@@ -523,11 +540,12 @@ export default function App() {
           </div>
           {/* Right resize handle */}
           <div
+            data-testid="right-panel-resize-handle"
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize right panel"
             tabIndex={0}
-            onMouseDown={handleResizeStart}
+            onMouseDown={(e) => handleResizeStart(e, "right")}
             style={{
               width: "4px",
               cursor: "col-resize",
@@ -648,7 +666,7 @@ export default function App() {
             aria-orientation="vertical"
             aria-label="Resize panel"
             tabIndex={0}
-            onMouseDown={handleResizeStart}
+            onMouseDown={(e) => handleResizeStart(e, "right")}
             style={{
               width: "4px",
               cursor: "col-resize",
