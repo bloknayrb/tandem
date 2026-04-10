@@ -29,6 +29,7 @@ import { useTabOrder } from "./hooks/useTabOrder";
 import { useTandemSettings } from "./hooks/useTandemSettings";
 import { useTutorial } from "./hooks/useTutorial";
 import { useYjsSync } from "./hooks/useYjsSync";
+import type { PanelLayout } from "./panel-layout";
 import { ChatPanel } from "./panels/ChatPanel";
 import { ReviewSummary } from "./panels/ReviewSummary";
 import { SidePanel } from "./panels/SidePanel";
@@ -251,17 +252,31 @@ export default function App() {
     setActiveAnnotationId(annotationId);
   }, []);
 
-  const [panelWidth, setPanelWidth] = useState<number>(() => loadPanelWidth("right"));
-  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadPanelWidth("left"));
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
+    settings.layout === "three-panel"
+      ? { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") }
+      : { kind: "tabbed", right: loadPanelWidth("right") },
+  );
+
+  // Transition between variants when the user toggles layout mid-session.
+  // Preserves `right` across both directions and `left` on return to three-panel.
+  useEffect(() => {
+    setPanelLayout((prev) => {
+      if (settings.layout === "three-panel") {
+        if (prev.kind === "three-panel") return prev;
+        return { kind: "three-panel", left: loadPanelWidth("left"), right: prev.right };
+      }
+      if (prev.kind === "tabbed") return prev;
+      return { kind: "tabbed", right: prev.right };
+    });
+  }, [settings.layout]);
 
   const editorMaxWidth =
     settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;
   const editorMargin = settings.editorWidthPercent < 100 ? "0 auto" : undefined;
 
-  const panelWidthRef = useRef(panelWidth);
-  panelWidthRef.current = panelWidth;
-  const leftPanelWidthRef = useRef(leftPanelWidth);
-  leftPanelWidthRef.current = leftPanelWidth;
+  const panelLayoutRef = useRef(panelLayout);
+  panelLayoutRef.current = panelLayout;
   const dragListenersRef = useRef<{
     move: (e: MouseEvent) => void;
     up: () => void;
@@ -282,8 +297,15 @@ export default function App() {
   const handleResizeStart = useCallback((e: React.MouseEvent, side: PanelSide) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = side === "left" ? leftPanelWidthRef.current : panelWidthRef.current;
-    const setter = side === "left" ? setLeftPanelWidth : setPanelWidth;
+    const current = panelLayoutRef.current;
+    // `left` is only defined in three-panel; fall back to the default so a
+    // stale mid-transition drag never reads undefined.
+    const startWidth =
+      side === "left"
+        ? current.kind === "three-panel"
+          ? current.left
+          : PANEL_DEFAULT_WIDTH
+        : current.right;
     const storageKey = PANEL_WIDTH_KEYS[side];
     let latestWidth = startWidth;
 
@@ -296,7 +318,16 @@ export default function App() {
       // The right panel's handle sits on its left edge (drag right = narrower).
       const next = side === "left" ? startWidth + delta : startWidth - delta;
       latestWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, next));
-      setter(latestWidth);
+      setPanelLayout((prev) => {
+        if (side === "right") {
+          return prev.kind === "three-panel"
+            ? { ...prev, right: latestWidth }
+            : { kind: "tabbed", right: latestWidth };
+        }
+        // Left handle is only rendered in three-panel, but guard anyway.
+        if (prev.kind !== "three-panel") return prev;
+        return { ...prev, left: latestWidth };
+      });
     };
 
     const onMouseUp = () => {
@@ -351,8 +382,6 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-
-  const useThreePanel = settings.layout === "three-panel";
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
@@ -415,7 +444,7 @@ export default function App() {
         onTabClose={handleTabClose}
         reorder={reorder}
       />
-      {useThreePanel ? (
+      {panelLayout.kind === "three-panel" ? (
         /* ── Three-panel layout: Left | Editor | Right ── */
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
           {/* Left panel */}
@@ -423,7 +452,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${leftPanelWidth}px`,
+              width: `${panelLayout.left}px`,
               borderRight: "1px solid #e5e7eb",
             }}
           >
@@ -563,7 +592,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${panelWidth}px`,
+              width: `${panelLayout.right}px`,
               borderLeft: "1px solid #e5e7eb",
             }}
           >
@@ -683,7 +712,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${panelWidth}px`,
+              width: `${panelLayout.right}px`,
               borderLeft: "1px solid #e5e7eb",
             }}
           >
