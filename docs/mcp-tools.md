@@ -363,6 +363,7 @@ Highlight text with a color and optional note.
 | `color` | enum | yes | `yellow`, `red`, `green`, `blue`, `purple` |
 | `note` | string | no | Optional note for the highlight |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:**
 ```json
@@ -386,6 +387,7 @@ Add a comment attached to a text range. Appears in the side panel.
 | `to` | number | yes | End position |
 | `text` | string | yes | Comment text |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:**
 ```json
@@ -405,6 +407,7 @@ Propose a text replacement (tracked-change style). User sees it as accept/reject
 | `newText` | string | yes | Suggested replacement text |
 | `reason` | string | no | Reason for the suggestion |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:**
 ```json
@@ -521,7 +524,7 @@ Edit the content of an existing annotation. Only pending annotations can be edit
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "edited": true, "editedAt": 1710936500000 }
+{ "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "editedAt": 1710936500000 }
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), error if annotation not found or not pending.

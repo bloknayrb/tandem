@@ -13,7 +13,7 @@ description: >
 
 # Tandem — Collaborative Document Editor
 
-Tandem lets you annotate and edit documents alongside the user in real time. The user sees your changes in a browser editor; you interact via 28 tandem_* MCP tools.
+Tandem lets you annotate and edit documents alongside the user in real time. The user sees your changes in a browser editor; you interact via the tandem_* MCP tool suite.
 
 ## Hard Rules
 
