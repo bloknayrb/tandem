@@ -16,8 +16,8 @@ import {
   SELECTION_DWELL_MIN_MS,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
-  Y_MAP_DWELL_MS,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_DWELL_MS,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
@@ -29,18 +29,31 @@ import { generateEventId } from "./types.js";
 /** Origin tag for all MCP-initiated Y.Map writes. Import and use this — never use raw "mcp" strings. */
 export const MCP_ORIGIN = "mcp";
 
-/** Read the user's configured selection dwell time from CTRL_ROOM, falling back to the default. */
+/**
+ * Read the user's configured selection dwell time from CTRL_ROOM.
+ *
+ * Called at timer-schedule time (not fire time), so mid-dwell slider changes
+ * don't affect an in-flight timer — the updated value takes effect on the
+ * next selection change.
+ *
+ * Falls back to `SELECTION_DWELL_DEFAULT_MS` when:
+ *   - CTRL_ROOM has no dwell key set (normal on cold startup, before the
+ *     client's broadcast effect runs)
+ *   - The stored value is the wrong type or outside [MIN, MAX] — the client
+ *     clamps on write, so this branch indicates a bug or client/server
+ *     constant drift. Logged as a warning so it can be diagnosed.
+ */
 function getDwellMs(): number {
-  try {
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-    const val = awareness.get(Y_MAP_DWELL_MS);
-    if (typeof val === "number" && val >= SELECTION_DWELL_MIN_MS && val <= SELECTION_DWELL_MAX_MS) {
-      return val;
-    }
-  } catch {
-    // CTRL_ROOM not yet available — use default
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+  const val = awareness.get(Y_MAP_DWELL_MS);
+  if (val === undefined) return SELECTION_DWELL_DEFAULT_MS;
+  if (typeof val === "number" && val >= SELECTION_DWELL_MIN_MS && val <= SELECTION_DWELL_MAX_MS) {
+    return val;
   }
+  console.warn(
+    `[EventQueue] Invalid dwell time in CTRL_ROOM awareness (type=${typeof val}, value=${String(val)}); using default ${SELECTION_DWELL_DEFAULT_MS}ms`,
+  );
   return SELECTION_DWELL_DEFAULT_MS;
 }
 

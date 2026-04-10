@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
+import { ApplyChangesButton } from "../components/ApplyChangesButton";
+import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 import { annotationToPmRange } from "../positions";
 import { AnnotationCard } from "./AnnotationCard";
-import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { FilterSelect } from "./FilterSelect";
-import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 
 interface SidePanelProps {
   annotations: Annotation[];
@@ -561,6 +561,7 @@ export function SidePanel({
         }}
       >
         <FilterSelect
+          testId="filter-type"
           value={filterType}
           onChange={(v) => setFilterType(v as FilterType)}
           options={[
@@ -573,6 +574,7 @@ export function SidePanel({
           ]}
         />
         <FilterSelect
+          testId="filter-author"
           value={filterAuthor}
           onChange={(v) => setFilterAuthor(v as FilterAuthor)}
           options={[
@@ -583,6 +585,7 @@ export function SidePanel({
           ]}
         />
         <FilterSelect
+          testId="filter-status"
           value={filterStatus}
           onChange={(v) => setFilterStatus(v as FilterStatus)}
           options={[
@@ -647,6 +650,7 @@ export function SidePanel({
                   </span>
                   <button
                     ref={confirmRef}
+                    data-testid="bulk-confirm-btn"
                     onClick={isAccept ? handleBulkAccept : handleBulkDismiss}
                     style={{
                       ...SMALL_BTN,
@@ -658,6 +662,7 @@ export function SidePanel({
                     Confirm
                   </button>
                   <button
+                    data-testid="bulk-cancel-btn"
                     onClick={() => setBulkConfirm(null)}
                     style={{ ...SMALL_BTN, background: "#fff", color: "#6b7280" }}
                   >
@@ -669,12 +674,14 @@ export function SidePanel({
           ) : (
             <>
               <button
+                data-testid="bulk-accept-btn"
                 onClick={() => setBulkConfirm("accept")}
                 style={{ ...SMALL_BTN, background: "#f0fdf4", color: "#166534" }}
               >
                 Acknowledge All ({pending.length})
               </button>
               <button
+                data-testid="bulk-dismiss-btn"
                 onClick={() => setBulkConfirm("dismiss")}
                 style={{ ...SMALL_BTN, background: "#fef2f2", color: "#991b1b" }}
               >

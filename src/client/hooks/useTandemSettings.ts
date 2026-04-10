@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
 import {
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
@@ -26,7 +26,16 @@ const DEFAULTS: TandemSettings = {
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
 };
 
-function loadSettings(): TandemSettings {
+/**
+ * Read and normalize settings from localStorage.
+ *
+ * Exported for unit testing. All numeric values are clamped to their valid
+ * ranges on load so corrupted storage cannot wedge the app at an invalid
+ * setting. Non-numeric or missing values fall back to the default via the
+ * `Number(x) || DEFAULT` idiom (note: this treats `0` as falsy, which is
+ * intentional — `0` is not a valid dwell or width anyway).
+ */
+export function loadSettings(): TandemSettings {
   try {
     const saved = localStorage.getItem(TANDEM_SETTINGS_KEY);
     if (saved) {
