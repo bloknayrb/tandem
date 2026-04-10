@@ -10,10 +10,6 @@ import {
 let mcp: McpTestClient;
 let tmpDir: string;
 
-const TITLE_FROM = 2;
-const TITLE_TO = 15;
-const TITLE_TEXT = "Test Document";
-
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
@@ -65,17 +61,18 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
 test("bulk-confirm resets when a filter changes (issue #199 regression)", async ({ page }) => {
   // Need 2+ pending annotations to show the "Acknowledge All" button
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  // Two annotations within the title so both definitely target valid
+  // ranges. "Test Document" spans offsets 2–14; split into "Test" [2,6]
+  // and "Document" [7,15].
   await mcp.callTool("tandem_comment", {
-    from: TITLE_FROM,
-    to: TITLE_TO,
+    from: 2,
+    to: 6,
     text: "First",
-    textSnapshot: TITLE_TEXT,
   });
   await mcp.callTool("tandem_highlight", {
-    from: 17,
-    to: 65,
+    from: 7,
+    to: 15,
     color: "yellow",
-    textSnapshot: "This is the first paragraph of the test document",
   });
   // Sanity check: confirm both annotations exist before navigating.
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
@@ -110,17 +107,18 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
 
 test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  // Two annotations within the title so both definitely target valid
+  // ranges. "Test Document" spans offsets 2–14; split into "Test" [2,6]
+  // and "Document" [7,15].
   await mcp.callTool("tandem_comment", {
-    from: TITLE_FROM,
-    to: TITLE_TO,
+    from: 2,
+    to: 6,
     text: "First",
-    textSnapshot: TITLE_TEXT,
   });
   await mcp.callTool("tandem_highlight", {
-    from: 17,
-    to: 65,
+    from: 7,
+    to: 15,
     color: "yellow",
-    textSnapshot: "This is the first paragraph of the test document",
   });
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
     data?: { annotations?: unknown[] };
