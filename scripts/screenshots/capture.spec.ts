@@ -1,10 +1,11 @@
 /**
  * Deterministic screenshot capture for docs/screenshots/*.png.
  *
- * Gated behind `SCREENSHOTS=1` so it never runs in CI or `npm run test:e2e`.
- * To regenerate the screenshot set (e.g. after a UI refresh):
+ * Lives under scripts/screenshots/ with its own playwright.config.ts so the
+ * root test runner (`npm run test:e2e`) can't pick it up. To regenerate the
+ * screenshot set (e.g. after a UI refresh):
  *
- *   SCREENSHOTS=1 npx playwright test screenshots --workers=1
+ *   npm run capture:screenshots
  *
  * Each test writes directly to `docs/screenshots/*.png`. The sample document
  * is `sample/welcome.md`, which ships with the repo, so output is stable
