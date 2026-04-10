@@ -1,23 +1,24 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
-  addDoc,
-  removeDoc,
-  setActiveDocId,
-  getOpenDocs,
-  getCurrentDoc,
-  requireDocument,
-  hasDoc,
-  docCount,
-} from "../../src/server/mcp/document-service.js";
-import {
+  getOrCreateXmlText,
+  getOutline,
+  getSection,
   populateYDoc,
   resolveOffset,
-  getOrCreateXmlText,
   verifyAndResolveRange,
 } from "../../src/server/mcp/document.js";
-import { getOutline, getSection } from "../../src/server/mcp/document.js";
+import {
+  addDoc,
+  docCount,
+  getCurrentDoc,
+  getOpenDocs,
+  hasDoc,
+  removeDoc,
+  requireDocument,
+  setActiveDocId,
+} from "../../src/server/mcp/document-service.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
 function setupDoc(id: string, text: string, opts?: { readOnly?: boolean; format?: string }) {
   const ydoc = getOrCreateDocument(id);

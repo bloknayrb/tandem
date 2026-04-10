@@ -1,22 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 import * as Y from "yjs";
-import { getOrCreateDocument } from "../yjs/provider.js";
-import {
-  mcpSuccess,
-  mcpError,
-  noDocumentError,
-  getErrorMessage,
-  withErrorBoundary,
-} from "./response.js";
-import { pushNotification } from "../notifications.js";
-import { generateNotificationId } from "../../shared/utils.js";
-import { headingPrefix } from "../../shared/offsets.js";
-import { getAdapter, atomicWrite } from "../file-io/index.js";
-import { suppressNextChange } from "../file-watcher.js";
-import { convertToMarkdown } from "./convert.js";
-import { saveSession } from "../session/manager.js";
-import { openFileByPath } from "./file-opener.js";
+import { z } from "zod";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
@@ -25,79 +9,91 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { toFlatOffset, TandemModeSchema } from "../../shared/types.js";
+import { headingPrefix } from "../../shared/offsets.js";
+import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
+import { generateNotificationId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
-
+import { atomicWrite, getAdapter } from "../file-io/index.js";
+import { suppressNextChange } from "../file-watcher.js";
+import { pushNotification } from "../notifications.js";
+// Position system
+import { resolveToElement, validateRange } from "../positions.js";
+import { saveSession } from "../session/manager.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
+import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import { extractText, getElementText, getOrCreateXmlText } from "./document-model.js";
-
-// Position system
-import { validateRange, resolveToElement } from "../positions.js";
-
 // Document service (state management)
 import {
-  getOpenDocs,
-  getActiveDocId,
-  setActiveDocId,
-  getCurrentDoc,
-  requireDocument,
   broadcastOpenDocs,
-  toDocListEntry,
-  hasDoc,
-  docCount,
   closeDocumentById,
+  docCount,
+  getActiveDocId,
+  getCurrentDoc,
+  getOpenDocs,
+  hasDoc,
+  requireDocument,
+  setActiveDocId,
+  toDocListEntry,
 } from "./document-service.js";
+import { openFileByPath } from "./file-opener.js";
+import {
+  getErrorMessage,
+  mcpError,
+  mcpSuccess,
+  noDocumentError,
+  withErrorBoundary,
+} from "./response.js";
 
-// Re-export for backward compatibility with existing consumers.
-export {
-  extractText,
-  extractMarkdown,
-  populateYDoc,
-  getElementText,
-  findXmlText,
-  getOrCreateXmlText,
-  resolveOffset,
-  verifyAndResolveRange,
-  detectFormat,
-  docIdFromPath,
-  getHeadingPrefixLength,
-} from "./document-model.js";
-export type { ResolvedOffset, RangeVerifyResult } from "./document-model.js";
-
-// Position system re-exports
-export {
-  validateRange,
-  anchoredRange,
-  resolveToElement,
-  flatOffsetToRelPos,
-  relPosToFlatOffset,
-  refreshRange,
-  refreshAllRanges,
-} from "../positions.js";
 export type {
-  RangeValidation,
   AnchoredRangeResult,
   ElementPosition,
+  RangeValidation,
 } from "../../shared/positions/index.js";
+// Position system re-exports
 export {
+  anchoredRange,
+  flatOffsetToRelPos,
+  refreshAllRanges,
+  refreshRange,
+  relPosToFlatOffset,
+  resolveToElement,
+  validateRange,
+} from "../positions.js";
+export type { RangeVerifyResult, ResolvedOffset } from "./document-model.js";
+// Re-export for backward compatibility with existing consumers.
+export {
+  detectFormat,
+  docIdFromPath,
+  extractMarkdown,
+  extractText,
+  findXmlText,
+  getElementText,
+  getHeadingPrefixLength,
+  getOrCreateXmlText,
+  populateYDoc,
+  resolveOffset,
+  verifyAndResolveRange,
+} from "./document-model.js";
+export type { OpenDoc } from "./document-service.js";
+export {
+  addDoc,
+  docCount,
+  getActiveDocId,
   getCurrentDoc,
   getOpenDocs,
-  getActiveDocId,
-  setActiveDocId,
+  hasDoc,
+  removeDoc,
   requireDocument,
-  toDocListEntry,
-  saveCurrentSession,
   restoreCtrlSession,
   restoreOpenDocuments,
+  saveCurrentSession,
+  setActiveDocId,
+  toDocListEntry,
   writeGenerationId,
-  addDoc,
-  removeDoc,
-  hasDoc,
-  docCount,
 } from "./document-service.js";
-export type { OpenDoc } from "./document-service.js";
-export { openFileByPath, openFileFromContent, SUPPORTED_EXTENSIONS } from "./file-opener.js";
 export type { OpenFileResult } from "./file-opener.js";
+export { openFileByPath, openFileFromContent, SUPPORTED_EXTENSIONS } from "./file-opener.js";
 
 export interface OutlineEntry {
   level: number;

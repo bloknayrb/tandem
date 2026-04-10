@@ -3,20 +3,20 @@
  * tracked changes, and restoring from backup.
  */
 
-import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs/promises";
 import path from "path";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getCurrentDoc, requireDocument } from "./document-service.js";
+import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { relPosToFlatOffset } from "../positions.js";
-import { extractText } from "./document-model.js";
+import type { Annotation } from "../../shared/types.js";
 import {
+  type AcceptedSuggestion,
   applyTrackedChanges,
   atomicWriteBuffer,
-  type AcceptedSuggestion,
 } from "../file-io/index.js";
-import type { Annotation } from "../../shared/types.js";
+import { relPosToFlatOffset } from "../positions.js";
+import { extractText } from "./document-model.js";
+import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 // ---------------------------------------------------------------------------

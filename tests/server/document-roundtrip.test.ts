@@ -1,12 +1,12 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  populateYDoc,
   extractText,
   getElementText,
   getHeadingPrefixLength,
+  populateYDoc,
 } from "../../src/server/mcp/document.js";
-import { makeDoc, makeEmptyDoc, getFragment } from "../helpers/ydoc-factory.js";
+import { getFragment, makeDoc, makeEmptyDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 

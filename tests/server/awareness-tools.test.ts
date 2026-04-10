@@ -1,3 +1,19 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
+import {
+  isUserActive,
+  processInboxAnnotations,
+  resetInbox,
+  safeSlice,
+} from "../../src/server/mcp/awareness.js";
+import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
+import {
+  addDoc,
+  getOpenDocs,
+  removeDoc,
+  setActiveDocId,
+} from "../../src/server/mcp/document-service.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
@@ -7,26 +23,10 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
-import { describe, it, expect, beforeEach } from "vitest";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import {
-  resetInbox,
-  safeSlice,
-  isUserActive,
-  processInboxAnnotations,
-} from "../../src/server/mcp/awareness.js";
-import { createAnnotation, collectAnnotations } from "../../src/server/mcp/annotations.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
-import {
-  addDoc,
-  removeDoc,
-  setActiveDocId,
-  getOpenDocs,
-} from "../../src/server/mcp/document-service.js";
-import { populateYDoc, extractText } from "../../src/server/mcp/document.js";
-import { generateMessageId } from "../../src/shared/utils.js";
-import { TandemModeSchema } from "../../src/shared/types.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
+import { TandemModeSchema } from "../../src/shared/types.js";
+import { generateMessageId } from "../../src/shared/utils.js";
+import { rangeOf } from "../helpers/ydoc-factory.js";
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);

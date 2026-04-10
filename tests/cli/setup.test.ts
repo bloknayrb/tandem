@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { applyConfig, buildMcpEntries, detectTargets, installSkill } from "../../src/cli/setup.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
-import { buildMcpEntries, detectTargets, applyConfig, installSkill } from "../../src/cli/setup.js";
 
 describe("buildMcpEntries", () => {
   it("returns tandem HTTP entry and channel node entry", () => {

@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
-import type { OpenTab } from "../types";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FileOpenDialog } from "../components/FileOpenDialog";
 import { useTabDirty } from "../hooks/useTabDirty";
+import type { OpenTab } from "../types";
 
 interface DocumentTabsProps {
   tabs: OpenTab[];

@@ -3,17 +3,17 @@
 // Uses the shared walker (docx-walker.ts) to map flat-text offsets into
 // the XML DOM, then mutates the DOM in-place before serializing back to ZIP.
 
-import JSZip from "jszip";
-import { parseDocument } from "htmlparser2";
-import { Element, Text } from "domhandler";
-import type { ChildNode } from "domhandler";
 import render from "dom-serializer";
+import type { ChildNode } from "domhandler";
+import { Element, Text } from "domhandler";
+import { parseDocument } from "htmlparser2";
+import JSZip from "jszip";
 import {
-  walkDocumentBody,
   findAllByName,
-  isElement,
   getAttr,
+  isElement,
   type TextHit,
+  walkDocumentBody,
 } from "./docx-walker.js";
 
 /** Element names inside <w:r> that would produce malformed XML if split. */

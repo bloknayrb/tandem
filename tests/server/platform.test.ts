@@ -1,11 +1,11 @@
-import { describe, it, expect, afterEach } from "vitest";
 import net from "net";
 import path from "path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  SESSION_DIR,
   freePort,
   parseLsofPids,
   parseSsPid,
+  SESSION_DIR,
   waitForPort,
 } from "../../src/server/platform";
 

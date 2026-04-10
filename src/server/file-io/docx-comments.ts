@@ -5,14 +5,14 @@
 // alongside character offsets. Heading prefix offsets are accounted for so
 // flat-text positions match Tandem's coordinate system after mammoth → htmlToYDoc.
 
-import JSZip from "jszip";
 import { parseDocument } from "htmlparser2";
+import JSZip from "jszip";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { anchoredRange } from "../positions.js";
 import type { FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
+import { anchoredRange } from "../positions.js";
 import { findAllByName, getAttr, getTextContent, walkDocumentBody } from "./docx-walker.js";
 
 // ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@
 // tracked-change text), while <w:ins> subtrees are traversed normally
 // (mammoth includes inserted text).
 
-import { parseDocument } from "htmlparser2";
 import type { ChildNode, Element } from "domhandler";
+import { parseDocument } from "htmlparser2";
 import { headingPrefixLength } from "../../shared/offsets.js";
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../src/shared/constants.js";
 

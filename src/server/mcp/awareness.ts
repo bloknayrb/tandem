@@ -1,12 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getOrCreateDocument } from "../yjs/provider.js";
-import { getCurrentDoc, extractText } from "./document.js";
-import { collectAnnotations, refreshRange } from "./annotations.js";
-import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
-import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
-import { TandemModeSchema } from "../../shared/types.js";
-import { generateMessageId } from "../../shared/utils.js";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
@@ -15,7 +8,14 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
+import { TandemModeSchema } from "../../shared/types.js";
+import { generateMessageId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
+import { collectAnnotations, refreshRange } from "./annotations.js";
+import { extractText, getCurrentDoc } from "./document.js";
+import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox
 const surfacedIds = new Set<string>();

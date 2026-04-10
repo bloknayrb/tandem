@@ -1,10 +1,10 @@
 import * as Y from "yjs";
 
-import { Y_MAP_ANNOTATIONS, TUTORIAL_ANNOTATION_PREFIX } from "../../shared/constants.js";
+import { TUTORIAL_ANNOTATION_PREFIX, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
+import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
-import { toFlatOffset } from "../../shared/types.js";
 import { extractText } from "./document-model.js";
 
 interface TutorialAnnotationDef {

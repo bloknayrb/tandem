@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
-import path from "path";
 import os from "os";
+import path from "path";
+import { beforeEach, describe, expect, it } from "vitest";
+import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
 import {
   openFileByPath,
   openFileFromContent,
   SUPPORTED_EXTENSIONS,
 } from "../../src/server/mcp/file-opener.js";
-import { removeDoc, setActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
 
 let tmpDir: string;
 

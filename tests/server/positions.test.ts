@@ -1,22 +1,22 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import {
-  validateRange,
   anchoredRange,
-  resolveToElement,
   flatOffsetToRelPos,
-  relPosToFlatOffset,
-  refreshRange,
   refreshAllRanges,
+  refreshRange,
+  relPosToFlatOffset,
+  resolveToElement,
+  validateRange,
 } from "../../src/server/positions.js";
+import type { Annotation } from "../../src/shared/types.js";
 import {
-  makeDoc,
   getAnnotationsMap,
   getFragment,
   makeAnnotation,
+  makeDoc,
 } from "../helpers/ydoc-factory.js";
-import { getOrCreateXmlText } from "../../src/server/mcp/document.js";
-import type { Annotation } from "../../src/shared/types.js";
 
 let doc: Y.Doc;
 

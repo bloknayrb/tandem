@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isKnownHocuspocusError } from "../../src/server/error-filter.js";
 
 /** Helper: create an Error with a `.code` property, mimicking ws library errors */

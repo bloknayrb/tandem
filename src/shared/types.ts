@@ -3,11 +3,11 @@ import type { DocumentRange, RelativeRange } from "./positions/types.js";
 
 // Canonical definitions live in the positions module; re-exported for backward compatibility.
 export type {
+  DocumentRange,
   FlatOffset,
   PmPos,
-  SerializedRelPos,
-  DocumentRange,
   RelativeRange,
+  SerializedRelPos,
 } from "./positions/types.js";
 export { toFlatOffset, toPmPos, toSerializedRelPos } from "./positions/types.js";
 

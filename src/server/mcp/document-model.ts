@@ -1,9 +1,9 @@
 import path from "path";
 import * as Y from "yjs";
 import {
-  headingPrefixLength as sharedHeadingPrefixLength,
-  headingPrefix,
   FLAT_SEPARATOR,
+  headingPrefix,
+  headingPrefixLength as sharedHeadingPrefixLength,
 } from "../../shared/offsets.js";
 import { saveMarkdown } from "../file-io/markdown.js";
 

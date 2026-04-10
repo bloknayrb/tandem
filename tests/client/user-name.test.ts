@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { USER_NAME_DEFAULT } from "../../src/shared/constants.js";
 
 function resolveUserName(stored: string | null): string {

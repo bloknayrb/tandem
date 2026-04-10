@@ -5,23 +5,22 @@
  * including Zod schema validation, withErrorBoundary wrapping, and
  * mcpSuccess/mcpError response formatting.
  */
-import { describe, it, expect, beforeEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { registerDocumentTools } from "../../src/server/mcp/document.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
-import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
-import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
+import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
+import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import {
   addDoc,
+  getOpenDocs,
   removeDoc,
   setActiveDocId,
-  getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
-import { populateYDoc } from "../../src/server/mcp/document.js";
-import { resetInbox } from "../../src/server/mcp/awareness.js";
+import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
 let client: Client;
 

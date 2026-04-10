@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
+import React, { useEffect, useRef, useState } from "react";
 import { yUndoPluginKey } from "y-prosemirror";
 import { ToolbarButton } from "./ToolbarButton";
 

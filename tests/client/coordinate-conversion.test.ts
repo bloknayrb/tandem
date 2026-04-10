@@ -1,12 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  annotationToPmRange,
   flatOffsetToPmPos,
   pmPosToFlatOffset,
-  annotationToPmRange,
   relRangeToPmPositions,
 } from "../../src/client/positions";
-import { makeDoc, getFragment, makeAnnotation } from "../helpers/ydoc-factory";
 import { flatOffsetToRelPos } from "../../src/server/positions";
+import { getFragment, makeAnnotation, makeDoc } from "../helpers/ydoc-factory";
 
 // Minimal ProseMirror-compatible mock. Assumes single flat text run per block
 // (no inline marks). nodeSize = 1 (open) + text.length + 1 (close).

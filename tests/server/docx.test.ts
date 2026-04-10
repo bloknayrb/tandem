@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { htmlToYDoc, exportAnnotations } from "../../src/server/file-io/docx.js";
+import { exportAnnotations, htmlToYDoc } from "../../src/server/file-io/docx.js";
 import { getElementText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { getFragment, makeAnnotation } from "../helpers/ydoc-factory.js";

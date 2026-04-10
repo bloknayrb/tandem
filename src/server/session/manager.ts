@@ -1,11 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
+import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { SessionData } from "../../shared/types.js";
-import { SESSION_DIR } from "../platform.js";
-
-import { SESSION_MAX_AGE, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
+import { SESSION_DIR } from "../platform.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
 const RENAME_MAX_RETRIES = 3;

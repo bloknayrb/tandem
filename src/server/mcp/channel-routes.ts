@@ -1,12 +1,11 @@
 import type { Express, Request, Response } from "express";
-
-import type { Handler } from "./api-routes.js";
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { sseHandler } from "../events/sse.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import type { Handler } from "./api-routes.js";
 
 const pendingPermissions = new Map<
   string,

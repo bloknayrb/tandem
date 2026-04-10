@@ -1,5 +1,5 @@
+import type { PhrasingContent, Root, RootContent } from "mdast";
 import * as Y from "yjs";
-import type { Root, RootContent, PhrasingContent } from "mdast";
 
 /**
  * Convert an MDAST tree into Y.Doc XmlFragment elements.

@@ -1,10 +1,10 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as Y from "yjs";
 import {
-  DEFAULT_WS_PORT,
-  DEFAULT_MCP_PORT,
   CTRL_ROOM,
+  DEFAULT_MCP_PORT,
+  DEFAULT_WS_PORT,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,

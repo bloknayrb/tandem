@@ -1,48 +1,48 @@
-import fs from "fs/promises";
+import { randomUUID } from "node:crypto";
 import fsSync from "fs";
+import fs from "fs/promises";
 import path from "path";
 import type * as Y from "yjs";
-import { randomUUID } from "node:crypto";
-import { getOrCreateDocument, getDocument } from "../yjs/provider.js";
 import {
-  MAX_FILE_SIZE,
   CHARS_PER_PAGE,
   LARGE_FILE_PAGE_THRESHOLD,
-  VERY_LARGE_FILE_PAGE_THRESHOLD,
+  MAX_FILE_SIZE,
   SUPPORTED_EXTENSIONS,
+  VERY_LARGE_FILE_PAGE_THRESHOLD,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
-  Y_MAP_USER_AWARENESS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
+  Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { MCP_ORIGIN, attachObservers } from "../events/queue.js";
-import { getAdapter } from "../file-io/index.js";
-import { watchFile } from "../file-watcher.js";
-import { refreshAllRanges, validateRange, anchoredRange } from "../positions.js";
-import { pushNotification } from "../notifications.js";
-import { generateNotificationId } from "../../shared/utils.js";
 import type { Annotation } from "../../shared/types.js";
-import { loadMarkdown } from "../file-io/markdown.js";
+import { generateNotificationId } from "../../shared/utils.js";
+import { attachObservers, MCP_ORIGIN } from "../events/queue.js";
 import { loadDocx } from "../file-io/docx.js";
-import { htmlToYDoc } from "../file-io/docx-html.js";
 import { extractDocxComments, injectCommentsAsAnnotations } from "../file-io/docx-comments.js";
+import { htmlToYDoc } from "../file-io/docx-html.js";
+import { getAdapter } from "../file-io/index.js";
+import { loadMarkdown } from "../file-io/markdown.js";
+import { watchFile } from "../file-watcher.js";
+import { pushNotification } from "../notifications.js";
+import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
 import {
-  saveSession,
+  deleteSession,
+  isAutoSaveRunning,
   loadSession,
   restoreYDoc,
+  saveSession,
   sourceFileChanged,
-  deleteSession,
   startAutoSave,
-  isAutoSaveRunning,
 } from "../session/manager.js";
-import { extractText, detectFormat, docIdFromPath, populateYDoc } from "./document-model.js";
+import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
+import { detectFormat, docIdFromPath, extractText, populateYDoc } from "./document-model.js";
 import {
-  type OpenDoc,
-  getOpenDocs,
-  setActiveDocId,
-  broadcastOpenDocs,
   addDoc,
+  broadcastOpenDocs,
+  getOpenDocs,
+  type OpenDoc,
+  setActiveDocId,
 } from "./document-service.js";
 
 export { SUPPORTED_EXTENSIONS };

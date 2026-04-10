@@ -1,8 +1,8 @@
-import { Y_MAP_ANNOTATIONS, Y_MAP_CHAT, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
-import * as Y from "yjs";
 import fs from "fs/promises";
 import path from "path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import { Y_MAP_ANNOTATIONS, Y_MAP_CHAT, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
 // Isolate session tests in a unique temp directory to avoid races with other test files
 vi.mock("../../src/server/platform", async (importOriginal) => {
@@ -16,18 +16,18 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
-import {
-  saveSession,
-  loadSession,
-  restoreYDoc,
-  sourceFileChanged,
-  sessionKey,
-  deleteSession,
-  saveCtrlSession,
-  loadCtrlSession,
-  restoreCtrlDoc,
-} from "../../src/server/session/manager";
 import { SESSION_DIR } from "../../src/server/platform";
+import {
+  deleteSession,
+  loadCtrlSession,
+  loadSession,
+  restoreCtrlDoc,
+  restoreYDoc,
+  saveCtrlSession,
+  saveSession,
+  sessionKey,
+  sourceFileChanged,
+} from "../../src/server/session/manager";
 
 describe("Session persistence", () => {
   beforeAll(async () => {

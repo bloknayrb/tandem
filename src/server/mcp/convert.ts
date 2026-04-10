@@ -1,10 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
+import { atomicWrite } from "../file-io/index.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractMarkdown } from "./document-model.js";
-import { atomicWrite } from "../file-io/index.js";
-import { openFileByPath } from "./file-opener.js";
 import { getCurrentDoc } from "./document-service.js";
+import { openFileByPath } from "./file-opener.js";
 
 export interface ConvertResult {
   outputPath: string;

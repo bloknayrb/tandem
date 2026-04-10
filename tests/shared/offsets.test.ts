@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { headingPrefixLength, headingPrefix, FLAT_SEPARATOR } from "../../src/shared/offsets";
+import { describe, expect, it } from "vitest";
+import { FLAT_SEPARATOR, headingPrefix, headingPrefixLength } from "../../src/shared/offsets";
 
 describe("headingPrefixLength", () => {
   it("returns 0 for null/undefined/0", () => {

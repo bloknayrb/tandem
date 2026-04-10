@@ -1,7 +1,7 @@
 import { Extension } from "@tiptap/core";
+import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import type { Annotation } from "../../../shared/types";

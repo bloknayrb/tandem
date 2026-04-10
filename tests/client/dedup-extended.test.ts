@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { deduplicateDocList } from "../../src/client/hooks/useYjsSync.js";
 import type { DocListEntry } from "../../src/client/types.js";
 

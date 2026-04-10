@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
-import * as Y from "yjs";
 import fs from "fs/promises";
 import path from "path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import { CTRL_ROOM } from "../../src/shared/constants";
 
 // Isolate session tests in a unique temp directory to avoid races with other test files
@@ -16,14 +16,14 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
+import { SESSION_DIR } from "../../src/server/platform";
 import {
-  saveSession,
   deleteSession,
   listSessionFilePaths,
   saveCtrlSession,
+  saveSession,
   sessionKey,
 } from "../../src/server/session/manager";
-import { SESSION_DIR } from "../../src/server/platform";
 
 // Unique paths to avoid collisions with other tests
 const TEST_FILES = [

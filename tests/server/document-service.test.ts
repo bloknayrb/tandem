@@ -1,21 +1,21 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import {
-  getOpenDocs,
   addDoc,
-  removeDoc,
-  hasDoc,
-  docCount,
-  getActiveDocId,
-  setActiveDocId,
-  getCurrentDoc,
-  requireDocument,
-  toDocListEntry,
   broadcastOpenDocs,
   closeDocumentById,
+  docCount,
+  getActiveDocId,
+  getCurrentDoc,
+  getOpenDocs,
+  hasDoc,
+  removeDoc,
+  requireDocument,
+  setActiveDocId,
+  toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
-import type { OpenDoc } from "../../src/server/mcp/document-service.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
 // Mock session manager to avoid filesystem side effects

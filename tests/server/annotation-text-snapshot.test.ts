@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { createAnnotation, collectAnnotations } from "../../src/server/mcp/annotations.js";
+import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 
 function makeResult(from: number, to: number) {

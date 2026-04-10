@@ -1,8 +1,8 @@
-import { Y_MAP_CHAT } from "../../src/shared/constants.js";
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { generateMessageId } from "../../src/shared/utils.js";
+import { Y_MAP_CHAT } from "../../src/shared/constants.js";
 import type { ChatMessage } from "../../src/shared/types.js";
+import { generateMessageId } from "../../src/shared/utils.js";
 
 describe("generateMessageId", () => {
   it("produces msg_ prefixed IDs", () => {

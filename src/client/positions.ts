@@ -16,11 +16,11 @@
 
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
-import type { Annotation } from "../shared/types";
-import type { FlatOffset, PmPos, DocumentRange, RelativeRange } from "../shared/positions/types";
-import type { PmRangeResult } from "../shared/positions/index";
-import { toFlatOffset, toPmPos } from "../shared/positions/types";
 import { headingPrefixLength } from "../shared/offsets";
+import type { PmRangeResult } from "../shared/positions/index";
+import type { DocumentRange, FlatOffset, PmPos, RelativeRange } from "../shared/positions/types";
+import { toFlatOffset, toPmPos } from "../shared/positions/types";
+import type { Annotation } from "../shared/types";
 
 // ---------------------------------------------------------------------------
 // Low-level: flat offset ↔ ProseMirror position

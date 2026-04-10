@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseSuggestion } from "../../src/client/panels/AnnotationCard.js";
 
 describe("parseSuggestion", () => {

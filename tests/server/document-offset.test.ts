@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { resolveOffset, extractText } from "../../src/server/mcp/document.js";
+import { extractText, resolveOffset } from "../../src/server/mcp/document.js";
 import { validateRange } from "../../src/server/positions.js";
-import { makeDoc, makeEmptyDoc, makeMarkdownDoc, getFragment } from "../helpers/ydoc-factory.js";
+import { getFragment, makeDoc, makeEmptyDoc, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 

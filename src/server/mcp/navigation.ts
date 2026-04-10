@@ -1,17 +1,17 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { Y_MAP_AWARENESS } from "../../shared/constants.js";
 import type { FlatOffset } from "../../shared/positions/types.js";
 import { toFlatOffset } from "../../shared/positions/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import { getCurrentDoc, extractText } from "./document.js";
+import { extractText, getCurrentDoc } from "./document.js";
 import {
-  mcpSuccess,
-  mcpError,
-  noDocumentError,
   escapeRegex,
   getErrorMessage,
+  mcpError,
+  mcpSuccess,
+  noDocumentError,
   withErrorBoundary,
 } from "./response.js";
 

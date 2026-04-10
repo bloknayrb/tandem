@@ -1,19 +1,19 @@
+import { randomUUID } from "node:crypto";
 import path from "path";
 import * as Y from "yjs";
-import { getOrCreateDocument, setShouldKeepDocument } from "../yjs/provider.js";
-import {
-  saveSession,
-  deleteSession,
-  saveCtrlSession,
-  loadCtrlSession,
-  restoreCtrlDoc,
-  listSessionFilePaths,
-  stopAutoSave,
-} from "../session/manager.js";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../shared/constants.js";
 import { MCP_ORIGIN } from "../events/queue.js";
-import { randomUUID } from "node:crypto";
 import { unwatchFile } from "../file-watcher.js";
+import {
+  deleteSession,
+  listSessionFilePaths,
+  loadCtrlSession,
+  restoreCtrlDoc,
+  saveCtrlSession,
+  saveSession,
+  stopAutoSave,
+} from "../session/manager.js";
+import { getOrCreateDocument, setShouldKeepDocument } from "../yjs/provider.js";
 
 // --- Multi-document state ---
 

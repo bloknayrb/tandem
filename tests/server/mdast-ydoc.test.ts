@@ -1,9 +1,9 @@
-import { describe, it, expect, afterEach } from "vitest";
+import type { Root } from "mdast";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { mdastToYDoc, yDocToMdast } from "../../src/server/file-io/mdast-ydoc.js";
 import { getElementText } from "../../src/server/mcp/document.js";
 import { getFragment } from "../helpers/ydoc-factory.js";
-import type { Root } from "mdast";
 
 let doc: Y.Doc;
 

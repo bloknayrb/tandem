@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  parseCommentMetadata,
   calculateCommentRanges,
+  type DocxComment,
   extractDocxComments,
   injectCommentsAsAnnotations,
-  type DocxComment,
+  parseCommentMetadata,
 } from "../../src/server/file-io/docx-comments.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";

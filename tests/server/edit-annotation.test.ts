@@ -2,21 +2,22 @@
  * Tests for tandem_editAnnotation MCP tool.
  * Uses in-memory MCP client to exercise the actual tool handler.
  */
-import { describe, it, expect, beforeEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { registerAnnotationTools, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { MCP_ORIGIN } from "../../src/server/events/queue.js";
+import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
+import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
   addDoc,
+  getOpenDocs,
   removeDoc,
   setActiveDocId,
-  getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
-import { populateYDoc } from "../../src/server/mcp/document.js";
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
