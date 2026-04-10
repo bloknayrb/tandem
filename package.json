@@ -1,6 +1,6 @@
 {
   "name": "tandem-editor",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Collaborative AI-human document editor with MCP tool integration for Claude",
   "repository": {
     "type": "git",
