@@ -394,6 +394,7 @@ export function SidePanel({
   // without making the effect depend on it — activeAnnotationId changes
   // already have their own scroll effect below, and we don't want to
   // double-fire scrolls on annotation click.
+  const listRef = useRef<HTMLDivElement>(null);
   const didMountFiltersRef = useRef(false);
   const activeAnnotationIdRef = useRef(activeAnnotationId);
   activeAnnotationIdRef.current = activeAnnotationId;
@@ -445,7 +446,6 @@ export function SidePanel({
     return () => clearTimeout(timer);
   }, [activeAnnotationId]);
 
-  const listRef = useRef<HTMLDivElement>(null);
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
   const activeReviewAnn =
     reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
