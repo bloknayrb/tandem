@@ -14,6 +14,10 @@ export default defineConfig({
     command: "npm run dev:standalone",
     url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
     reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
+    // 180s absorbs cold-start jitter on slow machines (tsx watch JIT compile +
+    // Vite pre-bundle + freePort() serial inside concurrently); see #230.
+    // A creeping baseline over ~60s should be investigated rather than bumped
+    // further — track root-cause follow-up in the issue linked from #230.
+    timeout: 180_000,
   },
 });
