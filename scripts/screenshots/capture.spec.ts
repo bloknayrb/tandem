@@ -14,7 +14,11 @@ import { expect, Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { cleanupAllOpenDocuments, McpTestClient, switchToAnnotationsTab } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  McpTestClient,
+  switchToAnnotationsTab,
+} from "../../tests/e2e/helpers";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
