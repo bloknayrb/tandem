@@ -337,7 +337,9 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
 test("side panel keeps active annotation in view on filter change", async ({ page }) => {
   // The sibling branch of the filter-change effect: when an annotation is
   // active (review mode), the list should scroll *it* into view instead of
-  // jumping to the top (#202).
+  // jumping to the top (#202). We assert both that the card is visible AND
+  // that scrollTop > 0 — the latter proves the scroll-to-top fallback did
+  // not fire (which would be a silent regression).
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await Promise.all(
     Array.from({ length: 15 }, (_, i) =>
@@ -353,30 +355,37 @@ test("side panel keeps active annotation in view on filter change", async ({ pag
   await page.goto("/");
   await switchToAnnotationsTab(page);
 
-  const list = page.locator('[role="list"][aria-label="Annotations"]');
-  await expect(list).toBeVisible();
+  const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
+  await expect(scrollContainer).toBeVisible();
   const cards = page.locator("[data-testid^='annotation-card-']");
   await expect(cards).toHaveCount(15);
 
-  // Activate a card near the bottom. Clicking the card sets activeAnnotationId.
+  // Activate an annotation near the bottom. Review mode + Tab navigation is
+  // the only code path that sets activeAnnotationId from the side panel —
+  // clicking a card just scrolls the editor via scrollToAnnotation(), it
+  // does NOT mark the annotation as active.
+  await page.locator("[data-testid='review-mode-btn']").click();
+  await expect(page.locator("text=Reviewing 1 /")).toBeVisible({ timeout: 5_000 });
+  for (let i = 0; i < 12; i++) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(page.locator("text=Reviewing 13 /")).toBeVisible({ timeout: 2_000 });
   const targetCard = cards.nth(12);
-  await targetCard.scrollIntoViewIfNeeded();
-  await targetCard.click();
 
-  // Scroll the list far away from the active card.
-  await list.evaluate((el) => {
+  // Reset the scroll so the effect has to work to put the card back in view.
+  await scrollContainer.evaluate((el) => {
     el.scrollTop = 0;
   });
 
   // Change the type filter. The effect should scroll the active card into
-  // view instead of resetting to scrollTop=0.
+  // view instead of resetting to scrollTop = 0.
   await page.locator("[data-testid='filter-type']").selectOption("comment");
 
-  // The active card must end up inside the list's visible area.
+  // (a) The active card must end up inside the scroll container's visible area.
   await expect
     .poll(
       async () => {
-        const listBox = await list.boundingBox();
+        const listBox = await scrollContainer.boundingBox();
         const cardBox = await targetCard.boundingBox();
         if (!listBox || !cardBox) return false;
         return cardBox.y + cardBox.height > listBox.y && cardBox.y < listBox.y + listBox.height;
@@ -384,6 +393,11 @@ test("side panel keeps active annotation in view on filter change", async ({ pag
       { timeout: 2_000 },
     )
     .toBe(true);
+
+  // (b) scrollTop must be nonzero — proves the scroll-to-top fallback did NOT
+  // run. Without this, the test passes trivially in tall viewports.
+  const finalScroll = await scrollContainer.evaluate((el) => el.scrollTop);
+  expect(finalScroll).toBeGreaterThan(0);
 });
 
 test("dwell-time slider value persists across reload", async ({ page }) => {
