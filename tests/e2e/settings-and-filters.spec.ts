@@ -105,24 +105,23 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
 });
 
 test("bulk-confirm resets when filter-type changes", async ({ page }) => {
+  // Seed 3 annotations so `pending.length > 1` still holds after the filter
+  // change — otherwise the bulk-actions row unmounts entirely and the
+  // confirm button disappears as a side effect of the parent unmounting,
+  // NOT because the `setBulkConfirm(null)` effect ran. That would let
+  // `filterType` be silently dropped from the effect's deps and still pass.
+  //
+  // Layout: 2 comments + 1 highlight. Filter to "comment" → 2 pending
+  // remain → bulk row stays mounted → confirm must be cleared by the
+  // filter-change effect specifically.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  // Two annotations within the title so both definitely target valid
-  // ranges. "Test Document" spans offsets 2–14; split into "Test" [2,6]
-  // and "Document" [7,15].
-  await mcp.callTool("tandem_comment", {
-    from: 2,
-    to: 6,
-    text: "First",
-  });
-  await mcp.callTool("tandem_highlight", {
-    from: 7,
-    to: 15,
-    color: "yellow",
-  });
+  await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "First" });
+  await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Second" });
+  await mcp.callTool("tandem_highlight", { from: 16, to: 24, color: "yellow" });
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
     data?: { annotations?: unknown[] };
   };
-  expect(annotations?.data?.annotations?.length ?? 0).toBeGreaterThanOrEqual(2);
+  expect(annotations?.data?.annotations?.length ?? 0).toBeGreaterThanOrEqual(3);
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
@@ -132,10 +131,39 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   const confirm = page.locator("[data-testid='bulk-confirm-btn']");
   await expect(confirm).toBeVisible({ timeout: 2_000 });
 
-  // Change type filter — same regression class, different axis.
-  // The first annotation is a comment; filtering to "highlight" changes
-  // what's pending-visible, which must dismiss the stale confirm dialog.
-  await page.locator("[data-testid='filter-type']").selectOption("highlight");
+  // Change type filter — comment filter leaves 2 pending comments, so the
+  // bulk actions row remains mounted and the confirm must be dismissed by
+  // the filter-change effect specifically (not by parent unmount).
+  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  // Sanity check: the bulk row must still be mounted — otherwise this test
+  // regresses to the same false-positive it was written to avoid.
+  await expect(bulkDismiss).toBeVisible({ timeout: 2_000 });
+  await expect(confirm).not.toBeVisible({ timeout: 2_000 });
+});
+
+test("bulk-confirm resets when filter-status changes", async ({ page }) => {
+  // Third axis of the filter-change deps guard. All annotations start as
+  // pending so filter-status "pending" keeps all 3 pending visible — the
+  // bulk row stays mounted and the confirm reset must fire specifically
+  // because the `filterStatus` dep fired, not as a parent-unmount artifact.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "First" });
+  await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Second" });
+  await mcp.callTool("tandem_comment", { from: 16, to: 24, text: "Third" });
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const bulkAccept = page.locator("[data-testid='bulk-accept-btn']");
+  await expect(bulkAccept).toBeVisible({ timeout: 15_000 });
+  await bulkAccept.click();
+  const confirm = page.locator("[data-testid='bulk-confirm-btn']");
+  await expect(confirm).toBeVisible({ timeout: 2_000 });
+
+  // Filter to "pending" — all 3 annotations are still pending so the bulk
+  // row stays mounted; the confirm reset can only come from the filter-
+  // change effect firing on the `filterStatus` dep.
+  await page.locator("[data-testid='filter-status']").selectOption("pending");
+  await expect(bulkAccept).toBeVisible({ timeout: 2_000 });
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
 
@@ -602,6 +630,85 @@ test("side panel keeps active annotation in view on filter change", async ({ pag
   // run. Without this, the test passes trivially in tall viewports.
   const finalScroll = await scrollContainer.evaluate((el) => el.scrollTop);
   expect(finalScroll).toBeGreaterThan(0);
+});
+
+test("side panel scrolls to top (+ logs warn) when active annotation is filtered out", async ({
+  page,
+}) => {
+  // Branch 3 of the filter-change scroll-reset effect: an annotation is
+  // active (via review-mode Tab navigation), then the user changes filters
+  // in a way that excludes that annotation. The card is no longer in the
+  // DOM, so `querySelector` misses — the effect must fall through to
+  // scroll-to-top AND log a `[tandem]`-prefixed warn so "scroll jumped"
+  // bug reports are diagnosable.
+  const consoleWarnings: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "warning") consoleWarnings.push(msg.text());
+  });
+
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  // Seed 14 comments + 1 highlight (15 total — matches the sibling overflow
+  // tests at :480-523 where 15 is the known-good count for overflowing the
+  // scroll container across viewport sizes). The highlight is what we'll
+  // filter to so every active comment gets filtered out.
+  await Promise.all([
+    ...Array.from({ length: 14 }, (_, i) =>
+      mcp.callTool("tandem_comment", {
+        from: 2,
+        to: 6,
+        text: `note ${i}`,
+        textSnapshot: "Test",
+      }),
+    ),
+    mcp.callTool("tandem_highlight", {
+      from: 7,
+      to: 15,
+      color: "yellow",
+      textSnapshot: "Document",
+    }),
+  ]);
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
+  await expect(scrollContainer).toBeVisible();
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(15);
+
+  // Enter review mode and Tab to a middle comment so it becomes the active
+  // annotation. Review-mode Tab is the only path that sets activeAnnotationId
+  // from the side panel.
+  await page.locator("[data-testid='review-mode-btn']").click();
+  await expect(page.locator("text=Reviewing 1 /")).toBeVisible({ timeout: 5_000 });
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(page.locator("text=Reviewing 6 /")).toBeVisible({ timeout: 2_000 });
+
+  // Scroll the list down so we can detect the scroll-to-top fallback.
+  await scrollContainer.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const scrollBefore = await scrollContainer.evaluate((el) => el.scrollTop);
+  expect(scrollBefore).toBeGreaterThan(0);
+
+  // Filter to "highlight" — the active annotation is a comment, so its
+  // card leaves the DOM. The effect must log the warn and scroll to 0.
+  await page.locator("[data-testid='filter-type']").selectOption("highlight");
+
+  await expect
+    .poll(async () => scrollContainer.evaluate((el) => el.scrollTop), {
+      timeout: 2_000,
+    })
+    .toBe(0);
+
+  // The fallback warn must have fired. This is the diagnostic-log contract
+  // added in commit 52576aa — losing it means "scroll jumped unexpectedly"
+  // becomes invisible in bug reports again.
+  const matched = consoleWarnings.some((m) =>
+    /\[tandem\] SidePanel: active annotation .* not found on filter change/.test(m),
+  );
+  expect(matched).toBe(true);
 });
 
 test("dwell-time slider value persists across reload", async ({ page }) => {

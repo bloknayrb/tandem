@@ -6,6 +6,7 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
+import type { ToolResponse } from "../../src/shared/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,6 +115,11 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
   // control to the caller only after the click has resolved.
 }
 
+/** Success-payload shape for `tandem_status` consumed by `cleanupAllOpenDocuments`. */
+type StatusData = {
+  openDocuments?: Array<{ documentId: string }>;
+};
+
 /**
  * Close every document the server thinks is open. Safe to call in afterEach
  * even when a test opened nothing — the loop just no-ops on an empty list.
@@ -121,10 +127,11 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
  */
 export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void> {
   try {
-    const status = (await mcp.callTool("tandem_status")) as {
-      data?: { openDocuments?: Array<{ documentId: string }> };
-    };
-    const docs = status?.data?.openDocuments ?? [];
+    // McpTestClient.callTool throws on SDK-level errors but returns the parsed
+    // envelope on success. Server errors still come through as `{ error: true, ... }`
+    // in the envelope — the `error === false` narrow picks the success arm.
+    const status = (await mcp.callTool("tandem_status")) as ToolResponse<StatusData>;
+    const docs = status.error === false ? (status.data.openDocuments ?? []) : [];
     await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
   } catch (err) {
     // Server may be shutting down — log so genuine regressions aren't silently
