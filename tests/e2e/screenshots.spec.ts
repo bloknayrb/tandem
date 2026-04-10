@@ -10,11 +10,11 @@
  * is `sample/welcome.md`, which ships with the repo, so output is stable
  * across runs as long as that file doesn't change.
  */
-import { expect, test } from "@playwright/test";
+import { expect, Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { McpTestClient, switchToAnnotationsTab } from "./helpers";
+import { cleanupAllOpenDocuments, McpTestClient, switchToAnnotationsTab } from "./helpers";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,32 +28,18 @@ test.skip(!process.env.SCREENSHOTS, "manual screenshot capture — run with SCRE
 let mcp: McpTestClient;
 
 test.beforeAll(() => {
-  if (!fs.existsSync(screenshotsDir)) {
-    fs.mkdirSync(screenshotsDir, { recursive: true });
-  }
+  fs.mkdirSync(screenshotsDir, { recursive: true });
 });
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
   // Start with a clean slate — close anything previous tests left open.
-  const status = (await mcp.callTool("tandem_status")) as {
-    data?: { openDocuments?: Array<{ documentId: string }> };
-  };
-  const docs = status?.data?.openDocuments ?? [];
-  await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
+  await cleanupAllOpenDocuments(mcp);
 });
 
 test.afterEach(async () => {
-  try {
-    const status = (await mcp.callTool("tandem_status")) as {
-      data?: { openDocuments?: Array<{ documentId: string }> };
-    };
-    const docs = status?.data?.openDocuments ?? [];
-    await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
-  } catch {
-    // Server may have shut down
-  }
+  await cleanupAllOpenDocuments(mcp);
   await mcp.close();
 });
 
@@ -83,17 +69,20 @@ async function openWithAnnotations() {
   });
 }
 
-test("01-editor-overview", async ({ page }) => {
-  await openWithAnnotations();
+/** Load the app, wait for the editor + first annotation card, settle animations. */
+async function gotoAnnotatedEditor(page: Page) {
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
   await switchToAnnotationsTab(page);
-  // Wait for annotations to render in the side panel.
   await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
     timeout: 10_000,
   });
-  // Let any fade/transition animations settle.
   await page.waitForTimeout(500);
+}
+
+test("01-editor-overview", async ({ page }) => {
+  await openWithAnnotations();
+  await gotoAnnotatedEditor(page);
   await page.screenshot({
     path: path.join(screenshotsDir, "01-editor-overview.png"),
     fullPage: false,
@@ -102,13 +91,7 @@ test("01-editor-overview", async ({ page }) => {
 
 test("03-side-panel", async ({ page }) => {
   await openWithAnnotations();
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await switchToAnnotationsTab(page);
-  await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
-    timeout: 10_000,
-  });
-  await page.waitForTimeout(500);
+  await gotoAnnotatedEditor(page);
   // Crop to just the side panel region. The panel is on the right side of
   // the window; compute a bounding box from the first annotation card's
   // ancestor container.

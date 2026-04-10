@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
+import { TANDEM_MODE_KEY, TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import {
+  cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
@@ -17,15 +19,7 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  try {
-    const status = (await mcp.callTool("tandem_status")) as {
-      data?: { openDocuments?: Array<{ documentId: string }> };
-    };
-    const docs = status?.data?.openDocuments ?? [];
-    await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
-  } catch {
-    // Server may have shut down
-  }
+  await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   cleanupFixtureDir(tmpDir);
 });
@@ -161,14 +155,14 @@ test("Solo/Tandem mode toggle switches via toolbar", async ({ page }) => {
   await soloBtn.click();
   await expect(soloBtn).toHaveAttribute("aria-pressed", "true");
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "false");
-  const soloSaved = await page.evaluate(() => localStorage.getItem("tandem:mode"));
+  const soloSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
   expect(soloSaved).toBe("solo");
 
   // Switch back.
   await tandemBtn.click();
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
-  const tandemSaved = await page.evaluate(() => localStorage.getItem("tandem:mode"));
+  const tandemSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
   expect(tandemSaved).toBe("tandem");
 });
 
@@ -193,10 +187,10 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   await expect(page.locator("[data-testid='right-panel-resize-handle']")).toHaveCount(1);
   await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0);
 
-  const threePanelSaved = await page.evaluate(() => {
-    const raw = localStorage.getItem("tandem:settings");
+  const threePanelSaved = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as { layout?: string }).layout : null;
-  });
+  }, TANDEM_SETTINGS_KEY);
   expect(threePanelSaved).toBe("three-panel");
 
   // Switch back.
@@ -225,10 +219,10 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
-  const savedDwell = await page.evaluate(() => {
-    const raw = localStorage.getItem("tandem:settings");
+  const savedDwell = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as { selectionDwellMs?: number }).selectionDwellMs : null;
-  });
+  }, TANDEM_SETTINGS_KEY);
   expect(savedDwell).toBe(2000);
 
   // Reload and confirm the slider shows the saved value.

@@ -113,3 +113,20 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
   // The display toggle is synchronous CSS; no wait needed, but we return
   // control to the caller only after the click has resolved.
 }
+
+/**
+ * Close every document the server thinks is open. Safe to call in afterEach
+ * even when a test opened nothing — the loop just no-ops on an empty list.
+ * Swallows errors because the server may already be shutting down.
+ */
+export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void> {
+  try {
+    const status = (await mcp.callTool("tandem_status")) as {
+      data?: { openDocuments?: Array<{ documentId: string }> };
+    };
+    const docs = status?.data?.openDocuments ?? [];
+    await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
+  } catch {
+    // Server may have shut down
+  }
+}
