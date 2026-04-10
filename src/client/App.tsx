@@ -2,8 +2,6 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DISCONNECT_DEBOUNCE_MS,
-  LEFT_PANEL_WIDTH_KEY,
-  PANEL_WIDTH_KEY,
   PANEL_WIDTH_KEYS,
   PROLONGED_DISCONNECT_MS,
   TANDEM_MODE_DEFAULT,
@@ -123,7 +121,8 @@ const PANEL_MIN_WIDTH = 200;
 const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
 
-function loadPanelWidth(key: string): number {
+function loadPanelWidth(side: PanelSide): number {
+  const key = PANEL_WIDTH_KEYS[side];
   try {
     const saved = localStorage.getItem(key);
     if (saved) {
@@ -169,15 +168,16 @@ export default function App() {
       return TandemModeSchema.safeParse(saved).success
         ? (saved as TandemMode)
         : TANDEM_MODE_DEFAULT;
-    } catch {
+    } catch (err) {
+      console.warn(`[tandem] localStorage unavailable reading ${TANDEM_MODE_KEY}:`, err);
       return TANDEM_MODE_DEFAULT;
     }
   });
   useEffect(() => {
     try {
       localStorage.setItem(TANDEM_MODE_KEY, tandemMode);
-    } catch {
-      // localStorage unavailable (incognito/storage-disabled)
+    } catch (err) {
+      console.warn(`[tandem] failed to persist ${TANDEM_MODE_KEY}:`, err);
     }
   }, [tandemMode]);
 
@@ -251,10 +251,8 @@ export default function App() {
     setActiveAnnotationId(annotationId);
   }, []);
 
-  const [panelWidth, setPanelWidth] = useState<number>(() => loadPanelWidth(PANEL_WIDTH_KEY));
-  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() =>
-    loadPanelWidth(LEFT_PANEL_WIDTH_KEY),
-  );
+  const [panelWidth, setPanelWidth] = useState<number>(() => loadPanelWidth("right"));
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadPanelWidth("left"));
 
   const editorMaxWidth =
     settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;

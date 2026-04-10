@@ -43,11 +43,16 @@ export type PanelSide = "left" | "right";
  * bare constants makes the "both handles write to the same key" regression
  * (#228) structurally impossible — you can't accidentally map both sides to
  * the same value at a callsite.
+ *
+ * Uses `as const satisfies Record<PanelSide, string>` so the value type stays
+ * as the literal strings rather than widening to `string` — this preserves
+ * the persistence-key identity at every callsite while still enforcing
+ * exhaustive coverage of `PanelSide`.
  */
-export const PANEL_WIDTH_KEYS: Record<PanelSide, string> = {
+export const PANEL_WIDTH_KEYS = {
   left: LEFT_PANEL_WIDTH_KEY,
   right: PANEL_WIDTH_KEY,
-};
+} as const satisfies Record<PanelSide, string>;
 export const SELECTION_DWELL_DEFAULT_MS = 1000;
 export const SELECTION_DWELL_MIN_MS = 500;
 export const SELECTION_DWELL_MAX_MS = 3000;

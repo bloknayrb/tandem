@@ -390,11 +390,14 @@ export function SidePanel({
   // annotation is active, scroll it into view instead of jumping to the top,
   // so the user doesn't lose their place mid-review (#202).
   //
-  // Using refs to skip the initial mount and to read activeAnnotationId
-  // without making the effect depend on it — activeAnnotationId changes
-  // already have their own scroll effect below, and we don't want to
-  // double-fire scrolls on annotation click.
-  const listRef = useRef<HTMLDivElement>(null);
+  // Reads `activeAnnotationId` via a ref so the effect depends only on the
+  // filter state. Review-mode Tab navigation mutates `activeAnnotationId`
+  // without changing filters — including it in the deps would re-fire the
+  // scroll-reset on every review keystroke. The sibling effect below at
+  // `activeAnnotationId`-change handles the scroll-to-active flow for that
+  // path. The `didMountFiltersRef` guard skips the initial mount so opening
+  // a document doesn't trigger a spurious reset.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const didMountFiltersRef = useRef(false);
   const activeAnnotationIdRef = useRef(activeAnnotationId);
   activeAnnotationIdRef.current = activeAnnotationId;
@@ -418,7 +421,7 @@ export function SidePanel({
         `[tandem] SidePanel: active annotation ${currentActive} not found on filter change; scrolling to top`,
       );
     }
-    listRef.current?.scrollTo({ top: 0 });
+    scrollContainerRef.current?.scrollTo({ top: 0 });
   }, [filterType, filterAuthor, filterStatus]);
 
   // Keep review index in bounds when annotations change
@@ -448,6 +451,14 @@ export function SidePanel({
         card.classList.add("tandem-annotation-flash");
         const onEnd = () => card.classList.remove("tandem-annotation-flash");
         card.addEventListener("animationend", onEnd, { once: true });
+      } else {
+        // Mirrors the filter-change effect's fallback — without this a card
+        // missing from the DOM (panel hidden, annotation filtered out,
+        // listRef-wrong-element-class regression) would silently no-op and
+        // "my clicked annotation didn't scroll" becomes invisible.
+        console.warn(
+          `[tandem] SidePanel: active annotation ${activeAnnotationId} not found after 50ms delay; scroll-to-card skipped`,
+        );
       }
     }, 50);
     return () => clearTimeout(timer);
@@ -459,7 +470,7 @@ export function SidePanel({
 
   return (
     <div
-      ref={listRef}
+      ref={scrollContainerRef}
       data-testid="annotation-list-scroll-container"
       style={{
         width: "100%",
