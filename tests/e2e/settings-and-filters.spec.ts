@@ -139,3 +139,101 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   await page.locator("[data-testid='filter-type']").selectOption("highlight");
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
+
+test("Solo/Tandem mode toggle switches via toolbar", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  const soloBtn = page.locator("[data-testid='mode-solo-btn']");
+  const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
+  await expect(soloBtn).toBeVisible({ timeout: 5_000 });
+  await expect(tandemBtn).toBeVisible();
+
+  // Default is tandem.
+  await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
+
+  // Switch to solo. Assert via localStorage (race-free) + aria-pressed
+  // (visible state). Avoid asserting through tandem_status because Y.Map
+  // propagation over Hocuspocus is async.
+  await soloBtn.click();
+  await expect(soloBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(tandemBtn).toHaveAttribute("aria-pressed", "false");
+  const soloSaved = await page.evaluate(() => localStorage.getItem("tandem:mode"));
+  expect(soloSaved).toBe("solo");
+
+  // Switch back.
+  await tandemBtn.click();
+  await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
+  const tandemSaved = await page.evaluate(() => localStorage.getItem("tandem:mode"));
+  expect(tandemSaved).toBe("tandem");
+});
+
+test("layout switches between tabbed and three-panel", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  // Tabbed layout (default) mounts exactly one resize handle.
+  await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0);
+
+  // Switch to three-panel.
+  await page.locator("[data-testid='settings-btn']").click();
+  await expect(page.locator("[data-testid='settings-popover']")).toBeVisible();
+  await page.locator("[data-testid='layout-three-panel-btn']").click();
+
+  // Three-panel mounts separate left and right handles and drops the
+  // tabbed-layout handle.
+  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='right-panel-resize-handle']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0);
+
+  const threePanelSaved = await page.evaluate(() => {
+    const raw = localStorage.getItem("tandem:settings");
+    return raw ? (JSON.parse(raw) as { layout?: string }).layout : null;
+  });
+  expect(threePanelSaved).toBe("three-panel");
+
+  // Switch back.
+  await page.locator("[data-testid='layout-tabbed-btn']").click();
+  await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0);
+});
+
+test("dwell-time slider value persists across reload", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const slider = page.locator("[data-testid='dwell-time-slider']");
+  await expect(slider).toBeVisible({ timeout: 2_000 });
+
+  // Programmatically set the slider to a known value and fire the input event.
+  // Playwright's fill() works for range inputs, but a native event dispatch
+  // is more reliable since some handlers listen on "input" rather than "change".
+  await slider.evaluate((el) => {
+    const input = el as HTMLInputElement;
+    input.value = "2000";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  const savedDwell = await page.evaluate(() => {
+    const raw = localStorage.getItem("tandem:settings");
+    return raw ? (JSON.parse(raw) as { selectionDwellMs?: number }).selectionDwellMs : null;
+  });
+  expect(savedDwell).toBe(2000);
+
+  // Reload and confirm the slider shows the saved value.
+  await page.reload();
+  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await page.locator("[data-testid='settings-btn']").click();
+  const reloadedSlider = page.locator("[data-testid='dwell-time-slider']");
+  await expect(reloadedSlider).toHaveValue("2000");
+});
