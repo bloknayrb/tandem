@@ -4,12 +4,14 @@ import {
   DISCONNECT_DEBOUNCE_MS,
   LEFT_PANEL_WIDTH_KEY,
   PANEL_WIDTH_KEY,
+  PANEL_WIDTH_KEYS,
   PROLONGED_DISCONNECT_MS,
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
   Y_MAP_DWELL_MS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
+  type PanelSide,
 } from "../shared/constants";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor, TandemMode } from "../shared/types";
@@ -120,8 +122,6 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
 const PANEL_MIN_WIDTH = 200;
 const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
-
-type PanelSide = "left" | "right";
 
 function loadPanelWidth(key: string): number {
   try {
@@ -286,7 +286,7 @@ export default function App() {
     const startX = e.clientX;
     const startWidth = side === "left" ? leftPanelWidthRef.current : panelWidthRef.current;
     const setter = side === "left" ? setLeftPanelWidth : setPanelWidth;
-    const storageKey = side === "left" ? LEFT_PANEL_WIDTH_KEY : PANEL_WIDTH_KEY;
+    const storageKey = PANEL_WIDTH_KEYS[side];
     let latestWidth = startWidth;
 
     document.body.style.userSelect = "none";
