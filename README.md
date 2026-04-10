@@ -2,7 +2,7 @@
   <img src="docs/assets/banner.png" alt="Tandem — Collaborative AI-Human Document Editor" width="800">
 </p>
 
-An AI document reviewer — open a progress report, RFP, or compliance filing and Claude reviews it alongside you in real time. Highlights, comments, suggestions, and questions appear as first-class annotations you accept, dismiss, or discuss. The original file is never modified unless you save.
+Have you ever been working on a document (or any multi-paragraph piece of text) with Claude and wondered aloud, "Why isn't there an easier way to do this?" Well look no further, because now there is! My goal with this was to try to create an experience kind of similar to editing a Google doc with another person except that that other person is Claude Code. 
 
 ![Tandem editor showing a document with annotations, side panel, and Claude's presence](docs/screenshots/01-editor-overview.png)
 
