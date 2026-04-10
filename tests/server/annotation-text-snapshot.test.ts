@@ -30,17 +30,15 @@ describe("annotation textSnapshot", () => {
     expect(stored?.textSnapshot).toBeUndefined();
   });
 
-  it("stores textSnapshot alongside priority", () => {
+  it("stores textSnapshot on flag annotations", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "flag", makeResult(5, 20), "Needs review", {
-      priority: "urgent",
       textSnapshot: "flagged text",
     });
     const annotations = collectAnnotations(map);
     const stored = annotations.find((a) => a.id === id);
     expect(stored?.textSnapshot).toBe("flagged text");
-    expect(stored?.priority).toBe("urgent");
   });
 });
 

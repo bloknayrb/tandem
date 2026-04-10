@@ -47,8 +47,6 @@ Choose the right type for each finding:
 - **\`tandem_suggest\`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
 - **\`tandem_flag\`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
 
-**Priority:** Set \`priority: 'urgent'\` on any annotation type when the finding is critical.
-
 **User-created types:** \`question\` and \`overlay\` annotations are created by users, not Claude. When you see a \`question\` in \`tandem_checkInbox\` or \`tandem_getAnnotations\`, respond with a \`tandem_comment\` on the same range or \`tandem_reply\` for conversational answers.
 
 ## Collaboration Mode
@@ -60,7 +58,7 @@ Check \`mode\` from \`tandem_status\` or \`tandem_checkInbox\` and adapt:
 
 ## Reacting to Document Events
 
-Selection events arrive via \`tandem_checkInbox\` with \`meta.respond_via = "tandem_reply"\`. When the user holds a selection, briefly acknowledge what they highlighted via \`tandem_reply\` — don't annotate unless asked. Use \`tandem_reply\` for any document-context reaction (chat messages, selections, question annotations); reserve terminal output for non-document work the user explicitly requests. In Solo mode, hold reactions until the user sends a chat message.
+Selection events can reach you two ways. Over the real-time channel they arrive as notifications with \`meta.respond_via = "tandem_reply"\`. When polling via \`tandem_checkInbox\`, the current selection shows up under \`activity.selectedText\` (no \`meta\` field — that only exists on channel pushes). Either way, when the user holds a selection, briefly acknowledge what they highlighted via \`tandem_reply\` — don't annotate unless asked. Use \`tandem_reply\` for any document-context reaction (chat messages, selections, question annotations); reserve terminal output for non-document work the user explicitly requests. In Solo mode, hold reactions until the user sends a chat message.
 
 ## Collaboration Etiquette
 

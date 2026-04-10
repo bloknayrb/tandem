@@ -167,7 +167,6 @@ describe("tandem_editAnnotation", () => {
     const ydoc = setupDoc("edit-8", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original", {
-      priority: "urgent",
       textSnapshot: "Hello",
     });
 
@@ -175,7 +174,6 @@ describe("tandem_editAnnotation", () => {
 
     const ann = map.get(id) as Annotation;
     expect(ann.content).toBe("Edited");
-    expect(ann.priority).toBe("urgent");
     expect(ann.textSnapshot).toBe("Hello");
     expect(ann.type).toBe("comment");
     expect(ann.author).toBe("claude");

@@ -264,7 +264,7 @@ Check editor status: running state, open documents, active document.
 ```
 
 **Notes:**
-- `mode` reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold non-urgent annotations until mode switches back to `"tandem"`).
+- `mode` reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold annotations until mode switches back to `"tandem"`).
 
 ---
 
@@ -432,7 +432,6 @@ Flag a text range for attention (e.g., issues, concerns, or items needing review
 | `to` | number | Yes | End position (character offset) |
 | `note` | string | No | Reason for flagging |
 | `documentId` | string | No | Target document ID (defaults to active document) |
-| `priority` | `'normal'` \| `'urgent'` | No | Annotation priority. Flags and questions are implicitly treated as higher priority. |
 | `textSnapshot` | string | No | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:** `{ annotationId: string }`
@@ -799,7 +798,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 - `userActions`: annotations created by the user (highlights, comments, questions).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
-- `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold non-urgent annotations and wait for the mode to switch to `"tandem"` before resuming.
+- `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 
 ---
 

@@ -133,7 +133,7 @@ Wavy underline on the annotated text. Proposes a text replacement. The side pane
 
 ### Flag
 
-Marks text for urgent attention. Flags can carry priority levels. Use flags for items that need immediate action rather than just review.
+Marks text for urgent attention. Use flags for items that need immediate action rather than just review.
 
 ### Question
 

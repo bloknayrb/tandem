@@ -22,7 +22,6 @@ export const AnnotationTypeSchema = z.enum([
   "flag",
 ]);
 export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
-export const AnnotationPrioritySchema = z.enum(["normal", "urgent"]);
 export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
 export const TandemModeSchema = z.enum(["solo", "tandem"]);
@@ -45,7 +44,6 @@ export const ToolErrorCodeSchema = z.enum([
 
 export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
-export type AnnotationPriority = z.infer<typeof AnnotationPrioritySchema>;
 export type TandemMode = z.infer<typeof TandemModeSchema>;
 export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
@@ -64,7 +62,6 @@ export interface Annotation {
   status: AnnotationStatus;
   timestamp: number;
   color?: HighlightColor;
-  priority?: AnnotationPriority;
   /** Snapshot of the annotated document text at creation time. Truncated to 200 chars. */
   textSnapshot?: string;
   /** Timestamp of last edit to the annotation content. */
