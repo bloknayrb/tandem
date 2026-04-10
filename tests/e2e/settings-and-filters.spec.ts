@@ -356,6 +356,50 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
     .toBe(0);
 });
 
+test("Clear-filters button also resets scroll to top", async ({ page }) => {
+  // The Clear button is a sibling trigger for the same scroll-reset effect.
+  // Guards against a regression where the effect is wired to selectOption
+  // events but not to the Clear path that sets all three filters at once.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await Promise.all(
+    Array.from({ length: 15 }, (_, i) =>
+      mcp.callTool("tandem_comment", {
+        from: 2,
+        to: 6,
+        text: `note ${i}`,
+        textSnapshot: "Test",
+      }),
+    ),
+  );
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
+  await expect(scrollContainer).toBeVisible();
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(15);
+
+  // Set a filter so the Clear button appears.
+  await page.locator("[data-testid='filter-type']").selectOption("comment");
+
+  // Scroll to the bottom.
+  await scrollContainer.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const scrollBefore = await scrollContainer.evaluate((el) => el.scrollTop);
+  expect(scrollBefore).toBeGreaterThan(0);
+
+  // Click Clear — the filter-change effect should reset scroll to 0.
+  // (There's no testid on the Clear button; target by visible text.)
+  await page.getByRole("button", { name: "Clear" }).click();
+
+  await expect
+    .poll(async () => scrollContainer.evaluate((el) => el.scrollTop), {
+      timeout: 2_000,
+    })
+    .toBe(0);
+});
+
 test("side panel keeps active annotation in view on filter change", async ({ page }) => {
   // The sibling branch of the filter-change effect: when an annotation is
   // active (review mode), the list should scroll *it* into view instead of
