@@ -494,7 +494,7 @@ export function SidePanel({
             alignItems: "center",
           }}
         >
-          <span>
+          <span data-testid="held-banner">
             {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
           </span>
           <button
@@ -649,6 +649,7 @@ export function SidePanel({
         />
         {hasFilters && (
           <button
+            data-testid="clear-filters-btn"
             onClick={() => {
               setFilterType("all");
               setFilterAuthor("all");

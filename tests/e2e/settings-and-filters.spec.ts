@@ -193,7 +193,7 @@ test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
 
   // In Tandem mode the held banner is absent — the annotation is visible.
-  const heldBanner = page.getByText(/\d+ annotation(s)? held/);
+  const heldBanner = page.getByTestId("held-banner");
   await expect(heldBanner).toHaveCount(0);
 
   // Switch to solo. Assert via localStorage (race-free) + aria-pressed
@@ -209,6 +209,8 @@ test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations
   // contract, not just the localStorage bit. Catches regressions where the
   // toggle updates storage but fails to drive the useModeGate hook.
   await expect(heldBanner).toBeVisible({ timeout: 2_000 });
+  // Preserve the count + pluralization contract the old regex locator asserted.
+  await expect(heldBanner).toHaveText(/\d+ annotation(s)? held/);
 
   // Switch back.
   await tandemBtn.click();
@@ -556,8 +558,7 @@ test("Clear-filters button also resets scroll to top", async ({ page }) => {
   expect(scrollBefore).toBeGreaterThan(0);
 
   // Click Clear — the filter-change effect should reset scroll to 0.
-  // (There's no testid on the Clear button; target by visible text.)
-  await page.getByRole("button", { name: "Clear" }).click();
+  await page.getByTestId("clear-filters-btn").click();
 
   await expect
     .poll(async () => scrollContainer.evaluate((el) => el.scrollTop), {
