@@ -78,7 +78,7 @@ When to use each type, with concrete decision rules:
 - **`tandem_highlight`**: Visual marker. Green = good/verified. Red = problem. Yellow = needs attention. Use when the finding is self-evident from color + short note.
 - **`tandem_comment`**: Observation or explanation requiring more than one sentence. Use when you need to explain reasoning.
 - **`tandem_suggest`**: Specific text replacement. **Prefer over `tandem_comment` when you can provide replacement text** — gives the user one-click accept/reject.
-- **`tandem_flag`**: Blocking issue requiring user action before document ships. Factual errors, compliance risks, missing required content. Visible in `urgent-only` interruption mode.
+- **`tandem_flag`**: Blocking issue requiring user action before document ships. Factual errors, compliance risks, missing required content. Always surfaces (flags and questions are exempt from Solo mode hold).
 - **`question` and `overlay`**: User-created annotation types. Claude cannot create these. When you see a `question` in `tandem_checkInbox`, respond with a `tandem_comment` on the same range or `tandem_reply` for conversational answers.
 
 Historical: the `priority` field on annotations has been removed. Urgency is now implicit in annotation `type` — flags and questions always surface; comments and suggestions are held in Solo mode and shown in Tandem mode.
