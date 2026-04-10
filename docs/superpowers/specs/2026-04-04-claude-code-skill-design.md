@@ -81,13 +81,12 @@ When to use each type, with concrete decision rules:
 - **`tandem_flag`**: Blocking issue requiring user action before document ships. Factual errors, compliance risks, missing required content. Visible in `urgent-only` interruption mode.
 - **`question` and `overlay`**: User-created annotation types. Claude cannot create these. When you see a `question` in `tandem_checkInbox`, respond with a `tandem_comment` on the same range or `tandem_reply` for conversational answers.
 
-Priority: set `priority: 'urgent'` on any annotation type when the finding is critical and the user is in `urgent-only` mode.
+Historical: the `priority` field on annotations has been removed. Urgency is now implicit in annotation `type` — flags and questions always surface; comments and suggestions are held in Solo mode and shown in Tandem mode.
 
-#### Section 5: Interruption modes (10 lines)
-Check `interruptionMode` from `tandem_status` or `tandem_checkInbox`:
-- **All** (default): Annotate freely.
-- **Urgent**: Only create `tandem_flag` and annotations with `priority: 'urgent'`. Hold everything else.
-- **Paused**: Hold all new annotations. Continue reading and preparing findings, but don't push them until mode changes.
+#### Section 5: Solo/Tandem mode (10 lines)
+Check `mode` from `tandem_status` or `tandem_checkInbox`:
+- **Tandem** (default): Annotate freely.
+- **Solo**: Hold all annotations until the user switches to Tandem. Flags and questions are exempt — they always surface regardless of mode.
 
 #### Section 6: Collaboration etiquette (10 lines)
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait.
