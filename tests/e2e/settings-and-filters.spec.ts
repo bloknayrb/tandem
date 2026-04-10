@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
-import { cleanupFixtureDir, createFixtureDir, McpTestClient } from "./helpers";
+import {
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+  switchToAnnotationsTab,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -74,6 +79,7 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
   });
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
     timeout: 10_000,
   });
@@ -115,6 +121,7 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   });
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
     timeout: 10_000,
   });

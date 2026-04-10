@@ -1,6 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import path from "path";
-import { McpTestClient, createFixtureDir, cleanupFixtureDir } from "./helpers";
+import {
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+  switchToAnnotationsTab,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -72,6 +77,7 @@ test("annotation card appears in side panel", async ({ page }) => {
   await openWithComment(tmpDir, "Nice heading");
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   const card = page.locator("[data-testid^='annotation-card-']");
   await expect(card.first()).toBeVisible({ timeout: 10_000 });
   await expect(card.first()).toContainText("Nice heading");
@@ -81,6 +87,7 @@ test("accept annotation changes status", async ({ page }) => {
   await openWithComment(tmpDir, "Looks good");
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   const acceptBtn = page.locator("[data-testid^='accept-btn-']");
   await expect(acceptBtn.first()).toBeVisible({ timeout: 10_000 });
   await acceptBtn.first().click();
@@ -95,6 +102,7 @@ test("dismiss annotation changes status", async ({ page }) => {
   await openWithComment(tmpDir, "Dismiss me");
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   const dismissBtn = page.locator("[data-testid^='dismiss-btn-']");
   await expect(dismissBtn.first()).toBeVisible({ timeout: 10_000 });
   await dismissBtn.first().click();
@@ -115,6 +123,7 @@ test("suggestion accept applies text change", async ({ page }) => {
   });
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   const acceptBtn = page.locator("[data-testid^='accept-btn-']");
   await expect(acceptBtn.first()).toBeVisible({ timeout: 10_000 });
   await acceptBtn.first().click();
@@ -171,6 +180,7 @@ test("review mode navigates with keyboard", async ({ page }) => {
   });
 
   await page.goto("/");
+  await switchToAnnotationsTab(page);
   const cards = page.locator("[data-testid^='annotation-card-']");
   await expect(cards.first()).toBeVisible({ timeout: 10_000 });
 

@@ -1,10 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
+import type { Page } from "@playwright/test";
 import fs from "fs";
-import path from "path";
 import os from "os";
+import path from "path";
 import { fileURLToPath } from "url";
+import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,4 +82,34 @@ export function cleanupFixtureDir(dir: string): void {
   } catch {
     // Best effort
   }
+}
+
+/**
+ * Switch the side panel to the Annotations tab.
+ *
+ * Wave 4 changed the default `primaryTab` setting to "chat", so in the
+ * tabbed layout the SidePanel (which contains annotation cards) is mounted
+ * but hidden via `display: none` behind the Chat tab. Any E2E test that
+ * asserts `annotation-card-*` elements are VISIBLE must call this helper
+ * after `page.goto("/")` — otherwise the cards exist in the DOM but
+ * Playwright reports them as hidden.
+ *
+ * **Silent-failure warning**: because the cards are still mounted when
+ * hidden, `locator(...).count()` will return a non-zero value even without
+ * this helper. Tests that assert on `count` instead of `toBeVisible` will
+ * pass misleadingly. Prefer `toBeVisible` for annotation-card assertions,
+ * or call this helper regardless.
+ *
+ * In three-panel layout mode, both panels are rendered side-by-side with
+ * static headers instead of tab buttons — there is no `annotations-tab`
+ * testid in that mode. The helper detects this and no-ops, so tests that
+ * switch layout mid-flight still work.
+ */
+export async function switchToAnnotationsTab(page: Page): Promise<void> {
+  const tab = page.locator("[data-testid='annotations-tab']");
+  // In three-panel mode the tab button does not exist — bail silently.
+  if ((await tab.count()) === 0) return;
+  await tab.click();
+  // The display toggle is synchronous CSS; no wait needed, but we return
+  // control to the caller only after the click has resolved.
 }

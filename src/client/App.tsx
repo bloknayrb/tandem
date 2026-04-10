@@ -1,38 +1,38 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
-import { Editor } from "./editor/Editor";
-import { SidePanel } from "./panels/SidePanel";
-import { ChatPanel } from "./panels/ChatPanel";
-import { StatusBar } from "./status/StatusBar";
-import { Toolbar } from "./editor/toolbar/Toolbar";
-import { DocumentTabs } from "./tabs/DocumentTabs";
-import { ReviewSummary } from "./panels/ReviewSummary";
-import { HelpModal } from "./components/HelpModal";
-import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
-import { ToastContainer } from "./components/ToastContainer";
-import { OnboardingTutorial } from "./components/OnboardingTutorial";
-import { SettingsPopover } from "./components/SettingsPopover";
-import { useTandemSettings } from "./hooks/useTandemSettings";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DISCONNECT_DEBOUNCE_MS,
+  PROLONGED_DISCONNECT_MS,
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
-  PROLONGED_DISCONNECT_MS,
   Y_MAP_DWELL_MS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
-import type { TandemMode, CapturedAnchor } from "../shared/types";
-import { TandemModeSchema } from "../shared/types";
-import { pmSelectionToFlat } from "./positions";
 import { toPmPos } from "../shared/positions/types";
-import { useModeGate } from "./hooks/useModeGate";
+import type { CapturedAnchor, TandemMode } from "../shared/types";
+import { TandemModeSchema } from "../shared/types";
+import { HelpModal } from "./components/HelpModal";
+import { OnboardingTutorial } from "./components/OnboardingTutorial";
+import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
+import { SettingsPopover } from "./components/SettingsPopover";
+import { ToastContainer } from "./components/ToastContainer";
+import { Editor } from "./editor/Editor";
+import { Toolbar } from "./editor/toolbar/Toolbar";
 import { useFileDrop } from "./hooks/useFileDrop";
+import { useModeGate } from "./hooks/useModeGate";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useTabOrder } from "./hooks/useTabOrder";
+import { useTandemSettings } from "./hooks/useTandemSettings";
 import { useTutorial } from "./hooks/useTutorial";
 import { useYjsSync } from "./hooks/useYjsSync";
+import { ChatPanel } from "./panels/ChatPanel";
+import { ReviewSummary } from "./panels/ReviewSummary";
+import { SidePanel } from "./panels/SidePanel";
+import { pmSelectionToFlat } from "./positions";
+import { StatusBar } from "./status/StatusBar";
+import { DocumentTabs } from "./tabs/DocumentTabs";
 import type { DocListEntry, OpenTab } from "./types";
 
 export type { DocListEntry, OpenTab };
@@ -680,6 +680,7 @@ export default function App() {
               }}
             >
               <button
+                data-testid="annotations-tab"
                 onClick={() => setShowChat(false)}
                 style={{
                   flex: 1,
@@ -718,6 +719,7 @@ export default function App() {
                 )}
               </button>
               <button
+                data-testid="chat-tab"
                 onMouseDown={captureSelectionForChat}
                 onClick={() => setShowChat(true)}
                 style={{
