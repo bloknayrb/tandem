@@ -264,7 +264,7 @@ Check editor status: running state, open documents, active document.
 ```
 
 **Notes:**
-- `mode` reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold non-urgent annotations until mode switches back to `"tandem"`).
+- `mode` reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold annotations until mode switches back to `"tandem"`).
 
 ---
 
@@ -363,6 +363,7 @@ Highlight text with a color and optional note.
 | `color` | enum | yes | `yellow`, `red`, `green`, `blue`, `purple` |
 | `note` | string | no | Optional note for the highlight |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:**
 ```json
@@ -386,6 +387,7 @@ Add a comment attached to a text range. Appears in the side panel.
 | `to` | number | yes | End position |
 | `text` | string | yes | Comment text |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:**
 ```json
@@ -405,6 +407,7 @@ Propose a text replacement (tracked-change style). User sees it as accept/reject
 | `newText` | string | yes | Suggested replacement text |
 | `reason` | string | no | Reason for the suggestion |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:**
 ```json
@@ -432,7 +435,6 @@ Flag a text range for attention (e.g., issues, concerns, or items needing review
 | `to` | number | Yes | End position (character offset) |
 | `note` | string | No | Reason for flagging |
 | `documentId` | string | No | Target document ID (defaults to active document) |
-| `priority` | `'normal'` \| `'urgent'` | No | Annotation priority. Flags and questions are implicitly treated as higher priority. |
 | `textSnapshot` | string | No | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
 **Returns:** `{ annotationId: string }`
@@ -522,7 +524,7 @@ Edit the content of an existing annotation. Only pending annotations can be edit
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "edited": true, "editedAt": 1710936500000 }
+{ "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "editedAt": 1710936500000 }
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), error if annotation not found or not pending.
@@ -799,7 +801,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 - `userActions`: annotations created by the user (highlights, comments, questions).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
-- `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold non-urgent annotations and wait for the mode to switch to `"tandem"` before resuming.
+- `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 
 ---
 

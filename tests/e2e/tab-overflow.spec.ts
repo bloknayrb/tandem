@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
 import path from "path";
-import { McpTestClient, createFixtureDir, cleanupFixtureDir } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -12,15 +17,7 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  try {
-    const status = (await mcp.callTool("tandem_status")) as {
-      data?: { openDocuments?: Array<{ documentId: string }> };
-    };
-    const docs = status?.data?.openDocuments ?? [];
-    await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
-  } catch {
-    // Server may have shut down
-  }
+  await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   cleanupFixtureDir(tmpDir);
 });

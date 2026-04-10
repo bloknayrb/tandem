@@ -386,6 +386,44 @@ export function SidePanel({
     setBulkConfirm(null);
   }, [filterType, filterAuthor, filterStatus]);
 
+  // When filters change, reset the annotation list scroll. If a review
+  // annotation is active, scroll it into view instead of jumping to the top,
+  // so the user doesn't lose their place mid-review (#202).
+  //
+  // Reads `activeAnnotationId` via a ref so the effect depends only on the
+  // filter state. Review-mode Tab navigation mutates `activeAnnotationId`
+  // without changing filters — including it in the deps would re-fire the
+  // scroll-reset on every review keystroke. The sibling effect below at
+  // `activeAnnotationId`-change handles the scroll-to-active flow for that
+  // path. The `didMountFiltersRef` guard skips the initial mount so opening
+  // a document doesn't trigger a spurious reset.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const didMountFiltersRef = useRef(false);
+  const activeAnnotationIdRef = useRef(activeAnnotationId);
+  activeAnnotationIdRef.current = activeAnnotationId;
+  useEffect(() => {
+    if (!didMountFiltersRef.current) {
+      didMountFiltersRef.current = true;
+      return;
+    }
+    const currentActive = activeAnnotationIdRef.current;
+    if (currentActive) {
+      const card = document.querySelector(`[data-testid="annotation-card-${currentActive}"]`);
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        return;
+      }
+      // Card not in the DOM after a filter change — either the active
+      // annotation was filtered out or the render hasn't committed yet.
+      // Fall through to scroll-to-top but log so "scroll jumped
+      // unexpectedly" bug reports are diagnosable.
+      console.warn(
+        `[tandem] SidePanel: active annotation ${currentActive} not found on filter change; scrolling to top`,
+      );
+    }
+    scrollContainerRef.current?.scrollTo({ top: 0 });
+  }, [filterType, filterAuthor, filterStatus]);
+
   // Keep review index in bounds when annotations change
   useEffect(() => {
     if (reviewMode && reviewIndexRef.current >= reviewTargets.length) {
@@ -413,18 +451,27 @@ export function SidePanel({
         card.classList.add("tandem-annotation-flash");
         const onEnd = () => card.classList.remove("tandem-annotation-flash");
         card.addEventListener("animationend", onEnd, { once: true });
+      } else {
+        // Mirrors the filter-change effect's fallback — without this a card
+        // missing from the DOM (panel hidden, annotation filtered out,
+        // listRef-wrong-element-class regression) would silently no-op and
+        // "my clicked annotation didn't scroll" becomes invisible.
+        console.warn(
+          `[tandem] SidePanel: active annotation ${activeAnnotationId} not found after 50ms delay; scroll-to-card skipped`,
+        );
       }
     }, 50);
     return () => clearTimeout(timer);
   }, [activeAnnotationId]);
 
-  const listRef = useRef<HTMLDivElement>(null);
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
   const activeReviewAnn =
     reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
 
   return (
     <div
+      ref={scrollContainerRef}
+      data-testid="annotation-list-scroll-container"
       style={{
         width: "100%",
         background: "#fafafa",
@@ -606,7 +653,9 @@ export function SidePanel({
               setFilterType("all");
               setFilterAuthor("all");
               setFilterStatus("all");
-              listRef.current?.scrollTo({ top: 0 });
+              // Scroll reset is handled centrally by the filter-change
+              // useEffect above — it also scrolls active review annotations
+              // into view instead of jumping to the top.
             }}
             style={{
               background: "none",
@@ -698,12 +747,7 @@ export function SidePanel({
       )}
 
       {/* Annotation list */}
-      <div
-        ref={listRef}
-        style={{ padding: "8px 16px", flex: 1 }}
-        role="list"
-        aria-label="Annotations"
-      >
+      <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
         {filtered.length === 0 ? (
           <p role="status" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
             {hasFilters

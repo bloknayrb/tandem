@@ -24,6 +24,35 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
 export const TANDEM_MODE_DEFAULT = "tandem" as const;
 export const TANDEM_MODE_KEY = "tandem:mode";
 export const TANDEM_SETTINGS_KEY = "tandem:settings";
+// Panel-width localStorage keys.
+//
+// NOTE: these use legacy hyphen naming (vs the neighboring colon convention
+// `tandem:mode`/`tandem:settings`) because they predate the colon scheme and
+// changing the strings would invalidate every existing user's saved widths.
+// Do not "fix" the style — the key string is the persistence contract.
+//
+// Right-side panel width is shared between the tabbed layout and the
+// three-panel right panel. The left key only applies in three-panel mode.
+export const PANEL_WIDTH_KEY = "tandem-panel-width";
+export const LEFT_PANEL_WIDTH_KEY = "tandem-left-panel-width";
+
+export type PanelSide = "left" | "right";
+
+/**
+ * Maps a panel side to its localStorage key. Using a Record instead of two
+ * bare constants makes the "both handles write to the same key" regression
+ * (#228) structurally impossible — you can't accidentally map both sides to
+ * the same value at a callsite.
+ *
+ * Uses `as const satisfies Record<PanelSide, string>` so the value type stays
+ * as the literal strings rather than widening to `string` — this preserves
+ * the persistence-key identity at every callsite while still enforcing
+ * exhaustive coverage of `PanelSide`.
+ */
+export const PANEL_WIDTH_KEYS = {
+  left: LEFT_PANEL_WIDTH_KEY,
+  right: PANEL_WIDTH_KEY,
+} as const satisfies Record<PanelSide, string>;
 export const SELECTION_DWELL_DEFAULT_MS = 1000;
 export const SELECTION_DWELL_MIN_MS = 500;
 export const SELECTION_DWELL_MAX_MS = 3000;

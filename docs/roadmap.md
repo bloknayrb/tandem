@@ -149,19 +149,20 @@ Implemented in PR #147:
 
 ### 8c: Review Mode — PARTIALLY DONE
 
-Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool (28 tools total).
+Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool.
 
 Remaining:
 - Configurable threshold banner ("Claude has 14 suggestions. Review in sequence or filter by type.")
 - Document dimming in review mode
 
-### 8d: Interruption Model — PARTIALLY DONE
+### 8d: Interruption Model — DONE
 
-- Claude never interrupts while user is actively typing (3-second debounce — already implemented)
-- Three modes implemented in StatusBar: All, Urgent, Paused
-- Client broadcasts `mode` to `CTRL_ROOM`'s Y.Map('userAwareness') — Claude reads it via `tandem_status` and `tandem_checkInbox`
-- Queued annotations delivered on pause via side panel badge
-- High-priority findings (factual errors) use distinct yellow caution indicator
+Superseded by the Wave 4 Solo/Tandem redesign (PRs #226, #227). The All/Urgent/Paused three-mode model was retired in favor of a binary Solo/Tandem toggle exposed in the toolbar:
+
+- Claude never interrupts while the user is actively typing (3-second debounce)
+- Two modes in the toolbar toggle: **Tandem** (default; full collaboration) and **Solo** (hold all pending Claude annotations; only respond to chat)
+- Client broadcasts `mode` to `CTRL_ROOM`'s Y.Map('userAwareness') — Claude reads it via `tandem_status` and `tandem_checkInbox`, both of which return `mode: "solo" | "tandem"`
+- Held annotations surface via the side panel banner (`{n} annotation(s) held`) with a one-click "Show all" affordance that flips back to Tandem
 
 ### 8e: Error Handling — PARTIALLY DONE
 

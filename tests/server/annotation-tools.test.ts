@@ -56,17 +56,6 @@ describe("tandem_highlight tool logic", () => {
       expect(stored.color).toBe(color);
     }
   });
-
-  it("supports priority field", () => {
-    const ydoc = setupDoc("hl-3", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "", {
-      priority: "urgent",
-    });
-
-    const stored = map.get(id) as Annotation;
-    expect(stored.priority).toBe("urgent");
-  });
 });
 
 describe("tandem_comment tool logic", () => {

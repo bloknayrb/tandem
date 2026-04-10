@@ -2,12 +2,14 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DISCONNECT_DEBOUNCE_MS,
+  PANEL_WIDTH_KEYS,
   PROLONGED_DISCONNECT_MS,
   TANDEM_MODE_DEFAULT,
   TANDEM_MODE_KEY,
   Y_MAP_DWELL_MS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
+  type PanelSide,
 } from "../shared/constants";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor, TandemMode } from "../shared/types";
@@ -118,7 +120,25 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
 const PANEL_MIN_WIDTH = 200;
 const PANEL_MAX_WIDTH = 600;
 const PANEL_DEFAULT_WIDTH = 300;
-const PANEL_WIDTH_KEY = "tandem-panel-width";
+
+function loadPanelWidth(side: PanelSide): number {
+  const key = PANEL_WIDTH_KEYS[side];
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (Number.isFinite(parsed)) {
+        return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
+      }
+      // Non-finite saved value — fall through and warn so corrupt storage
+      // is diagnosable instead of silently reverting to the default.
+      console.warn(`[tandem] ignoring non-numeric panel width for ${key}: ${saved}`);
+    }
+  } catch (err) {
+    console.warn(`[tandem] localStorage unavailable reading ${key}:`, err);
+  }
+  return PANEL_DEFAULT_WIDTH;
+}
 
 export default function App() {
   const {
@@ -148,15 +168,16 @@ export default function App() {
       return TandemModeSchema.safeParse(saved).success
         ? (saved as TandemMode)
         : TANDEM_MODE_DEFAULT;
-    } catch {
+    } catch (err) {
+      console.warn(`[tandem] localStorage unavailable reading ${TANDEM_MODE_KEY}:`, err);
       return TANDEM_MODE_DEFAULT;
     }
   });
   useEffect(() => {
     try {
       localStorage.setItem(TANDEM_MODE_KEY, tandemMode);
-    } catch {
-      // localStorage unavailable (incognito/storage-disabled)
+    } catch (err) {
+      console.warn(`[tandem] failed to persist ${TANDEM_MODE_KEY}:`, err);
     }
   }, [tandemMode]);
 
@@ -230,20 +251,8 @@ export default function App() {
     setActiveAnnotationId(annotationId);
   }, []);
 
-  const [panelWidth, setPanelWidth] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(PANEL_WIDTH_KEY);
-      if (saved) {
-        const parsed = parseInt(saved, 10);
-        if (Number.isFinite(parsed)) {
-          return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
-        }
-      }
-    } catch {
-      // localStorage unavailable (incognito/storage-disabled)
-    }
-    return PANEL_DEFAULT_WIDTH;
-  });
+  const [panelWidth, setPanelWidth] = useState<number>(() => loadPanelWidth("right"));
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadPanelWidth("left"));
 
   const editorMaxWidth =
     settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;
@@ -251,6 +260,8 @@ export default function App() {
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
+  const leftPanelWidthRef = useRef(leftPanelWidth);
+  leftPanelWidthRef.current = leftPanelWidth;
   const dragListenersRef = useRef<{
     move: (e: MouseEvent) => void;
     up: () => void;
@@ -268,21 +279,24 @@ export default function App() {
     };
   }, []);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+  const handleResizeStart = useCallback((e: React.MouseEvent, side: PanelSide) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = panelWidthRef.current;
+    const startWidth = side === "left" ? leftPanelWidthRef.current : panelWidthRef.current;
+    const setter = side === "left" ? setLeftPanelWidth : setPanelWidth;
+    const storageKey = PANEL_WIDTH_KEYS[side];
     let latestWidth = startWidth;
 
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
 
     const onMouseMove = (ev: MouseEvent) => {
-      latestWidth = Math.max(
-        PANEL_MIN_WIDTH,
-        Math.min(PANEL_MAX_WIDTH, startWidth - (ev.clientX - startX)),
-      );
-      setPanelWidth(latestWidth);
+      const delta = ev.clientX - startX;
+      // The left panel's handle sits on its right edge (drag right = wider).
+      // The right panel's handle sits on its left edge (drag right = narrower).
+      const next = side === "left" ? startWidth + delta : startWidth - delta;
+      latestWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, next));
+      setter(latestWidth);
     };
 
     const onMouseUp = () => {
@@ -292,9 +306,9 @@ export default function App() {
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
       try {
-        localStorage.setItem(PANEL_WIDTH_KEY, String(latestWidth));
-      } catch {
-        // localStorage unavailable
+        localStorage.setItem(storageKey, String(latestWidth));
+      } catch (err) {
+        console.warn(`[tandem] failed to persist ${storageKey}:`, err);
       }
     };
 
@@ -409,7 +423,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${panelWidth}px`,
+              width: `${leftPanelWidth}px`,
               borderRight: "1px solid #e5e7eb",
             }}
           >
@@ -462,11 +476,12 @@ export default function App() {
           </div>
           {/* Left resize handle */}
           <div
+            data-testid="left-panel-resize-handle"
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize left panel"
             tabIndex={0}
-            onMouseDown={handleResizeStart}
+            onMouseDown={(e) => handleResizeStart(e, "left")}
             style={{
               width: "4px",
               cursor: "col-resize",
@@ -523,11 +538,12 @@ export default function App() {
           </div>
           {/* Right resize handle */}
           <div
+            data-testid="right-panel-resize-handle"
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize right panel"
             tabIndex={0}
-            onMouseDown={handleResizeStart}
+            onMouseDown={(e) => handleResizeStart(e, "right")}
             style={{
               width: "4px",
               cursor: "col-resize",
@@ -648,7 +664,7 @@ export default function App() {
             aria-orientation="vertical"
             aria-label="Resize panel"
             tabIndex={0}
-            onMouseDown={handleResizeStart}
+            onMouseDown={(e) => handleResizeStart(e, "right")}
             style={{
               width: "4px",
               cursor: "col-resize",

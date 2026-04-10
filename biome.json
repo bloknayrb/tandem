@@ -19,6 +19,7 @@
     "includes": [
       "src/**/*.{ts,tsx,json}",
       "tests/**/*.{ts,tsx}",
+      "scripts/**/*.{ts,tsx}",
       "*.{ts,json}",
       "!dist/**",
       "!node_modules/**",

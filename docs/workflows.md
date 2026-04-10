@@ -310,7 +310,6 @@ Claude: tandem_getContext({ from: 120, to: 135, documentId: "contract-review-x1y
 Claude: tandem_flag({
   from: 120, to: 135,
   note: "Imported comment flagged this figure. Cross-checked: the correct amount per Q3 report is $4.2M, not $3.8M.",
-  priority: "urgent"
 })
 ```
 

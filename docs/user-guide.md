@@ -72,9 +72,11 @@ The bottom bar shows:
 
 - **Connection state** — Green when connected, with reconnect attempt count and elapsed time during disconnects. A prominent banner appears after 30 seconds of continuous disconnect.
 - **Document count** — How many documents are currently open.
-- **Claude's activity** — What Claude is doing ("Reviewing Cost Summary...", idle, etc.).
-- **Interruption mode** — Controls which annotations surface immediately. See [Interruption Modes](#interruption-modes).
 - **Display name** — Your name as it appears to Claude. Click to change it (stored in localStorage).
+- **Review Only badge** — Appears when the active document is read-only (e.g. an imported `.docx`).
+- **Claude's activity** — What Claude is doing ("Reviewing Cost Summary...", idle, etc.).
+
+Claude collaboration mode (**Solo** / **Tandem**) lives in the toolbar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
 
 ### Toast Notifications
 
@@ -131,7 +133,7 @@ Wavy underline on the annotated text. Proposes a text replacement. The side pane
 
 ### Flag
 
-Marks text for urgent attention. Flags can carry priority levels. Use flags for items that need immediate action rather than just review.
+Marks text for urgent attention. Use flags for items that need immediate action rather than just review.
 
 ### Question
 

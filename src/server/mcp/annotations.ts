@@ -11,7 +11,6 @@ import type { Annotation, AnnotationType, HighlightColor } from "../../shared/ty
 import {
   AnnotationTypeSchema,
   AnnotationStatusSchema,
-  AnnotationPrioritySchema,
   HighlightColorSchema,
   AuthorSchema,
   AnnotationActionSchema,
@@ -164,9 +163,6 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
-      priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
-      ),
       textSnapshot: z
         .string()
         .optional()
@@ -176,7 +172,7 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_highlight",
-      async ({ from: rawFrom, to: rawTo, color, note, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, color, note, documentId, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -189,7 +185,6 @@ export function registerAnnotationTools(server: McpServer): void {
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "highlight", result, note || "", {
           color: color as HighlightColor,
-          ...(priority ? { priority } : {}),
           textSnapshot: snap,
         });
         return mcpSuccess({ annotationId: id });
@@ -208,9 +203,6 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
-      priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
-      ),
       textSnapshot: z
         .string()
         .optional()
@@ -220,7 +212,7 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({ from: rawFrom, to: rawTo, text, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, text, documentId, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -232,7 +224,6 @@ export function registerAnnotationTools(server: McpServer): void {
         }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
-          ...(priority ? { priority } : {}),
           textSnapshot: snap,
         });
         return mcpSuccess({ annotationId: id });
@@ -252,9 +243,6 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
-      priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
-      ),
       textSnapshot: z
         .string()
         .optional()
@@ -264,7 +252,7 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_suggest",
-      async ({ from: rawFrom, to: rawTo, newText, reason, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, newText, reason, documentId, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -281,7 +269,7 @@ export function registerAnnotationTools(server: McpServer): void {
           "suggestion",
           result,
           JSON.stringify({ newText, reason: reason || "" }),
-          { ...(priority ? { priority } : {}), textSnapshot: snap },
+          { textSnapshot: snap },
         );
         return mcpSuccess({ annotationId: id });
       },
@@ -299,9 +287,6 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
-      priority: AnnotationPrioritySchema.optional().describe(
-        "Annotation priority. Set to 'urgent' for critical issues that should be visible even when the user has interruption mode set to urgent-only. Flags and questions are implicitly urgent.",
-      ),
       textSnapshot: z
         .string()
         .optional()
@@ -311,7 +296,7 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_flag",
-      async ({ from: rawFrom, to: rawTo, note, documentId, priority, textSnapshot }) => {
+      async ({ from: rawFrom, to: rawTo, note, documentId, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -323,7 +308,6 @@ export function registerAnnotationTools(server: McpServer): void {
         }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "flag", result, note || "", {
-          ...(priority ? { priority } : {}),
           textSnapshot: snap,
         });
         return mcpSuccess({ annotationId: id });
