@@ -126,7 +126,9 @@ export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void>
     };
     const docs = status?.data?.openDocuments ?? [];
     await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
-  } catch {
-    // Server may have shut down
+  } catch (err) {
+    // Server may be shutting down — log so genuine regressions aren't silently
+    // swallowed by an afterEach hook.
+    console.warn("cleanupAllOpenDocuments failed:", err);
   }
 }
