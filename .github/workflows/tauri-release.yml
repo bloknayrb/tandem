@@ -105,3 +105,14 @@ jobs:
           prerelease: false
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+  release-check:
+    needs: build-tauri
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all builds succeeded
+        if: needs.build-tauri.result != 'success'
+        run: |
+          echo "::error::Some platform builds failed. Check the matrix jobs before publishing the release."
+          exit 1
