@@ -554,3 +554,112 @@ fn show_no_claude_dialog(handle: &tauri::AppHandle) {
         .title("Claude Not Found")
         .show(|_| {});
 }
+
+/// Prompt the user to install an available update. Returns true if they accept.
+/// This is intentionally a sync `fn`, NOT `async fn` — `blocking_show()` blocks
+/// the calling thread waiting for the OS dialog. This is safe because:
+/// 1. Tauri uses a multi-threaded Tokio runtime (default)
+/// 2. This is only called from spawned async tasks, never the main thread
+/// Do NOT make this async — `blocking_show()` on an async runtime thread will deadlock.
+fn show_update_available_dialog(app: &tauri::AppHandle, version: &str) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    app.dialog()
+        .message(format!(
+            "Tandem v{version} is available.\n\n\
+             Would you like to update now? The application will restart after installing."
+        ))
+        .title("Update Available")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancel)
+        .blocking_show()
+}
+
+/// Inform the user they're on the latest version (manual check feedback).
+fn show_up_to_date_dialog(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    app.dialog()
+        .message(format!(
+            "You're running the latest version of Tandem (v{}).",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .title("No Updates Available")
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
+}
+
+/// Show an error dialog for failed update checks (manual check feedback only).
+fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    app.dialog()
+        .message(format!(
+            "Could not check for updates.\n\n\
+             Error: {error}\n\n\
+             Please try again later or check your internet connection."
+        ))
+        .title("Update Error")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+/// Check for updates and optionally prompt the user.
+/// `manual` controls whether the user gets feedback on "no update" / error.
+async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            log::error!("Failed to create updater: {e}");
+            if manual {
+                show_update_error_dialog(app, &e.to_string());
+            }
+            return;
+        }
+    };
+
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
+            log::info!("No update available");
+            if manual {
+                show_up_to_date_dialog(app);
+            }
+            return;
+        }
+        Err(e) => {
+            log::warn!("Update check failed: {e}");
+            if manual {
+                show_update_error_dialog(app, &e.to_string());
+            }
+            return;
+        }
+    };
+
+    let version = update.version.clone();
+    log::info!("Update available: v{version}");
+
+    if !show_update_available_dialog(app, &version) {
+        log::info!("User declined update to v{version}");
+        return;
+    }
+
+    // Download and install — closures receive progress but we don't use them yet
+    match update.download_and_install(|_chunk_len, _total| {}, || {}).await {
+        Ok(()) => {
+            log::info!("Update to v{version} installed — killing sidecar and restarting");
+            // Kill sidecar BEFORE restart. CommandChild::kill() sends the signal
+            // but doesn't wait for exit — add a brief delay so the OS releases
+            // ports 3478/3479 before the new instance tries to bind them.
+            // The RunEvent::Exit handler will also call kill_sidecar (harmless
+            // no-op since guard.take() already returned None).
+            kill_sidecar(app);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            app.restart();
+        }
+        Err(e) => {
+            log::error!("Update install failed: {e}");
+            show_update_error_dialog(app, &e.to_string());
+        }
+    }
+}
