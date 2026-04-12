@@ -44,8 +44,10 @@ fn show_main_window(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            log::info!("Second instance detected — args: {args:?}, cwd: {cwd}");
             show_main_window(app);
+            // TODO: if args contains a file path, open it via the sidecar API
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -107,8 +109,13 @@ pub fn run() {
 
             let menu = Menu::with_items(app, &[&open_i, &setup_i, &sep, &about_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().unwrap())
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .expect("No window icon configured — check bundle.icon in tauri.conf.json");
+
+            let tray_result = TrayIconBuilder::new()
+                .icon(icon)
                 .tooltip("Tandem")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -149,8 +156,13 @@ pub fn run() {
                             .title("About Tandem")
                             .show(|_| {});
                     }
-                    MENU_QUIT => app.exit(0),
-                    _ => {}
+                    MENU_QUIT => {
+                        log::info!("User-initiated quit from tray menu");
+                        app.exit(0);
+                    }
+                    other => {
+                        log::debug!("Unhandled tray menu event: {other}");
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -162,7 +174,22 @@ pub fn run() {
                         show_main_window(tray.app_handle());
                     }
                 })
-                .build(app)?;
+                .build(app);
+
+            match tray_result {
+                Ok(_tray) => {}
+                Err(e) => {
+                    if cfg!(target_os = "linux") {
+                        log::error!(
+                            "System tray unavailable: {e}. \
+                             On Linux, install libappindicator3-dev. \
+                             Tandem will continue without a tray icon."
+                        );
+                    } else {
+                        return Err(e.into());
+                    }
+                }
+            }
 
             Ok(())
         })
