@@ -3,7 +3,8 @@
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2,
-    "lineWidth": 100
+    "lineWidth": 100,
+    "lineEnding": "lf"
   },
   "javascript": {
     "formatter": {
@@ -19,7 +20,8 @@
     "includes": [
       "src/**/*.{ts,tsx,json}",
       "tests/**/*.{ts,tsx}",
-      "scripts/**/*.{ts,tsx}",
+      "scripts/**/*.{ts,tsx,mjs}",
+      "packages/**/*.{ts,tsx,mjs}",
       "*.{ts,json}",
       "!dist/**",
       "!node_modules/**",
