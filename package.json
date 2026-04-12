@@ -61,14 +61,14 @@
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",
-      "biome format --write"
+      "biome check --write"
     ],
     "*.mjs": [
       "eslint --fix",
-      "biome format --write"
+      "biome check --write"
     ],
     "*.json !package-lock.json": [
-      "biome format --write"
+      "biome check --write"
     ]
   },
   "dependencies": {
