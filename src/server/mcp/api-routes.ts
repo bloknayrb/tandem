@@ -36,7 +36,9 @@ export function isHostAllowed(host: string | undefined): boolean {
 }
 
 /** Check if an Origin header is a localhost URL. Exported for testing. */
-export const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?$/;
+export const LOCALHOST_ORIGIN_RE = new RegExp(
+  `^https?://(localhost|127\\.0\\.0\\.1|${TAURI_HOSTNAME.replace(/\./g, "\\.")})(:\\d+)?$`,
+);
 export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");
 }
