@@ -550,6 +550,14 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the Toolbar (not StatusBar); client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
 - `ReviewSummary` -- Overlay shown when all pending annotations are resolved
 
+### Tauri Desktop (`src-tauri/`)
+
+- `Cargo.toml` -- Rust dependencies: tauri v2, plugins (shell, fs, dialog, single-instance, window-state, process)
+- `tauri.conf.json` -- App config: identifier, window size, `externalBin` (node sidecar), `resources` (bundled server/client/channel/sample)
+- `capabilities/` -- Permission manifests: `default.json` (core + shell + fs + dialog), `desktop.json` (window-state)
+- `src/lib.rs` -- Plugin registration (single-instance first), Tauri app builder
+- `src/main.rs` -- Entry point, delegates to `lib.rs`
+
 ### Shared (`src/shared/`)
 
 - `types.ts` -- TypeScript interfaces shared between server and client (includes `editedAt` on Annotation, `ConnectionStatus` enum, `NotificationPayload`)

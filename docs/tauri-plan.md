@@ -44,7 +44,7 @@ Tandem.app / Tandem.exe / Tandem.AppImage
 
 ## Implementation Plan
 
-### Step 1: Tauri Project Scaffolding
+### Step 1: Tauri Project Scaffolding ✅
 - Initialize `src-tauri/` with `cargo create-tauri-app` or manual setup
 - Create `tauri.conf.json` with:
   - `bundle.identifier`: `com.tandem.editor`
@@ -57,7 +57,7 @@ Tandem.app / Tandem.exe / Tandem.AppImage
 - Minimal `src-tauri/src/main.rs`: window creation, sidecar lifecycle, system tray
 - **Files:** New `src-tauri/` directory, `src-tauri/tauri.conf.json`, `src-tauri/src/main.rs`, `src-tauri/Cargo.toml`, `src-tauri/capabilities/default.json`
 
-### Step 2: Node.js Sidecar Integration
+### Step 2: Node.js Sidecar Integration ✅
 - Node.js binary declared as sidecar in `bundle.externalBin`; JS bundles declared as resources in `bundle.resources`
 - At runtime, Rust resolves the resource dir path and spawns: `node-sidecar <resource_dir>/dist/server/index.js`
 - Rust code manages sidecar lifecycle:
@@ -231,3 +231,24 @@ scripts/
 - [ ] Existing E2E tests pass against the Tauri-hosted server (same ports, same API)
 - [ ] Tutorial annotations appear on first launch with `sample/welcome.md` (copied to user data dir)
 - [ ] "Launch Claude" button opens Claude Desktop (or shows instructions if not installed)
+
+---
+
+## Progress
+
+| Step | Description | Status |
+|------|-------------|--------|
+| 1 | Tauri Project Scaffolding | Done |
+| 2 | Node.js Sidecar Integration | Done |
+| 3 | MCP Setup (Every Launch) | Not started |
+| 4 | Single Instance + System Tray | Not started |
+| 5 | Build Pipeline + CI | Not started |
+| 6 | Auto-Update | Not started |
+| 7 | Code Signing | Not started |
+
+### Dev Notes
+
+- `bundle.resources` is currently empty — `dist/server/**`, `dist/channel/**`, `dist/client/**`, `sample/**` will be added in Step 5 (build pipeline) when production builds are configured.
+- Sidecar binary for dev: `node.exe` copied to `src-tauri/binaries/node-sidecar-{target-triple}.exe` (gitignored). Production builds will use a download script.
+- `start_sidecar()` checks health first and skips spawn if server is already running — allows `cargo tauri dev` alongside manual `npm run dev:standalone`.
+- Window close hides to tray (server keeps running); app exit kills sidecar.

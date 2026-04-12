@@ -52,6 +52,15 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
 
+## Tauri Desktop
+- `cargo tauri dev` -- Tauri dev mode (Vite hot-reload + Rust rebuild)
+- `cargo tauri build` -- Production build (installer output)
+- `src-tauri/` layout: `Cargo.toml`, `tauri.conf.json`, `capabilities/` (permission manifests), `src/lib.rs` (plugin registration), `src/main.rs` (entry point)
+- Installed plugins: shell (sidecar management), fs, dialog, single-instance, window-state, process
+- **`single-instance` must be the FIRST plugin registered in `lib.rs`** -- later registration breaks instance detection
+- `@tauri-apps/api` is the JS/TS bridge for calling Tauri APIs from the frontend
+- Desktop-only plugins (single-instance, window-state) use a separate `capabilities/desktop.json`; core permissions live in `capabilities/default.json`
+
 ## Critical Rules
 
 These WILL break things if violated:
