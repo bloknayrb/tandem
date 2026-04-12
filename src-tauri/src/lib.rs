@@ -6,6 +6,7 @@ use tauri::Manager;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::UpdaterExt;
 
 /// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479)
 const HEALTH_URL: &str = "http://localhost:3479/health";
@@ -54,6 +55,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
         .setup(|app| {
             let log_level = if cfg!(debug_assertions) {
