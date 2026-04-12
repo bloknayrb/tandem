@@ -2,6 +2,7 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
@@ -139,8 +140,9 @@ export function SidePanel({
     const y = ydocRef.current;
     if (!y) return;
     const map = y.getMap(Y_MAP_ANNOTATIONS);
-    const ann = map.get(id) as Annotation | undefined;
-    if (!ann) return;
+    const raw = map.get(id) as Annotation | undefined;
+    if (!raw) return;
+    const ann = sanitizeAnnotation(raw);
     map.set(id, { ...ann, status });
     // Only annotations with suggestedText trigger a text replacement when
     // accepted. For plain comments/highlights/flags, accepting is just a
@@ -178,8 +180,9 @@ export function SidePanel({
     const y = ydocRef.current;
     if (!y) return;
     const map = y.getMap(Y_MAP_ANNOTATIONS);
-    const ann = map.get(id) as Annotation | undefined;
-    if (!ann || ann.status === "pending") return;
+    const raw = map.get(id) as Annotation | undefined;
+    if (!raw || raw.status === "pending") return;
+    const ann = sanitizeAnnotation(raw);
 
     // If it was an accepted annotation with suggestedText, revert the text edit first.
     // If text revert fails, don't revert status — half-undo is worse than no undo.
@@ -246,8 +249,9 @@ export function SidePanel({
     const y = ydocRef.current;
     if (!y) return;
     const map = y.getMap(Y_MAP_ANNOTATIONS);
-    const ann = map.get(id) as Annotation | undefined;
-    if (!ann) return;
+    const raw = map.get(id) as Annotation | undefined;
+    if (!raw) return;
+    const ann = sanitizeAnnotation(raw);
 
     // If the annotation has suggestedText, newContent is JSON-encoded
     // {suggestedText, content} from the AnnotationCard edit form.
@@ -260,12 +264,10 @@ export function SidePanel({
           content: parsed.content,
           editedAt: Date.now(),
         });
-        return;
       } catch {
-        console.warn(
-          `[SidePanel] Failed to parse edit payload for annotation ${id}, falling back to plain content update`,
-        );
+        console.warn(`[SidePanel] Failed to parse edit payload for annotation ${id}`);
       }
+      return; // Never fall through to raw-content write for suggestedText annotations
     }
     map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
   }

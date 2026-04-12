@@ -4,6 +4,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";
 
@@ -21,7 +22,7 @@ function buildDecorations(
   const maxPos = doc.content.size;
 
   annotationsMap.forEach((value) => {
-    const ann = value as Annotation;
+    const ann = sanitizeAnnotation(value as Annotation);
     if (ann.status !== "pending") return;
     if (!ann.range && !ann.relRange) return;
 
@@ -56,7 +57,7 @@ function buildDecorations(
       }
       case "comment":
         if (ann.suggestedText !== undefined) {
-          // Comment with replacement → wavy purple underline (preserves old "suggestion" visual)
+          // Comment with replacement → wavy purple underline (suggestion visual)
           attrs = {
             class: "tandem-suggestion",
             style:
@@ -65,7 +66,7 @@ function buildDecorations(
             "aria-label": "Replacement annotation",
           };
         } else if (ann.directedAt === "claude") {
-          // Comment directed at Claude → solid blue underline (preserves old "question" visual)
+          // Comment directed at Claude → solid blue underline (question visual)
           attrs = {
             class: "tandem-question",
             style:
@@ -92,15 +93,18 @@ function buildDecorations(
           "aria-label": "Flag annotation",
         };
         break;
-      default:
-        return; // Unknown type, skip
+      default: {
+        const _exhaustive: never = ann;
+        console.warn("[annotation] Unhandled annotation type in buildDecorations, skipping");
+        return;
+      }
     }
 
     try {
       decorations.push(Decoration.inline(from, to, attrs));
     } catch (err) {
-      // RangeError expected during concurrent edits (stale positions)
       if (!(err instanceof RangeError)) throw err;
+      console.debug("[annotation] RangeError for %s (from=%d, to=%d), skipping", ann.id, from, to);
     }
   });
 

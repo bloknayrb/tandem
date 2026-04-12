@@ -12,12 +12,12 @@ Tandem runs as a local server with two surfaces: a **browser editor** where you 
 
 ## First Launch
 
-On first run, Tandem opens `sample/welcome.md` automatically. Three tutorial annotations appear in the document — a highlight, a comment, and a suggestion — so you have something to interact with immediately.
+On first run, Tandem opens `sample/welcome.md` automatically. Three tutorial annotations appear in the document — a highlight, a comment, and a comment with replacement text — so you have something to interact with immediately.
 
 A floating tutorial card appears at the bottom-left of the editor with three steps:
 
 1. **Review an annotation** — Accept or dismiss one of the tutorial annotations from the side panel, or press `Ctrl+Shift+R` to enter Review Mode and use `Y`/`N` keys.
-2. **Ask Claude a question** — Select text and press `Ctrl+Shift+A`, or type in the Chat panel.
+2. **Ask Claude a question** — Select text, click Comment, toggle "@Claude", and send your question. Or type in the Chat panel.
 3. **Try editing** — Click in the document and type something.
 
 The tutorial dismisses after all three steps and won't appear again (progress is saved to localStorage).
@@ -49,10 +49,10 @@ Select text to reveal formatting buttons: **Bold**, **Italic**, **Headings** (H1
 When text is selected, annotation buttons appear alongside the formatting toolbar:
 
 - **Highlight** — Mark text with a colored background. A dropdown lets you pick from 5 colors: yellow, red, green, blue, or purple. An explicit ✕ button closes the color picker.
-- **Comment** — Attach a note to the selected text.
-- **Suggest** — Propose a text replacement. A text input appears for the new wording.
+- **Comment** — Attach a note to the selected text. Two optional toggles appear:
+  - **Replace** — Propose replacement text. A text input appears for the new wording. Accepting the annotation applies the replacement automatically.
+  - **@Claude** — Direct the comment to Claude as a question. Claude sees the selected text and your comment, and can respond with annotations, chat messages, or both.
 - **Flag** — Mark text for urgent attention.
-- **Ask Claude** — Send a question about the selected text to Claude (also available via `Ctrl+Shift+A`).
 
 When no text is selected, annotation buttons show a "Select text first" tooltip explaining why they're disabled.
 
@@ -117,7 +117,7 @@ Press `Ctrl+S` to save the active document to disk. Claude can also save via `ta
 
 ## Annotations
 
-Annotations are Tandem's core feature. There are five types, each with distinct visual styling in the document:
+Annotations are Tandem's core feature. There are three types, each with distinct visual styling in the document:
 
 ### Highlight
 
@@ -127,30 +127,25 @@ Colored background on the annotated text. Choose from 5 colors (yellow, red, gre
 
 Dashed underline on the annotated text. Attach observations, questions, or notes. The comment text appears in the side panel card.
 
-### Suggestion
+Comments support two optional behaviors:
 
-Wavy underline on the annotated text. Proposes a text replacement. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting a suggestion applies the text change automatically.
+- **Replacement suggestions** — A comment with a `suggestedText` field proposes a text replacement. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting the comment applies the text change automatically.
+- **Questions directed at Claude** — A comment with `directedAt: "claude"` sends the comment to Claude as a question about the selected text. Claude sees the annotated passage and your comment, and can respond with annotations, chat messages, or both. These comments render with an indigo border and light tint.
 
 ### Flag
 
 Marks text for urgent attention. Use flags for items that need immediate action rather than just review.
 
-### Question
-
-Indigo border with a light tint on the annotated text. Created when you use **Ask Claude** (`Ctrl+Shift+A`) on a selection. The question appears in the side panel alongside other annotations and is also sent to Claude as a chat-like prompt. Claude can respond with annotations, chat messages, or both.
-
 ### Creating Annotations
 
-Select text in the editor to reveal the annotation toolbar. Click the desired type. For highlights, pick a color from the dropdown. For suggestions, type the proposed replacement text. For comments and flags, type your note.
-
-**Ask Claude** (`Ctrl+Shift+A`) is a special action that sends a question about the selected text to Claude. It bridges the annotation and chat systems — Claude sees your question and can respond with annotations, chat messages, or both.
+Select text in the editor to reveal the annotation toolbar. Click the desired type. For highlights, pick a color from the dropdown. For comments, type your note — then optionally toggle "Replace" to propose replacement text, or "@Claude" to direct the comment to Claude as a question. For flags, type your note.
 
 ### Editing Annotations
 
 Click the **✎ Edit** button on any pending annotation card to edit it:
 
-- **Highlights, comments, and flags** — A textarea appears with the current note.
-- **Suggestions** — Two textareas appear: one for the proposed replacement text, one for the reason.
+- **Highlights and flags** — A textarea appears with the current note.
+- **Comments** — A textarea appears for the comment text. If the comment has replacement text, a second textarea appears for the proposed replacement.
 
 Click **Save** to apply or **Cancel** to discard. Edited cards show "(edited)" with a timestamp. Only pending annotations can be edited — accepted or dismissed annotations are immutable.
 
@@ -158,11 +153,11 @@ Click **Save** to apply or **Cancel** to discard. Edited cards show "(edited)" w
 
 ### One at a Time
 
-Each annotation card in the side panel has **Accept** and **Dismiss** buttons. Accepting a suggestion applies its text change. Accepting other types simply marks them as resolved.
+Each annotation card in the side panel has **Accept** and **Dismiss** buttons. Accepting a comment with replacement text applies the text change. Accepting other annotations simply marks them as resolved.
 
 ### Undo
 
-After accepting or dismissing, a 10-second undo window opens. An "Undo" link appears on the card with a shrinking progress bar showing the remaining time. In review mode, press `Z`. For accepted suggestions, undo atomically reverts both the text change and the annotation status.
+After accepting or dismissing, a 10-second undo window opens. An "Undo" link appears on the card with a shrinking progress bar showing the remaining time. In review mode, press `Z`. For accepted comments with replacement text, undo atomically reverts both the text change and the annotation status.
 
 ### Review Mode
 
@@ -239,7 +234,6 @@ Press `?` to open the in-app shortcuts reference at any time.
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Shift+R` | Toggle review mode |
-| `Ctrl+Shift+A` | Ask Claude about selected text |
 | `Tab` | Next annotation (review mode) |
 | `Shift+Tab` | Previous annotation (review mode) |
 | `Y` | Accept annotation (review mode) |

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   collectAnnotations,
@@ -400,6 +400,35 @@ describe("sanitizeAnnotation", () => {
     const result = sanitizeAnnotation(legacy as unknown as Annotation);
     expect(result.textSnapshot).toBe("original");
     expect(result.editedAt).toBe(2000);
+  });
+
+  it("warns and coerces truly unknown types to comment", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unknown = { ...base, type: "note" };
+    const result = sanitizeAnnotation(unknown as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown type "note"'));
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn for valid comment type", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const comment = { ...base, type: "comment" };
+    sanitizeAnnotation(comment as unknown as Annotation);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("preserves textSnapshot: '' (empty string)", () => {
+    const ann = { ...base, type: "comment", textSnapshot: "" };
+    const result = sanitizeAnnotation(ann as unknown as Annotation);
+    expect(result.textSnapshot).toBe("");
+  });
+
+  it("preserves editedAt: 0", () => {
+    const ann = { ...base, type: "comment", editedAt: 0 };
+    const result = sanitizeAnnotation(ann as unknown as Annotation);
+    expect(result.editedAt).toBe(0);
   });
 
   it("collectAnnotations sanitizes legacy shapes from Y.Map", () => {

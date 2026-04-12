@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
+import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
@@ -134,72 +135,8 @@ export function createAnnotation(
   return id;
 }
 
-/** Raw annotation from Y.Map — may contain legacy `suggestion`/`question` types. */
-type RawAnnotation = Omit<Annotation, "type"> & { type: string };
-
-/**
- * Normalize a legacy annotation into the unified shape.
- * - `suggestion` → `comment` with `suggestedText` + `content` (parsed from JSON)
- * - `question` → `comment` with `directedAt: "claude"`
- * - Strips stray `color` from non-highlight entries (#245)
- */
-export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotation {
-  const ann = input as RawAnnotation;
-
-  // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
-  const base = {
-    id: ann.id,
-    author: ann.author,
-    range: ann.range,
-    content: ann.content,
-    status: ann.status,
-    timestamp: ann.timestamp,
-    ...(ann.relRange ? { relRange: ann.relRange } : {}),
-    ...(ann.textSnapshot ? { textSnapshot: ann.textSnapshot } : {}),
-    ...(ann.editedAt ? { editedAt: ann.editedAt } : {}),
-  };
-
-  if (ann.type === "suggestion") {
-    let suggestedText: string | undefined;
-    let content: string;
-    try {
-      const parsed = JSON.parse(ann.content) as { newText?: string; reason?: string };
-      suggestedText = parsed.newText;
-      content = parsed.reason ?? "";
-    } catch {
-      console.warn(
-        `[sanitizeAnnotation] Malformed JSON in legacy suggestion ${ann.id}, treating as plain comment`,
-      );
-      content = ann.content;
-    }
-    return { ...base, type: "comment", content, suggestedText } as Annotation;
-  }
-
-  if (ann.type === "question") {
-    return { ...base, type: "comment", directedAt: "claude" as const } as Annotation;
-  }
-
-  // Strip stray color from non-highlight entries (#245)
-  if (ann.type === "highlight") {
-    return {
-      ...base,
-      type: "highlight",
-      color: (ann as Annotation & { color?: string }).color,
-    } as Annotation;
-  }
-
-  if (ann.type === "flag") {
-    return { ...base, type: "flag" } as Annotation;
-  }
-
-  // For comment type, preserve suggestedText/directedAt if present
-  return {
-    ...base,
-    type: "comment",
-    ...(ann.suggestedText !== undefined ? { suggestedText: ann.suggestedText } : {}),
-    ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
-  } as Annotation;
-}
+export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
+// sanitizeAnnotation is also imported above for internal use within this file.
 
 /** Collect all annotations from the Y.Map as an array, skipping malformed entries.
  *  Applies sanitizeAnnotation() to normalize legacy shapes. */

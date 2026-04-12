@@ -541,12 +541,13 @@ Edit the content of an existing annotation. Only pending annotations can be edit
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
 | `content` | string | no | New comment/note text |
+| `reason` | string | no | Alias for content (legacy compat) |
 | `newText` | string | no | Sets the `suggestedText` field on a comment (replacement proposal) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "editedAt": 1710936500000 }
+{ "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "suggestedText": "replacement text if set", "editedAt": 1710936500000 }
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), error if annotation not found or not pending.
@@ -560,7 +561,8 @@ tandem_editAnnotation({
 ```
 
 **Notes:**
-- At least one of `content` or `newText` must be provided.
+- At least one of `content`, `reason`, or `newText` must be provided.
+- `reason` is an alias for `content` — if both are provided, `content` takes precedence.
 - Only pending annotations can be edited — accepted or dismissed annotations return an error.
 - Sets `editedAt` timestamp on the annotation. The browser shows an "(edited)" indicator.
 - `newText` sets the `suggestedText` field directly on the annotation, turning a plain comment into a replacement suggestion (or updating an existing one).

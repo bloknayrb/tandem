@@ -157,7 +157,14 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
     for (const [key, change] of event.changes.keys) {
       const raw = annotationsMap.get(key) as Annotation | undefined;
       if (!raw) continue;
-      const ann = sanitizeAnnotation(raw);
+
+      let ann: Annotation;
+      try {
+        ann = sanitizeAnnotation(raw);
+      } catch (err) {
+        console.warn(`[EventQueue] sanitizeAnnotation failed for key=${key}:`, err);
+        continue;
+      }
 
       if (change.action === "add" && ann.author === "user") {
         pushEvent({

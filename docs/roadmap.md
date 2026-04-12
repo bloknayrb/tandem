@@ -139,7 +139,7 @@ First-run experience, error handling, and UX refinements.
 
 Implemented in PR #147:
 
-- Pre-loaded sample document (`sample/welcome.md`) with 3 pre-placed tutorial annotations (highlight, comment, suggestion) via `injectTutorialAnnotations()`
+- Pre-loaded sample document (`sample/welcome.md`) with 3 pre-placed tutorial annotations (highlight, comment, comment with replacement) via `injectTutorialAnnotations()`
 - `OnboardingTutorial` floating card at bottom-left with 3-step progression
 - Three interactions: (1) accept/dismiss an annotation, (2) create a user annotation, (3) focus editor and type
 - `useTutorial` hook detects step completion via annotation status observers + editor focus events
@@ -149,10 +149,10 @@ Implemented in PR #147:
 
 ### 8c: Review Mode — PARTIALLY DONE
 
-Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool.
+Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted replacement suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool.
 
 Remaining:
-- Configurable threshold banner ("Claude has 14 suggestions. Review in sequence or filter by type.")
+- Configurable threshold banner ("Claude has 14 annotations to review. Review in sequence or filter by type.")
 - Document dimming in review mode
 
 ### 8d: Interruption Model — DONE
@@ -178,10 +178,8 @@ Remaining:
 ### 8f: Toolbar Enhancements — PARTIALLY DONE
 
 - ~~Highlight button~~ — implemented (yellow default)
-- ~~Comment button~~ — implemented
+- ~~Comment button~~ — implemented (unified with Replace toggle and @Claude toggle)
 - Flag markers (red/yellow/green)
-- ~~Ask Claude: select text → floating input → response as annotation~~ — implemented (Ctrl+Shift+A)
-- Suggest: propose a change for Claude to evaluate
 - ~~Accept All / Dismiss All buttons~~ — implemented in SidePanel
 - ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
 - ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
@@ -206,7 +204,7 @@ Playwright E2E tests cover the critical annotation lifecycle path. Infrastructur
 - **Fixture management**: `createFixtureDir()` copies sample files to a temp dir per test, `cleanupFixtureDir()` removes it
 - **Config**: `workers: 1` (server supports one MCP session), `webServer` starts `dev:standalone`, `reuseExistingServer` for local dev
 - **CI**: Playwright Chromium install + E2E step after build, report artifact uploaded on failure
-- **13+ tests**: document load, annotation decoration, annotation card, accept, dismiss, suggestion apply, tab switching, review mode keyboard, tab overflow, tab reorder, tab scroll
+- **13+ tests**: document load, annotation decoration, annotation card, accept, dismiss, replacement apply, tab switching, review mode keyboard, tab overflow, tab reorder, tab scroll
 
 Run: `npm run test:e2e` (auto-starts servers) or `npm run test:e2e:ui` (Playwright UI mode)
 
