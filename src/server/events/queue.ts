@@ -168,6 +168,8 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
             annotationType: ann.type,
             content: ann.content,
             textSnippet: ann.textSnapshot ?? "",
+            ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
+            ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
           },
         });
       } else if (change.action === "update" && ann.author === "claude") {

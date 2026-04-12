@@ -33,24 +33,15 @@ const SMALL_BTN: React.CSSProperties = {
   cursor: "pointer",
 };
 
-type FilterType = AnnotationType | "all";
+type FilterType = AnnotationType | "all" | "with-replacement" | "for-claude";
 type FilterAuthor = "all" | "claude" | "user" | "import";
 type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
 
-/** Apply a suggestion annotation's text replacement in the editor */
+/** Apply an annotation's replacement text in the editor */
 function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null): boolean {
-  if (ann.type !== "suggestion") return false;
+  if (ann.suggestedText === undefined) return false;
 
-  let newText: string;
-  try {
-    const parsed = JSON.parse(ann.content);
-    newText = parsed.newText;
-  } catch {
-    console.warn("[SidePanel] Malformed suggestion content for", ann.id);
-    return false;
-  }
-
-  if (typeof newText !== "string") return false;
+  const newText = ann.suggestedText;
 
   const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
   if (!resolved) {
@@ -123,7 +114,11 @@ export function SidePanel({
 
     for (const a of annotations) {
       if (a.status === "pending") allPending.push(a);
-      const matchType = filterType === "all" || a.type === filterType;
+      let matchType: boolean;
+      if (filterType === "all") matchType = true;
+      else if (filterType === "with-replacement") matchType = a.suggestedText !== undefined;
+      else if (filterType === "for-claude") matchType = a.directedAt === "claude";
+      else matchType = a.type === filterType;
       const matchAuthor = filterAuthor === "all" || a.author === filterAuthor;
       const matchStatus = filterStatus === "all" || a.status === filterStatus;
       if (matchType && matchAuthor && matchStatus) filtered.push(a);
@@ -147,12 +142,10 @@ export function SidePanel({
     const ann = map.get(id) as Annotation | undefined;
     if (!ann) return;
     map.set(id, { ...ann, status });
-    // Only suggestions trigger a text replacement when accepted. For other
-    // annotation types (comment/highlight/question/flag), accepting is just
-    // a status change. Previously this branch called applySuggestion
-    // unconditionally — which returns false for non-suggestions — and the
-    // revert-on-failure path would silently flip the status back to pending.
-    if (status === "accepted" && ann.type === "suggestion" && editorRef.current) {
+    // Only annotations with suggestedText trigger a text replacement when
+    // accepted. For plain comments/highlights/flags, accepting is just a
+    // status change.
+    if (status === "accepted" && ann.suggestedText !== undefined && editorRef.current) {
       const applied = applySuggestion(ann, editorRef.current, ydocRef.current);
       if (!applied) {
         // Revert annotation status — text replacement failed
@@ -188,11 +181,11 @@ export function SidePanel({
     const ann = map.get(id) as Annotation | undefined;
     if (!ann || ann.status === "pending") return;
 
-    // If it was an accepted suggestion, revert the text edit first.
+    // If it was an accepted annotation with suggestedText, revert the text edit first.
     // If text revert fails, don't revert status — half-undo is worse than no undo.
-    if (ann.status === "accepted" && ann.type === "suggestion" && editorRef.current) {
+    if (ann.status === "accepted" && ann.suggestedText !== undefined && editorRef.current) {
       try {
-        const { newText } = JSON.parse(ann.content);
+        const newText = ann.suggestedText;
         const oldText = ann.textSnapshot;
         if (typeof newText === "string" && typeof oldText === "string") {
           const resolved = annotationToPmRange(ann, editorRef.current.state.doc, y);
@@ -255,6 +248,23 @@ export function SidePanel({
     const map = y.getMap(Y_MAP_ANNOTATIONS);
     const ann = map.get(id) as Annotation | undefined;
     if (!ann) return;
+
+    // If the annotation has suggestedText, newContent is JSON-encoded
+    // {suggestedText, content} from the AnnotationCard edit form.
+    if (ann.suggestedText !== undefined) {
+      try {
+        const parsed = JSON.parse(newContent) as { suggestedText: string; content: string };
+        map.set(id, {
+          ...ann,
+          suggestedText: parsed.suggestedText,
+          content: parsed.content,
+          editedAt: Date.now(),
+        });
+        return;
+      } catch {
+        // Fall through to plain content update
+      }
+    }
     map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
   }
 
@@ -620,8 +630,8 @@ export function SidePanel({
             { value: "all", label: "All types" },
             { value: "highlight", label: "Highlights" },
             { value: "comment", label: "Comments" },
-            { value: "suggestion", label: "Suggestions" },
-            { value: "question", label: "Questions" },
+            { value: "with-replacement", label: "With replacement" },
+            { value: "for-claude", label: "For Claude" },
             { value: "flag", label: "Flags" },
           ]}
         />

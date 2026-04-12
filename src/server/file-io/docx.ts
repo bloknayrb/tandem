@@ -3,7 +3,7 @@
 
 import mammoth from "mammoth";
 import * as Y from "yjs";
-import type { Annotation, AnnotationType } from "../../shared/types.js";
+import type { Annotation } from "../../shared/types.js";
 import { getElementText } from "../mcp/document-model.js";
 
 // Re-export for backward compatibility — consumers can import from either module
@@ -37,25 +37,36 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
   const fragment = doc.getXmlFragment("default");
   const fullText = extractFullText(fragment);
 
-  const groups: Partial<Record<AnnotationType, Annotation[]>> = {};
+  // Group by derived category using field presence, not raw type
+  type GroupKey = "highlights" | "comments" | "suggestions" | "questions" | "flags";
+  const groups: Partial<Record<GroupKey, Annotation[]>> = {};
   for (const ann of annotations) {
-    const key = ann.type;
+    let key: GroupKey;
+    if (ann.type === "highlight") key = "highlights";
+    else if (ann.suggestedText !== undefined) key = "suggestions";
+    else if (ann.directedAt === "claude") key = "questions";
+    else if (ann.type === "flag") key = "flags";
+    else key = "comments";
     if (!groups[key]) groups[key] = [];
     groups[key]?.push(ann);
   }
 
   const lines: string[] = ["# Document Review", ""];
 
-  const typeLabels = {
-    highlight: "Highlights",
-    comment: "Comments",
-    suggestion: "Suggestions",
-    question: "Questions",
-    flag: "Flags",
-  } satisfies Record<AnnotationType, string>;
+  const groupLabels: Record<GroupKey, string> = {
+    highlights: "Highlights",
+    comments: "Comments",
+    suggestions: "Suggestions",
+    questions: "Questions for Claude",
+    flags: "Flags",
+  };
 
-  for (const [type, anns] of Object.entries(groups) as [AnnotationType, Annotation[]][]) {
-    lines.push(`## ${typeLabels[type]}`, "");
+  const groupOrder: GroupKey[] = ["highlights", "comments", "suggestions", "questions", "flags"];
+
+  for (const key of groupOrder) {
+    const anns = groups[key];
+    if (!anns) continue;
+    lines.push(`## ${groupLabels[key]}`, "");
 
     for (const ann of anns) {
       const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
@@ -63,14 +74,9 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
 
       lines.push(`- **"${truncated}"** (${ann.author})`);
 
-      if (ann.type === "suggestion") {
-        try {
-          const { newText, reason } = JSON.parse(ann.content);
-          lines.push(`  - Replace with: "${newText}"`);
-          if (reason) lines.push(`  - Reason: ${reason}`);
-        } catch {
-          lines.push(`  - ${ann.content}`);
-        }
+      if (ann.suggestedText !== undefined) {
+        lines.push(`  - Replace with: "${ann.suggestedText}"`);
+        if (ann.content) lines.push(`  - Reason: ${ann.content}`);
       } else if (ann.content) {
         lines.push(`  - ${ann.content}`);
       }

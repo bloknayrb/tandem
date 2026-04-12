@@ -55,30 +55,33 @@ function buildDecorations(
         break;
       }
       case "comment":
-        attrs = {
-          class: "tandem-comment",
-          style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
-          "data-annotation-id": ann.id,
-          "aria-label": "Comment annotation",
-        };
-        break;
-      case "suggestion":
-        attrs = {
-          class: "tandem-suggestion",
-          style:
-            "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
-          "data-annotation-id": ann.id,
-          "aria-label": "Suggestion annotation",
-        };
-        break;
-      case "question":
-        attrs = {
-          class: "tandem-question",
-          style:
-            "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
-          "data-annotation-id": ann.id,
-          "aria-label": "Question annotation",
-        };
+        if (ann.suggestedText !== undefined) {
+          // Comment with replacement → wavy purple underline (preserves old "suggestion" visual)
+          attrs = {
+            class: "tandem-suggestion",
+            style:
+              "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
+            "data-annotation-id": ann.id,
+            "aria-label": "Replacement annotation",
+          };
+        } else if (ann.directedAt === "claude") {
+          // Comment directed at Claude → solid blue underline (preserves old "question" visual)
+          attrs = {
+            class: "tandem-question",
+            style:
+              "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
+            "data-annotation-id": ann.id,
+            "aria-label": "Question annotation",
+          };
+        } else {
+          // Plain comment → dashed blue underline (unchanged)
+          attrs = {
+            class: "tandem-comment",
+            style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
+            "data-annotation-id": ann.id,
+            "aria-label": "Comment annotation",
+          };
+        }
         break;
       case "flag":
         attrs = {

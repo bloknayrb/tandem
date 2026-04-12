@@ -84,7 +84,7 @@ export async function applyChangesCore(
 
   for (const [, raw] of map) {
     const ann = raw as Annotation;
-    if (ann.type !== "suggestion") continue;
+    if (ann.suggestedText === undefined) continue;
     if (ann.status === "pending") {
       pendingCount++;
       continue;
@@ -111,15 +111,7 @@ export async function applyChangesCore(
       }
     }
 
-    // Parse suggestion content
-    let newText = "";
-    try {
-      const parsed = JSON.parse(ann.content) as { newText: string; reason: string };
-      newText = parsed.newText;
-    } catch {
-      // If content isn't JSON, treat the whole string as newText
-      newText = ann.content;
-    }
+    const newText = ann.suggestedText ?? "";
 
     // Extract importCommentId from annotation ID if it starts with "import-"
     // Format: import-{commentId}-{timestamp} where commentId may contain hyphens
