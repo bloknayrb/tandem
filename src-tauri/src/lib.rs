@@ -102,6 +102,22 @@ pub fn run() {
                 if let Err(e) = run_setup(&handle, &client).await {
                     log::warn!("MCP setup failed (non-fatal): {e}");
                 }
+
+                // Check for updates on launch (non-blocking, after sidecar is healthy)
+                check_for_update(&handle, false).await;
+            });
+
+            // Periodic update check every 8 hours (for long-running sessions)
+            // Note: `handle` was moved into the first spawn block above, so we
+            // clone from `app.handle()` here (still in the setup() closure scope)
+            let periodic_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(8 * 60 * 60));
+                interval.tick().await; // Discard the first immediate tick — launch check covers it
+                loop {
+                    interval.tick().await;
+                    check_for_update(&periodic_handle, false).await;
+                }
             });
 
             let open_i = MenuItem::with_id(app, MENU_OPEN, "Open Editor", true, None::<&str>)?;
