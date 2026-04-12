@@ -65,6 +65,11 @@ pub fn run() {
                     return;
                 }
 
+                // Copy sample files to writable data dir (first-run only)
+                if let Err(e) = copy_sample_files(&handle) {
+                    log::warn!("Sample file copy failed (non-fatal): {e}");
+                }
+
                 // Setup fires after health check passes — in BOTH paths
                 // (freshly spawned sidecar OR already-running dev server)
                 if let Err(e) = run_setup(&handle, &client).await {
@@ -349,6 +354,46 @@ fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), St
             channel_path.to_string_lossy().into_owned(),
         ))
     }
+}
+
+/// Copy sample/ files from resources to the writable data dir.
+/// Copies each file only if the destination doesn't already exist (first-run).
+fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
+    let resource_dir = handle
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
+    let data_dir = handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+
+    let src_dir = resource_dir.join("sample");
+    let dest_dir = data_dir.join("sample");
+
+    // Skip if source doesn't exist (dev mode without build)
+    if !src_dir.exists() {
+        log::info!("No bundled sample/ directory — skipping copy");
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("Failed to create sample dir: {e}"))?;
+
+    let entries = std::fs::read_dir(&src_dir)
+        .map_err(|e| format!("Failed to read sample dir: {e}"))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read dir entry: {e}"))?;
+        let dest = dest_dir.join(entry.file_name());
+        if !dest.exists() {
+            std::fs::copy(entry.path(), &dest)
+                .map_err(|e| format!("Failed to copy {}: {e}", entry.file_name().to_string_lossy()))?;
+            log::info!("Copied sample/{} to data dir", entry.file_name().to_string_lossy());
+        }
+    }
+
+    Ok(())
 }
 
 /// Show a non-blocking dialog informing the user that Claude is not installed.
