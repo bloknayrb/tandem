@@ -4,6 +4,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
+/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts
 const HEALTH_URL: &str = "http://localhost:3479/health";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -16,7 +17,6 @@ struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Focus the existing window when a second instance launches
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
             }
@@ -47,7 +47,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Hide to tray on close instead of quitting (server keeps running)
+            // Server keeps running in the background; tray menu provides "Quit"
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
                 api.prevent_close();
@@ -75,11 +75,20 @@ fn kill_sidecar(handle: &tauri::AppHandle) {
     }
 }
 
+fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))
+}
+
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
 async fn start_sidecar(handle: &tauri::AppHandle) -> Result<(), String> {
-    // Check if server is already running (e.g. dev mode with npm run dev:standalone)
-    if check_health().await {
+    let client = build_http_client(Duration::from_secs(2))?;
+
+    // Dev mode: skip spawn if server is already running (e.g. npm run dev:standalone)
+    if check_health(&client).await {
         log::info!("Server already healthy — skipping sidecar spawn");
         return Ok(());
     }
@@ -89,11 +98,13 @@ async fn start_sidecar(handle: &tauri::AppHandle) -> Result<(), String> {
         .resource_dir()
         .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
     let server_js = resource_dir.join("dist/server/index.js");
+    let server_js_str = server_js.to_string_lossy().into_owned();
 
     let app_data_dir = handle
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+    let app_data_dir_str = app_data_dir.to_string_lossy().into_owned();
 
     for attempt in 0..=MAX_RESTARTS {
         if attempt > 0 {
@@ -108,28 +119,26 @@ async fn start_sidecar(handle: &tauri::AppHandle) -> Result<(), String> {
             .shell()
             .sidecar("binaries/node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
-            .args([server_js.to_string_lossy().as_ref()])
+            .args([server_js_str.as_str()])
             .env("TANDEM_OPEN_BROWSER", "0")
-            .env("TANDEM_DATA_DIR", app_data_dir.to_string_lossy().as_ref())
+            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str())
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
-        // Store child handle for shutdown
         {
             let state = handle.state::<SidecarState>();
             let mut guard = state.0.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
             *guard = Some(child);
         }
 
-        // Wait for health check
-        match wait_for_health().await {
+        let started = std::time::Instant::now();
+        match wait_for_health(&client).await {
             Ok(()) => {
-                log::info!("Sidecar healthy after {:.0}s", HEALTH_TIMEOUT.as_secs());
+                log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
                 return Ok(());
             }
             Err(e) => {
                 log::error!("Health check failed: {e}");
-                // Kill the unhealthy sidecar before retry
                 kill_sidecar(handle);
             }
         }
@@ -141,12 +150,7 @@ async fn start_sidecar(handle: &tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Poll the health endpoint until it responds 200.
-async fn wait_for_health() -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
+async fn wait_for_health(client: &reqwest::Client) -> Result<(), String> {
     let start = std::time::Instant::now();
     while start.elapsed() < HEALTH_TIMEOUT {
         if let Ok(resp) = client.get(HEALTH_URL).send().await {
@@ -164,15 +168,9 @@ async fn wait_for_health() -> Result<(), String> {
 }
 
 /// Single health check — returns true if server is already responding.
-async fn check_health() -> bool {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .build()
-        .ok();
-    if let Some(client) = client {
-        if let Ok(resp) = client.get(HEALTH_URL).send().await {
-            return resp.status().is_success();
-        }
+async fn check_health(client: &reqwest::Client) -> bool {
+    if let Ok(resp) = client.get(HEALTH_URL).send().await {
+        return resp.status().is_success();
     }
     false
 }
