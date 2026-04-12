@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
 import {
+  CTRL_ROOM,
   DEFAULT_MCP_PORT,
   LEFT_PANEL_WIDTH_KEY,
   PANEL_WIDTH_KEY,
@@ -38,6 +39,9 @@ test.afterEach(async ({ page }) => {
         __tandemEventSource?: EventSource;
         __tandemEvents?: unknown[];
       };
+      // Most tests in this file never open an EventSource — short-circuit
+      // the teardown so we don't pay a round-trip on every test.
+      if (!w.__tandemEventSource && !w.__tandemEvents) return;
       w.__tandemEventSource?.close();
       w.__tandemEventSource = undefined;
       w.__tandemEvents = undefined;
@@ -785,7 +789,18 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
 // This E2E proves all five links are wired correctly; do not delete it as
 // "already covered by unit tests."
 test("dwell-time slider value is honored by the selection event pipeline", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  // Capture the fixture's documentId so the positive assertion below can
+  // match against the actual document, not just `toBeTruthy()`. This closes
+  // a silent-failure hole: without the strict match, a selection event from
+  // an unrelated document (or a future regression that leaks CTRL_ROOM
+  // events) would pass the check trivially.
+  const openResult = (await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample.md"),
+  })) as { error: false; data: { documentId: string } } | { error: true };
+  if (openResult.error !== false) {
+    throw new Error("tandem_open failed in dwell-time test setup");
+  }
+  const fixtureDocId = openResult.data.documentId;
 
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
@@ -822,7 +837,11 @@ test("dwell-time slider value is honored by the selection event pipeline", async
   // server before we start relying on it.
   await page.waitForTimeout(250);
   // Close the popover so future clicks in the editor dispatch selection.
+  // Wait for the hidden state explicitly — otherwise the next
+  // `setDwellSliderValue(2500)` call races the close animation and its
+  // `isVisible()` branch would skip the re-open click.
   await page.keyboard.press("Escape");
+  await expect(page.locator("[data-testid='settings-popover']")).toBeHidden({ timeout: 2_000 });
 
   // --- Step 3: Subscribe to SSE with an absolute URL.
   // `page.evaluate(() => new EventSource("/api/events"))` would resolve
@@ -942,8 +961,13 @@ test("dwell-time slider value is honored by the selection event pipeline", async
   const selectionEvents = events.filter((e) => e?.type === "selection:changed");
   expect(selectionEvents.length).toBeGreaterThanOrEqual(1);
   const first = selectionEvents[0];
-  expect(first.documentId).toBeTruthy();
-  expect(first.documentId).not.toBe("tandem:ctrl"); // CTRL_ROOM is reserved
+  // Strict positive match against the fixture's actual documentId. This
+  // implicitly excludes CTRL_ROOM (which is `CTRL_ROOM` from shared
+  // constants, not the previously-hardcoded "tandem:ctrl" literal that
+  // could never match anything), and also catches any regression that
+  // leaks an event from an unrelated document into this test's context.
+  expect(first.documentId).toBe(fixtureDocId);
+  expect(first.documentId).not.toBe(CTRL_ROOM);
   expect(first.payload?.selectedText ?? "").toContain("Test Document");
 });
 
