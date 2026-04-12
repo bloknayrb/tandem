@@ -77,12 +77,12 @@ describe("collectAnnotations", () => {
     const map = getAnnotationsMap(doc);
     createAnnotation(map, doc, "comment", rangeOf(0, 2), "c");
     createAnnotation(map, doc, "highlight", rangeOf(0, 2), "h");
-    createAnnotation(map, doc, "suggestion", rangeOf(0, 2), "{}");
+    createAnnotation(map, doc, "flag", rangeOf(0, 2), "f");
 
     const types = collectAnnotations(map).map((a) => a.type);
     expect(types).toContain("comment");
     expect(types).toContain("highlight");
-    expect(types).toContain("suggestion");
+    expect(types).toContain("flag");
   });
 });
 
@@ -92,21 +92,17 @@ describe("filter logic", () => {
     const map = getAnnotationsMap(doc);
     createAnnotation(map, doc, "comment", rangeOf(0, 4), "a comment");
     createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "yellow" });
-    createAnnotation(
-      map,
-      doc,
-      "suggestion",
-      rangeOf(5, 12),
-      JSON.stringify({ newText: "stuff", reason: "clarity" }),
-    );
+    createAnnotation(map, doc, "comment", rangeOf(5, 12), "clarity", {
+      suggestedText: "stuff",
+    });
     return map;
   }
 
   it("filters by type", () => {
     const map = setupAnnotations();
     const comments = collectAnnotations(map).filter((a) => a.type === "comment");
-    expect(comments).toHaveLength(1);
-    expect(comments[0].content).toBe("a comment");
+    expect(comments).toHaveLength(2); // plain comment + suggestion-style comment
+    expect(comments.find((a) => a.content === "a comment")).toBeTruthy();
   });
 
   it("filters by status", () => {
@@ -123,47 +119,39 @@ describe("filter logic", () => {
     expect(user).toHaveLength(0);
   });
 
-  it("compound filter: author + type", () => {
+  it("compound filter: author + suggestedText", () => {
     const map = setupAnnotations();
     const result = collectAnnotations(map)
       .filter((a) => a.author === "claude")
-      .filter((a) => a.type === "suggestion");
+      .filter((a) => a.suggestedText !== undefined);
     expect(result).toHaveLength(1);
   });
 });
 
-describe("suggestion JSON contract", () => {
-  it("suggestion content is parseable JSON with newText and reason", () => {
+describe("suggestion fields on comment type", () => {
+  it("comment with suggestedText stores replacement and reason separately", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(
-      map,
-      doc,
-      "suggestion",
-      rangeOf(0, 4),
-      JSON.stringify({ newText: "replacement", reason: "better wording" }),
-    );
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "better wording", {
+      suggestedText: "replacement",
+    });
 
     const stored = map.get(id) as Annotation;
-    const parsed = JSON.parse(stored.content);
-    expect(parsed.newText).toBe("replacement");
-    expect(parsed.reason).toBe("better wording");
+    expect(stored.type).toBe("comment");
+    expect(stored.suggestedText).toBe("replacement");
+    expect(stored.content).toBe("better wording");
   });
 
-  it("suggestion with empty reason", () => {
+  it("comment with suggestedText and empty reason", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(
-      map,
-      doc,
-      "suggestion",
-      rangeOf(0, 4),
-      JSON.stringify({ newText: "x", reason: "" }),
-    );
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "", {
+      suggestedText: "x",
+    });
 
     const stored = map.get(id) as Annotation;
-    const parsed = JSON.parse(stored.content);
-    expect(parsed.reason).toBe("");
+    expect(stored.suggestedText).toBe("x");
+    expect(stored.content).toBe("");
   });
 });
 

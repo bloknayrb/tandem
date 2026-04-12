@@ -366,9 +366,10 @@ describe("exportAnnotations", () => {
       }),
       makeAnnotation({
         id: "s1",
-        type: "suggestion",
+        type: "comment",
         range: { from: 0, to: 5 },
-        content: JSON.stringify({ newText: "Hi", reason: "More casual" }),
+        content: "More casual",
+        suggestedText: "Hi",
       }),
     ];
 

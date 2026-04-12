@@ -70,29 +70,30 @@ describe("tandem_comment tool logic", () => {
   });
 });
 
-describe("tandem_suggest tool logic", () => {
-  it("creates suggestion with JSON content", () => {
+describe("tandem_suggest tool logic (comment with suggestedText)", () => {
+  it("creates comment with suggestedText", () => {
     const ydoc = setupDoc("sg-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const content = JSON.stringify({ newText: "Hi", reason: "more concise" });
-    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), content);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "more concise", {
+      suggestedText: "Hi",
+    });
 
     const stored = map.get(id) as Annotation;
-    expect(stored.type).toBe("suggestion");
-    const parsed = JSON.parse(stored.content);
-    expect(parsed.newText).toBe("Hi");
-    expect(parsed.reason).toBe("more concise");
+    expect(stored.type).toBe("comment");
+    expect(stored.suggestedText).toBe("Hi");
+    expect(stored.content).toBe("more concise");
   });
 
   it("handles empty reason", () => {
     const ydoc = setupDoc("sg-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const content = JSON.stringify({ newText: "Hi", reason: "" });
-    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), content);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "", {
+      suggestedText: "Hi",
+    });
 
     const stored = map.get(id) as Annotation;
-    const parsed = JSON.parse(stored.content);
-    expect(parsed.reason).toBe("");
+    expect(stored.suggestedText).toBe("Hi");
+    expect(stored.content).toBe("");
   });
 });
 
@@ -125,14 +126,10 @@ describe("tandem_getAnnotations tool logic", () => {
       author: "user",
       color: "yellow",
     });
-    createAnnotation(
-      map,
-      ydoc,
-      "suggestion",
-      rangeOf(6, 11, ydoc),
-      JSON.stringify({ newText: "x", reason: "" }),
-      { author: "claude" },
-    );
+    createAnnotation(map, ydoc, "comment", rangeOf(6, 11, ydoc), "", {
+      author: "claude",
+      suggestedText: "x",
+    });
     // One accepted
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "old comment", {
       author: "claude",
@@ -162,9 +159,9 @@ describe("tandem_getAnnotations tool logic", () => {
     const ydoc = setupDoc("ga-3", "Hello world test");
     const map = populateAnnotations(ydoc);
     const comments = collectAnnotations(map).filter((a) => a.type === "comment");
-    expect(comments).toHaveLength(2);
-    const suggestions = collectAnnotations(map).filter((a) => a.type === "suggestion");
-    expect(suggestions).toHaveLength(1);
+    expect(comments).toHaveLength(3); // 2 plain comments + 1 with suggestedText
+    const withSuggestion = collectAnnotations(map).filter((a) => a.suggestedText !== undefined);
+    expect(withSuggestion).toHaveLength(1);
   });
 
   it("filters by status", () => {
@@ -243,21 +240,17 @@ describe("tandem_exportAnnotations tool logic", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Nice intro");
     createAnnotation(map, ydoc, "highlight", rangeOf(6, 11, ydoc), "", { color: "yellow" });
-    createAnnotation(
-      map,
-      ydoc,
-      "suggestion",
-      rangeOf(0, 5, ydoc),
-      JSON.stringify({ newText: "Hi", reason: "simpler" }),
-    );
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "simpler", {
+      suggestedText: "Hi",
+    });
 
     const annotations = collectAnnotations(map);
     const md = exportAnnotations(ydoc, annotations);
 
-    expect(md).toContain("Comment");
+    expect(md).toContain("Comments");
     expect(md).toContain("Nice intro");
-    expect(md).toContain("Highlight");
-    expect(md).toContain("Suggestion");
+    expect(md).toContain("Highlights");
+    expect(md).toContain("Suggestions");
   });
 
   it("returns no annotations message for empty list", () => {
