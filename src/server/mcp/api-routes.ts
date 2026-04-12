@@ -2,6 +2,13 @@ import { basename } from "node:path";
 import type { Express, NextFunction, Request, Response } from "express";
 
 import {
+  applyConfig,
+  buildMcpEntries,
+  type DetectedTarget,
+  detectTargets,
+  installSkill,
+} from "../../cli/setup.js";
+import {
   CHANNEL_SSE_KEEPALIVE_MS,
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
@@ -38,6 +45,72 @@ const VALID_NODE_BASENAME_RE = /^node(-sidecar)?(\.exe)?$/;
 export function isValidNodeBinary(nodeBinary: string): boolean {
   if (!nodeBinary) return false;
   return VALID_NODE_BASENAME_RE.test(basename(nodeBinary));
+}
+
+interface SetupResult {
+  status: number;
+  body: {
+    error?: string;
+    message?: string;
+    data?: {
+      targets: DetectedTarget[];
+      configured: string[];
+      errors: string[];
+      skillInstalled: boolean;
+    };
+  };
+}
+
+/**
+ * Core setup logic, extracted for testability.
+ * Validates input, detects Claude installs, writes MCP config, installs skill.
+ */
+export async function runSetupHandler(
+  input: Record<string, unknown>,
+  homeOverride?: string,
+): Promise<SetupResult> {
+  const { nodeBinary, channelPath } = input;
+
+  if (!nodeBinary || typeof nodeBinary !== "string") {
+    return { status: 400, body: { error: "BAD_REQUEST", message: "nodeBinary is required" } };
+  }
+  if (!channelPath || typeof channelPath !== "string") {
+    return { status: 400, body: { error: "BAD_REQUEST", message: "channelPath is required" } };
+  }
+  if (!isValidNodeBinary(nodeBinary)) {
+    return {
+      status: 400,
+      body: { error: "BAD_REQUEST", message: "nodeBinary must be a node binary" },
+    };
+  }
+
+  const targets = detectTargets({ homeOverride });
+  const entries = buildMcpEntries(channelPath, nodeBinary);
+
+  const configured: string[] = [];
+  const errors: string[] = [];
+
+  for (const target of targets) {
+    try {
+      await applyConfig(target.configPath, entries);
+      configured.push(target.label);
+    } catch (err) {
+      errors.push(`${target.label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  let skillInstalled = false;
+  try {
+    await installSkill({ homeOverride });
+    skillInstalled = true;
+  } catch (err) {
+    errors.push(`Skill install: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return {
+    status: 200,
+    body: { data: { targets, configured, errors, skillInstalled } },
+  };
 }
 
 /** Map error code to HTTP status. Exported for testing. */
@@ -288,5 +361,11 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
     } catch (err: unknown) {
       sendApiError(res, err);
     }
+  });
+
+  app.options("/api/setup", apiMiddleware);
+  app.post("/api/setup", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+    const result = await runSetupHandler((req.body ?? {}) as Record<string, unknown>);
+    res.status(result.status).json(result.body);
   });
 }

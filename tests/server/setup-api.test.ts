@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { isValidNodeBinary } from "../../src/server/mcp/api-routes.js";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isValidNodeBinary, runSetupHandler } from "../../src/server/mcp/api-routes.js";
 
 describe("isValidNodeBinary", () => {
   it("accepts absolute path ending in node", () => {
@@ -39,5 +42,106 @@ describe("isValidNodeBinary", () => {
   it("rejects path traversal attempts", () => {
     expect(isValidNodeBinary("../../../bin/sh")).toBe(false);
     expect(isValidNodeBinary("/tmp/evil/node/../../../bin/sh")).toBe(false);
+  });
+});
+
+describe("runSetupHandler", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "tandem-setup-api-"));
+    // Create ~/.claude dir so detectTargets finds Claude Code
+    mkdirSync(join(tmpDir, ".claude"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns 400 when nodeBinary is missing", async () => {
+    const result = await runSetupHandler({ channelPath: "/fake/channel.js" }, tmpDir);
+    expect(result.status).toBe(400);
+  });
+
+  it("returns 400 when channelPath is missing", async () => {
+    const result = await runSetupHandler({ nodeBinary: "node" }, tmpDir);
+    expect(result.status).toBe(400);
+  });
+
+  it("returns 400 when nodeBinary fails validation", async () => {
+    const result = await runSetupHandler(
+      { nodeBinary: "/usr/bin/python", channelPath: "/fake/channel.js" },
+      tmpDir,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("BAD_REQUEST");
+  });
+
+  it("configures Claude Code when .claude dir exists", async () => {
+    const result = await runSetupHandler(
+      { nodeBinary: "node", channelPath: "/fake/dist/channel/index.js" },
+      tmpDir,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.data.configured).toContain("Claude Code");
+
+    // Verify the config file was actually written
+    const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
+    expect(config.mcpServers.tandem.url).toContain("/mcp");
+    expect(config.mcpServers["tandem-channel"].command).toBe("node");
+    expect(config.mcpServers["tandem-channel"].args).toEqual(["/fake/dist/channel/index.js"]);
+  });
+
+  it("does not detect Claude Code when .claude dir is absent", async () => {
+    // Use a home dir with no .claude — Claude Code target should not appear.
+    // Note: Claude Desktop may still be detected via APPDATA/platform paths.
+    const emptyHome = mkdtempSync(join(tmpdir(), "tandem-empty-home-"));
+    try {
+      const result = await runSetupHandler(
+        { nodeBinary: "node", channelPath: "/fake/channel.js" },
+        emptyHome,
+      );
+      expect(result.status).toBe(200);
+      const labels = result.body.data!.targets.map((t) => t.label);
+      expect(labels).not.toContain("Claude Code");
+    } finally {
+      rmSync(emptyHome, { recursive: true, force: true });
+    }
+  });
+
+  it("installs the Claude Code skill", async () => {
+    const result = await runSetupHandler(
+      { nodeBinary: "node", channelPath: "/fake/channel.js" },
+      tmpDir,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.data.skillInstalled).toBe(true);
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    expect(readFileSync(skillPath, "utf-8")).toContain("name: tandem");
+  });
+
+  it("reports partial failures without failing the whole request", async () => {
+    // Create a directory at the config path to make applyConfig fail for it
+    const configPath = join(tmpDir, ".claude.json");
+    mkdirSync(configPath, { recursive: true });
+    const result = await runSetupHandler(
+      { nodeBinary: "node", channelPath: "/fake/channel.js" },
+      tmpDir,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.data.errors.length).toBeGreaterThan(0);
+  });
+
+  it("uses custom nodeBinary in MCP config", async () => {
+    const result = await runSetupHandler(
+      {
+        nodeBinary: "/app/MacOS/node-sidecar",
+        channelPath: "/app/Resources/dist/channel/index.js",
+      },
+      tmpDir,
+    );
+    expect(result.status).toBe(200);
+    const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
+    expect(config.mcpServers["tandem-channel"].command).toBe("/app/MacOS/node-sidecar");
   });
 });
