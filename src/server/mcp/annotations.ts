@@ -125,7 +125,56 @@ export function createAnnotation(
   return id;
 }
 
-/** Collect all annotations from the Y.Map as an array, skipping malformed entries */
+/**
+ * Normalize a legacy annotation into the unified shape.
+ * - `suggestion` → `comment` with `suggestedText` + `content` (parsed from JSON)
+ * - `question` → `comment` with `directedAt: "claude"`
+ * - Strips stray `color` from non-highlight entries (#245)
+ */
+export function sanitizeAnnotation(ann: Annotation): Annotation {
+  if (ann.type === "suggestion") {
+    let suggestedText: string | undefined;
+    let content: string;
+    try {
+      const parsed = JSON.parse(ann.content) as { newText?: string; reason?: string };
+      suggestedText = parsed.newText;
+      content = parsed.reason ?? "";
+    } catch {
+      // Malformed JSON — keep raw content, no suggestedText
+      content = ann.content;
+    }
+    return {
+      ...ann,
+      type: "comment",
+      content,
+      suggestedText,
+    };
+  }
+
+  if (ann.type === "question") {
+    return {
+      ...ann,
+      type: "comment",
+      directedAt: "claude",
+    };
+  }
+
+  // Strip stray color from non-highlight entries (#245)
+  if (ann.type !== "highlight" && "color" in ann) {
+    const { color: _, ...rest } = ann;
+    return rest as Annotation;
+  }
+
+  return ann;
+}
+
+/** Type-safe annotation update helper — merges a patch into an annotation, preserving the discriminant. */
+export function updateAnnotation<A extends Annotation>(ann: A, patch: Partial<A>): A {
+  return { ...ann, ...patch };
+}
+
+/** Collect all annotations from the Y.Map as an array, skipping malformed entries.
+ *  Applies sanitizeAnnotation() to normalize legacy shapes. */
 export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
   const result: Annotation[] = [];
   map.forEach((value, key) => {
@@ -140,7 +189,7 @@ export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
       typeof (ann.range as Record<string, unknown>).from === "number" &&
       typeof (ann.range as Record<string, unknown>).to === "number"
     ) {
-      result.push(ann as unknown as Annotation);
+      result.push(sanitizeAnnotation(ann as unknown as Annotation));
     } else {
       console.warn(`[Tandem] Skipping malformed annotation entry: ${key}`);
     }

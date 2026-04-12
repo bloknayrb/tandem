@@ -65,6 +65,10 @@ export interface Annotation {
   textSnapshot?: string;
   /** Timestamp of last edit to the annotation content. */
   editedAt?: number;
+  /** Replacement text for comment annotations that propose a change (replaces old JSON-encoded suggestion content). */
+  suggestedText?: string;
+  /** When set to "claude", directs this comment to Claude for response (replaces old "question" type). */
+  directedAt?: "claude";
 }
 
 export interface AnchoredRange {
