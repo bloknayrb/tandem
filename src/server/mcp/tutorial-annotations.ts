@@ -13,6 +13,7 @@ interface TutorialAnnotationDef {
   targetText: string;
   content: string;
   color?: HighlightColor;
+  suggestedText?: string;
 }
 
 const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
@@ -31,12 +32,10 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
   },
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}suggest-1`,
-    type: "suggestion",
+    type: "comment",
     targetText: "simplify onboarding",
-    content: JSON.stringify({
-      newText: "streamline onboarding",
-      reason: "More precise verb choice",
-    }),
+    content: "More precise verb choice",
+    suggestedText: "streamline onboarding",
   },
 ];
 
@@ -85,6 +84,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         timestamp: Date.now(),
         color: def.color,
         textSnapshot: def.targetText,
+        ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
       };
 
       map.set(def.id, annotation);

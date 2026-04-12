@@ -92,7 +92,11 @@ export function Toolbar({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showColorPicker]);
 
-  function createAnnotation(type: AnnotationType, content: string, color?: HighlightColor) {
+  function createAnnotation(
+    type: AnnotationType,
+    content: string,
+    extras?: { color?: HighlightColor; suggestedText?: string; directedAt?: "claude" },
+  ) {
     if (!editor || !ydoc) return;
 
     const range = capturedRangeRef.current ?? editor.state.selection;
@@ -111,7 +115,9 @@ export function Toolbar({
       content,
       status: "pending",
       timestamp: Date.now(),
-      ...(color ? { color } : {}),
+      ...(extras?.color ? { color: extras.color } : {}),
+      ...(extras?.suggestedText !== undefined ? { suggestedText: extras.suggestedText } : {}),
+      ...(extras?.directedAt !== undefined ? { directedAt: extras.directedAt } : {}),
     };
 
     ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
@@ -135,7 +141,7 @@ export function Toolbar({
 
   function handleHighlight(e: React.MouseEvent) {
     e.preventDefault();
-    createAnnotation("highlight", "", highlightColor);
+    createAnnotation("highlight", "", { color: highlightColor });
   }
 
   function handleColorPickerToggle(e: React.MouseEvent) {
@@ -185,13 +191,10 @@ export function Toolbar({
         createAnnotation("comment", modeText.trim());
         break;
       case "suggest":
-        createAnnotation(
-          "suggestion",
-          JSON.stringify({ newText: modeText.trim(), reason: modeReason.trim() }),
-        );
+        createAnnotation("comment", modeReason.trim(), { suggestedText: modeText.trim() });
         break;
       case "askClaude":
-        createAnnotation("question", modeText.trim());
+        createAnnotation("comment", modeText.trim(), { directedAt: "claude" });
         break;
     }
 

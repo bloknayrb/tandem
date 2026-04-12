@@ -113,12 +113,21 @@ export function createAnnotation(
   const snippet = annotation.textSnapshot
     ? `: "${annotation.textSnapshot.slice(0, 60)}${annotation.textSnapshot.length > 60 ? "…" : ""}"`
     : "";
+  // Derive notification label from field presence, not raw type
+  const label =
+    annotation.suggestedText !== undefined
+      ? "Replacement"
+      : annotation.directedAt === "claude"
+        ? "Question"
+        : type[0].toUpperCase() + type.slice(1);
+  const dedupSuffix =
+    annotation.suggestedText !== undefined ? "replacement" : (annotation.directedAt ?? type);
   pushNotification({
     id: generateNotificationId(),
     type: "review-pending",
     severity: "info",
-    message: `New ${type[0].toUpperCase() + type.slice(1)}${snippet}`,
-    dedupKey: `review-pending:${type}`,
+    message: `New ${label}${snippet}`,
+    dedupKey: `review-pending:${dedupSuffix}`,
     timestamp: Date.now(),
   });
 
@@ -243,11 +252,19 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_comment",
-    "Add a comment to a text range",
+    "Add a comment to a text range. Optionally include suggestedText for a replacement proposal, or directedAt: 'claude' to ask Claude.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
       text: z.string().describe("Comment text"),
+      suggestedText: z
+        .string()
+        .optional()
+        .describe("Optional replacement text — turns this into a tracked-change suggestion"),
+      directedAt: z
+        .enum(["claude"])
+        .optional()
+        .describe("Set to 'claude' to direct this comment to Claude for response"),
       documentId: z
         .string()
         .optional()
@@ -261,7 +278,15 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({ from: rawFrom, to: rawTo, text, documentId, textSnapshot }) => {
+      async ({
+        from: rawFrom,
+        to: rawTo,
+        text,
+        suggestedText,
+        directedAt,
+        documentId,
+        textSnapshot,
+      }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -274,6 +299,8 @@ export function registerAnnotationTools(server: McpServer): void {
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
         const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
           textSnapshot: snap,
+          ...(suggestedText !== undefined ? { suggestedText } : {}),
+          ...(directedAt !== undefined ? { directedAt } : {}),
         });
         return mcpSuccess({ annotationId: id });
       },
@@ -282,7 +309,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_suggest",
-    "Propose a text replacement (tracked change style)",
+    "Propose a text replacement (tracked change style). Legacy shim — prefer tandem_comment with suggestedText.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
@@ -312,14 +339,10 @@ export function registerAnnotationTools(server: McpServer): void {
           return rangeFailureToError(result);
         }
         const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(
-          da.map,
-          da.ydoc,
-          "suggestion",
-          result,
-          JSON.stringify({ newText, reason: reason || "" }),
-          { textSnapshot: snap },
-        );
+        const id = createAnnotation(da.map, da.ydoc, "comment", result, reason || "", {
+          textSnapshot: snap,
+          suggestedText: newText,
+        });
         return mcpSuccess({ annotationId: id });
       },
     ),
@@ -437,12 +460,12 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_editAnnotation",
-    "Edit the content of an existing annotation. For suggestions, use newText/reason params; for other types, use content.",
+    "Edit the content of an existing annotation. Use newText to update replacement text, reason/content for the comment body.",
     {
       id: z.string().describe("Annotation ID"),
-      content: z.string().optional().describe("New text for non-suggestion annotations"),
-      newText: z.string().optional().describe("For suggestions: new replacement text"),
-      reason: z.string().optional().describe("For suggestions: new reason"),
+      content: z.string().optional().describe("New comment text"),
+      newText: z.string().optional().describe("New replacement text (sets suggestedText)"),
+      reason: z.string().optional().describe("Alias for content (legacy compat)"),
       documentId: z
         .string()
         .optional()
@@ -454,56 +477,38 @@ export function registerAnnotationTools(server: McpServer): void {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
 
-        const ann = da.map.get(id) as Annotation | undefined;
-        if (!ann) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+        const raw = da.map.get(id) as Annotation | undefined;
+        if (!raw) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+
+        // Sanitize legacy shapes before editing
+        const ann = sanitizeAnnotation(raw);
 
         if (ann.status !== "pending") {
           return mcpError("INVALID_RANGE", `Cannot edit a ${ann.status} annotation`);
         }
 
-        let updatedContent: string;
-
-        if (ann.type === "suggestion") {
-          if (content !== undefined && newText === undefined && reason === undefined) {
-            // Allow raw content override for suggestions too
-            updatedContent = content;
-          } else if (newText !== undefined || reason !== undefined) {
-            // Merge with existing suggestion fields
-            let existing: { newText: string; reason: string };
-            try {
-              existing = JSON.parse(ann.content);
-            } catch {
-              console.error(
-                `[tandem_editAnnotation] Malformed existing content for suggestion ${id}`,
-              );
-              return mcpError(
-                "INVALID_RANGE",
-                `Suggestion ${id} has malformed content — cannot merge fields. Use 'content' to replace entirely.`,
-              );
-            }
-            updatedContent = JSON.stringify({
-              newText: newText !== undefined ? newText : existing.newText,
-              reason: reason !== undefined ? reason : existing.reason,
-            });
-          } else {
-            return mcpError(
-              "INVALID_RANGE",
-              "No editable fields provided. Use newText/reason for suggestions, or content.",
-            );
-          }
-        } else {
-          if (content === undefined) {
-            return mcpError(
-              "INVALID_RANGE",
-              "No editable fields provided. Use content for non-suggestion annotations.",
-            );
-          }
-          updatedContent = content;
+        if (content === undefined && newText === undefined && reason === undefined) {
+          return mcpError(
+            "INVALID_RANGE",
+            "No editable fields provided. Use content, newText, or reason.",
+          );
         }
 
-        const updated = { ...ann, content: updatedContent, editedAt: Date.now() };
+        const updated: Annotation = {
+          ...ann,
+          ...(content !== undefined ? { content } : {}),
+          ...(reason !== undefined && content === undefined ? { content: reason } : {}),
+          ...(newText !== undefined ? { suggestedText: newText } : {}),
+          editedAt: Date.now(),
+        };
+
         da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
-        return mcpSuccess({ id, content: updatedContent, editedAt: updated.editedAt });
+        return mcpSuccess({
+          id,
+          content: updated.content,
+          suggestedText: updated.suggestedText,
+          editedAt: updated.editedAt,
+        });
       },
     ),
   );
