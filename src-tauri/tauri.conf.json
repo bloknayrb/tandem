@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -44,6 +45,14 @@
       "../dist/channel/": "dist/channel/",
       "../dist/client/": "dist/client/",
       "../sample/": "sample/"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/bloknayrb/tandem/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
     }
   }
 }
