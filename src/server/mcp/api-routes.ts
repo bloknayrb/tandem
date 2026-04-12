@@ -40,10 +40,17 @@ export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");
 }
 
+/** Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM hash leaks. */
+function hasUncPrefix(p: string): boolean {
+  return p.startsWith("\\\\") || p.startsWith("//");
+}
+
 /** Validate that a nodeBinary path points to a Node.js binary, not an arbitrary executable. */
-const VALID_NODE_BASENAME_RE = /^node(-sidecar)?(\.exe)?$/;
+const VALID_NODE_BASENAME_RE = /^node(-sidecar(-[a-z0-9_-]+)?)?(\.exe)?$/;
 export function isValidNodeBinary(nodeBinary: string): boolean {
   if (!nodeBinary) return false;
+  if (nodeBinary.includes("..")) return false;
+  if (hasUncPrefix(nodeBinary)) return false;
   return VALID_NODE_BASENAME_RE.test(basename(nodeBinary));
 }
 
@@ -52,8 +59,7 @@ export function isValidChannelPath(channelPath: string): boolean {
   if (!channelPath) return false;
   if (!basename(channelPath).endsWith(".js")) return false;
   if (channelPath.includes("..")) return false;
-  if (channelPath.startsWith("\\\\")) return false;
-  // Allow bare relative paths in dev mode, require absolute in production
+  if (hasUncPrefix(channelPath)) return false;
   return true;
 }
 
@@ -380,7 +386,15 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
 
   app.options("/api/setup", apiMiddleware);
   app.post("/api/setup", apiMiddleware, largeBody, async (req: Request, res: Response) => {
-    const result = await runSetupHandler((req.body ?? {}) as Record<string, unknown>);
-    res.status(result.status).json(result.body);
+    try {
+      const result = await runSetupHandler((req.body ?? {}) as Record<string, unknown>);
+      res.status(result.status).json(result.body);
+    } catch (err: unknown) {
+      console.error("[Tandem] Setup handler threw:", err);
+      res.status(500).json({
+        error: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 }

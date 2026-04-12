@@ -118,9 +118,24 @@ pub fn run() {
                         let handle = app.clone();
                         let client = app.state::<reqwest::Client>().inner().clone();
                         tauri::async_runtime::spawn(async move {
+                            use tauri_plugin_dialog::DialogExt;
                             match run_setup(&handle, &client).await {
-                                Ok(()) => log::info!("MCP setup re-run from tray menu"),
-                                Err(e) => log::warn!("MCP setup failed: {e}"),
+                                Ok(()) => {
+                                    log::info!("MCP setup re-run from tray menu");
+                                    handle
+                                        .dialog()
+                                        .message("MCP configuration updated successfully.")
+                                        .title("Setup Complete")
+                                        .show(|_| {});
+                                }
+                                Err(e) => {
+                                    log::warn!("MCP setup failed: {e}");
+                                    handle
+                                        .dialog()
+                                        .message(format!("Setup failed: {e}"))
+                                        .title("Setup Error")
+                                        .show(|_| {});
+                                }
                             }
                         });
                     }
@@ -352,18 +367,32 @@ async fn run_setup(handle: &tauri::AppHandle, client: &reqwest::Client) -> Resul
         .await
         .map_err(|e| format!("Setup response parse error: {e}"))?;
 
+    // Validate response shape
+    if result.get("data").is_none() {
+        return Err("Setup response missing 'data' field".to_string());
+    }
+
     // Log what was configured
-    if let Some(configured) = result["data"]["configured"].as_array() {
+    let configured_count = if let Some(configured) = result["data"]["configured"].as_array() {
         for target in configured {
             if let Some(label) = target.as_str() {
                 log::info!("MCP config written for {label}");
             }
         }
-    }
+        configured.len()
+    } else {
+        0
+    };
 
+    // Check for errors — return Err if all targets failed
     if let Some(errors) = result["data"]["errors"].as_array() {
-        for err in errors {
-            if let Some(msg) = err.as_str() {
+        if !errors.is_empty() {
+            let msgs: Vec<&str> = errors.iter().filter_map(|e| e.as_str()).collect();
+            if configured_count == 0 {
+                return Err(format!("All config writes failed: {}", msgs.join("; ")));
+            }
+            // Partial success: log warnings but don't fail
+            for msg in &msgs {
                 log::warn!("Setup error: {msg}");
             }
         }

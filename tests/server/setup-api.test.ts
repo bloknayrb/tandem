@@ -43,9 +43,27 @@ describe("isValidNodeBinary", () => {
     expect(isValidNodeBinary("")).toBe(false);
   });
 
+  it("accepts target-triple sidecar names (release builds)", () => {
+    expect(
+      isValidNodeBinary("C:\\Program Files\\Tandem\\node-sidecar-x86_64-pc-windows-msvc.exe"),
+    ).toBe(true);
+    expect(
+      isValidNodeBinary(
+        "/Applications/Tandem.app/Contents/MacOS/node-sidecar-aarch64-apple-darwin",
+      ),
+    ).toBe(true);
+    expect(isValidNodeBinary("/usr/lib/tandem/node-sidecar-x86_64-unknown-linux-gnu")).toBe(true);
+  });
+
   it("rejects path traversal attempts", () => {
     expect(isValidNodeBinary("../../../bin/sh")).toBe(false);
     expect(isValidNodeBinary("/tmp/evil/node/../../../bin/sh")).toBe(false);
+    expect(isValidNodeBinary("../../node")).toBe(false);
+  });
+
+  it("rejects UNC paths", () => {
+    expect(isValidNodeBinary("\\\\attacker.com\\share\\node.exe")).toBe(false);
+    expect(isValidNodeBinary("//attacker.com/share/node.exe")).toBe(false);
   });
 });
 
@@ -72,8 +90,9 @@ describe("isValidChannelPath", () => {
     expect(isValidChannelPath("C:\\app\\..\\..\\evil.js")).toBe(false);
   });
 
-  it("rejects UNC paths", () => {
+  it("rejects UNC paths (backslash and forward-slash)", () => {
     expect(isValidChannelPath("\\\\server\\share\\evil.js")).toBe(false);
+    expect(isValidChannelPath("//attacker.com/share/evil.js")).toBe(false);
   });
 
   it("accepts bare relative .js path (dev mode)", () => {
@@ -107,6 +126,15 @@ describe("runSetupHandler", () => {
   it("returns 400 when nodeBinary fails validation", async () => {
     const result = await runSetupHandler(
       { nodeBinary: "/usr/bin/python", channelPath: "/fake/channel.js" },
+      tmpDir,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("BAD_REQUEST");
+  });
+
+  it("returns 400 when channelPath fails validation", async () => {
+    const result = await runSetupHandler(
+      { nodeBinary: "node", channelPath: "/app/../../../etc/evil.js" },
       tmpDir,
     );
     expect(result.status).toBe(400);
