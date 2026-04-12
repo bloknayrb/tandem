@@ -15,18 +15,6 @@ export { toFlatOffset, toPmPos, toSerializedRelPos } from "./positions/types.js"
 
 export const AnnotationTypeSchema = z.enum(["highlight", "comment", "flag"]);
 
-/**
- * Legacy schema that accepts the old 5-value enum. Used only in sanitizeAnnotation
- * to parse data from pre-migration sessions. Not exported — all public APIs use
- * the narrowed 3-value AnnotationTypeSchema.
- */
-export const LegacyAnnotationTypeSchema = z.enum([
-  "highlight",
-  "comment",
-  "suggestion",
-  "question",
-  "flag",
-]);
 export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
 export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);

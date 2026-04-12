@@ -351,7 +351,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
       )}
       {isPending && !isEditing && (onAccept || onDismiss) && (
         <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
-          {onAccept && hasSuggestedText && (
+          {onAccept && (
             <button
               data-testid={`accept-btn-${annotation.id}`}
               onClick={(e) => {
@@ -368,7 +368,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 cursor: "pointer",
               }}
             >
-              Accept
+              {hasSuggestedText ? "Accept" : "Acknowledge"}
             </button>
           )}
           {onDismiss && (

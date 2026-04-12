@@ -11,7 +11,7 @@ const STEPS = [
   },
   {
     title: "Ask a question",
-    text: "Select text and click Ask Claude (Ctrl+Shift+A), or type in the Chat panel.",
+    text: "Select text, click Comment, and check the @Claude toggle to direct it to Claude — or type in the Chat panel.",
   },
   {
     title: "Make an edit",

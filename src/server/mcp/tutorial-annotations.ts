@@ -82,8 +82,8 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         content: def.content,
         status: "pending" as const,
         timestamp: Date.now(),
-        color: def.color,
         textSnapshot: def.targetText,
+        ...(def.color !== undefined ? { color: def.color } : {}),
         ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
       } as Annotation;
 

@@ -167,7 +167,9 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
       suggestedText = parsed.newText;
       content = parsed.reason ?? "";
     } catch {
-      // Malformed JSON — keep raw content, no suggestedText
+      console.warn(
+        `[sanitizeAnnotation] Malformed JSON in legacy suggestion ${ann.id}, treating as plain comment`,
+      );
       content = ann.content;
     }
     return { ...base, type: "comment", content, suggestedText } as Annotation;
@@ -197,11 +199,6 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
     ...(ann.suggestedText !== undefined ? { suggestedText: ann.suggestedText } : {}),
     ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
   } as Annotation;
-}
-
-/** Type-safe annotation update helper — merges a patch into an annotation, preserving the discriminant. */
-export function updateAnnotation<A extends Annotation>(ann: A, patch: Partial<A>): A {
-  return { ...ann, ...patch };
 }
 
 /** Collect all annotations from the Y.Map as an array, skipping malformed entries.
@@ -449,9 +446,10 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      const ann = da.map.get(id) as Annotation | undefined;
-      if (!ann) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+      const raw = da.map.get(id) as Annotation | undefined;
+      if (!raw) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
 
+      const ann = sanitizeAnnotation(raw);
       const updated = {
         ...ann,
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
@@ -513,6 +511,13 @@ export function registerAnnotationTools(server: McpServer): void {
           return mcpError(
             "INVALID_RANGE",
             "No editable fields provided. Use content, newText, or reason.",
+          );
+        }
+
+        if (newText !== undefined && ann.type !== "comment") {
+          return mcpError(
+            "INVALID_RANGE",
+            `Cannot set replacement text on a ${ann.type} annotation. Only comments support suggestedText.`,
           );
         }
 

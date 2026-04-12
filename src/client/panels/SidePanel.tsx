@@ -262,7 +262,9 @@ export function SidePanel({
         });
         return;
       } catch {
-        // Fall through to plain content update
+        console.warn(
+          `[SidePanel] Failed to parse edit payload for annotation ${id}, falling back to plain content update`,
+        );
       }
     }
     map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
