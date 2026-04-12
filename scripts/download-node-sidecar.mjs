@@ -61,29 +61,43 @@ function detectHostTriple() {
 async function download(url, destPath) {
   console.log(`Downloading ${url}`);
   const tmpPath = destPath + ".tmp";
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
-  if (!resp.body) throw new Error(`No response body from ${url}`);
-  await pipeline(Readable.fromWeb(resp.body), createWriteStream(tmpPath));
-  renameSync(tmpPath, destPath);
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+    if (!resp.body) throw new Error(`No response body from ${url}`);
+    await pipeline(Readable.fromWeb(resp.body), createWriteStream(tmpPath));
+    renameSync(tmpPath, destPath);
+  } catch (err) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* already gone */
+    }
+    throw err;
+  }
 }
+
+const isCI = process.env.CI === "true";
 
 async function verifyChecksum(archivePath, archiveName, nodeVersion) {
   const shaUrl = `https://nodejs.org/dist/v${nodeVersion}/SHASUMS256.txt`;
   let resp;
   try {
     resp = await fetch(shaUrl);
-  } catch {
+  } catch (err) {
+    if (isCI) throw new Error(`Checksum fetch failed in CI: ${err.message}`);
     console.warn("Could not fetch checksums — skipping verification");
     return;
   }
   if (!resp.ok) {
+    if (isCI) throw new Error(`Checksum fetch returned HTTP ${resp.status} in CI`);
     console.warn(`Checksum fetch returned HTTP ${resp.status} — skipping verification`);
     return;
   }
   const shasums = await resp.text();
   const line = shasums.split("\n").find((l) => l.includes(archiveName));
   if (!line) {
+    if (isCI) throw new Error(`No checksum found for ${archiveName} in CI`);
     console.warn(`No checksum found for ${archiveName} — skipping verification`);
     return;
   }
@@ -142,11 +156,13 @@ function extractZip(archivePath, nodeVersion, info, outputPath) {
     );
   }
 
-  const extracted = join(tempDir, prefix, info.binary);
-  renameSync(extracted, outputPath);
-
-  // Clean up temp dir using Node.js API (cross-platform, no shell quoting issues)
-  rmSync(tempDir, { recursive: true, force: true });
+  try {
+    const extracted = join(tempDir, prefix, info.binary);
+    renameSync(extracted, outputPath);
+  } finally {
+    // Clean up temp dir using Node.js API (cross-platform, no shell quoting issues)
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 // --- Main ---

@@ -73,6 +73,12 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // Copy sample files BEFORE sidecar spawn so the server's
+                // auto-open finds them during its startup sequence
+                if let Err(e) = copy_sample_files(&handle) {
+                    log::warn!("Sample file copy failed (non-fatal): {e}");
+                }
+
                 if let Err(e) = start_sidecar(&handle, &client).await {
                     log::error!("Sidecar failed: {e}");
                     use tauri_plugin_dialog::DialogExt;
@@ -87,11 +93,6 @@ pub fn run() {
                         .title("Server Error")
                         .show(|_| {});
                     return;
-                }
-
-                // Copy sample files to writable data dir (first-run only)
-                if let Err(e) = copy_sample_files(&handle) {
-                    log::warn!("Sample file copy failed (non-fatal): {e}");
                 }
 
                 // Setup fires after health check passes — in BOTH paths
@@ -508,11 +509,28 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read dir entry: {e}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Failed to get file type: {e}"))?;
+        if !file_type.is_file() {
+            log::debug!(
+                "Skipping non-file entry: {}",
+                entry.file_name().to_string_lossy()
+            );
+            continue;
+        }
         let dest = dest_dir.join(entry.file_name());
         if !dest.exists() {
-            std::fs::copy(entry.path(), &dest)
-                .map_err(|e| format!("Failed to copy {}: {e}", entry.file_name().to_string_lossy()))?;
-            log::info!("Copied sample/{} to data dir", entry.file_name().to_string_lossy());
+            std::fs::copy(entry.path(), &dest).map_err(|e| {
+                format!(
+                    "Failed to copy {}: {e}",
+                    entry.file_name().to_string_lossy()
+                )
+            })?;
+            log::info!(
+                "Copied sample/{} to data dir",
+                entry.file_name().to_string_lossy()
+            );
         }
     }
 
