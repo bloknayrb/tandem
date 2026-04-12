@@ -15,6 +15,7 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 
 // Tray menu item IDs — matched in on_menu_event
 const MENU_OPEN: &str = "open";
@@ -104,16 +105,13 @@ pub fn run() {
                     log::warn!("MCP setup failed (non-fatal): {e}");
                 }
 
-                // Check for updates on launch (non-blocking, after sidecar is healthy)
                 check_for_update(&handle, false).await;
             });
 
-            // Periodic update check every 8 hours (for long-running sessions)
-            // Note: `handle` was moved into the first spawn block above, so we
-            // clone from `app.handle()` here (still in the setup() closure scope)
+            // `handle` was moved into the spawn above; clone a fresh one
             let periodic_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(8 * 60 * 60));
+                let mut interval = tokio::time::interval(UPDATE_CHECK_INTERVAL);
                 interval.tick().await; // Discard the first immediate tick — launch check covers it
                 loop {
                     interval.tick().await;
@@ -672,11 +670,8 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     match update.download_and_install(|_chunk_len, _total| {}, || {}).await {
         Ok(()) => {
             log::info!("Update to v{version} installed — killing sidecar and restarting");
-            // Kill sidecar BEFORE restart. CommandChild::kill() sends the signal
-            // but doesn't wait for exit — add a brief delay so the OS releases
-            // ports 3478/3479 before the new instance tries to bind them.
-            // The RunEvent::Exit handler will also call kill_sidecar (harmless
-            // no-op since guard.take() already returned None).
+            // Kill before restart so the new instance can bind ports 3478/3479.
+            // Brief delay because kill() doesn't wait for process exit.
             kill_sidecar(app);
             tokio::time::sleep(Duration::from_millis(500)).await;
             app.restart();
