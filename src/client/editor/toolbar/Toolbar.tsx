@@ -18,7 +18,7 @@ const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> =
   { value: "purple", label: "Purple" },
 ];
 
-type ToolbarMode = "idle" | "comment" | "suggest" | "askClaude";
+type ToolbarMode = "idle" | "comment";
 
 interface ToolbarProps {
   editor: TiptapEditor | null;
@@ -42,11 +42,11 @@ export function Toolbar({
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [mode, setMode] = useState<ToolbarMode>("idle");
   const [modeText, setModeText] = useState("");
-  const [modeReason, setModeReason] = useState(""); // used by suggest mode only
+  const [showReplacement, setShowReplacement] = useState(false);
+  const [replacementText, setReplacementText] = useState("");
+  const [sendToClaude, setSendToClaude] = useState(false);
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
-  const suggestInputRef = useRef<HTMLInputElement>(null);
-  const askClaudeInputRef = useRef<HTMLInputElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,15 +66,8 @@ export function Toolbar({
   }, [editor]);
 
   useEffect(() => {
-    if (mode === "idle") return;
-    const refMap: Record<Exclude<ToolbarMode, "idle">, React.RefObject<HTMLInputElement | null>> = {
-      comment: commentInputRef,
-      suggest: suggestInputRef,
-      askClaude: askClaudeInputRef,
-    };
-    const ref = refMap[mode];
-    if (ref.current) {
-      ref.current.focus();
+    if (mode === "comment" && commentInputRef.current) {
+      commentInputRef.current.focus();
     }
   }, [mode]);
 
@@ -163,44 +156,46 @@ export function Toolbar({
         captureSelectionRange();
         setMode(targetMode);
         setModeText("");
-        setModeReason("");
+        setReplacementText("");
+        setShowReplacement(false);
+        setSendToClaude(false);
       };
     },
     [editor],
   );
 
   const startComment = useMemo(() => handleModeStart("comment"), [handleModeStart]);
-  const startSuggest = useMemo(() => handleModeStart("suggest"), [handleModeStart]);
-  const startAskClaude = useMemo(() => handleModeStart("askClaude"), [handleModeStart]);
 
   function handleModeCancel() {
     setMode("idle");
     setModeText("");
-    setModeReason("");
+    setReplacementText("");
+    setShowReplacement(false);
+    setSendToClaude(false);
     resetAndFocusEditor();
   }
 
   function handleModeSubmit() {
-    if (!modeText.trim()) {
+    if (!modeText.trim() && !replacementText.trim()) {
       handleModeCancel();
       return;
     }
 
-    switch (mode) {
-      case "comment":
-        createAnnotation("comment", modeText.trim());
-        break;
-      case "suggest":
-        createAnnotation("comment", modeReason.trim(), { suggestedText: modeText.trim() });
-        break;
-      case "askClaude":
-        createAnnotation("comment", modeText.trim(), { directedAt: "claude" });
-        break;
+    const extras: { suggestedText?: string; directedAt?: "claude" } = {};
+    if (showReplacement && replacementText.trim()) {
+      extras.suggestedText = replacementText.trim();
     }
+    if (sendToClaude) {
+      extras.directedAt = "claude";
+    }
+
+    createAnnotation("comment", modeText.trim(), extras);
 
     setMode("idle");
     setModeText("");
-    setModeReason("");
+    setReplacementText("");
+    setShowReplacement(false);
+    setSendToClaude(false);
     editor?.chain().focus().run();
   }
 
@@ -357,74 +352,79 @@ export function Toolbar({
           onKeyDown={handleModeKeyDown}
           onSubmit={handleModeSubmit}
           onCancel={handleModeCancel}
-          placeholder="Add a comment..."
-          submitLabel="Add"
-          borderColor="#3b82f6"
-          canSubmit={!!modeText.trim()}
-        />
-      )}
-
-      <ToolbarButton
-        label="Suggest"
-        disabled={!canAnnotate || inInputMode}
-        disabledTitle="Select text first"
-        onMouseDown={startSuggest}
-      />
-      {mode === "suggest" && (
-        <InputGroup
-          inputRef={suggestInputRef}
-          value={modeText}
-          onChange={setModeText}
-          onKeyDown={handleModeKeyDown}
-          onSubmit={handleModeSubmit}
-          onCancel={handleModeCancel}
-          placeholder="Replacement text..."
-          submitLabel="Suggest"
-          borderColor="#8b5cf6"
-          canSubmit={!!modeText.trim()}
+          placeholder={sendToClaude ? "Ask about this text..." : "Add a comment..."}
+          submitLabel={showReplacement ? "Suggest" : sendToClaude ? "Ask" : "Add"}
+          borderColor={showReplacement ? "#8b5cf6" : sendToClaude ? "#6366f1" : "#3b82f6"}
+          canSubmit={!!modeText.trim() || (showReplacement && !!replacementText.trim())}
           secondaryInput={
-            <input
-              type="text"
-              value={modeReason}
-              onChange={(e) => setModeReason(e.target.value)}
-              onKeyDown={handleModeKeyDown}
-              placeholder="Reason (optional)"
-              style={{
-                padding: "3px 8px",
-                fontSize: "13px",
-                border: "1px solid #d1d5db",
-                borderRadius: "4px",
-                outline: "none",
-                minWidth: "100px",
-                flex: "1 1 140px",
-              }}
-            />
+            <>
+              {showReplacement && (
+                <input
+                  type="text"
+                  value={replacementText}
+                  onChange={(e) => setReplacementText(e.target.value)}
+                  onKeyDown={handleModeKeyDown}
+                  placeholder="Replacement text..."
+                  style={{
+                    padding: "3px 8px",
+                    fontSize: "13px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: "4px",
+                    outline: "none",
+                    minWidth: "100px",
+                    flex: "1 1 140px",
+                  }}
+                />
+              )}
+              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    color: showReplacement ? "#8b5cf6" : "#9ca3af",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showReplacement}
+                    onChange={(e) => {
+                      setShowReplacement(e.target.checked);
+                      if (!e.target.checked) setReplacementText("");
+                    }}
+                    style={{ margin: 0 }}
+                  />
+                  Replace
+                </label>
+                <label
+                  style={{
+                    fontSize: "11px",
+                    color: sendToClaude ? "#6366f1" : "#9ca3af",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={sendToClaude}
+                    onChange={(e) => setSendToClaude(e.target.checked)}
+                    style={{ margin: 0 }}
+                  />
+                  @Claude
+                </label>
+              </div>
+            </>
           }
         />
       )}
 
       <ToolbarButton label="Flag" disabled={!canAnnotate || inInputMode} onMouseDown={handleFlag} />
-
-      <ToolbarButton
-        label="Ask Claude"
-        shortcut="Ctrl+Shift+A"
-        disabled={!canAnnotate || inInputMode}
-        onMouseDown={startAskClaude}
-      />
-      {mode === "askClaude" && (
-        <InputGroup
-          inputRef={askClaudeInputRef}
-          value={modeText}
-          onChange={setModeText}
-          onKeyDown={handleModeKeyDown}
-          onSubmit={handleModeSubmit}
-          onCancel={handleModeCancel}
-          placeholder="Ask about this text..."
-          submitLabel="Ask"
-          borderColor="#6366f1"
-          canSubmit={!!modeText.trim()}
-        />
-      )}
 
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
