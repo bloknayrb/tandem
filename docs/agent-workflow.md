@@ -56,6 +56,8 @@ For each issue's plan, spawn 2 specialized reviewers in parallel. Pick based on 
 
 Reviewers read the plan (not the code) and flag gaps, missing callsites, edge cases, or risks. Manager consolidates findings into `plan-review.md` and amends the plan before Phase C.
 
+**Write-access caveat:** `feature-dev:code-architect` has no Write or Edit tool and cannot persist its review to disk — it returns the review inline in its summary. If you need the reviewer to write `plan-review-architect.md` directly, use `general-purpose` with an architect-framed prompt instead. See Lessons section for details.
+
 ### Phase C — Execute (parallel worktrees)
 
 **Before spawning:** cross-check target files across all plans. Any two plans that touch the same file → those issues go sequential through C/D/E. Everything else stays parallel.
@@ -68,6 +70,8 @@ Spawn `general-purpose` agents with `isolation: "worktree"`, one per non-collidi
 4. Produces `execute-report.md` with: files changed, test results, any deviations from plan, and the final manual-test checklist
 
 **Do not use `professional-agents:developer`** — it loses changes on worktree exit. Verified via memory `feedback_worktree_agent_persistence.md`.
+
+**Worktree base:** the isolation tool uses `origin/master` as the worktree base regardless of detached HEAD. See Lessons section for mitigation.
 
 ### Phase D — /simplify (per worktree)
 
@@ -94,6 +98,8 @@ For each PR, spawn 4 reviewers in parallel:
 Each reviewer gets a **focused prompt** scoped to its specialization, not a generic "review this PR" instruction. The silent-failure-hunter consistently finds what code-reviewer misses — don't skip it.
 
 Manager deduplicates findings across agents and writes `pr-review.md`. Verify throw-behavior and error-handling claims against actual code before accepting — LLM reviews inflate issue counts.
+
+**PR base pointer audit:** before kicking off Phase F reviews, verify that stacked PRs have their base pointer set to the parent branch (not master). A wrong base inflates the visible diff with the parent's commits, and reviewers will flag bogus "massive scope" findings. Fix via `gh pr edit <N> --base <parent-branch>` before reviewers start.
 
 ### Phase G — Fix review issues (targeted, rework-bounded)
 
@@ -163,9 +169,54 @@ Before Phase C, the manager builds a map of `file → [issues that touch it]` fr
 | F (PR review) | `pr-review-toolkit:code-reviewer`, `pr-review-toolkit:silent-failure-hunter`, `crdt-reviewer`, `pr-review-toolkit:pr-test-analyzer` | 4-angle coverage |
 | G (fix) | `general-purpose` + worktree | Targeted re-execution |
 
+## Lessons from first full run (v0.3.1)
+
+The workflow's first end-to-end execution on a fresh batch (PRs #237-#243) surfaced five operational findings. Each is captured below as observation → rule → rationale so future runs inherit the fix.
+
+### 1. Worktree base is fixed to `origin/master`
+
+**Observation:** The agent SDK's `isolation: "worktree"` parameter branches new worktrees from `origin/master`, not from the manager session's current HEAD. During Wave 1 the manager checked out `origin/fix/issue-229-crlf-normalize` as a detached HEAD hoping Phase C agents would branch from there; they branched from master anyway. Some Phase C agents noticed and rebased manually (#231, #232, #233-panellayout); #230 did not and stayed master-based, causing Phase F base-display confusion and a manual `gh pr edit --base` cleanup.
+
+**Rule:** When chaining PRs on a common ancestor, do not rely on the manager's detached HEAD. Either (a) instruct each Phase C agent to explicitly `git checkout <base-branch>` inside its worktree before creating its feature branch, or (b) accept that all Phase C branches will be master-based and plan the rebase cost at Gate 2.
+
+**Rationale:** Implicit assumptions about worktree base cost one wasted rebase and several confused reviewers per run. Making the base explicit is a one-line prompt addition.
+
+### 2. `feature-dev:code-architect` cannot write files
+
+**Observation:** This agent type is configured read-only — no Write or Edit tool. When Phase B instructions told it to persist its plan review to `.pipeline-state/<issue>/plan-review-architect.md`, it could not comply and instead delivered the review inline in its summary text. Wave 1 hit this on 4 architect reviews, and the manager had to manually persist each one before Phase C could read them.
+
+**Rule:** For any review role that needs to write output files, use `general-purpose` and frame the role via the agent's prompt. Reserve `feature-dev:code-architect` for cases where the review can legitimately return inline (short, no file persistence needed). The same caveat applies to any other `feature-dev:*` agent whose tool list excludes Write — verify before dispatching.
+
+**Rationale:** Agent-type tool sets are opaque until you hit the limit. One manual persistence pass is tolerable; four is a process smell that signals the wrong agent type was picked.
+
+### 3. Rework boundary is one pass per hypothesis, not one pass per PR
+
+**Observation:** The original doc said "Phase G / Phase H: one pass, one targeted re-review." Wave 1's #239 (E2E server-start timeout) required three distinct passes: 60s→180s timeout (revealed the timeout wasn't the root issue), `stdio: "ignore"` (revealed Playwright's ignore may not propagate to child fds), and finally pre-built `node dist/server/index.js` (success). A strict one-pass rule would have closed #239 after pass 1 or 2, losing the diagnostic signal each failed pass provided.
+
+**Rule:** The rework boundary is one pass per working hypothesis, capped at 3 total passes per PR. When a fix agent reports DONE_WITH_CONCERNS or FAILED with a new root-cause hypothesis, the manager may dispatch one more pass with the new hypothesis without asking the user. Beyond 3 passes, escalate to Gate 1 / Gate 2.
+
+**Rationale:** Strict one-pass rules work when the first hypothesis is right; they fail on multi-layered root causes. Hypothesis-bounded passes preserve the "don't loop forever" intent while allowing diagnostic iteration.
+
+### 4. Debate agents for stuck fixes
+
+**Observation:** When #239 was still blocked after Phase H pass 2, the manager dispatched 3 parallel debate agents (pragmatist, robustness-first, root-cause) plus 1 referee to select the winning approach. The referee hit a quota limit mid-execution, but the 3 self-contained proposals alone gave the manager enough signal to pick "pre-built server" without the referee. This pattern was not in the original workflow.
+
+**Rule:** Add a formal debate escalation sub-process to Phase G/H. When a rework pass fails and the manager is unsure of the next approach, dispatch 2-3 proposal agents with different priors (minimalist / robustness / root-cause investigator) in parallel. Each writes a self-contained proposal. The manager may then decide directly or dispatch a referee. A debate escalation counts as one "pass" for rework-boundary purposes.
+
+**Rationale:** Parallel proposals cost roughly the same tokens as one exhaustive investigation but expose three angles. Self-contained proposals mean the manager is resilient to referee failure.
+
+### 5. PR base pointer hygiene on stacked branches
+
+**Observation:** When Phase C agents produce chained PRs (branch X stacked on branch Y), the PR's base pointer on GitHub should be set to Y, not master. Otherwise the PR diff shows all of Y's commits plus X's, confusing reviewers who think X has massive scope. Phase F reviews for #240 and #242 both flagged "100+ file scope violations" that were base-pointer artifacts, not real scope problems.
+
+**Rule:** Phase E (PR open) must include "if the branch is stacked on another open PR's branch, set `--base <parent-branch>` when running `gh pr create`." The manager should verify PR base pointers in a quick audit step after Phase E completes, and correct any via `gh pr edit --base` before Phase F dispatch.
+
+**Rationale:** Wrong base pointers waste reviewer attention on nonexistent findings and pollute `pr-review.md` with noise. A 30-second audit prevents 20 minutes of false-positive triage.
+
 ## History
 
 - **Waves 1-3** (PRs #111-#147): informal version of this workflow, refined each wave
 - **2026-04-05**: formalized to 10 steps after three review agents caught real process gaps during a Wave 3 PR review
 - **Wave 4** (PRs #148-#228): full workflow applied, manual testing prep moved into Phase A
 - **2026-04-10**: documented and wired to `/issue-pipeline` slash command
+- **2026-04-11**: v0.3.1 first full pipeline run — 7 PRs merged (#237-#243). Workflow updated with 5 lessons.
