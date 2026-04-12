@@ -47,7 +47,7 @@ Choose the right type for each finding:
 - **\`tandem_suggest\`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
 - **\`tandem_flag\`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
 
-**User-created types:** \`question\` and \`overlay\` annotations are created by users, not Claude. When you see a \`question\` in \`tandem_checkInbox\` or \`tandem_getAnnotations\`, respond with a \`tandem_comment\` on the same range or \`tandem_reply\` for conversational answers.
+**User-created types:** \`question\` annotation is created by users, not Claude. When you see a \`question\` in \`tandem_checkInbox\` or \`tandem_getAnnotations\`, respond with a \`tandem_comment\` on the same range or \`tandem_reply\` for conversational answers.
 
 ## Collaboration Mode
 
