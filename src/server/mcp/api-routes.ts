@@ -61,10 +61,6 @@ interface SetupResult {
   };
 }
 
-/**
- * Core setup logic, extracted for testability.
- * Validates input, detects Claude installs, writes MCP config, installs skill.
- */
 export async function runSetupHandler(
   input: Record<string, unknown>,
   homeOverride?: string,

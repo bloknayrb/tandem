@@ -4,8 +4,9 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
-/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts
+/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479)
 const HEALTH_URL: &str = "http://localhost:3479/health";
+const SETUP_URL: &str = "http://localhost:3479/api/setup";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESTARTS: u32 = 3;
@@ -38,7 +39,15 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = start_sidecar(&handle).await {
+                let client = match build_http_client(Duration::from_secs(5)) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("HTTP client init failed: {e}");
+                        return;
+                    }
+                };
+
+                if let Err(e) = start_sidecar(&handle, &client).await {
                     log::error!("Sidecar failed: {e}");
                     // TODO: show user-visible error dialog
                     return;
@@ -46,7 +55,7 @@ pub fn run() {
 
                 // Setup fires after health check passes — in BOTH paths
                 // (freshly spawned sidecar OR already-running dev server)
-                if let Err(e) = run_setup(&handle).await {
+                if let Err(e) = run_setup(&handle, &client).await {
                     log::warn!("MCP setup failed (non-fatal): {e}");
                 }
             });
@@ -91,9 +100,7 @@ fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
 
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
-async fn start_sidecar(handle: &tauri::AppHandle) -> Result<(), String> {
-    let client = build_http_client(Duration::from_secs(2))?;
-
+async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> Result<(), String> {
     // Dev mode: skip spawn if server is already running (e.g. npm run dev:standalone)
     if check_health(&client).await {
         log::info!("Server already healthy — skipping sidecar spawn");
@@ -182,14 +189,12 @@ async fn check_health(client: &reqwest::Client) -> bool {
     false
 }
 
-const SETUP_URL: &str = "http://localhost:3479/api/setup";
 const CLAUDE_DOWNLOAD_URL: &str = "https://claude.ai/download";
 
 /// POST to /api/setup with resolved paths. Best-effort — failures are logged, not fatal.
-async fn run_setup(handle: &tauri::AppHandle) -> Result<(), String> {
+async fn run_setup(handle: &tauri::AppHandle, client: &reqwest::Client) -> Result<(), String> {
     let (node_binary, channel_path) = resolve_setup_paths(handle)?;
 
-    let client = build_http_client(Duration::from_secs(5))?;
     let body = serde_json::json!({
         "nodeBinary": node_binary,
         "channelPath": channel_path,
