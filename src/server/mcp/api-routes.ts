@@ -12,6 +12,7 @@ import {
   CHANNEL_SSE_KEEPALIVE_MS,
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  TAURI_HOSTNAME,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -31,11 +32,11 @@ export type Handler = (req: Request, res: Response, next: NextFunction) => void;
 /** Check if a Host header value is allowed (localhost only). Exported for testing. */
 export function isHostAllowed(host: string | undefined): boolean {
   const reqHost = (host ?? "").split(":")[0];
-  return reqHost === "localhost" || reqHost === "127.0.0.1";
+  return reqHost === "localhost" || reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME;
 }
 
 /** Check if an Origin header is a localhost URL. Exported for testing. */
-export const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+export const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?$/;
 export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");
 }

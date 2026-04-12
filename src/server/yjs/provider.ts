@@ -1,6 +1,8 @@
 import { Hocuspocus } from "@hocuspocus/server";
 import * as Y from "yjs";
 
+import { TAURI_HOSTNAME } from "../../shared/constants.js";
+
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
 
@@ -71,7 +73,11 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
         throw new Error("Connection rejected: missing origin header");
       }
       const url = new URL(origin);
-      if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      if (
+        url.hostname !== "localhost" &&
+        url.hostname !== "127.0.0.1" &&
+        url.hostname !== TAURI_HOSTNAME
+      ) {
         console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
         throw new Error("Connection rejected: invalid origin");
       }
