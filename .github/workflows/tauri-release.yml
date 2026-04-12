@@ -63,11 +63,13 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $cert = New-SelfSignedCertificate `
             -Type CodeSigningCert `
             -Subject "CN=Tandem Editor, O=Tandem" `
             -CertStoreLocation Cert:\CurrentUser\My `
             -NotAfter (Get-Date).AddYears(5)
+          if (-not $cert) { throw "Failed to create code signing certificate" }
           echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
       - name: Configure Windows code signing
