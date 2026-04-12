@@ -38,6 +38,11 @@
     "externalBin": [
       "binaries/node-sidecar"
     ],
-    "resources": []
+    "resources": [
+      "../dist/server/**",
+      "../dist/channel/**",
+      "../dist/client/**",
+      "../sample/**"
+    ]
   }
 }
