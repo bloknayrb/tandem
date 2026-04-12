@@ -17,6 +17,13 @@ const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 
+/// Strip the Windows extended-length path prefix (`\\?\`) that Tauri's
+/// `resource_dir()` / `app_data_dir()` return. Node.js can't resolve these.
+fn strip_win_prefix(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
 // Tray menu item IDs — matched in on_menu_event
 const MENU_OPEN: &str = "open";
 const MENU_SETUP: &str = "setup";
@@ -277,13 +284,13 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
         .resource_dir()
         .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
     let server_js = resource_dir.join("dist/server/index.js");
-    let server_js_str = server_js.to_string_lossy().into_owned();
+    let server_js_str = strip_win_prefix(&server_js);
 
     let app_data_dir = handle
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
-    let app_data_dir_str = app_data_dir.to_string_lossy().into_owned();
+    let app_data_dir_str = strip_win_prefix(&app_data_dir);
 
     for attempt in 0..=MAX_RESTARTS {
         if attempt > 0 {
@@ -296,7 +303,7 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
 
         let (rx, child) = handle
             .shell()
-            .sidecar("binaries/node-sidecar")
+            .sidecar("node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
             .args([server_js_str.as_str()])
             .env("TANDEM_OPEN_BROWSER", "0")
@@ -498,8 +505,8 @@ fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), St
         let node_binary = exe_dir.join(sidecar_name);
 
         Ok((
-            node_binary.to_string_lossy().into_owned(),
-            channel_path.to_string_lossy().into_owned(),
+            strip_win_prefix(&node_binary),
+            strip_win_prefix(&channel_path),
         ))
     }
 }

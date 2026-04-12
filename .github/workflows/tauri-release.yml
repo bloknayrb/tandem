@@ -59,6 +59,29 @@ jobs:
       - name: Download Node.js sidecar
         run: node scripts/download-node-sidecar.mjs --target ${{ matrix.node-target }}
 
+      - name: Create self-signed code signing certificate
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=Tandem Editor, O=Tandem" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -NotAfter (Get-Date).AddYears(5)
+          echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      - name: Configure Windows code signing
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json -Depth 20
+          $config.bundle | Add-Member -NotePropertyName windows -NotePropertyValue @{
+            certificateThumbprint = $env:CERT_THUMBPRINT
+            digestAlgorithm = "sha256"
+            timestampUrl = "http://timestamp.digicert.com"
+          } -Force
+          $config | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
