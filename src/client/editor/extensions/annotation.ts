@@ -4,6 +4,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
 import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";
 
@@ -21,7 +22,7 @@ function buildDecorations(
   const maxPos = doc.content.size;
 
   annotationsMap.forEach((value) => {
-    const ann = value as Annotation;
+    const ann = sanitizeAnnotation(value as Annotation);
     if (ann.status !== "pending") return;
     if (!ann.range && !ann.relRange) return;
 
@@ -55,30 +56,33 @@ function buildDecorations(
         break;
       }
       case "comment":
-        attrs = {
-          class: "tandem-comment",
-          style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
-          "data-annotation-id": ann.id,
-          "aria-label": "Comment annotation",
-        };
-        break;
-      case "suggestion":
-        attrs = {
-          class: "tandem-suggestion",
-          style:
-            "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
-          "data-annotation-id": ann.id,
-          "aria-label": "Suggestion annotation",
-        };
-        break;
-      case "question":
-        attrs = {
-          class: "tandem-question",
-          style:
-            "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
-          "data-annotation-id": ann.id,
-          "aria-label": "Question annotation",
-        };
+        if (ann.suggestedText !== undefined) {
+          // Comment with replacement → wavy purple underline (suggestion visual)
+          attrs = {
+            class: "tandem-suggestion",
+            style:
+              "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
+            "data-annotation-id": ann.id,
+            "aria-label": "Replacement annotation",
+          };
+        } else if (ann.directedAt === "claude") {
+          // Comment directed at Claude → solid blue underline (question visual)
+          attrs = {
+            class: "tandem-question",
+            style:
+              "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
+            "data-annotation-id": ann.id,
+            "aria-label": "Question annotation",
+          };
+        } else {
+          // Plain comment → dashed blue underline (unchanged)
+          attrs = {
+            class: "tandem-comment",
+            style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
+            "data-annotation-id": ann.id,
+            "aria-label": "Comment annotation",
+          };
+        }
         break;
       case "flag":
         attrs = {
@@ -89,15 +93,18 @@ function buildDecorations(
           "aria-label": "Flag annotation",
         };
         break;
-      default:
-        return; // Unknown type, skip
+      default: {
+        const _exhaustive: never = ann;
+        console.warn("[annotation] Unhandled annotation type in buildDecorations, skipping");
+        return;
+      }
     }
 
     try {
       decorations.push(Decoration.inline(from, to, attrs));
     } catch (err) {
-      // RangeError expected during concurrent edits (stale positions)
       if (!(err instanceof RangeError)) throw err;
+      console.debug("[annotation] RangeError for %s (from=%d, to=%d), skipping", ann.id, from, to);
     }
   });
 

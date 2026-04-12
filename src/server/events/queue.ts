@@ -21,6 +21,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
+import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { TandemEvent } from "./types.js";
@@ -154,8 +155,16 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
     if (txn.origin === MCP_ORIGIN) return;
 
     for (const [key, change] of event.changes.keys) {
-      const ann = annotationsMap.get(key) as Annotation | undefined;
-      if (!ann) continue;
+      const raw = annotationsMap.get(key) as Annotation | undefined;
+      if (!raw) continue;
+
+      let ann: Annotation;
+      try {
+        ann = sanitizeAnnotation(raw);
+      } catch (err) {
+        console.warn(`[EventQueue] sanitizeAnnotation failed for key=${key}:`, err);
+        continue;
+      }
 
       if (change.action === "add" && ann.author === "user") {
         pushEvent({
@@ -168,6 +177,8 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
             annotationType: ann.type,
             content: ann.content,
             textSnippet: ann.textSnapshot ?? "",
+            ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
+            ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
           },
         });
       } else if (change.action === "update" && ann.author === "claude") {

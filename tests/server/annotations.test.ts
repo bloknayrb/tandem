@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   collectAnnotations,
   createAnnotation,
   refreshRange,
+  sanitizeAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
@@ -77,12 +78,12 @@ describe("collectAnnotations", () => {
     const map = getAnnotationsMap(doc);
     createAnnotation(map, doc, "comment", rangeOf(0, 2), "c");
     createAnnotation(map, doc, "highlight", rangeOf(0, 2), "h");
-    createAnnotation(map, doc, "suggestion", rangeOf(0, 2), "{}");
+    createAnnotation(map, doc, "flag", rangeOf(0, 2), "f");
 
     const types = collectAnnotations(map).map((a) => a.type);
     expect(types).toContain("comment");
     expect(types).toContain("highlight");
-    expect(types).toContain("suggestion");
+    expect(types).toContain("flag");
   });
 });
 
@@ -92,21 +93,17 @@ describe("filter logic", () => {
     const map = getAnnotationsMap(doc);
     createAnnotation(map, doc, "comment", rangeOf(0, 4), "a comment");
     createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "yellow" });
-    createAnnotation(
-      map,
-      doc,
-      "suggestion",
-      rangeOf(5, 12),
-      JSON.stringify({ newText: "stuff", reason: "clarity" }),
-    );
+    createAnnotation(map, doc, "comment", rangeOf(5, 12), "clarity", {
+      suggestedText: "stuff",
+    });
     return map;
   }
 
   it("filters by type", () => {
     const map = setupAnnotations();
     const comments = collectAnnotations(map).filter((a) => a.type === "comment");
-    expect(comments).toHaveLength(1);
-    expect(comments[0].content).toBe("a comment");
+    expect(comments).toHaveLength(2); // plain comment + suggestion-style comment
+    expect(comments.find((a) => a.content === "a comment")).toBeTruthy();
   });
 
   it("filters by status", () => {
@@ -123,47 +120,39 @@ describe("filter logic", () => {
     expect(user).toHaveLength(0);
   });
 
-  it("compound filter: author + type", () => {
+  it("compound filter: author + suggestedText", () => {
     const map = setupAnnotations();
     const result = collectAnnotations(map)
       .filter((a) => a.author === "claude")
-      .filter((a) => a.type === "suggestion");
+      .filter((a) => a.suggestedText !== undefined);
     expect(result).toHaveLength(1);
   });
 });
 
-describe("suggestion JSON contract", () => {
-  it("suggestion content is parseable JSON with newText and reason", () => {
+describe("suggestion fields on comment type", () => {
+  it("comment with suggestedText stores replacement and reason separately", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(
-      map,
-      doc,
-      "suggestion",
-      rangeOf(0, 4),
-      JSON.stringify({ newText: "replacement", reason: "better wording" }),
-    );
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "better wording", {
+      suggestedText: "replacement",
+    });
 
     const stored = map.get(id) as Annotation;
-    const parsed = JSON.parse(stored.content);
-    expect(parsed.newText).toBe("replacement");
-    expect(parsed.reason).toBe("better wording");
+    expect(stored.type).toBe("comment");
+    expect(stored.suggestedText).toBe("replacement");
+    expect(stored.content).toBe("better wording");
   });
 
-  it("suggestion with empty reason", () => {
+  it("comment with suggestedText and empty reason", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(
-      map,
-      doc,
-      "suggestion",
-      rangeOf(0, 4),
-      JSON.stringify({ newText: "x", reason: "" }),
-    );
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "", {
+      suggestedText: "x",
+    });
 
     const stored = map.get(id) as Annotation;
-    const parsed = JSON.parse(stored.content);
-    expect(parsed.reason).toBe("");
+    expect(stored.suggestedText).toBe("x");
+    expect(stored.content).toBe("");
   });
 });
 
@@ -313,5 +302,154 @@ describe("refreshRange", () => {
     const refreshed = refreshRange(ann, doc);
     // Falls back to original range since relRange can't resolve
     expect(refreshed.range).toEqual({ from: 6, to: 12 });
+  });
+});
+
+describe("sanitizeAnnotation", () => {
+  const base = {
+    id: "ann_test_1",
+    author: "claude" as const,
+    range: { from: 0, to: 5 },
+    content: "test",
+    status: "pending" as const,
+    timestamp: 1000,
+  };
+
+  it("converts legacy suggestion with valid JSON to comment + suggestedText", () => {
+    const legacy = {
+      ...base,
+      type: "suggestion",
+      content: JSON.stringify({ newText: "Hi", reason: "brevity" }),
+    };
+    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.suggestedText).toBe("Hi");
+    expect(result.content).toBe("brevity");
+  });
+
+  it("converts legacy suggestion with malformed JSON to plain comment", () => {
+    const legacy = { ...base, type: "suggestion", content: "not-json" };
+    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.suggestedText).toBeUndefined();
+    expect(result.content).toBe("not-json");
+  });
+
+  it("converts legacy suggestion with partial JSON (missing reason)", () => {
+    const legacy = {
+      ...base,
+      type: "suggestion",
+      content: JSON.stringify({ newText: "Hi" }),
+    };
+    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.suggestedText).toBe("Hi");
+    expect(result.content).toBe("");
+  });
+
+  it("converts legacy question to comment with directedAt", () => {
+    const legacy = { ...base, type: "question" };
+    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.directedAt).toBe("claude");
+  });
+
+  it("strips stray color from non-highlight entries", () => {
+    const withStrayColor = { ...base, type: "comment", color: "yellow" };
+    const result = sanitizeAnnotation(withStrayColor as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.color).toBeUndefined();
+  });
+
+  it("preserves color on highlight entries", () => {
+    const highlight = { ...base, type: "highlight", color: "yellow" };
+    const result = sanitizeAnnotation(highlight as unknown as Annotation);
+    expect(result.type).toBe("highlight");
+    expect(result.color).toBe("yellow");
+  });
+
+  it("passes through valid comment with suggestedText unchanged", () => {
+    const comment = { ...base, type: "comment", suggestedText: "replacement" };
+    const result = sanitizeAnnotation(comment as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.suggestedText).toBe("replacement");
+    expect(result.content).toBe("test");
+  });
+
+  it("passes through valid comment with directedAt unchanged", () => {
+    const comment = { ...base, type: "comment", directedAt: "claude" as const };
+    const result = sanitizeAnnotation(comment as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(result.directedAt).toBe("claude");
+  });
+
+  it("passes through valid flag unchanged", () => {
+    const flag = { ...base, type: "flag" };
+    const result = sanitizeAnnotation(flag as unknown as Annotation);
+    expect(result.type).toBe("flag");
+  });
+
+  it("preserves optional fields (relRange, textSnapshot, editedAt)", () => {
+    const legacy = {
+      ...base,
+      type: "suggestion",
+      content: JSON.stringify({ newText: "x", reason: "y" }),
+      textSnapshot: "original",
+      editedAt: 2000,
+    };
+    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    expect(result.textSnapshot).toBe("original");
+    expect(result.editedAt).toBe(2000);
+  });
+
+  it("warns and coerces truly unknown types to comment", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unknown = { ...base, type: "note" };
+    const result = sanitizeAnnotation(unknown as unknown as Annotation);
+    expect(result.type).toBe("comment");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown type "note"'));
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn for valid comment type", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const comment = { ...base, type: "comment" };
+    sanitizeAnnotation(comment as unknown as Annotation);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("preserves textSnapshot: '' (empty string)", () => {
+    const ann = { ...base, type: "comment", textSnapshot: "" };
+    const result = sanitizeAnnotation(ann as unknown as Annotation);
+    expect(result.textSnapshot).toBe("");
+  });
+
+  it("preserves editedAt: 0", () => {
+    const ann = { ...base, type: "comment", editedAt: 0 };
+    const result = sanitizeAnnotation(ann as unknown as Annotation);
+    expect(result.editedAt).toBe(0);
+  });
+
+  it("collectAnnotations sanitizes legacy shapes from Y.Map", () => {
+    doc = makeDoc("test");
+    const map = getAnnotationsMap(doc);
+
+    // Manually insert a legacy suggestion into the Y.Map
+    map.set("legacy-1", {
+      id: "legacy-1",
+      author: "claude",
+      type: "suggestion",
+      range: { from: 0, to: 4 },
+      content: JSON.stringify({ newText: "Hello", reason: "greeting" }),
+      status: "pending",
+      timestamp: 1000,
+    });
+
+    const annotations = collectAnnotations(map);
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0].type).toBe("comment");
+    expect(annotations[0].suggestedText).toBe("Hello");
+    expect(annotations[0].content).toBe("greeting");
   });
 });

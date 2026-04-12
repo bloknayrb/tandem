@@ -9,6 +9,7 @@ import {
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
 } from "../../shared/constants";
+import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
 
@@ -89,7 +90,7 @@ export function useYjsSync(): YjsSyncResult {
     const annotationObserver = () => {
       const anns: Annotation[] = [];
       annotationsMap.forEach((value) => {
-        anns.push(value as Annotation);
+        anns.push(sanitizeAnnotation(value as Annotation));
       });
       setAnnotations(anns);
     };

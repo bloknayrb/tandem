@@ -13,13 +13,8 @@ export { toFlatOffset, toPmPos, toSerializedRelPos } from "./positions/types.js"
 
 // --- Zod schemas (source of truth) ---
 
-export const AnnotationTypeSchema = z.enum([
-  "highlight",
-  "comment",
-  "suggestion",
-  "question",
-  "flag",
-]);
+export const AnnotationTypeSchema = z.enum(["highlight", "comment", "flag"]);
+
 export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
 export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
@@ -48,24 +43,49 @@ export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 
-// --- Interfaces (not worth converting to Zod — no runtime validation needed) ---
+// --- Annotation types ---
 
-export interface Annotation {
+interface AnnotationBase {
   id: string;
   author: "user" | "claude" | "import";
-  type: AnnotationType;
   range: DocumentRange;
   /** CRDT-anchored range that survives edits. Falls back to `range` if absent. */
   relRange?: RelativeRange;
   content: string;
   status: AnnotationStatus;
   timestamp: number;
-  color?: HighlightColor;
   /** Snapshot of the annotated document text at creation time. Truncated to 200 chars. */
   textSnapshot?: string;
   /** Timestamp of last edit to the annotation content. */
   editedAt?: number;
 }
+
+/**
+ * Discriminated union for annotations. Three canonical types:
+ * - `highlight` — marks text with a color and optional note
+ * - `comment` — note on text; optionally carries `suggestedText` (replacement)
+ *   or `directedAt: "claude"` (question)
+ * - `flag` — flags text for attention
+ */
+export type Annotation =
+  | (AnnotationBase & {
+      type: "highlight";
+      color?: HighlightColor;
+      suggestedText?: undefined;
+      directedAt?: undefined;
+    })
+  | (AnnotationBase & {
+      type: "comment";
+      color?: undefined;
+      suggestedText?: string;
+      directedAt?: "claude";
+    })
+  | (AnnotationBase & {
+      type: "flag";
+      color?: undefined;
+      suggestedText?: undefined;
+      directedAt?: undefined;
+    });
 
 export interface AnchoredRange {
   start: { nodeId: string; offset: number };

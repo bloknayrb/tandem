@@ -69,7 +69,12 @@ describe("tandem_checkInbox logic", () => {
     makeDoc("Hello world");
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
-    addAnnotation(map, { author: "claude", type: "suggestion", status: "accepted" });
+    addAnnotation(map, {
+      author: "claude",
+      type: "comment",
+      status: "accepted",
+      suggestedText: "replacement",
+    });
     addAnnotation(map, { author: "claude", type: "comment", status: "dismissed" });
     addAnnotation(map, { author: "claude", type: "highlight", status: "pending" }); // Still pending, not a response
 
@@ -79,19 +84,20 @@ describe("tandem_checkInbox logic", () => {
     expect(responses.length).toBe(2);
   });
 
-  it("question annotation type works", () => {
+  it("question annotation (directedAt claude) works", () => {
     makeDoc("Hello world");
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
     const _question = addAnnotation(map, {
       author: "user",
-      type: "question",
+      type: "comment",
       range: { from: 0, to: 5 },
       content: "What does this mean?",
+      directedAt: "claude",
     });
 
     const allAnns = collectAnnotations(map);
-    const questions = allAnns.filter((a) => a.type === "question");
+    const questions = allAnns.filter((a) => a.directedAt === "claude");
 
     expect(questions.length).toBe(1);
     expect(questions[0].content).toBe("What does this mean?");

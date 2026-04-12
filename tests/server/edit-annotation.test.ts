@@ -77,8 +77,9 @@ describe("tandem_editAnnotation", () => {
   it("edits a suggestion's newText, preserving reason", async () => {
     const ydoc = setupDoc("edit-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const originalContent = JSON.stringify({ newText: "Hi", reason: "brevity" });
-    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), originalContent);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "brevity", {
+      suggestedText: "Hi",
+    });
 
     const result = await client.callTool({
       name: "tandem_editAnnotation",
@@ -86,19 +87,19 @@ describe("tandem_editAnnotation", () => {
     });
     const parsed = parseResult(result as any);
     expect(parsed.error).toBe(false);
-    expect(parsed.data.content).toContain("Hey");
+    expect(parsed.data.suggestedText).toBe("Hey");
 
     const ann = map.get(id) as Annotation;
-    const content = JSON.parse(ann.content);
-    expect(content.newText).toBe("Hey");
-    expect(content.reason).toBe("brevity"); // preserved
+    expect(ann.suggestedText).toBe("Hey");
+    expect(ann.content).toBe("brevity"); // preserved
   });
 
   it("edits a suggestion's reason only", async () => {
     const ydoc = setupDoc("edit-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const originalContent = JSON.stringify({ newText: "Hi", reason: "brevity" });
-    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), originalContent);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "brevity", {
+      suggestedText: "Hi",
+    });
 
     await client.callTool({
       name: "tandem_editAnnotation",
@@ -106,9 +107,8 @@ describe("tandem_editAnnotation", () => {
     });
 
     const ann = map.get(id) as Annotation;
-    const content = JSON.parse(ann.content);
-    expect(content.newText).toBe("Hi"); // preserved
-    expect(content.reason).toBe("more concise");
+    expect(ann.suggestedText).toBe("Hi"); // preserved
+    expect(ann.content).toBe("more concise");
   });
 
   it("rejects edit on a resolved annotation", async () => {
@@ -142,11 +142,12 @@ describe("tandem_editAnnotation", () => {
     expect(parsed.message).toContain("No editable fields");
   });
 
-  it("rejects when no editable fields provided for suggestion", async () => {
+  it("rejects when no editable fields provided for comment with suggestedText", async () => {
     const ydoc = setupDoc("edit-6", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const originalContent = JSON.stringify({ newText: "Hi", reason: "brevity" });
-    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), originalContent);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "brevity", {
+      suggestedText: "Hi",
+    });
 
     const result = await client.callTool({ name: "tandem_editAnnotation", arguments: { id } });
     const parsed = parseResult(result as any);
@@ -182,21 +183,91 @@ describe("tandem_editAnnotation", () => {
     expect(ann.editedAt).toBeDefined();
   });
 
-  it("returns error on malformed suggestion content when merging fields", async () => {
+  it("edits suggestedText on a comment that already has it", async () => {
     const ydoc = setupDoc("edit-9", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    // Create suggestion with malformed content
-    const id = createAnnotation(map, ydoc, "suggestion", rangeOf(0, 5, ydoc), "not-json");
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "reason", {
+      suggestedText: "Old",
+    });
 
     const result = await client.callTool({
       name: "tandem_editAnnotation",
-      arguments: { id, newText: "Hi" },
+      arguments: { id, newText: "New" },
     });
     const parsed = parseResult(result as any);
-    expect(parsed.message).toContain("malformed content");
+    expect(parsed.error).toBe(false);
 
-    // Content should be unchanged
     const ann = map.get(id) as Annotation;
-    expect(ann.content).toBe("not-json");
+    expect(ann.suggestedText).toBe("New");
+    expect(ann.content).toBe("reason"); // preserved
+  });
+
+  it("rejects newText on a highlight annotation", async () => {
+    const ydoc = setupDoc("edit-10", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "note", {
+      color: "yellow",
+    });
+
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, newText: "replacement" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.message).toContain("Only comments support suggestedText");
+  });
+});
+
+describe("tandem_comment via MCP", () => {
+  it("creates annotation with suggestedText", async () => {
+    const ydoc = setupDoc("comment-st-1", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const result = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "more concise", suggestedText: "Hi" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(false);
+
+    const ann = map.get(parsed.data.annotationId) as Annotation;
+    expect(ann.type).toBe("comment");
+    expect(ann.suggestedText).toBe("Hi");
+    expect(ann.content).toBe("more concise");
+  });
+
+  it("creates annotation with directedAt", async () => {
+    const ydoc = setupDoc("comment-da-1", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const result = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "Is this right?", directedAt: "claude" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(false);
+
+    const ann = map.get(parsed.data.annotationId) as Annotation;
+    expect(ann.type).toBe("comment");
+    expect(ann.directedAt).toBe("claude");
+  });
+});
+
+describe("tandem_suggest shim via MCP", () => {
+  it("creates comment with suggestedText from newText/reason", async () => {
+    const ydoc = setupDoc("suggest-shim-1", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const result = await client.callTool({
+      name: "tandem_suggest",
+      arguments: { from: 0, to: 5, newText: "Hi", reason: "brevity" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(false);
+
+    const ann = map.get(parsed.data.annotationId) as Annotation;
+    expect(ann.type).toBe("comment");
+    expect(ann.suggestedText).toBe("Hi");
+    expect(ann.content).toBe("brevity");
   });
 });

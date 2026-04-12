@@ -9,7 +9,7 @@ import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import type { FlatOffset } from "../../shared/types.js";
+import type { Annotation, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
@@ -174,7 +174,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
           ? `[${comment.authorName}] ${comment.bodyText}`
           : comment.bodyText;
 
-      const annotation: Record<string, unknown> = {
+      const annotation: Annotation = {
         id,
         author: "import" as const,
         type: "comment" as const,
@@ -182,12 +182,8 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
         content,
         status: "pending" as const,
         timestamp: comment.date ? new Date(comment.date).getTime() : Date.now(),
+        ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
       };
-
-      // Attach CRDT-anchored range when available
-      if (result.fullyAnchored) {
-        annotation.relRange = result.relRange;
-      }
 
       map.set(id, annotation);
       injected++;

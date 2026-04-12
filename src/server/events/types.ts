@@ -13,6 +13,8 @@ export interface AnnotationCreatedPayload {
   annotationType: string;
   content: string;
   textSnippet: string;
+  hasSuggestedText?: boolean;
+  directedAt?: "claude";
 }
 
 export interface AnnotationAcceptedPayload {
@@ -121,9 +123,14 @@ export function formatEventContent(event: TandemEvent): string {
 
   switch (event.type) {
     case "annotation:created": {
-      const { annotationType, content, textSnippet } = event.payload;
+      const { annotationType, content, textSnippet, hasSuggestedText, directedAt } = event.payload;
       const snippet = textSnippet ? ` on "${textSnippet}"` : "";
-      return `User created ${annotationType}${snippet}: ${content || "(no content)"}${doc}`;
+      const label = hasSuggestedText
+        ? "replacement"
+        : directedAt === "claude"
+          ? "question for Claude"
+          : annotationType;
+      return `User created ${label}${snippet}: ${content || "(no content)"}${doc}`;
     }
     case "annotation:accepted": {
       const { annotationId, textSnippet } = event.payload;

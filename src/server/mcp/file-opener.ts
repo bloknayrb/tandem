@@ -36,6 +36,7 @@ import {
   startAutoSave,
 } from "../session/manager.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
+import { sanitizeAnnotation } from "./annotations.js";
 import { detectFormat, docIdFromPath, extractText, populateYDoc } from "./document-model.js";
 import {
   addDoc,
@@ -450,10 +451,10 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       }
     }, MCP_ORIGIN);
 
-    // 3. Refresh all annotation ranges in a batch transaction
+    // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
     const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
     const annotations: Annotation[] = [];
-    annotationMap.forEach((val) => annotations.push(val as Annotation));
+    annotationMap.forEach((val) => annotations.push(sanitizeAnnotation(val as Annotation)));
 
     if (annotations.length > 0) {
       const refreshed = refreshAllRanges(annotations, doc, annotationMap);

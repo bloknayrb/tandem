@@ -99,7 +99,7 @@ describe("origin filtering", () => {
     doc.transact(() => {
       map.set("ann_c", {
         id: "ann_c",
-        type: "suggestion",
+        type: "comment",
         author: "claude",
         content: "fix this",
         status: "pending",
@@ -112,7 +112,7 @@ describe("origin filtering", () => {
     // Browser user accepts it (non-MCP update)
     map.set("ann_c", {
       id: "ann_c",
-      type: "suggestion",
+      type: "comment",
       author: "claude",
       content: "fix this",
       status: "accepted",
@@ -132,7 +132,7 @@ describe("origin filtering", () => {
     doc.transact(() => {
       map.set("ann_d", {
         id: "ann_d",
-        type: "suggestion",
+        type: "comment",
         author: "claude",
         content: "try this",
         status: "pending",
@@ -143,7 +143,7 @@ describe("origin filtering", () => {
 
     map.set("ann_d", {
       id: "ann_d",
-      type: "suggestion",
+      type: "comment",
       author: "claude",
       content: "try this",
       status: "dismissed",
@@ -291,7 +291,7 @@ describe("wasEmittedViaChannel (ref-counted dedup)", () => {
     // Create annotation (emits annotation:created with annotationId)
     map.set("ann_rc", {
       id: "ann_rc",
-      type: "suggestion",
+      type: "comment",
       author: "user",
       content: "test",
       status: "pending",

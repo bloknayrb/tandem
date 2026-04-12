@@ -14,31 +14,14 @@ export interface AnnotationCardProps {
   onClick?: () => void;
 }
 
-const ANNOTATION_BORDER_COLORS: Record<string, string> = {
-  comment: "#3b82f6",
-  suggestion: "#8b5cf6",
-  question: "#6366f1",
-  flag: "#ef4444",
-};
-
 function getBorderColor(annotation: Annotation): string {
   if (annotation.color) {
     return HIGHLIGHT_COLORS[annotation.color] || "#e5e7eb";
   }
-  return ANNOTATION_BORDER_COLORS[annotation.type] || "#e5e7eb";
-}
-
-/** Parse suggestion content JSON, returning { newText, reason } or null on failure */
-export function parseSuggestion(content: string): { newText: string; reason: string } | null {
-  try {
-    const parsed = JSON.parse(content);
-    if (typeof parsed.newText === "string") {
-      return { newText: parsed.newText, reason: parsed.reason || "" };
-    }
-  } catch {
-    // not valid suggestion JSON
-  }
-  return null;
+  if (annotation.suggestedText !== undefined) return "#8b5cf6"; // replacement
+  if (annotation.directedAt === "claude") return "#6366f1"; // question for Claude
+  if (annotation.type === "flag") return "#ef4444";
+  return "#3b82f6"; // plain comment
 }
 
 export const AnnotationCard = React.memo(function AnnotationCard({
@@ -59,18 +42,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   const [editNewText, setEditNewText] = useState("");
   const [editReason, setEditReason] = useState("");
 
-  const isSuggestion = annotation.type === "suggestion";
+  const hasSuggestedText = annotation.suggestedText !== undefined;
 
   function enterEditMode() {
-    if (isSuggestion) {
-      const parsed = parseSuggestion(annotation.content);
-      if (parsed) {
-        setEditNewText(parsed.newText);
-        setEditReason(parsed.reason);
-      } else {
-        setEditNewText(annotation.content);
-        setEditReason("");
-      }
+    if (hasSuggestedText) {
+      setEditNewText(annotation.suggestedText ?? "");
+      setEditReason(annotation.content);
     } else {
       setEditText(annotation.content);
     }
@@ -78,8 +55,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   }
 
   function handleSave() {
-    const newContent = isSuggestion
-      ? JSON.stringify({ newText: editNewText, reason: editReason })
+    // For annotations with suggestedText, we encode both fields back into the
+    // content string as JSON so the existing onEdit handler can pass it through.
+    // The server-side tandem_editAnnotation now accepts newText/reason params
+    // but the client edit path goes through Y.Map.set directly.
+    const newContent = hasSuggestedText
+      ? JSON.stringify({ suggestedText: editNewText, content: editReason })
       : editText;
     onEdit?.(annotation.id, newContent);
     setIsEditing(false);
@@ -123,7 +104,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
       ? annotation.content.slice(0, 57) + "..."
       : annotation.content
     : "";
-  const cardLabel = `${annotation.type} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
+  const displayType = hasSuggestedText
+    ? "replacement"
+    : annotation.directedAt === "claude"
+      ? "question"
+      : annotation.type;
+  const cardLabel = `${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
 
   return (
     <div
@@ -155,7 +141,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
             gap: "4px",
           }}
         >
-          {annotation.type}
+          {displayType}
           {!isPending && (
             <span
               style={{
@@ -224,7 +210,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
       )}
       {isEditing ? (
         <div style={{ marginTop: "4px" }} onClick={(e) => e.stopPropagation()}>
-          {isSuggestion ? (
+          {hasSuggestedText ? (
             <>
               <label
                 style={{
@@ -314,54 +300,50 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         </div>
       ) : (
         <div style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
-          {annotation.type === "suggestion" ? (
-            (() => {
-              const parsed = parseSuggestion(annotation.content);
-              if (!parsed) return <p style={{ margin: 0 }}>{annotation.content}</p>;
-              return (
-                <>
-                  <div
-                    data-testid={`suggestion-diff-${annotation.id}`}
+          {hasSuggestedText ? (
+            <>
+              <div
+                data-testid={`suggestion-diff-${annotation.id}`}
+                style={{
+                  padding: "4px 8px",
+                  marginBottom: annotation.content ? "4px" : 0,
+                  backgroundColor: "#f9fafb",
+                  borderRadius: "3px",
+                  fontSize: "12px",
+                  lineHeight: "1.5",
+                }}
+              >
+                {annotation.textSnapshot && (
+                  <span
                     style={{
-                      padding: "4px 8px",
-                      marginBottom: parsed.reason ? "4px" : 0,
-                      backgroundColor: "#f9fafb",
-                      borderRadius: "3px",
-                      fontSize: "12px",
-                      lineHeight: "1.5",
+                      textDecoration: "line-through",
+                      color: "#dc2626",
+                      backgroundColor: "#fef2f2",
+                      padding: "0 2px",
+                      borderRadius: "2px",
                     }}
                   >
-                    {annotation.textSnapshot && (
-                      <span
-                        style={{
-                          textDecoration: "line-through",
-                          color: "#dc2626",
-                          backgroundColor: "#fef2f2",
-                          padding: "0 2px",
-                          borderRadius: "2px",
-                        }}
-                      >
-                        {annotation.textSnapshot}
-                      </span>
-                    )}
-                    {annotation.textSnapshot && " → "}
-                    <span
-                      style={{
-                        color: "#166534",
-                        backgroundColor: "#f0fdf4",
-                        padding: "0 2px",
-                        borderRadius: "2px",
-                      }}
-                    >
-                      {parsed.newText}
-                    </span>
-                  </div>
-                  {parsed.reason && (
-                    <p style={{ margin: 0, fontSize: "12px", color: "#6b7280" }}>{parsed.reason}</p>
-                  )}
-                </>
-              );
-            })()
+                    {annotation.textSnapshot}
+                  </span>
+                )}
+                {annotation.textSnapshot && " → "}
+                <span
+                  style={{
+                    color: "#166534",
+                    backgroundColor: "#f0fdf4",
+                    padding: "0 2px",
+                    borderRadius: "2px",
+                  }}
+                >
+                  {annotation.suggestedText}
+                </span>
+              </div>
+              {annotation.content && (
+                <p style={{ margin: 0, fontSize: "12px", color: "#6b7280" }}>
+                  {annotation.content}
+                </p>
+              )}
+            </>
           ) : (
             <p style={{ margin: 0 }}>{annotation.content || "(no note)"}</p>
           )}
@@ -381,12 +363,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid #d1d5db",
                 borderRadius: "3px",
-                background: isSuggestion ? "#f0fdf4" : "#eef2ff",
-                color: isSuggestion ? "#166534" : "#1e40af",
+                background: "#f0fdf4",
+                color: "#166534",
                 cursor: "pointer",
               }}
             >
-              {isSuggestion ? "Accept" : "Acknowledge"}
+              {hasSuggestedText ? "Accept" : "Acknowledge"}
             </button>
           )}
           {onDismiss && (

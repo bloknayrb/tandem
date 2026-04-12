@@ -108,13 +108,9 @@ describe("processInboxAnnotations", () => {
   it("buckets resolved Claude annotations into userResponses", () => {
     const ydoc = setupDoc("inbox-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(
-      map,
-      ydoc,
-      "suggestion",
-      rangeOf(0, 5),
-      '{"newText":"Hi","reason":""}',
-    );
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "", {
+      suggestedText: "Hi",
+    });
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
 

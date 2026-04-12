@@ -21,7 +21,7 @@
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-021)
+- [Design Decisions](docs/decisions.md) -- ADRs (001-022)
 - [Lessons Learned](docs/lessons-learned.md) -- 31 lessons including E2E testing gotchas
 
 ## Architecture
