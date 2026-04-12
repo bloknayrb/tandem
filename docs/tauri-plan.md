@@ -71,7 +71,7 @@ Tandem.app / Tandem.exe / Tandem.AppImage
 - **Files:** `src-tauri/tauri.conf.json` (sidecar + resource config), `src-tauri/src/main.rs` (sidecar management)
 - **Key reference:** `src/server/platform.ts` — `waitForPort()` pattern for health checking
 
-### Step 3: MCP Setup (Every Launch)
+### Step 3: MCP Setup (Every Launch) ✅
 - **On every launch** (not just first run): validate and update MCP config paths. App updates, relocations (macOS drag to /Applications), and OS updates can invalidate absolute paths. Cost is a single JSON file write.
 - Detect if Claude Code or Claude Desktop is installed (reuse logic from `src/cli/setup.ts:detectTargets()`)
 - **Critical:** MCP config for `tandem-channel` must write the **absolute path to the bundled Node binary** as `command`, not `"node"`. Resolve via Tauri's `app.path().resource_dir()` at runtime. Example output:
@@ -111,6 +111,7 @@ Tandem.app / Tandem.exe / Tandem.AppImage
   - Generates Tauri updater JSON manifest for auto-updates
 - Download Node.js binaries for each platform at build time (pre-build script)
 - **Target-triple naming (required):** Tauri sidecar binaries must be named `node-sidecar-{target-triple}[.exe]` exactly matching the Rust compilation target (e.g., `node-sidecar-x86_64-apple-darwin`, `node-sidecar-aarch64-apple-darwin`, `node-sidecar-x86_64-pc-windows-msvc.exe`). The pre-build script must detect the active target via `rustc -vV | grep host` and rename the downloaded Node binary accordingly. Build will fail without this.
+- **`sample/welcome.md` copy (from Step 3 deferral):** The app bundle is read-only in production. The server's welcome.md auto-open writes to the file's original path, which fails in a read-only bundle. Step 5 must copy `sample/welcome.md` from `bundle.resources` to the user data dir at first-run (or on version upgrade), and configure the server to open the copy. The existing `TANDEM_DATA_DIR` env var gives the sidecar the right location.
 - **Files:** `.github/workflows/tauri-release.yml`, `scripts/download-node-sidecar.sh`, `package.json` (new scripts)
 
 ### Step 6: Auto-Update
@@ -240,7 +241,7 @@ scripts/
 |------|-------------|--------|
 | 1 | Tauri Project Scaffolding | Done |
 | 2 | Node.js Sidecar Integration | Done |
-| 3 | MCP Setup (Every Launch) | Not started |
+| 3 | MCP Setup (Every Launch) | Done |
 | 4 | Single Instance + System Tray | Not started |
 | 5 | Build Pipeline + CI | Not started |
 | 6 | Auto-Update | Not started |
