@@ -302,7 +302,7 @@ Each open document has its own Y.Doc (one per Hocuspocus room). Each Y.Doc conta
 | Structure | Type | Purpose |
 |-----------|------|---------|
 | `Y.XmlFragment('default')` | Document content | Paragraphs, headings as Y.XmlElement nodes with Y.XmlText children |
-| `Y.Map('annotations')` | Annotation metadata | Highlights, comments, suggestions keyed by annotation ID |
+| `Y.Map('annotations')` | Annotation metadata | Highlights, comments, flags keyed by annotation ID |
 | `Y.Map('awareness')` | Claude's presence | Status text, focus paragraph, active flag |
 | `Y.Map('userAwareness')` | User's presence | Selection range, typing state, cursor position |
 | `Y.Map('documentMeta')` | Document metadata | `openDocuments` array, `activeDocumentId`, readOnly flag, format |
@@ -460,7 +460,7 @@ Server opens sample/welcome.md (first run, no restored sessions)
     → injectTutorialAnnotations() creates 3 pre-placed annotations:
         1. Highlight on "Welcome" heading
         2. Comment on a paragraph
-        3. Suggestion with replacement text
+        3. Comment with replacement text
     → Injection is idempotent (checks for existing IDs)
 
 Browser renders OnboardingTutorial floating card (bottom-left)
@@ -542,7 +542,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files
 - `FileOpenDialog` (`src/client/components/`) -- Path input and drag-and-drop upload for opening files without Claude
 - `HelpModal` (`src/client/components/`) -- Keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)
-- `AnnotationExtension` -- Renders highlights/comments/suggestions as ProseMirror Decorations from Y.Map('annotations')
+- `AnnotationExtension` -- Renders highlights, comments, and flags as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches

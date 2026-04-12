@@ -7,26 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-12
+
+### Changed
+
+- **Annotation type unification:** Three semantically identical types (`comment`, `suggestion`, `question`) collapsed into a single `comment` type with optional `suggestedText` and `directedAt` fields. `AnnotationTypeSchema` reduced from 5 values to 3: `highlight`, `comment`, `flag`. (#193, #245, #255)
+- **Toolbar:** Three annotation buttons (Comment, Suggest, Ask Claude) replaced with a single Comment button with "Replace" and "@Claude" toggles (#193)
+- **Side panel filters:** "Suggestions" → "With replacement", "Questions" → "For Claude" (#193)
+- **`sanitizeAnnotation()` moved to `src/shared/sanitize.ts`** — now available to both server and client code. Client-side Y.Map reads are sanitized to handle legacy session data. (#255)
+
 ### Added
 
 - Link (Ctrl+K), Horizontal Rule, and Code Block buttons in the formatting toolbar (#204)
-- Suggestion cards show a visual diff — original text in red strikethrough → replacement in green (#195)
+- Replacement cards show a visual diff — original text in red strikethrough → replacement in green (#195)
 - Undo countdown progress bar — a shrinking indicator shows the 10-second undo window (#196)
 - Review mode shortcut hints (Y / N / ↑↓ / Z) shown below the Review button (#200)
 - Chat anchor previews expand on hover to show full text (#198)
 - `disabledTitle` prop on toolbar buttons — annotation buttons show "Select text first" when no text is selected (#197)
 - Explicit ✕ close button on the highlight color picker (#203)
+- `tandem_comment` now accepts optional `suggestedText` and `directedAt` parameters (#193)
+- `sanitizeAnnotation()` normalizes legacy `suggestion`/`question` entries at read boundaries — permanent migration for historical session data (#193)
+- Exhaustive type switch in `buildDecorations` catches unhandled annotation types at compile time (#255)
+- 8 new tests covering MCP tool params, sanitization edge cases, and legacy migration paths (#255)
 
 ### Fixed
 
 - Toolbar wraps to a second row on narrow windows instead of overflowing; inline inputs shrink responsively (#192)
 - Edit button on annotation cards now shows a visible "✎ Edit" label instead of icon-only (#201)
+- Client-side legacy annotations (from pre-0.3.2 sessions) no longer render as invisible decorations or display raw JSON (#255)
+- `sanitizeAnnotation` no longer drops `textSnapshot: ""` or `editedAt: 0` via falsy-check bug (#255)
+- Event queue observer no longer silently dies if `sanitizeAnnotation` throws (#255)
+- `handleEdit` catch-block no longer corrupts annotation data on JSON parse failure (#255)
 
-## [0.3.2] - 2026-04-12
+### Deprecated
+
+- `tandem_suggest` MCP tool — use `tandem_comment` with `suggestedText` parameter instead (#193)
 
 ### Removed
 
-- **MCP wire change:** Removed unused `"overlay"` annotation kind from `AnnotationTypeSchema`. No internal code path produced or consumed it, but external clients sending `type: "overlay"` to annotation filtering or creation tools will now receive a Zod validation error. Use `comment`, `suggestion`, `question`, or `flag` instead. Node-anchored analytical overlays (ADR-005, `OverlayEntry` / `OverlayDefinition`) are unrelated and unchanged.
+- **MCP wire change:** Removed unused `"overlay"` annotation kind from `AnnotationTypeSchema`. External clients sending `type: "overlay"` will now receive a Zod validation error. (#249)
+- **MCP wire change:** `suggestion` and `question` annotation types removed from `AnnotationTypeSchema`. Use `comment` with `suggestedText` or `directedAt` fields. Legacy data is migrated automatically via `sanitizeAnnotation()`. (#193)
 
 ## [0.3.0] - 2026-04-07
 
