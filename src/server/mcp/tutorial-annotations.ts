@@ -73,19 +73,19 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         continue;
       }
 
-      const annotation: Annotation = {
+      const annotation = {
         id: def.id,
-        author: "claude",
+        author: "claude" as const,
         type: def.type,
         range: result.range,
         relRange: result.relRange,
         content: def.content,
-        status: "pending",
+        status: "pending" as const,
         timestamp: Date.now(),
         color: def.color,
         textSnapshot: def.targetText,
         ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
-      };
+      } as Annotation;
 
       map.set(def.id, annotation);
       injected++;

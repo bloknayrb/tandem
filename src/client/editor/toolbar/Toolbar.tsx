@@ -107,18 +107,18 @@ export function Toolbar({
     const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
 
     const id = generateAnnotationId();
-    const annotation: Annotation = {
+    const annotation = {
       id,
-      author: "user",
+      author: "user" as const,
       type,
       range: { from: flatFrom, to: flatTo },
       content,
-      status: "pending",
+      status: "pending" as const,
       timestamp: Date.now(),
       ...(extras?.color ? { color: extras.color } : {}),
       ...(extras?.suggestedText !== undefined ? { suggestedText: extras.suggestedText } : {}),
       ...(extras?.directedAt !== undefined ? { directedAt: extras.directedAt } : {}),
-    };
+    } as Annotation;
 
     ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
     capturedRangeRef.current = null;

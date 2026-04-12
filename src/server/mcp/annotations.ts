@@ -97,17 +97,17 @@ export function createAnnotation(
 ): string {
   const id = generateAnnotationId();
 
-  const annotation: Annotation = {
+  const annotation = {
     id,
-    author: "claude",
+    author: "claude" as const,
     type,
     range: anchored.range,
     ...(anchored.relRange ? { relRange: anchored.relRange } : {}),
     content,
-    status: "pending",
+    status: "pending" as const,
     timestamp: Date.now(),
     ...extras,
-  };
+  } as Annotation;
   ydoc.transact(() => map.set(id, annotation), MCP_ORIGIN);
 
   const snippet = annotation.textSnapshot
@@ -134,13 +134,31 @@ export function createAnnotation(
   return id;
 }
 
+/** Raw annotation from Y.Map — may contain legacy `suggestion`/`question` types. */
+type RawAnnotation = Omit<Annotation, "type"> & { type: string };
+
 /**
  * Normalize a legacy annotation into the unified shape.
  * - `suggestion` → `comment` with `suggestedText` + `content` (parsed from JSON)
  * - `question` → `comment` with `directedAt: "claude"`
  * - Strips stray `color` from non-highlight entries (#245)
  */
-export function sanitizeAnnotation(ann: Annotation): Annotation {
+export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotation {
+  const ann = input as RawAnnotation;
+
+  // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
+  const base = {
+    id: ann.id,
+    author: ann.author,
+    range: ann.range,
+    content: ann.content,
+    status: ann.status,
+    timestamp: ann.timestamp,
+    ...(ann.relRange ? { relRange: ann.relRange } : {}),
+    ...(ann.textSnapshot ? { textSnapshot: ann.textSnapshot } : {}),
+    ...(ann.editedAt ? { editedAt: ann.editedAt } : {}),
+  };
+
   if (ann.type === "suggestion") {
     let suggestedText: string | undefined;
     let content: string;
@@ -152,29 +170,33 @@ export function sanitizeAnnotation(ann: Annotation): Annotation {
       // Malformed JSON — keep raw content, no suggestedText
       content = ann.content;
     }
-    return {
-      ...ann,
-      type: "comment",
-      content,
-      suggestedText,
-    };
+    return { ...base, type: "comment", content, suggestedText } as Annotation;
   }
 
   if (ann.type === "question") {
-    return {
-      ...ann,
-      type: "comment",
-      directedAt: "claude",
-    };
+    return { ...base, type: "comment", directedAt: "claude" as const } as Annotation;
   }
 
   // Strip stray color from non-highlight entries (#245)
-  if (ann.type !== "highlight" && "color" in ann) {
-    const { color: _, ...rest } = ann;
-    return rest as Annotation;
+  if (ann.type === "highlight") {
+    return {
+      ...base,
+      type: "highlight",
+      color: (ann as Annotation & { color?: string }).color,
+    } as Annotation;
   }
 
-  return ann;
+  if (ann.type === "flag") {
+    return { ...base, type: "flag" } as Annotation;
+  }
+
+  // For comment type, preserve suggestedText/directedAt if present
+  return {
+    ...base,
+    type: "comment",
+    ...(ann.suggestedText !== undefined ? { suggestedText: ann.suggestedText } : {}),
+    ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
+  } as Annotation;
 }
 
 /** Type-safe annotation update helper — merges a patch into an annotation, preserving the discriminant. */
@@ -494,13 +516,13 @@ export function registerAnnotationTools(server: McpServer): void {
           );
         }
 
-        const updated: Annotation = {
+        const updated = {
           ...ann,
           ...(content !== undefined ? { content } : {}),
           ...(reason !== undefined && content === undefined ? { content: reason } : {}),
           ...(newText !== undefined ? { suggestedText: newText } : {}),
           editedAt: Date.now(),
-        };
+        } as Annotation;
 
         da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
         return mcpSuccess({
