@@ -56,10 +56,15 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - `cargo tauri dev` -- Tauri dev mode (Vite hot-reload + Rust rebuild)
 - `cargo tauri build` -- Production build (installer output)
 - `src-tauri/` layout: `Cargo.toml`, `tauri.conf.json`, `capabilities/` (permission manifests), `src/lib.rs` (plugin registration), `src/main.rs` (entry point)
-- Installed plugins: shell (sidecar management), fs, dialog, single-instance, window-state, process
+- Installed plugins: shell (sidecar management), fs, dialog, single-instance, window-state, process, updater
 - **`single-instance` must be the FIRST plugin registered in `lib.rs`** -- later registration breaks instance detection
 - `@tauri-apps/api` is the JS/TS bridge for calling Tauri APIs from the frontend
-- Desktop-only plugins (single-instance, window-state) use a separate `capabilities/desktop.json`; core permissions live in `capabilities/default.json`
+- Desktop-only plugins (single-instance, window-state, updater) use a separate `capabilities/desktop.json`; core permissions live in `capabilities/default.json`
+- **Auto-updater** checks for updates on launch + every 8h, or manually via tray menu "Check for Updates"
+- Updater config in `tauri.conf.json` `plugins.updater`: endpoint points to GitHub Releases `latest.json`
+- `bundle.createUpdaterArtifacts: true` tells CI to generate `.sig` signature files alongside installers
+- **Signing:** Ed25519 keypair. Public key in `tauri.conf.json`, private key in GitHub Actions secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`)
+- `kill_sidecar()` is called **before** `app.restart()` after update install -- prevents port conflict when new instance starts
 
 ## Critical Rules
 
