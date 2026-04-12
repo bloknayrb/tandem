@@ -55,7 +55,7 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
   } satisfies Record<AnnotationType, string>;
 
   for (const [type, anns] of Object.entries(groups) as [AnnotationType, Annotation[]][]) {
-    lines.push(`## ${typeLabels[type] || type}`, "");
+    lines.push(`## ${typeLabels[type]}`, "");
 
     for (const ann of anns) {
       const snippet = safeSlice(fullText, ann.range.from, ann.range.to);

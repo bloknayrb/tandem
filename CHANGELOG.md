@@ -5,26 +5,6 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-04-07
-
-### Wave 4: Notification & Interruption Redesign
-
-- **Solo/Tandem mode** replaces All/Urgent/Paused interruption controls (#207, #226)
-- **Dwell-time selection events** — selections fire after 1s hold (#188)
-- **Configurable layout** — tabbed or three-panel, with settings popover (#206)
-- **Click-to-navigate** — click annotated text to jump to annotation card
-- **Tab badges** — notification counts on inactive panel tabs
-- **Skill-directed response routing** — Claude responds in chat panel, not terminal
-- Review banner replaced with per-annotation toasts (#208, landed earlier)
-- `Y_MAP_MODE` constant, Zod validation for mode reads, error logging in channel event bridge
-- 894 tests passing
-
-## [0.3.2] - 2026-04-12
-
-### Removed
-
-- **MCP wire change:** Removed unused `"overlay"` annotation kind from `AnnotationTypeSchema`. No internal code path produced or consumed it, but external clients sending `type: "overlay"` to annotation filtering or creation tools will now receive a Zod validation error. Use `comment`, `suggestion`, `question`, or `flag` instead. Node-anchored analytical overlays (ADR-005, `OverlayEntry` / `OverlayDefinition`) are unrelated and unchanged.
-
 ## [Unreleased]
 
 ### Added
@@ -41,6 +21,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Toolbar wraps to a second row on narrow windows instead of overflowing; inline inputs shrink responsively (#192)
 - Edit button on annotation cards now shows a visible "✎ Edit" label instead of icon-only (#201)
+
+## [0.3.2] - 2026-04-12
+
+### Removed
+
+- **MCP wire change:** Removed unused `"overlay"` annotation kind from `AnnotationTypeSchema`. No internal code path produced or consumed it, but external clients sending `type: "overlay"` to annotation filtering or creation tools will now receive a Zod validation error. Use `comment`, `suggestion`, `question`, or `flag` instead. Node-anchored analytical overlays (ADR-005, `OverlayEntry` / `OverlayDefinition`) are unrelated and unchanged.
+
+## [0.3.0] - 2026-04-07
+
+### Wave 4: Notification & Interruption Redesign
+
+- **Solo/Tandem mode** replaces All/Urgent/Paused interruption controls (#207, #226)
+- **Dwell-time selection events** — selections fire after 1s hold (#188)
+- **Configurable layout** — tabbed or three-panel, with settings popover (#206)
+- **Click-to-navigate** — click annotated text to jump to annotation card
+- **Tab badges** — notification counts on inactive panel tabs
+- **Skill-directed response routing** — Claude responds in chat panel, not terminal
+- Review banner replaced with per-annotation toasts (#208, landed earlier)
+- `Y_MAP_MODE` constant, Zod validation for mode reads, error logging in channel event bridge
+- 894 tests passing
 
 ## [0.2.12] - 2026-04-06
 
