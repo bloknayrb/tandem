@@ -21,6 +21,7 @@ const MENU_OPEN: &str = "open";
 const MENU_SETUP: &str = "setup";
 const MENU_ABOUT: &str = "about";
 const MENU_QUIT: &str = "quit";
+const MENU_UPDATE: &str = "update";
 
 /// Tracks the sidecar child process so we can kill it on shutdown.
 struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
@@ -122,11 +123,12 @@ pub fn run() {
 
             let open_i = MenuItem::with_id(app, MENU_OPEN, "Open Editor", true, None::<&str>)?;
             let setup_i = MenuItem::with_id(app, MENU_SETUP, "Setup Claude", true, None::<&str>)?;
+            let update_i = MenuItem::with_id(app, MENU_UPDATE, "Check for Updates", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let about_i = MenuItem::with_id(app, MENU_ABOUT, "About Tandem", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
 
-            let menu = Menu::with_items(app, &[&open_i, &setup_i, &sep, &about_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&open_i, &setup_i, &update_i, &sep, &about_i, &quit_i])?;
 
             let icon = app
                 .default_window_icon()
@@ -163,6 +165,12 @@ pub fn run() {
                                         .show(|_| {});
                                 }
                             }
+                        });
+                    }
+                    MENU_UPDATE => {
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            check_for_update(&handle, true).await;
                         });
                     }
                     MENU_ABOUT => {
