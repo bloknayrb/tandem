@@ -18,6 +18,15 @@ describe("buildMcpEntries", () => {
       TANDEM_URL: `http://localhost:${DEFAULT_MCP_PORT}`,
     });
   });
+
+  it("uses custom nodeBinary when provided (Tauri sidecar path)", () => {
+    const entries = buildMcpEntries(
+      "/app/Resources/dist/channel/index.js",
+      "/app/MacOS/node-sidecar",
+    );
+    expect(entries["tandem-channel"].command).toBe("/app/MacOS/node-sidecar");
+    expect(entries["tandem-channel"].args).toEqual(["/app/Resources/dist/channel/index.js"]);
+  });
 });
 
 describe("applyConfig", () => {
