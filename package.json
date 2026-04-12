@@ -63,6 +63,10 @@
       "eslint --fix",
       "biome format --write"
     ],
+    "*.mjs": [
+      "eslint --fix",
+      "biome format --write"
+    ],
     "*.json !package-lock.json": [
       "biome format --write"
     ]

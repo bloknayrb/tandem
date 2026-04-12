@@ -8,9 +8,9 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { request } from "node:http";
 import { createConnection } from "node:net";
 import { join } from "node:path";
-import { request } from "node:http";
 
 // Keep in sync with src/shared/constants.ts (can't import TS from standalone .mjs)
 const WS_PORT = 3478;
@@ -106,7 +106,9 @@ function checkMcpJson() {
   // Check tandem-channel entry
   const channel = servers["tandem-channel"];
   if (!channel) {
-    warn(".mcp.json missing tandem-channel — Claude will use polling instead of push notifications");
+    warn(
+      ".mcp.json missing tandem-channel — Claude will use polling instead of push notifications",
+    );
   } else {
     const cmd = channel.command;
     const args = (channel.args || []).join(" ");
@@ -121,7 +123,10 @@ function checkMcpJson() {
     }
 
     if (!channel.env?.TANDEM_URL) {
-      warn("tandem-channel missing TANDEM_URL env var", 'Add "env": {"TANDEM_URL": "http://localhost:3479"}');
+      warn(
+        "tandem-channel missing TANDEM_URL env var",
+        'Add "env": {"TANDEM_URL": "http://localhost:3479"}',
+      );
     }
   }
 }
@@ -144,7 +149,10 @@ function checkUserMcpConfig() {
   try {
     config = JSON.parse(readFileSync(claudeCodePath, "utf-8"));
   } catch (err) {
-    warn(`~/.claude/mcp_settings.json is malformed JSON: ${err.message}`, "Run: tandem setup to rewrite it");
+    warn(
+      `~/.claude/mcp_settings.json is malformed JSON: ${err.message}`,
+      "Run: tandem setup to rewrite it",
+    );
     return;
   }
 
@@ -234,7 +242,10 @@ async function checkHealth() {
   }
 
   if (result.error) {
-    fail(`Server not responding on localhost:${MCP_PORT} (${result.error})`, "npm run dev:standalone");
+    fail(
+      `Server not responding on localhost:${MCP_PORT} (${result.error})`,
+      "npm run dev:standalone",
+    );
     return false;
   }
 
@@ -260,21 +271,17 @@ async function checkHealth() {
 
 function checkSseEndpoint() {
   return new Promise((resolve) => {
-    const req = request(
-      `http://127.0.0.1:${MCP_PORT}/api/events`,
-      { timeout: 2000 },
-      (res) => {
-        // SSE endpoint responds with 200 and text/event-stream
-        req.destroy(); // don't hold the connection open
-        const ct = res.headers["content-type"] || "";
-        if (res.statusCode === 200 && ct.includes("text/event-stream")) {
-          pass("SSE event stream reachable (/api/events)");
-        } else {
-          warn(`/api/events responded with status ${res.statusCode}, content-type: ${ct}`);
-        }
-        resolve();
-      },
-    );
+    const req = request(`http://127.0.0.1:${MCP_PORT}/api/events`, { timeout: 2000 }, (res) => {
+      // SSE endpoint responds with 200 and text/event-stream
+      req.destroy(); // don't hold the connection open
+      const ct = res.headers["content-type"] || "";
+      if (res.statusCode === 200 && ct.includes("text/event-stream")) {
+        pass("SSE event stream reachable (/api/events)");
+      } else {
+        warn(`/api/events responded with status ${res.statusCode}, content-type: ${ct}`);
+      }
+      resolve();
+    });
     req.on("error", (err) => {
       warn(`/api/events not reachable: ${err.message}`);
       resolve();

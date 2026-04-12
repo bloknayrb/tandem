@@ -6,12 +6,12 @@
  * Run with: node scripts/take-screenshots.mjs
  */
 
-import { chromium } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { chromium } from "@playwright/test";
 import fs from "fs";
-import path from "path";
 import os from "os";
+import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -155,7 +155,10 @@ async function main() {
     const toastDismissBtns = page.locator('[data-testid^="toast-dismiss-"]');
     const toastCount = await toastDismissBtns.count();
     for (let i = 0; i < toastCount; i++) {
-      try { await toastDismissBtns.nth(0).click(); await sleep(200); } catch {}
+      try {
+        await toastDismissBtns.nth(0).click();
+        await sleep(200);
+      } catch {}
     }
     await sleep(500);
 
@@ -165,7 +168,11 @@ async function main() {
     for (const ann of annList) {
       if (ann.status === "pending" && ann.id?.startsWith("tutorial-")) {
         try {
-          await mcp.call("tandem_resolveAnnotation", { annotationId: ann.id, action: "dismiss", documentId: docId });
+          await mcp.call("tandem_resolveAnnotation", {
+            annotationId: ann.id,
+            action: "dismiss",
+            documentId: docId,
+          });
         } catch {}
       }
     }
@@ -258,7 +265,10 @@ async function main() {
     const toastDismissBtns2 = page.locator('[data-testid^="toast-dismiss-"]');
     const toastCount2 = await toastDismissBtns2.count();
     for (let i = 0; i < toastCount2; i++) {
-      try { await toastDismissBtns2.nth(0).click(); await sleep(200); } catch {}
+      try {
+        await toastDismissBtns2.nth(0).click();
+        await sleep(200);
+      } catch {}
     }
     await sleep(500);
 
@@ -368,7 +378,9 @@ async function main() {
     const chatInput = page.locator('[data-testid="chat-input"]').first();
     if (await chatInput.isVisible({ timeout: 2000 }).catch(() => false)) {
       await chatInput.click();
-      await chatInput.fill("Can you look at the sample content section? The timeline details feel vague.");
+      await chatInput.fill(
+        "Can you look at the sample content section? The timeline details feel vague.",
+      );
       await page.keyboard.press("Enter");
       await sleep(800);
     }
