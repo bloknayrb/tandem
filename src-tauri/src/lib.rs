@@ -41,6 +41,13 @@ pub fn run() {
                 if let Err(e) = start_sidecar(&handle).await {
                     log::error!("Sidecar failed: {e}");
                     // TODO: show user-visible error dialog
+                    return;
+                }
+
+                // Setup fires after health check passes — in BOTH paths
+                // (freshly spawned sidecar OR already-running dev server)
+                if let Err(e) = run_setup(&handle).await {
+                    log::warn!("MCP setup failed (non-fatal): {e}");
                 }
             });
 
@@ -173,4 +180,122 @@ async fn check_health(client: &reqwest::Client) -> bool {
         return resp.status().is_success();
     }
     false
+}
+
+const SETUP_URL: &str = "http://localhost:3479/api/setup";
+const CLAUDE_DOWNLOAD_URL: &str = "https://claude.ai/download";
+
+/// POST to /api/setup with resolved paths. Best-effort — failures are logged, not fatal.
+async fn run_setup(handle: &tauri::AppHandle) -> Result<(), String> {
+    let (node_binary, channel_path) = resolve_setup_paths(handle)?;
+
+    let client = build_http_client(Duration::from_secs(5))?;
+    let body = serde_json::json!({
+        "nodeBinary": node_binary,
+        "channelPath": channel_path,
+    });
+
+    let resp = client
+        .post(SETUP_URL)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Setup request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Setup returned {status}: {text}"));
+    }
+
+    let result: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Setup response parse error: {e}"))?;
+
+    // Log what was configured
+    if let Some(configured) = result["data"]["configured"].as_array() {
+        for target in configured {
+            if let Some(label) = target.as_str() {
+                log::info!("MCP config written for {label}");
+            }
+        }
+    }
+
+    if let Some(errors) = result["data"]["errors"].as_array() {
+        for err in errors {
+            if let Some(msg) = err.as_str() {
+                log::warn!("Setup error: {msg}");
+            }
+        }
+    }
+
+    // Show dialog if no Claude installations found
+    let targets = result["data"]["targets"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    if targets == 0 {
+        show_no_claude_dialog(handle);
+    }
+
+    Ok(())
+}
+
+/// Resolve nodeBinary and channelPath based on build mode.
+///
+/// Sidecar binaries live alongside the main executable (not in resource_dir)
+/// and use the naming convention `node-sidecar-{target-triple}[.exe]`.
+/// Channel JS and other resources live in resource_dir.
+fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), String> {
+    if cfg!(debug_assertions) {
+        // Dev mode: use bare "node" (PATH-dependent) and repo-relative channel path
+        let channel_path = std::env::current_dir()
+            .map_err(|e| format!("Failed to get cwd: {e}"))?
+            .join("dist/channel/index.js");
+        Ok(("node".to_string(), channel_path.to_string_lossy().into_owned()))
+    } else {
+        // Release mode: channel JS is a resource
+        let resource_dir = handle
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
+        let channel_path = resource_dir.join("dist/channel/index.js");
+
+        // Sidecar binary lives alongside the main executable with target triple suffix
+        let exe_dir = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current exe: {e}"))?
+            .parent()
+            .ok_or("Failed to get exe parent dir")?
+            .to_path_buf();
+
+        let sidecar_name = if cfg!(target_os = "windows") {
+            format!("node-sidecar-{}.exe", env!("TARGET_TRIPLE"))
+        } else {
+            format!("node-sidecar-{}", env!("TARGET_TRIPLE"))
+        };
+        let node_binary = exe_dir.join(sidecar_name);
+
+        Ok((
+            node_binary.to_string_lossy().into_owned(),
+            channel_path.to_string_lossy().into_owned(),
+        ))
+    }
+}
+
+/// Show a non-blocking dialog informing the user that Claude is not installed.
+fn show_no_claude_dialog(handle: &tauri::AppHandle) {
+    use tauri_plugin_dialog::DialogExt;
+
+    handle
+        .dialog()
+        .message(format!(
+            "No Claude installation found.\n\n\
+             Tandem works as a standalone editor, but AI collaboration \
+             features require Claude Desktop or Claude Code.\n\n\
+             Download Claude at: {CLAUDE_DOWNLOAD_URL}"
+        ))
+        .title("Claude Not Found")
+        .show(|_| {});
 }
