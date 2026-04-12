@@ -2,6 +2,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_shell::ShellExt;
 
 /// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479)
@@ -9,18 +11,32 @@ const HEALTH_URL: &str = "http://localhost:3479/health";
 const SETUP_URL: &str = "http://localhost:3479/api/setup";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
+const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
+
+// Tray menu item IDs — matched in on_menu_event
+const MENU_OPEN: &str = "open";
+const MENU_SETUP: &str = "setup";
+const MENU_ABOUT: &str = "about";
+const MENU_QUIT: &str = "quit";
 
 /// Tracks the sidecar child process so we can kill it on shutdown.
 struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+/// Show, unminimize, and focus the main window.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -37,16 +53,12 @@ pub fn run() {
                 )?;
             }
 
+            let client = build_http_client(HTTP_CLIENT_TIMEOUT)
+                .expect("Failed to build HTTP client");
+            app.manage(client.clone());
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let client = match build_http_client(Duration::from_secs(5)) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::error!("HTTP client init failed: {e}");
-                        return;
-                    }
-                };
-
                 if let Err(e) = start_sidecar(&handle, &client).await {
                     log::error!("Sidecar failed: {e}");
                     // TODO: show user-visible error dialog
@@ -59,6 +71,56 @@ pub fn run() {
                     log::warn!("MCP setup failed (non-fatal): {e}");
                 }
             });
+
+            let open_i = MenuItem::with_id(app, MENU_OPEN, "Open Editor", true, None::<&str>)?;
+            let setup_i = MenuItem::with_id(app, MENU_SETUP, "Setup Claude", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
+            let about_i = MenuItem::with_id(app, MENU_ABOUT, "About Tandem", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
+
+            let menu = Menu::with_items(app, &[&open_i, &setup_i, &sep, &about_i, &quit_i])?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap())
+                .tooltip("Tandem")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    MENU_OPEN => show_main_window(app),
+                    MENU_SETUP => {
+                        let handle = app.clone();
+                        let client = app.state::<reqwest::Client>().inner().clone();
+                        tauri::async_runtime::spawn(async move {
+                            match run_setup(&handle, &client).await {
+                                Ok(()) => log::info!("MCP setup re-run from tray menu"),
+                                Err(e) => log::warn!("MCP setup failed: {e}"),
+                            }
+                        });
+                    }
+                    MENU_ABOUT => {
+                        use tauri_plugin_dialog::DialogExt;
+                        app.dialog()
+                            .message(format!(
+                                "Tandem v{}\n\nCollaborative AI-human document editor",
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                            .title("About Tandem")
+                            .show(|_| {});
+                    }
+                    MENU_QUIT => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
 
             Ok(())
         })
