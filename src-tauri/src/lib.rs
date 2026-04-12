@@ -1,4 +1,5 @@
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::Manager;
@@ -72,7 +73,17 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = start_sidecar(&handle, &client).await {
                     log::error!("Sidecar failed: {e}");
-                    // TODO: show user-visible error dialog
+                    use tauri_plugin_dialog::DialogExt;
+                    handle
+                        .dialog()
+                        .message(format!(
+                            "Tandem's server failed to start.\n\n\
+                             Error: {e}\n\n\
+                             Try restarting the application. If the problem persists, \
+                             check that port 3479 is not in use by another process."
+                        ))
+                        .title("Server Error")
+                        .show(|_| {});
                     return;
                 }
 
@@ -143,8 +154,12 @@ pub fn run() {
         .on_window_event(|window, event| {
             // Server keeps running in the background; tray menu provides "Quit"
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                match window.hide() {
+                    Ok(()) => api.prevent_close(),
+                    Err(e) => {
+                        log::error!("Failed to hide window on close: {e} — allowing native close");
+                    }
+                }
             }
         })
         .build(tauri::generate_context!())
@@ -161,11 +176,16 @@ fn kill_sidecar(handle: &tauri::AppHandle) {
     let state: tauri::State<'_, SidecarState> = handle.state();
     let mut guard = match state.0.lock() {
         Ok(g) => g,
-        Err(_) => return,
+        Err(poisoned) => {
+            log::error!("Sidecar state mutex poisoned — forcing access to kill child");
+            poisoned.into_inner()
+        }
     };
     if let Some(child) = guard.take() {
         log::info!("Killing sidecar process");
-        let _ = child.kill();
+        if let Err(e) = child.kill() {
+            log::error!("Failed to kill sidecar: {e}");
+        }
     }
 }
 
@@ -207,7 +227,7 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
             tokio::time::sleep(backoff).await;
         }
 
-        let (_rx, child) = handle
+        let (rx, child) = handle
             .shell()
             .sidecar("binaries/node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
@@ -217,6 +237,35 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
+        // Shared flag: drain task sets true on Terminated, health poll bails early
+        let sidecar_dead = Arc::new(AtomicBool::new(false));
+        let dead_flag = sidecar_dead.clone();
+
+        // Forward sidecar output to Tauri log system for diagnostics
+        tauri::async_runtime::spawn(async move {
+            use tauri_plugin_shell::process::CommandEvent;
+            let mut rx = rx;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    CommandEvent::Stdout(line) => {
+                        log::debug!("[sidecar] {}", String::from_utf8_lossy(&line));
+                    }
+                    CommandEvent::Stderr(line) => {
+                        log::warn!("[sidecar] {}", String::from_utf8_lossy(&line));
+                    }
+                    CommandEvent::Error(err) => {
+                        log::error!("[sidecar] error: {err}");
+                    }
+                    CommandEvent::Terminated(status) => {
+                        log::warn!("[sidecar] terminated: {status:?}");
+                        dead_flag.store(true, Ordering::Release);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
         {
             let state = handle.state::<SidecarState>();
             let mut guard = state.0.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
@@ -224,7 +273,7 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
         }
 
         let started = std::time::Instant::now();
-        match wait_for_health(&client).await {
+        match wait_for_health(&client, &sidecar_dead).await {
             Ok(()) => {
                 log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
                 return Ok(());
@@ -242,9 +291,16 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
 }
 
 /// Poll the health endpoint until it responds 200.
-async fn wait_for_health(client: &reqwest::Client) -> Result<(), String> {
+/// Bails early if `sidecar_dead` is set (process terminated before becoming healthy).
+async fn wait_for_health(
+    client: &reqwest::Client,
+    sidecar_dead: &AtomicBool,
+) -> Result<(), String> {
     let start = std::time::Instant::now();
     while start.elapsed() < HEALTH_TIMEOUT {
+        if sidecar_dead.load(Ordering::Acquire) {
+            return Err("Sidecar process terminated before becoming healthy".to_string());
+        }
         if let Ok(resp) = client.get(HEALTH_URL).send().await {
             if resp.status().is_success() {
                 return Ok(());

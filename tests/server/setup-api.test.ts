@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isValidNodeBinary, runSetupHandler } from "../../src/server/mcp/api-routes.js";
+import {
+  isValidChannelPath,
+  isValidNodeBinary,
+  runSetupHandler,
+} from "../../src/server/mcp/api-routes.js";
 
 describe("isValidNodeBinary", () => {
   it("accepts absolute path ending in node", () => {
@@ -42,6 +46,38 @@ describe("isValidNodeBinary", () => {
   it("rejects path traversal attempts", () => {
     expect(isValidNodeBinary("../../../bin/sh")).toBe(false);
     expect(isValidNodeBinary("/tmp/evil/node/../../../bin/sh")).toBe(false);
+  });
+});
+
+describe("isValidChannelPath", () => {
+  it("accepts absolute path ending in .js", () => {
+    expect(isValidChannelPath("/app/Resources/dist/channel/index.js")).toBe(true);
+  });
+
+  it("accepts Windows absolute path ending in .js", () => {
+    expect(isValidChannelPath("C:\\Program Files\\Tandem\\dist\\channel\\index.js")).toBe(true);
+  });
+
+  it("rejects empty string", () => {
+    expect(isValidChannelPath("")).toBe(false);
+  });
+
+  it("rejects non-.js files", () => {
+    expect(isValidChannelPath("/app/channel/index.ts")).toBe(false);
+    expect(isValidChannelPath("/app/channel/evil.exe")).toBe(false);
+  });
+
+  it("rejects path traversal", () => {
+    expect(isValidChannelPath("/app/../../../etc/evil.js")).toBe(false);
+    expect(isValidChannelPath("C:\\app\\..\\..\\evil.js")).toBe(false);
+  });
+
+  it("rejects UNC paths", () => {
+    expect(isValidChannelPath("\\\\server\\share\\evil.js")).toBe(false);
+  });
+
+  it("accepts bare relative .js path (dev mode)", () => {
+    expect(isValidChannelPath("dist/channel/index.js")).toBe(true);
   });
 });
 

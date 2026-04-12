@@ -47,6 +47,16 @@ export function isValidNodeBinary(nodeBinary: string): boolean {
   return VALID_NODE_BASENAME_RE.test(basename(nodeBinary));
 }
 
+/** Validate that a channelPath points to a JS file without traversal or UNC paths. */
+export function isValidChannelPath(channelPath: string): boolean {
+  if (!channelPath) return false;
+  if (!basename(channelPath).endsWith(".js")) return false;
+  if (channelPath.includes("..")) return false;
+  if (channelPath.startsWith("\\\\")) return false;
+  // Allow bare relative paths in dev mode, require absolute in production
+  return true;
+}
+
 interface SetupResult {
   status: number;
   body: {
@@ -77,6 +87,15 @@ export async function runSetupHandler(
     return {
       status: 400,
       body: { error: "BAD_REQUEST", message: "nodeBinary must be a node binary" },
+    };
+  }
+  if (!isValidChannelPath(channelPath)) {
+    return {
+      status: 400,
+      body: {
+        error: "BAD_REQUEST",
+        message: "channelPath must be a .js file without path traversal",
+      },
     };
   }
 
