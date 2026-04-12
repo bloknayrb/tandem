@@ -52,6 +52,8 @@
     "lint": "eslint .",
     "format": "biome format --write .",
     "doctor": "node scripts/doctor.mjs",
+    "dev:tauri": "cargo tauri dev",
+    "build:tauri": "cargo tauri build",
     "prepare": "husky",
     "prepublishOnly": "npm run build"
   },
