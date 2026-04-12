@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Y_MAP_MODE` constant, Zod validation for mode reads, error logging in channel event bridge
 - 894 tests passing
 
+## [0.3.2] - 2026-04-12
+
+### Removed
+
+- **MCP wire change:** Removed unused `"overlay"` annotation kind from `AnnotationTypeSchema`. No internal code path produced or consumed it, but external clients sending `type: "overlay"` to annotation filtering or creation tools will now receive a Zod validation error. Use `comment`, `suggestion`, `question`, or `flag` instead. Node-anchored analytical overlays (ADR-005, `OverlayEntry` / `OverlayDefinition`) are unrelated and unchanged.
+
 ## [Unreleased]
 
 ### Added

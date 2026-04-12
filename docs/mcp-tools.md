@@ -452,7 +452,7 @@ Read all annotations, optionally filtered. For checking new user actions, prefer
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment`, `suggestion`, `overlay`, `question`, `flag` |
+| `type` | enum | no | `highlight`, `comment`, `suggestion`, `question`, `flag` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 

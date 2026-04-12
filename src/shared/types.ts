@@ -17,7 +17,6 @@ export const AnnotationTypeSchema = z.enum([
   "highlight",
   "comment",
   "suggestion",
-  "overlay",
   "question",
   "flag",
 ]);

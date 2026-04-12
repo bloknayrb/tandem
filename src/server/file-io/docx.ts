@@ -3,7 +3,7 @@
 
 import mammoth from "mammoth";
 import * as Y from "yjs";
-import type { Annotation } from "../../shared/types.js";
+import type { Annotation, AnnotationType } from "../../shared/types.js";
 import { getElementText } from "../mcp/document-model.js";
 
 // Re-export for backward compatibility — consumers can import from either module
@@ -37,25 +37,24 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
   const fragment = doc.getXmlFragment("default");
   const fullText = extractFullText(fragment);
 
-  const groups: Record<string, Annotation[]> = {};
+  const groups: Partial<Record<AnnotationType, Annotation[]>> = {};
   for (const ann of annotations) {
     const key = ann.type;
     if (!groups[key]) groups[key] = [];
-    groups[key].push(ann);
+    groups[key]?.push(ann);
   }
 
   const lines: string[] = ["# Document Review", ""];
 
-  const typeLabels: Record<string, string> = {
+  const typeLabels = {
     highlight: "Highlights",
     comment: "Comments",
     suggestion: "Suggestions",
-    overlay: "Overlays",
     question: "Questions",
     flag: "Flags",
-  };
+  } satisfies Record<AnnotationType, string>;
 
-  for (const [type, anns] of Object.entries(groups)) {
+  for (const [type, anns] of Object.entries(groups) as [AnnotationType, Annotation[]][]) {
     lines.push(`## ${typeLabels[type] || type}`, "");
 
     for (const ann of anns) {
