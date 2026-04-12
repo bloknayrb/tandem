@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Express, NextFunction, Request, Response } from "express";
 
 import {
@@ -30,6 +31,13 @@ export function isHostAllowed(host: string | undefined): boolean {
 export const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");
+}
+
+/** Validate that a nodeBinary path points to a Node.js binary, not an arbitrary executable. */
+const VALID_NODE_BASENAME_RE = /^node(-sidecar)?(\.exe)?$/;
+export function isValidNodeBinary(nodeBinary: string): boolean {
+  if (!nodeBinary) return false;
+  return VALID_NODE_BASENAME_RE.test(basename(nodeBinary));
 }
 
 /** Map error code to HTTP status. Exported for testing. */
