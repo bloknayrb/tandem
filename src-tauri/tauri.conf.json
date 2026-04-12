@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3478 http://localhost:3479 ws://localhost:3478; img-src 'self' data: blob:; font-src 'self' data:"
     }
   },
   "bundle": {

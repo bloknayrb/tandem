@@ -25,10 +25,18 @@ struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
 /// Show, unminimize, and focus the main window.
 fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+    let Some(window) = app.get_webview_window("main") else {
+        log::error!("Main window not found — check window label matches tauri.conf.json");
+        return;
+    };
+    if let Err(e) = window.unminimize() {
+        log::warn!("unminimize failed: {e}");
+    }
+    if let Err(e) = window.show() {
+        log::warn!("show failed: {e}");
+    }
+    if let Err(e) = window.set_focus() {
+        log::warn!("set_focus failed: {e}");
     }
 }
 
@@ -45,13 +53,16 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(SidecarState(Mutex::new(None)))
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            let log_level = if cfg!(debug_assertions) {
+                log::LevelFilter::Info
+            } else {
+                log::LevelFilter::Warn
+            };
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log_level)
+                    .build(),
+            )?;
 
             let client = build_http_client(HTTP_CLIENT_TIMEOUT)
                 .expect("Failed to build HTTP client");
@@ -137,7 +148,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
+        .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 kill_sidecar(app);
