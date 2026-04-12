@@ -379,13 +379,15 @@ tandem_highlight({ from: 42, to: 67, color: "red", note: "This figure doesn't ma
 
 ### tandem_comment
 
-Add a comment attached to a text range. Appears in the side panel.
+Add a comment attached to a text range. Appears in the side panel. Subsumes the old `suggestion` and `question` annotation types — use `suggestedText` for replacement proposals and `directedAt` to address a specific participant.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `from` | number | yes | Start position |
 | `to` | number | yes | End position |
 | `text` | string | yes | Comment text |
+| `suggestedText` | string | no | Proposed replacement text. When set, the comment renders as a tracked-change suggestion with accept/reject controls. |
+| `directedAt` | string | no | Who the comment is for (e.g., `"claude"`). When set, the comment renders with an @-mention badge. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
@@ -394,9 +396,30 @@ Add a comment attached to a text range. Appears in the side panel.
 { "annotationId": "ann_1710936000000_d4e5f6" }
 ```
 
+**Example (plain comment):**
+```
+tandem_comment({ from: 42, to: 67, text: "This section needs more detail" })
+```
+
+**Example (replacement suggestion):**
+```
+tandem_comment({
+  from: 180, to: 193,
+  text: "Q3 revenue was updated in the latest financial report",
+  suggestedText: "$13.1 million"
+})
+```
+
+**Example (directed at Claude):**
+```
+tandem_comment({ from: 100, to: 120, text: "Is this figure correct?", directedAt: "claude" })
+```
+
 ---
 
 ### tandem_suggest
+
+> **Legacy shim.** Prefer `tandem_comment` with `suggestedText`. This tool still works but internally delegates to `tandem_comment`.
 
 Propose a text replacement (tracked-change style). User sees it as accept/reject in the browser.
 
@@ -452,7 +475,7 @@ Read all annotations, optionally filtered. For checking new user actions, prefer
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment`, `suggestion`, `question`, `flag` |
+| `type` | enum | no | `highlight`, `comment`, `flag` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -517,9 +540,8 @@ Edit the content of an existing annotation. Only pending annotations can be edit
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
-| `content` | string | no | New comment/note text (for highlights, comments, flags) |
-| `newText` | string | no | New suggested replacement text (for suggestions only) |
-| `reason` | string | no | New reason text (for suggestions only) |
+| `content` | string | no | New comment/note text |
+| `newText` | string | no | Sets the `suggestedText` field on a comment (replacement proposal) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
@@ -538,10 +560,10 @@ tandem_editAnnotation({
 ```
 
 **Notes:**
-- At least one of `content`, `newText`, or `reason` must be provided.
+- At least one of `content` or `newText` must be provided.
 - Only pending annotations can be edited — accepted or dismissed annotations return an error.
 - Sets `editedAt` timestamp on the annotation. The browser shows an "(edited)" indicator.
-- For suggestions, `newText` updates the proposed replacement and `reason` updates the justification. For other types, use `content`.
+- `newText` sets the `suggestedText` field directly on the annotation, turning a plain comment into a replacement suggestion (or updating an existing one).
 
 ---
 
@@ -773,7 +795,7 @@ Check if the user is actively editing and where their cursor is.
 
 ### tandem_checkInbox
 
-Check for user actions you haven't seen yet -- new highlights, comments, questions, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
+Check for user actions you haven't seen yet -- new highlights, comments, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -782,7 +804,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 **Returns:**
 ```json
 {
-  "summary": "2 new: 1 comment, 1 question. 1 accepted.",
+  "summary": "2 new: 1 comment, 1 comment (for Claude). 1 accepted.",
   "hasNew": true,
   "userActions": [ { ...annotation, "textSnippet": "..." } ],
   "userResponses": [ { ...annotation, "textSnippet": "..." } ],
@@ -798,7 +820,7 @@ Check for user actions you haven't seen yet -- new highlights, comments, questio
 
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items.
-- `userActions`: annotations created by the user (highlights, comments, questions).
+- `userActions`: annotations created by the user (highlights, comments, flags).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.

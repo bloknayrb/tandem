@@ -103,10 +103,10 @@ Claude: tandem_highlight({
 Red highlight appears in Bryan's browser. Claude suggests the fix:
 
 ```
-Claude: tandem_suggest({
+Claude: tandem_comment({
   from: 342, to: 355,
-  newText: "$13.1 million",
-  reason: "Updated per Q3 financial report"
+  text: "Updated per Q3 financial report",
+  suggestedText: "$13.1 million"
 })
 ```
 
@@ -239,7 +239,7 @@ Agent C: tandem_getTextContent({ section: "Issues and Risks" })
 // Checks for completeness and specificity
 ```
 
-Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_suggest` independently. All annotations appear in Bryan's browser in real-time. Opus monitors progress:
+Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_flag` independently. All annotations appear in Bryan's browser in real-time. Opus monitors progress:
 
 ```
 Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
@@ -251,7 +251,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 **Setup:** Claude has finished reviewing and left 15+ annotations. Bryan wants to process them efficiently.
 
 The browser's side panel shows all pending annotations with filter controls:
-- Filter by type (highlights, comments, suggestions, questions, flags)
+- Filter by type (highlights, comments, flags) — comments with replacement text show as "With replacement", comments with `directedAt` show as "For Claude"
 - Filter by author (Claude, You)
 - Filter by status (pending, accepted, dismissed)
 
@@ -322,13 +322,13 @@ Bryan filters annotations by author in the SidePanel — "Imported" shows the or
 The server auto-opens `sample/welcome.md` and injects 3 tutorial annotations:
 1. A **highlight** on the welcome heading — demonstrates visual markers
 2. A **comment** on a paragraph — shows the annotation side panel
-3. A **suggestion** with replacement text — introduces accept/reject workflow
+3. A **comment** with replacement text — introduces accept/reject workflow
 
 A floating tutorial card appears at the bottom-left of the editor with three steps:
 
 **Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or using Y/N in keyboard review mode) completes this step.
 
-**Step 2: Ask Claude a question.** The card prompts the user to select text and create an annotation (highlight, comment, or Ask Claude via Ctrl+Shift+A). Creating any user annotation completes this step.
+**Step 2: Ask Claude a question.** The card prompts the user to select text and create an annotation (highlight, comment, or comment with @Claude toggle). Creating any user annotation completes this step.
 
 **Step 3: Try editing.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
 
@@ -342,8 +342,8 @@ After all three steps, the tutorial card disappears and doesn't return (persiste
 
 Each pending annotation card shows a pencil (edit) button. Clicking it enters inline edit mode:
 
-- **For highlights, comments, and flags:** A single textarea appears with the current note/text content.
-- **For suggestions:** Two textareas appear — one for `newText` (the proposed replacement) and one for `reason` (the justification).
+- **For highlights and flags:** A single textarea appears with the current note/text content.
+- **For comments:** A textarea for the comment text, plus an optional field for `suggestedText` (replacement proposal) if one exists.
 
 Click "Save" to apply the edit or "Cancel" to discard. The annotation card shows "(edited)" after saving, with the `editedAt` timestamp.
 
@@ -358,13 +358,12 @@ Claude: tandem_editAnnotation({
 })
 ```
 
-For suggestions, Claude can update the proposed text and reason separately:
+For comments with replacement text, Claude can update the proposed text:
 
 ```
 Claude: tandem_editAnnotation({
   id: "ann_1710936000000_g7h8i9",
-  newText: "$14.2 million",
-  reason: "Corrected per Q4 financial report (was using Q3 figure)"
+  newText: "$14.2 million"
 })
 ```
 
