@@ -335,7 +335,9 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
                         dead_flag.store(true, Ordering::Release);
                         break;
                     }
-                    _ => {}
+                    other => {
+                        log::debug!("[sidecar] unhandled event: {other:?}");
+                    }
                 }
             }
         });
@@ -371,21 +373,26 @@ async fn wait_for_health(
     sidecar_dead: &AtomicBool,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
+    let mut last_error: Option<String> = None;
     while start.elapsed() < HEALTH_TIMEOUT {
         if sidecar_dead.load(Ordering::Acquire) {
             return Err("Sidecar process terminated before becoming healthy".to_string());
         }
-        if let Ok(resp) = client.get(HEALTH_URL).send().await {
-            if resp.status().is_success() {
-                return Ok(());
+        match client.get(HEALTH_URL).send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => {
+                last_error = Some(format!("HTTP {}", resp.status()));
+            }
+            Err(e) => {
+                last_error = Some(e.to_string());
             }
         }
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
-
     Err(format!(
-        "Health endpoint not ready after {:.0}s",
-        HEALTH_TIMEOUT.as_secs()
+        "Health endpoint not ready after {}s (last error: {})",
+        HEALTH_TIMEOUT.as_secs(),
+        last_error.unwrap_or_else(|| "none".to_string())
     ))
 }
 
@@ -528,7 +535,11 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 
     // Skip if source doesn't exist (dev mode without build)
     if !src_dir.exists() {
-        log::info!("No bundled sample/ directory — skipping copy");
+        if cfg!(debug_assertions) {
+            log::info!("No bundled sample/ directory — skipping copy (dev mode)");
+        } else {
+            log::warn!("No bundled sample/ directory in release build — first-run tutorial will be missing");
+        }
         return Ok(());
     }
 
@@ -639,9 +650,9 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     let updater = match app.updater() {
         Ok(u) => u,
         Err(e) => {
-            log::error!("Failed to create updater: {e}");
+            log::debug!("Updater unavailable: {e}");
             if manual {
-                show_update_error_dialog(app, &e.to_string());
+                show_update_error_dialog(app, &format!("Updater not configured: {e}"));
             }
             return;
         }
@@ -677,10 +688,16 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     match update.download_and_install(|_chunk_len, _total| {}, || {}).await {
         Ok(()) => {
             log::info!("Update to v{version} installed — killing sidecar and restarting");
-            // Kill before restart so the new instance can bind ports 3478/3479.
-            // Brief delay because kill() doesn't wait for process exit.
             kill_sidecar(app);
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            // Wait for sidecar to release ports before restarting
+            let client = app.state::<reqwest::Client>().inner().clone();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while tokio::time::Instant::now() < deadline {
+                if !check_health(&client).await {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
             app.restart();
         }
         Err(e) => {
