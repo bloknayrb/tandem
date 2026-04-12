@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Tauri v2 desktop app wrapping the existing web editor (macOS, Linux, Windows)
+- System tray with menu: Open Editor, Setup Claude, Check for Updates, About, Quit
+- Single-instance detection — second launch focuses the existing window instead of opening a duplicate
+- Node.js sidecar lifecycle: auto-spawn on startup, health polling, crash restart with exponential backoff
+- Auto-updater checks on launch and every 8h; manual check available via tray menu "Check for Updates"
+- Cross-platform CI release workflow (macOS arm64/x64, Linux x64, Windows x64) with GitHub Releases
+- Window state persistence — position and size remembered across sessions
+- Sample file copied to writable data directory on first run (supports read-only app bundles)
+- Self-signed code signing for Windows builds in CI
+- MCP setup auto-configuration on launch — writes Claude Code/Desktop config without manual `tandem setup`
+
+### Fixed
+
+- Accept `tauri.localhost` origin in WebSocket and CORS checks so the production WebView can connect
+- Strip Windows `\\?\` extended-length path prefix returned by Tauri path APIs before passing to Node
+- Sidecar binary name resolution corrected for Tauri's platform-specific naming convention
+- Self-contained JS bundles via tsup `noExternal` so Tauri doesn't require `node_modules` at runtime
+- Poll for port release before restarting after update install, preventing a startup race condition
+- Surface last HTTP error in health-poll timeout diagnostics for easier debugging
+
+### Changed
+
+- Updater-unavailable log downgraded from error to debug (reduces noise in dev builds without updater keys)
+- Unhandled sidecar events are now logged instead of silently dropped
+- Warn when `sample/` directory is missing in release builds
+- CI: fail build when updater signing key secret is absent
+- CI: summary job catches partial platform build failures rather than reporting false success
+
 ## [0.3.2] - 2026-04-12
 
 ### Changed

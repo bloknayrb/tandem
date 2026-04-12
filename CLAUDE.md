@@ -64,7 +64,12 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Updater config in `tauri.conf.json` `plugins.updater`: endpoint points to GitHub Releases `latest.json`
 - `bundle.createUpdaterArtifacts: true` tells CI to generate `.sig` signature files alongside installers
 - **Signing:** Ed25519 keypair. Public key in `tauri.conf.json`, private key in GitHub Actions secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`)
-- `kill_sidecar()` is called **before** `app.restart()` after update install -- prevents port conflict when new instance starts
+- `kill_sidecar()` is called **before** `app.restart()` after update install; post-kill, Rust polls the health endpoint (up to 5s) waiting for port release before calling `app.restart()` -- avoids a fixed sleep
+- **`tauri.localhost` origin:** the Tauri WebView uses `http://tauri.localhost` (not `http://localhost`). The server accepts it in three places: CORS allowed-origins regex, `apiMiddleware` Host-header check, and Hocuspocus WebSocket origin validation. The hostname is exported as `TAURI_HOSTNAME` from `src/shared/constants.ts` -- use that constant, not a raw string.
+- **`strip_win_prefix()`** in `src-tauri/src/lib.rs` strips the `\\?\` extended-length prefix that Tauri's `resource_dir()` / `app_data_dir()` return on Windows. Node.js cannot resolve these prefixed paths. Call it on every path before passing to the sidecar.
+- **Self-contained bundles:** `tsup.config.ts` exports a `selfContained` shared config (`noExternal: [/.*/]` + `createRequire` banner) spread onto the server and channel entries. This inlines all npm deps so Tauri can ship `dist/server/` and `dist/channel/` without a `node_modules/` directory. The CLI entry does NOT use `selfContained` (it runs in a Node environment with its own dependencies).
+- **Sidecar name** is `"node-sidecar"` (as passed to `handle.shell().sidecar()`). Tauri appends the target triple at build time; the actual binary on disk is `node-sidecar-{target-triple}[.exe]`.
+- **CI:** `tauri-release.yml` has a `Validate updater signing key` step that fails fast if `TAURI_SIGNING_PRIVATE_KEY` is unset, and a `release-check` summary job (`needs: build-tauri, if: always()`) that fails the workflow if any matrix build failed -- prevents publishing a partial release.
 
 ## Critical Rules
 
