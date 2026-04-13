@@ -75,6 +75,7 @@ export const Y_MAP_MODE = "mode";
 export const Y_MAP_DWELL_MS = "selectionDwellMs";
 export const Y_MAP_CHAT = "chat";
 export const Y_MAP_DOCUMENT_META = "documentMeta";
+export const Y_MAP_ANNOTATION_REPLIES = "annotationReplies";
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";
 
 export const SERVER_INFO_DIR = ".tandem";

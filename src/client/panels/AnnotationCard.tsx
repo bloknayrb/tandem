@@ -1,14 +1,17 @@
 import React, { useState } from "react";
 import { HIGHLIGHT_COLORS } from "../../shared/constants";
-import type { Annotation } from "../../shared/types";
+import type { Annotation, AnnotationReply } from "../../shared/types";
+import { CommentThread } from "./CommentThread";
 
 export interface AnnotationCardProps {
   annotation: Annotation;
+  replies?: AnnotationReply[];
   isReviewTarget?: boolean;
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
   onUndo?: (id: string) => void;
   onEdit?: (id: string, newContent: string) => void;
+  onReply?: (id: string, text: string) => void;
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
@@ -26,11 +29,13 @@ function getBorderColor(annotation: Annotation): string {
 
 export const AnnotationCard = React.memo(function AnnotationCard({
   annotation,
+  replies = [],
   isReviewTarget,
   onAccept,
   onDismiss,
   onUndo,
   onEdit,
+  onReply,
   undoable,
   onClick,
 }: AnnotationCardProps) {
@@ -41,6 +46,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   const [editText, setEditText] = useState("");
   const [editNewText, setEditNewText] = useState("");
   const [editReason, setEditReason] = useState("");
+  const [isReplying, setIsReplying] = useState(false);
+  const [replyText, setReplyText] = useState("");
 
   const hasSuggestedText = annotation.suggestedText !== undefined;
 
@@ -75,6 +82,22 @@ export const AnnotationCard = React.memo(function AnnotationCard({
       e.stopPropagation();
       handleCancel();
     }
+  }
+
+  function handleReplyKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setIsReplying(false);
+      setReplyText("");
+    }
+  }
+
+  function handleSendReply() {
+    const trimmed = replyText.trim();
+    if (!trimmed) return;
+    onReply?.(annotation.id, trimmed);
+    setReplyText("");
+    setIsReplying(false);
   }
 
   const textareaStyle: React.CSSProperties = {
@@ -429,6 +452,83 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               to { width: 0%; }
             }`}
           </style>
+        </div>
+      )}
+      {/* Reply thread */}
+      <CommentThread replies={replies} />
+      {/* Reply input — only on pending annotations with a reply handler */}
+      {isPending && onReply && !isEditing && (
+        <div style={{ marginTop: "6px" }} onClick={(e) => e.stopPropagation()}>
+          {isReplying ? (
+            <div>
+              <textarea
+                data-testid={`reply-input-${annotation.id}`}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={handleReplyKeyDown}
+                placeholder="Write a reply..."
+                style={textareaStyle}
+                autoFocus
+              />
+              <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                <button
+                  data-testid={`reply-send-btn-${annotation.id}`}
+                  onClick={handleSendReply}
+                  disabled={!replyText.trim()}
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: "11px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: "3px",
+                    background: replyText.trim() ? "#eef2ff" : "#f3f4f6",
+                    color: replyText.trim() ? "#4338ca" : "#9ca3af",
+                    cursor: replyText.trim() ? "pointer" : "default",
+                  }}
+                >
+                  Send
+                </button>
+                <button
+                  data-testid={`reply-cancel-btn-${annotation.id}`}
+                  onClick={() => {
+                    setIsReplying(false);
+                    setReplyText("");
+                  }}
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: "11px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: "3px",
+                    background: "#fff",
+                    color: "#6b7280",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              data-testid={`reply-btn-${annotation.id}`}
+              onClick={() => setIsReplying(true)}
+              style={{
+                padding: "1px 4px",
+                fontSize: "11px",
+                border: "none",
+                background: "none",
+                color: "#9ca3af",
+                cursor: "pointer",
+              }}
+            >
+              Reply{replies.length > 0 ? ` (${replies.length})` : ""}
+            </button>
+          )}
+        </div>
+      )}
+      {/* Read-only reply count for resolved annotations */}
+      {!isPending && replies.length > 0 && !onReply && (
+        <div style={{ marginTop: "4px", fontSize: "11px", color: "#9ca3af" }}>
+          {replies.length} {replies.length === 1 ? "reply" : "replies"}
         </div>
       )}
     </div>
