@@ -21,3 +21,7 @@ export function generateReplyId(): string {
 export function generateNotificationId(): string {
   return generateId("ntf");
 }
+
+export function generateAuthorshipId(author: "user" | "claude"): string {
+  return generateId(author);
+}

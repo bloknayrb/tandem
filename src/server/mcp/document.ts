@@ -11,6 +11,7 @@ import {
 import { headingPrefix } from "../../shared/offsets.js";
 import type { AuthorshipRange } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
+import { generateAuthorshipId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 // Position system
 import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
@@ -390,7 +391,7 @@ export function registerDocumentTools(server: McpServer): void {
           const anchored = anchoredRange(r.doc, newFrom, newTo);
           if (anchored.ok) {
             const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
-            const rangeId = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const rangeId = generateAuthorshipId("claude");
             const entry: AuthorshipRange = {
               id: rangeId,
               author: "claude",
