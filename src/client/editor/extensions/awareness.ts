@@ -4,43 +4,84 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
 import { TYPING_DEBOUNCE, Y_MAP_AWARENESS, Y_MAP_USER_AWARENESS } from "../../../shared/constants";
-import { toPmPos } from "../../../shared/positions/types";
+import { toFlatOffset, toPmPos } from "../../../shared/positions/types";
 import type { ClaudeAwareness } from "../../../shared/types";
-import { pmSelectionToFlat } from "../../positions";
+import { flatOffsetToPmPos, pmSelectionToFlat } from "../../positions";
 
 const awarenessPluginKey = new PluginKey("tandemAwareness");
 
 /**
- * Build a decoration for Claude's focus paragraph.
- * Applies a soft blue tint on the paragraph Claude is currently reading.
+ * Build decorations for Claude's awareness state:
+ * - Paragraph gutter highlight when focusParagraph is set
+ * - Character-level cursor widget when focusOffset is set
+ *
+ * Falls back to paragraph-only gutter if cursor decoration fails.
  */
-function buildFocusDecoration(doc: PmNode, focusParagraph: number | null): DecorationSet {
-  if (focusParagraph === null || focusParagraph < 0) {
-    return DecorationSet.empty;
-  }
+function buildAwarenessDecorations(doc: PmNode, awareness: ClaudeAwareness | null): DecorationSet {
+  if (!awareness) return DecorationSet.empty;
 
   const decorations: Decoration[] = [];
-  let blockIndex = 0;
+  const { focusParagraph, focusOffset, active } = awareness;
 
-  doc.forEach((node, offset) => {
-    if (blockIndex === focusParagraph) {
+  // Paragraph gutter decoration
+  if (focusParagraph !== null && focusParagraph >= 0) {
+    let blockIndex = 0;
+    doc.forEach((node, offset) => {
+      if (blockIndex === focusParagraph) {
+        decorations.push(
+          Decoration.node(offset, offset + node.nodeSize, {
+            class: "tandem-claude-focus",
+            style:
+              "background: rgba(99, 102, 241, 0.1); border-left: 3px solid rgba(99, 102, 241, 0.4); padding-left: 8px; transition: background 0.3s ease, border-color 0.3s ease;",
+          }),
+        );
+      }
+      blockIndex++;
+    });
+  }
+
+  // Character-level cursor decoration
+  if (focusOffset !== null && focusOffset >= 0) {
+    try {
+      // Bounds validation — warn on stale offsets that exceed document length
+      const docSize = doc.content.size;
+      if (focusOffset > docSize) {
+        console.warn(
+          `[awareness] focusOffset ${focusOffset} exceeds doc size ${docSize} — clamping (stale offset?)`,
+        );
+      }
+
+      const pmPos = flatOffsetToPmPos(doc, toFlatOffset(focusOffset));
+
+      // Cursor widget: a zero-width element rendered at the cursor position
+      const idleClass = active === false ? " tandem-claude-cursor-idle" : "";
       decorations.push(
-        Decoration.node(offset, offset + node.nodeSize, {
-          class: "tandem-claude-focus",
-          style:
-            "background: rgba(99, 102, 241, 0.1); border-left: 3px solid rgba(99, 102, 241, 0.4); padding-left: 8px; transition: background 0.3s ease, border-color 0.3s ease;",
+        Decoration.widget(pmPos, () => {
+          const cursor = document.createElement("span");
+          cursor.className = `tandem-claude-cursor${idleClass}`;
+          cursor.setAttribute("aria-hidden", "true");
+
+          const label = document.createElement("span");
+          label.className = "tandem-claude-cursor-label";
+          label.textContent = "Claude";
+          cursor.appendChild(label);
+
+          return cursor;
         }),
       );
+    } catch (err) {
+      // Fallback: skip cursor decoration, paragraph gutter still renders
+      console.warn("[awareness] cursor decoration failed, falling back to gutter-only:", err);
     }
-    blockIndex++;
-  });
+  }
 
+  if (decorations.length === 0) return DecorationSet.empty;
   return DecorationSet.create(doc, decorations);
 }
 
 /**
  * Tiptap extension that:
- * 1. Renders Claude's presence (focus paragraph highlight, gutter indicator)
+ * 1. Renders Claude's presence (focus paragraph highlight, gutter indicator, character cursor)
  * 2. Writes user's selection and activity to Y.Map('userAwareness') for the server to read
  */
 export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
@@ -65,12 +106,12 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         state: {
           init(_, state) {
             const claude = awarenessMap.get("claude") as ClaudeAwareness | undefined;
-            return buildFocusDecoration(state.doc, claude?.focusParagraph ?? null);
+            return buildAwarenessDecorations(state.doc, claude ?? null);
           },
           apply(tr, decorationSet, _oldState, newState) {
             if (tr.getMeta(awarenessPluginKey)) {
               const claude = awarenessMap.get("claude") as ClaudeAwareness | undefined;
-              return buildFocusDecoration(newState.doc, claude?.focusParagraph ?? null);
+              return buildAwarenessDecorations(newState.doc, claude ?? null);
             }
             if (tr.docChanged) {
               return decorationSet.map(tr.mapping, tr.doc);

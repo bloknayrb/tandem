@@ -154,33 +154,41 @@ export function registerNavigationTools(server: McpServer): void {
     {
       text: z.string().describe("Status text"),
       focusParagraph: z.number().optional().describe("Index of paragraph Claude is focusing on"),
+      focusOffset: z
+        .number()
+        .optional()
+        .describe("Flat character offset for precise cursor positioning within the document"),
       documentId: z
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_setStatus", async ({ text, focusParagraph, documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) {
-        return mcpSuccess({
-          status: text,
-          warning: "No document open — status not broadcast to editor.",
-        });
-      }
-      const doc = getOrCreateDocument(current.docName);
-      const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-      doc.transact(
-        () =>
-          awarenessMap.set("claude", {
+    withErrorBoundary(
+      "tandem_setStatus",
+      async ({ text, focusParagraph, focusOffset, documentId }) => {
+        const current = getCurrentDoc(documentId);
+        if (!current) {
+          return mcpSuccess({
             status: text,
-            timestamp: Date.now(),
-            active: true,
-            focusParagraph: focusParagraph ?? null,
-          }),
-        MCP_ORIGIN,
-      );
-      return mcpSuccess({ status: text });
-    }),
+            warning: "No document open — status not broadcast to editor.",
+          });
+        }
+        const doc = getOrCreateDocument(current.docName);
+        const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
+        doc.transact(
+          () =>
+            awarenessMap.set("claude", {
+              status: text,
+              timestamp: Date.now(),
+              active: true,
+              focusParagraph: focusParagraph ?? null,
+              focusOffset: focusOffset ?? null,
+            }),
+          MCP_ORIGIN,
+        );
+        return mcpSuccess({ status: text });
+      },
+    ),
   );
 
   server.tool(
