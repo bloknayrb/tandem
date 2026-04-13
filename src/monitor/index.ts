@@ -15,7 +15,11 @@ import {
   CHANNEL_MAX_RETRIES,
   CHANNEL_RETRY_DELAY_MS,
   DEFAULT_MCP_PORT,
+  TANDEM_MODE_DEFAULT,
 } from "../shared/constants.js";
+import type { TandemMode } from "../shared/types.js";
+
+const VALID_MODES = new Set<TandemMode>(["solo", "tandem"]);
 
 // stdout is the monitor event wire — redirect console to stderr
 console.log = console.error;
@@ -26,8 +30,9 @@ const TANDEM_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
 const AWARENESS_DEBOUNCE_MS = 500;
 const AWARENESS_CLEAR_MS = 3000;
 const MODE_CACHE_TTL_MS = 2000;
-
-// --- Main loop ---
+// Bound the SSE buffer so a misbehaving server that never sends frame
+// boundaries can't wedge the monitor with unbounded string growth.
+const MAX_SSE_BUFFER_BYTES = 1_000_000;
 
 async function main(): Promise<void> {
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
@@ -59,8 +64,11 @@ async function main(): Promise<void> {
               message: `Monitor lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
             }),
           });
-        } catch {
-          // Best-effort error report
+        } catch (reportErr) {
+          console.error(
+            "[Monitor] Could not report failure to server:",
+            reportErr instanceof Error ? reportErr.message : reportErr,
+          );
         }
         process.exit(1);
       }
@@ -69,8 +77,6 @@ async function main(): Promise<void> {
     }
   }
 }
-
-// --- SSE consumer ---
 
 async function connectAndStream(
   lastEventId: string | undefined,
@@ -101,7 +107,9 @@ async function connectAndStream(
         status: "idle",
         active: false,
       }),
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error("[Monitor] Awareness clear failed:", err instanceof Error ? err.message : err);
+    });
   }
 
   function flushAwareness() {
@@ -131,91 +139,103 @@ async function connectAndStream(
     awarenessTimer = setTimeout(flushAwareness, AWARENESS_DEBOUNCE_MS);
   }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) throw new Error("SSE stream ended");
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("SSE stream ended");
 
-    buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-    let boundary: number;
-    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-
-      if (frame.startsWith(":")) continue;
-
-      let eventId: string | undefined;
-      let data: string | undefined;
-
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("id: ")) eventId = line.slice(4);
-        else if (line.startsWith("data: ")) data = line.slice(6);
+      if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+        throw new Error(
+          `SSE buffer exceeded ${MAX_SSE_BUFFER_BYTES} bytes without a frame boundary`,
+        );
       }
 
-      if (!data) continue;
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
 
-      let event: TandemEvent | null;
-      try {
-        event = parseTandemEvent(JSON.parse(data));
-      } catch {
-        console.error("[Monitor] Malformed SSE event data (skipping):", data.slice(0, 200));
-        continue;
-      }
-      if (!event) {
-        console.error("[Monitor] Received invalid SSE event, skipping");
-        continue;
-      }
+        if (frame.startsWith(":")) continue;
 
-      // Solo mode suppression: drop non-chat events when mode is "solo"
-      if (event.type !== "chat:message") {
-        const mode = await getCachedMode();
-        if (mode === "solo") {
-          console.error(`[Monitor] Solo mode: suppressed ${event.type} event`);
-          if (eventId) onEventId(eventId);
+        let eventId: string | undefined;
+        let data: string | undefined;
+
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("id: ")) eventId = line.slice(4);
+          else if (line.startsWith("data: ")) data = line.slice(6);
+        }
+
+        if (!data) continue;
+
+        let event: TandemEvent | null;
+        try {
+          event = parseTandemEvent(JSON.parse(data));
+        } catch {
+          console.error("[Monitor] Malformed SSE event data (skipping):", data.slice(0, 200));
           continue;
         }
+        if (!event) {
+          console.error("[Monitor] Received invalid SSE event, skipping");
+          continue;
+        }
+
+        // Solo mode suppression: drop non-chat events when mode is "solo"
+        if (event.type !== "chat:message") {
+          const mode = await getCachedMode();
+          if (mode === "solo") {
+            console.error(`[Monitor] Solo mode: suppressed ${event.type} event`);
+            if (eventId) onEventId(eventId);
+            continue;
+          }
+        }
+
+        if (eventId) onEventId(eventId);
+
+        // Collapse newlines so multi-line content stays as a single
+        // notification (each stdout line is delivered separately).
+        const content = formatEventContent(event).replace(/\n/g, " ");
+        process.stdout.write(content + "\n");
+
+        scheduleAwareness(event);
       }
-
-      if (eventId) onEventId(eventId);
-
-      // Each stdout line = one Claude notification.
-      // Collapse newlines so multi-line content stays as a single notification.
-      const content = formatEventContent(event).replace(/\n/g, " ");
-      process.stdout.write(content + "\n");
-
-      scheduleAwareness(event);
     }
+  } finally {
+    // Prevent timers leaking across reconnects — stale awareness POSTs
+    // from a dead connection would otherwise collide with a new one.
+    if (awarenessTimer) clearTimeout(awarenessTimer);
+    if (clearAwarenessTimer) clearTimeout(clearAwarenessTimer);
+    pendingAwareness = null;
   }
 }
 
-// --- Cached mode lookup ---
-
-let cachedMode: string = "tandem";
+let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
 
-async function getCachedMode(): Promise<string> {
+async function getCachedMode(): Promise<TandemMode> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
   try {
     const res = await fetch(`${TANDEM_URL}/api/mode`);
     if (res.ok) {
-      const { mode } = (await res.json()) as { mode: string };
-      cachedMode = mode;
+      const body = (await res.json()) as { mode?: unknown };
+      cachedMode = VALID_MODES.has(body.mode as TandemMode)
+        ? (body.mode as TandemMode)
+        : TANDEM_MODE_DEFAULT;
     } else {
       console.error(`[Monitor] Mode check returned ${res.status}, using cached: "${cachedMode}"`);
     }
-    cachedModeAt = now;
   } catch (err) {
     console.error(
       "[Monitor] Mode check failed, delivering event (fail-open):",
       err instanceof Error ? err.message : err,
     );
-    cachedModeAt = now;
   }
+  // Rate-limit retries even on failure — avoid pounding the server.
+  cachedModeAt = now;
   return cachedMode;
 }
-
-// --- Start ---
 
 main().catch((err) => {
   console.error("[Monitor] Fatal error:", err);

@@ -9,11 +9,9 @@ import { SKILL_CONTENT } from "./skill-content.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Absolute path to dist/channel/index.js (sibling of dist/cli/)
-const CHANNEL_DIST = resolve(__dirname, "../channel/index.js");
-
-// Absolute path to the Tandem package root (dist/cli/ -> ..)
+// Paths are anchored to the package root (dist/cli/ resolves up two levels).
 const PACKAGE_ROOT = resolve(__dirname, "../..");
+const CHANNEL_DIST = resolve(PACKAGE_ROOT, "dist/channel/index.js");
 
 const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
 
