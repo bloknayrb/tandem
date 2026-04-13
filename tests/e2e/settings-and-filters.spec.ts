@@ -56,7 +56,7 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Click the toolbar settings button — uses the new testid from PR #227
   const settingsBtn = page.locator("[data-testid='settings-btn']");
@@ -203,7 +203,7 @@ test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations
   });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await switchToAnnotationsTab(page);
 
   const soloBtn = page.locator("[data-testid='mode-solo-btn']");
@@ -250,7 +250,7 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Tabbed layout (default) mounts exactly one resize handle.
   await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(1);
@@ -286,7 +286,7 @@ test("three-panel layout resizes left/right widths independently", async ({ page
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Enter three-panel layout and clear any stale width state so both panels
   // start at PANEL_DEFAULT_WIDTH (300).
@@ -302,7 +302,7 @@ test("three-panel layout resizes left/right widths independently", async ({ page
     [LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY],
   );
   await page.reload();
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
   const rightHandle = page.locator("[data-testid='right-panel-resize-handle']");
@@ -358,7 +358,7 @@ test("three-panel layout resizes left/right widths independently", async ({ page
 
   // Round-trip through reload — both keys must persist.
   await page.reload();
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   const afterReload = await readWidths();
   expect(afterReload.left).toBe(afterLeftDrag.left);
   expect(afterReload.right).toBe(afterRightDrag.right);
@@ -371,7 +371,7 @@ test("panel-width drags clamp to [200, 600]", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Enter three-panel layout and clear stale width state.
   await page.locator("[data-testid='settings-btn']").click();
@@ -386,7 +386,7 @@ test("panel-width drags clamp to [200, 600]", async ({ page }) => {
     [LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY],
   );
   await page.reload();
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
   const rightHandle = page.locator("[data-testid='right-panel-resize-handle']");
@@ -437,7 +437,7 @@ test("three-panel left width survives a tabbed-layout round trip", async ({ page
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Clear all width state before starting.
   await page.evaluate(
@@ -448,7 +448,7 @@ test("three-panel left width survives a tabbed-layout round trip", async ({ page
     [LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY],
   );
   await page.reload();
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Enter three-panel mode.
   await page.locator("[data-testid='settings-btn']").click();
@@ -739,7 +739,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   await page.locator("[data-testid='settings-btn']").click();
   const slider = page.locator("[data-testid='dwell-time-slider']");
@@ -768,7 +768,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
 
   // Reload and confirm the slider shows the saved value.
   await page.reload();
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await page.locator("[data-testid='settings-btn']").click();
   const reloadedSlider = page.locator("[data-testid='dwell-time-slider']");
   await expect(reloadedSlider).toHaveValue("2000");
@@ -787,7 +787,7 @@ test("selections are buffered, not pushed as SSE events (#188)", async ({ page }
   });
 
   await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Subscribe to SSE events
   const eventsUrl = `http://localhost:${DEFAULT_MCP_PORT}/api/events`;
@@ -816,7 +816,7 @@ test("selections are buffered, not pushed as SSE events (#188)", async ({ page }
   );
 
   // Make a selection in the editor
-  const prose = page.locator(".ProseMirror");
+  const prose = page.locator(".tandem-editor");
   await prose.click();
   await prose.locator("h1").first().selectText();
 
