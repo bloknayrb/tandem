@@ -17,7 +17,10 @@ const awarenessPluginKey = new PluginKey("tandemAwareness");
  *
  * Falls back to paragraph-only gutter if cursor decoration fails.
  */
-function buildAwarenessDecorations(doc: PmNode, awareness: ClaudeAwareness | null): DecorationSet {
+export function buildAwarenessDecorations(
+  doc: PmNode,
+  awareness: ClaudeAwareness | null,
+): DecorationSet {
   if (!awareness) return DecorationSet.empty;
 
   const decorations: Decoration[] = [];
@@ -43,14 +46,6 @@ function buildAwarenessDecorations(doc: PmNode, awareness: ClaudeAwareness | nul
   // Character-level cursor decoration
   if (focusOffset !== null && focusOffset >= 0) {
     try {
-      // Bounds validation — warn on stale offsets that exceed document length
-      const docSize = doc.content.size;
-      if (focusOffset > docSize) {
-        console.warn(
-          `[awareness] focusOffset ${focusOffset} exceeds doc size ${docSize} — clamping (stale offset?)`,
-        );
-      }
-
       const pmPos = flatOffsetToPmPos(doc, toFlatOffset(focusOffset));
 
       const idleClass = active === false ? " tandem-claude-cursor-idle" : "";
