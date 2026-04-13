@@ -384,7 +384,12 @@ export function registerDocumentTools(server: McpServer): void {
           }, MCP_ORIGIN);
         }
 
-        // Record authorship for the inserted text (Y.Map overlay strategy)
+        // Record authorship for the inserted text (Y.Map overlay strategy).
+        // This runs in a separate transaction because anchoredRange() reads the
+        // Y.Doc state *after* the edit to compute RelativePositions for the new
+        // text. Combining it into the edit transaction would anchor against
+        // pre-edit state. The race window is acceptable for v1 — authorship is
+        // decorative (highlight overlay), not semantic.
         if (newText.length > 0) {
           const newFrom = from;
           const newTo = toFlatOffset(newFrom + newText.length);
