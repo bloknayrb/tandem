@@ -713,6 +713,15 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         return;
     }
 
+    // Kill sidecar BEFORE install — on Windows, the NSIS installer runs during
+    // download_and_install() and needs to replace node-sidecar.exe on disk.
+    // If the process is still running, the file is locked and install fails.
+    kill_sidecar(app);
+    let client = app.state::<reqwest::Client>().inner().clone();
+    if !wait_for_port_release(&client, 5).await {
+        log::warn!("Sidecar still responding after 5s kill deadline -- proceeding with install anyway");
+    }
+
     match update.download_and_install(
         |chunk_len, total| {
             if let Some(t) = total {
@@ -722,13 +731,7 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         || { log::info!("Update downloaded -- installing"); },
     ).await {
         Ok(()) => {
-            log::info!("Update to v{version} installed — killing sidecar and restarting");
-            kill_sidecar(app);
-            // Wait for sidecar to release ports before restarting
-            let client = app.state::<reqwest::Client>().inner().clone();
-            if !wait_for_port_release(&client, 5).await {
-                log::warn!("Sidecar still responding after 5s kill deadline -- restarting anyway");
-            }
+            log::info!("Update to v{version} installed — restarting");
             app.restart();
         }
         Err(e) => {
