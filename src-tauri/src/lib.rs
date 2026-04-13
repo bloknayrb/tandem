@@ -53,6 +53,10 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let tray_available = Arc::new(AtomicBool::new(false));
+    let tray_flag_for_setup = tray_available.clone();
+    let tray_flag_for_close = tray_available.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log::info!("Second instance detected — args: {args:?}, cwd: {cwd}");
@@ -66,7 +70,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
-        .setup(|app| {
+        .setup(move |app| {
             let log_level = if cfg!(debug_assertions) {
                 log::LevelFilter::Info
             } else {
@@ -209,7 +213,9 @@ pub fn run() {
                 .build(app);
 
             match tray_result {
-                Ok(_tray) => {}
+                Ok(_tray) => {
+                    tray_flag_for_setup.store(true, Ordering::Release);
+                }
                 Err(e) => {
                     if cfg!(target_os = "linux") {
                         log::error!(
@@ -225,14 +231,21 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Server keeps running in the background; tray menu provides "Quit"
+        .on_window_event(move |window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                match window.hide() {
-                    Ok(()) => api.prevent_close(),
-                    Err(e) => {
-                        log::error!("Failed to hide window on close: {e} — allowing native close");
+                if tray_flag_for_close.load(Ordering::Acquire) {
+                    // Tray available: hide to tray, server keeps running
+                    match window.hide() {
+                        Ok(()) => api.prevent_close(),
+                        Err(e) => {
+                            log::error!("Failed to hide window on close: {e} — allowing native close");
+                        }
                     }
+                } else {
+                    // No tray (Linux without libappindicator): exit cleanly so
+                    // RunEvent::Exit fires and the sidecar is killed
+                    log::info!("No tray icon — exiting on window close");
+                    window.app_handle().exit(0);
                 }
             }
         })
@@ -357,6 +370,9 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
             Err(e) => {
                 log::error!("Health check failed: {e}");
                 kill_sidecar(handle);
+                if !wait_for_port_release(client, 1).await {
+                    log::warn!("Port still held 1s after kill — backoff will provide additional buffer");
+                }
             }
         }
     }
@@ -400,6 +416,19 @@ async fn wait_for_health(
 async fn check_health(client: &reqwest::Client) -> bool {
     if let Ok(resp) = client.get(HEALTH_URL).send().await {
         return resp.status().is_success();
+    }
+    false
+}
+
+/// Poll until the health endpoint stops responding (port released).
+/// Returns true if released within the deadline, false on timeout.
+async fn wait_for_port_release(client: &reqwest::Client, deadline_secs: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(deadline_secs);
+    while tokio::time::Instant::now() < deadline {
+        if !check_health(client).await {
+            return true;
+        }
+        tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
     false
 }
@@ -684,19 +713,21 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         return;
     }
 
-    // Download and install — closures receive progress but we don't use them yet
-    match update.download_and_install(|_chunk_len, _total| {}, || {}).await {
+    match update.download_and_install(
+        |chunk_len, total| {
+            if let Some(t) = total {
+                log::debug!("Update download: {chunk_len}/{t} bytes");
+            }
+        },
+        || { log::info!("Update downloaded -- installing"); },
+    ).await {
         Ok(()) => {
             log::info!("Update to v{version} installed — killing sidecar and restarting");
             kill_sidecar(app);
             // Wait for sidecar to release ports before restarting
             let client = app.state::<reqwest::Client>().inner().clone();
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            while tokio::time::Instant::now() < deadline {
-                if !check_health(&client).await {
-                    break;
-                }
-                tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
+            if !wait_for_port_release(&client, 5).await {
+                log::warn!("Sidecar still responding after 5s kill deadline -- restarting anyway");
             }
             app.restart();
         }

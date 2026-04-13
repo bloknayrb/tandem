@@ -86,19 +86,19 @@ async function verifyChecksum(archivePath, archiveName, nodeVersion) {
     resp = await fetch(shaUrl);
   } catch (err) {
     if (isCI) throw new Error(`Checksum fetch failed in CI: ${err.message}`);
-    console.warn("Could not fetch checksums — skipping verification");
+    console.warn("WARNING: Could not fetch checksums — skipping verification");
     return;
   }
   if (!resp.ok) {
     if (isCI) throw new Error(`Checksum fetch returned HTTP ${resp.status} in CI`);
-    console.warn(`Checksum fetch returned HTTP ${resp.status} — skipping verification`);
+    console.warn(`WARNING: Checksum fetch returned HTTP ${resp.status} — skipping verification`);
     return;
   }
   const shasums = await resp.text();
   const line = shasums.split("\n").find((l) => l.includes(archiveName));
   if (!line) {
     if (isCI) throw new Error(`No checksum found for ${archiveName} in CI`);
-    console.warn(`No checksum found for ${archiveName} — skipping verification`);
+    console.warn(`WARNING: No checksum found for ${archiveName} — skipping verification`);
     return;
   }
   const expectedHash = line.split(/\s+/)[0];
@@ -124,11 +124,12 @@ function extractTarGz(archivePath, nodeVersion, info, outputPath) {
       `tar -xzf "${archivePath}" -C "${dirname(outputPath)}" --strip-components=2 "${entryPath}"`,
       { stdio: "inherit" },
     );
-  } catch {
+  } catch (err) {
     throw new Error(
       `Failed to extract Node.js binary from archive. ` +
         `Expected entry: ${entryPath}. ` +
-        `This may indicate download corruption — delete ${archivePath} and re-run.`,
+        `This may indicate download corruption — delete ${archivePath} and re-run.\n` +
+        `Original error: ${err.message} (exit code ${err.status})`,
     );
   }
 
@@ -149,10 +150,11 @@ function extractZip(archivePath, nodeVersion, info, outputPath) {
       `powershell -NoProfile -Command "Expand-Archive -Path '${archivePath.replace(/'/g, "''")}' -DestinationPath '${tempDir.replace(/'/g, "''")}' -Force"`,
       { stdio: "inherit" },
     );
-  } catch {
+  } catch (err) {
     throw new Error(
       `Failed to extract Node.js zip archive. ` +
-        `This may indicate download corruption — delete ${archivePath} and re-run.`,
+        `This may indicate download corruption — delete ${archivePath} and re-run.\n` +
+        `Original error: ${err.message} (exit code ${err.status})`,
     );
   }
 
