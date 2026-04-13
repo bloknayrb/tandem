@@ -195,10 +195,10 @@ export function Editor({
           border-radius: 2px;
         }
 
-        /* Authorship decorations — user=blue, claude=green */
-        .tandem-authorship { border-radius: 2px; transition: background 0.2s; }
-        .tandem-authorship--user { background: rgba(59, 130, 246, 0.08); }
-        .tandem-authorship--claude { background: rgba(34, 197, 94, 0.08); }
+        /* Authorship decorations — user=blue, claude=orange */
+        .tandem-authorship { transition: color 0.2s; }
+        .tandem-authorship--user { color: rgb(59, 130, 246); }
+        .tandem-authorship--claude { color: rgb(234, 138, 30); }
 
         /* Claude focus paragraph */
         .tandem-claude-focus {
