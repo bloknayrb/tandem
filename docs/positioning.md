@@ -4,13 +4,13 @@ _Last updated: 2026-03-21_
 
 ## What Tandem Is
 
-Tandem is an AI-powered document review tool. You open a document — a progress report, an RFP response, a compliance filing — and Claude reviews it alongside you in real time. Claude highlights issues, leaves comments, suggests rewrites. You accept, dismiss, or ask follow-up questions. The original file is never modified unless you say so.
+Tandem lets you work on documents with an LLM without the constant copy-paste. You open a document — a progress report, an RFP response, a compliance filing — highlight the text you want to discuss, and Claude sees it directly. Claude can suggest rewrites, leave comments, flag issues, and edit text alongside you. Because Claude connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. The original file is never modified unless you say so.
 
-The closest analogy: **what GitHub Copilot code review is for pull requests, Tandem is for documents.**
+The core value: **you point at text, the LLM sees it, and you iterate together without leaving the document.**
 
 ## What Makes It Different
 
-Most AI document tools are writing assistants — they help you produce content. Tandem is a **review assistant** — it helps you evaluate content someone else wrote. That's a different workflow, a different user, and a different product.
+Most AI document tools are either writing assistants (generate content for you) or chat interfaces (you paste text in, get text back). Tandem is an **iteration surface** — you and the LLM both see the document, and you work on it together without copy-paste. The LLM can review what's there, help you rewrite it, or draft new content, all without either of you leaving your surface.
 
 ### The annotation model
 
@@ -93,8 +93,8 @@ The compliance and commercial use cases that would pay for this tool require eit
 **Don't say:** "Collaborative AI editor" (invites comparison with Google Docs)
 **Don't say:** "AI writing assistant" (crowded, undifferentiated)
 
-**Do say:** "AI document reviewer" — like having a junior analyst review your reports
-**Do say:** "What GitHub Copilot code review is for pull requests, Tandem is for documents"
-**Do say:** "Open a Word doc, get AI annotations without touching the original"
+**Do say:** "Work on documents with your LLM — no more copy-paste"
+**Do say:** "Your full Claude, just now it can see and edit your document too"
+**Do say:** "Point at text, Claude sees it, iterate together"
 
-The narrower and more specific the positioning, the stronger it is. The broadest defensible claim: **Tandem is the first tool that treats AI document suggestions as first-class, addressable, persistent objects that users can accept, dismiss, and converse about.**
+The narrower and more specific the positioning, the stronger it is. The broadest defensible claim: **Tandem is the first tool that connects your full LLM to your document via MCP, so you iterate on text together without copy-paste — and Claude's suggestions are first-class, addressable, persistent objects you can accept, dismiss, and converse about.**

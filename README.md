@@ -174,7 +174,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 - **[User Guide](docs/user-guide.md)** — How to use Tandem: browser UI, annotations, chat, review mode, keyboard shortcuts
 - [MCP Tool Reference](docs/mcp-tools.md) — 30 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
-- [Workflows](docs/workflows.md) — Claude Code usage patterns: document review, cross-referencing, multi-model
+- [Workflows](docs/workflows.md) — Claude Code usage patterns: text iteration, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
 - [Design Decisions](docs/decisions.md) — ADR-001 through ADR-022
 - [Lessons Learned](docs/lessons-learned.md) — 37 implementation lessons

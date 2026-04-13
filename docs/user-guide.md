@@ -6,7 +6,7 @@ A complete guide to using Tandem — from first launch to advanced workflows.
 
 ## Overview
 
-Tandem is an AI document reviewer. You open a document — a progress report, RFP response, compliance filing, or any prose — and Claude reviews it alongside you in real time. Claude highlights issues, leaves comments, suggests rewrites, and flags items for attention. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
+Tandem lets you work on documents with an LLM without the constant copy-paste. You open a document — a progress report, RFP response, compliance filing, or any prose — highlight the text you want to discuss, and Claude sees it directly. Claude can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because Claude connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
 
 Tandem runs as a local server with two surfaces: a **browser editor** where you read and edit documents, and **Claude Code** where Claude connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
@@ -78,7 +78,7 @@ The bottom bar shows:
 - **Document count** — How many documents are currently open.
 - **Display name** — Your name as it appears to Claude. Click to change it (stored in localStorage).
 - **Review Only badge** — Appears when the active document is read-only (e.g. an imported `.docx`).
-- **Claude's activity** — What Claude is doing ("Reviewing Cost Summary...", idle, etc.).
+- **Claude's activity** — What Claude is doing ("Working on Cost Summary...", idle, etc.).
 
 Claude collaboration mode (**Solo** / **Tandem**) lives in the toolbar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
 
@@ -121,7 +121,7 @@ Press `Ctrl+S` to save the active document to disk. Claude can also save via `ta
 
 ## Annotations
 
-Annotations are Tandem's core feature. There are three types, each with distinct visual styling in the document:
+Annotations are how Claude's feedback shows up in the document. There are three types, each with distinct visual styling:
 
 ### Highlight
 
@@ -194,7 +194,7 @@ The toolbar includes a **Solo / Tandem** toggle that controls whether Claude's a
 - **Tandem** (default) — Claude's annotations appear immediately as they arrive.
 - **Solo** — Claude's pending annotations are held back. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
-Use **Solo** during focused writing to avoid interruption. Switch to **Tandem** when you're ready to review Claude's work — all held annotations appear at once.
+Use **Solo** during focused writing to avoid interruption. Switch to **Tandem** when you're ready to see Claude's suggestions — all held annotations appear at once.
 
 ## Chat
 
@@ -311,7 +311,7 @@ With channel push active, Claude receives events automatically without needing t
 1. Call `tandem_status()` to see open documents
 2. Call `tandem_listDocuments()` for details
 3. Call `tandem_getOutline()` on the active document to orient
-4. Call `tandem_getAnnotations()` to see existing review state
+4. Call `tandem_getAnnotations()` to see existing annotation state
 5. Continue where the previous session left off
 
 Previously-open documents are auto-restored when the server starts — no manual `tandem_open` needed.
@@ -319,7 +319,7 @@ Previously-open documents are auto-restored when the server starts — no manual
 ### Further Reading
 
 - [MCP Tool Reference](mcp-tools.md) — Full documentation for all 30 tools
-- [Workflows](workflows.md) — Advanced Claude Code patterns: cross-referencing documents, multi-model review, RFP drafting, session handoff details
+- [Workflows](workflows.md) — Advanced Claude Code patterns: cross-referencing documents, multi-model collaboration, RFP drafting, session handoff details
 - [Architecture](architecture.md) — System design, coordinate systems, data flows
 
 ## Troubleshooting

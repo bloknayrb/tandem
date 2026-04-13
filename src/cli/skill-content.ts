@@ -6,7 +6,7 @@ export const SKILL_CONTENT = `---
 name: tandem
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
-  document editing, or collaborative document review. Provides workflow
+  document editing, or iterating on text collaboratively. Provides workflow
   guidance, annotation strategy, and tool usage patterns for the Tandem
   collaborative editor.
 ---
@@ -27,13 +27,13 @@ These prevent the most common failures. Follow them always.
 
 ## Workflow
 
-Standard review sequence:
+Standard workflow:
 
 1. \`tandem_status\` — check for already-open documents (sessions restore automatically)
 2. \`tandem_getOutline\` — understand document structure
-3. \`tandem_setStatus("Reviewing [section]...", { focusParagraph: N })\` — show progress (use \`index\` from outline)
+3. \`tandem_setStatus("Working on [section]...", { focusParagraph: N })\` — show progress (use \`index\` from outline)
 4. \`tandem_getTextContent({ section: "..." })\` — read one section at a time
-5. Annotate findings (see annotation guide below)
+5. Annotate or edit as needed (see annotation guide below)
 6. \`tandem_checkInbox\` — check for user messages and actions
 7. Repeat steps 3-6 for each section
 8. \`tandem_save\` — persist edits to disk when done
