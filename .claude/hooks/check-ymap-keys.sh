@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# PostToolUse hook: warn if raw Y.Map key strings are used instead of constants
+# PostToolUse hook: warn if raw Y.Map key strings are used in getMap() calls
 # Checks src/ files (excluding constants.ts definitions and test files)
 # Exit 0 = no block, just warns via stderr
 
 set -euo pipefail
+trap 'exit 0' ERR
 
 INPUT=$(cat)
-FILE_PATH=$(echo "$INPUT" | node -e "
+FILE_PATH=$(printf '%s' "$INPUT" | node -e "
   let d='';
   process.stdin.on('data', c => d += c);
   process.stdin.on('end', () => {
@@ -17,6 +18,9 @@ FILE_PATH=$(echo "$INPUT" | node -e "
     } catch { process.exit(0); }
   });
 ")
+
+# Normalize Windows backslashes so /src/ regexes match
+FILE_PATH="${FILE_PATH//\\//}"
 
 # Only check src/ files, skip constants.ts and test files
 if [[ -z "$FILE_PATH" ]] || [[ ! "$FILE_PATH" =~ /src/ ]] || [[ "$FILE_PATH" =~ constants\.ts$ ]] || [[ "$FILE_PATH" =~ \.test\.ts$ ]] || [[ "$FILE_PATH" =~ \.spec\.ts$ ]]; then

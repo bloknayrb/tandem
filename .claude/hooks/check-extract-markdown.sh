@@ -5,9 +5,10 @@
 # Exit 0 = no block, just warns via stderr
 
 set -euo pipefail
+trap 'exit 0' ERR
 
 INPUT=$(cat)
-FILE_PATH=$(echo "$INPUT" | node -e "
+FILE_PATH=$(printf '%s' "$INPUT" | node -e "
   let d='';
   process.stdin.on('data', c => d += c);
   process.stdin.on('end', () => {
@@ -18,6 +19,9 @@ FILE_PATH=$(echo "$INPUT" | node -e "
     } catch { process.exit(0); }
   });
 ")
+
+# Normalize Windows backslashes so /src/ regexes match
+FILE_PATH="${FILE_PATH//\\//}"
 
 # Only check server MCP files, skip convert.ts (legitimate use for export)
 if [[ -z "$FILE_PATH" ]] || [[ ! "$FILE_PATH" =~ /src/server/ ]] || [[ "$FILE_PATH" =~ convert\.ts$ ]]; then
