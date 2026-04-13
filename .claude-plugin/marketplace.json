@@ -1,0 +1,19 @@
+{
+  "name": "tandem-editor",
+  "owner": {
+    "name": "Tandem"
+  },
+  "metadata": {
+    "description": "Tandem — collaborative AI-human document editor"
+  },
+  "plugins": [
+    {
+      "name": "tandem",
+      "source": {
+        "source": "npm",
+        "package": "tandem-editor"
+      },
+      "description": "Collaborative AI-human document editor with real-time event push"
+    }
+  ]
+}

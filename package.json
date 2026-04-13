@@ -23,7 +23,9 @@
   "files": [
     "dist/",
     "sample/",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    ".claude-plugin/",
+    "skills/"
   ],
   "exports": {
     ".": "./dist/cli/index.js",

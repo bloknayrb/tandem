@@ -13,6 +13,6 @@
     "rootDir": "src",
     "baseUrl": "."
   },
-  "include": ["src/server", "src/shared", "src/channel"],
+  "include": ["src/server", "src/shared", "src/channel", "src/monitor"],
   "exclude": ["node_modules"]
 }

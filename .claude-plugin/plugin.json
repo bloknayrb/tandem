@@ -1,0 +1,24 @@
+{
+  "name": "tandem",
+  "version": "0.5.1",
+  "description": "Collaborative AI-human document editor with real-time event push",
+  "author": {
+    "name": "Tandem"
+  },
+  "repository": "https://github.com/bloknayrb/tandem",
+  "license": "MIT",
+  "keywords": ["editor", "collaborative", "mcp", "claude"],
+  "mcpServers": {
+    "tandem": {
+      "type": "http",
+      "url": "http://localhost:3479/mcp"
+    }
+  },
+  "monitors": [
+    {
+      "name": "tandem-events",
+      "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js",
+      "description": "Streams real-time user events (annotations, chat, document changes) from the Tandem editor"
+    }
+  ]
+}
