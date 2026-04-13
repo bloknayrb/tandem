@@ -24,6 +24,11 @@ describe("isHostAllowed (DNS rebinding protection)", () => {
     expect(isHostAllowed("attacker.com:3479")).toBe(false);
   });
 
+  it("accepts tauri.localhost", () => {
+    expect(isHostAllowed("tauri.localhost")).toBe(true);
+    expect(isHostAllowed("tauri.localhost:3479")).toBe(true);
+  });
+
   it("rejects DNS rebinding attempts", () => {
     expect(isHostAllowed("evil.localhost")).toBe(false);
     expect(isHostAllowed("127.0.0.2")).toBe(false);
@@ -67,6 +72,11 @@ describe("isLocalhostOrigin (CORS validation)", () => {
 
   it("allows https://localhost:3000", () => {
     expect(isLocalhostOrigin("https://localhost:3000")).toBe(true);
+  });
+
+  it("accepts http://tauri.localhost origins", () => {
+    expect(isLocalhostOrigin("http://tauri.localhost")).toBe(true);
+    expect(isLocalhostOrigin("http://tauri.localhost:3479")).toBe(true);
   });
 
   it("rejects external origins", () => {

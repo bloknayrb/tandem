@@ -482,6 +482,111 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 - Atomic file saves: write to temp file, then rename
 - Max 4 concurrent WebSocket connections, 10MB max payload
 
+---
+
+## Tauri Desktop Layer
+
+The Tauri app wraps the existing web stack — it does not replace or modify it. In dev mode the WebView loads from `http://localhost:5173` (Vite); in production builds it loads from `tauri://localhost` (bundled `dist/client/`). The Node.js server continues to run on `:3478`/`:3479` in both modes; the WebView talks to it the same way a browser would.
+
+```mermaid
+graph TB
+    subgraph "Tauri Desktop"
+        WebView["WebView\n(tauri://localhost in prod)"]
+        TauriCore["Rust Core\nsrc-tauri/src/lib.rs"]
+        Tray["System Tray\n(background operation)"]
+        Updater["Auto-Updater\n(tauri-plugin-updater)"]
+    end
+
+    subgraph "Sidecar (bundled Node.js)"
+        Server["Tandem Server\nlocalhost:3478 / :3479"]
+    end
+
+    WebView <-->|HTTP/WebSocket localhost| Server
+    TauriCore -->|spawn + health-poll| Server
+    TauriCore --> Tray
+    TauriCore --> Updater
+    Updater -->|GitHub Releases latest.json| GHR["GitHub Releases"]
+```
+
+### Sidecar Lifecycle
+
+On launch, the Rust core:
+
+1. Copies `sample/` files to the writable app-data dir (first run only — skips if destination exists)
+2. Checks whether the server is already healthy (`GET /health`) — skips spawn in dev mode if `npm run dev:standalone` is already running
+3. Spawns `node-sidecar` (bundled Node.js binary named with target triple) with `dist/server/index.js` as the entry point and `TANDEM_DATA_DIR` set to the platform app-data dir
+4. Polls `GET http://localhost:3479/health` every 200ms with a 15s timeout
+5. On crash, retries up to `MAX_RESTARTS = 3` times with exponential backoff (1s, 2s, 4s)
+6. On all retries exhausted: shows an error dialog and exits
+7. On clean exit (`RunEvent::Exit`): kills the sidecar process to avoid orphan processes
+
+The sidecar child handle is stored in `SidecarState` (a `Mutex<Option<CommandChild>>`) in Tauri managed state. Stdout/stderr from the sidecar are forwarded to the Tauri log system for diagnostics.
+
+### MCP Auto-Setup
+
+After the health check passes, the Rust core POSTs to `POST /api/setup` with:
+
+```json
+{ "nodeBinary": "<path to node-sidecar binary>", "channelPath": "<path to dist/channel/index.js>" }
+```
+
+This triggers the same setup logic as `tandem setup` — auto-detecting Claude Code and Claude Desktop installations and writing MCP config entries. It runs on every launch (idempotent), so MCP config stays correct after reinstalls or path changes. In dev mode, `nodeBinary` is `"node"` (from PATH) and `channelPath` points to the repo-relative `dist/channel/index.js`.
+
+If no Claude installation is detected, a non-blocking dialog appears suggesting the user download Claude.
+
+### System Tray
+
+The window hides (rather than closes) when the user clicks the OS close button — the server keeps running in the background. The tray menu provides the actual exit path:
+
+| Item | Action |
+|------|--------|
+| Open Editor | Show + focus the main window |
+| Setup Claude | Re-run MCP config (with result dialog) |
+| Check for Updates | Manual update check |
+| About Tandem | Version dialog |
+| Quit | Kill sidecar, then exit |
+
+Left-clicking the tray icon shows the main window. On Linux, `libappindicator3-dev` is required; if unavailable the app continues without a tray icon (not a hard failure).
+
+### Auto-Updater
+
+Updates are checked against the GitHub Releases `latest.json` endpoint. Checks run:
+- Once on launch (after health check)
+- Periodically every 8 hours (background task)
+- On demand via the tray "Check for Updates" item
+
+Updates are Ed25519-signed. The public key lives in `tauri.conf.json` (`plugins.updater.pubkey`); the private key is stored as a GitHub Actions secret (`TAURI_SIGNING_PRIVATE_KEY`). `bundle.createUpdaterArtifacts: true` in `tauri.conf.json` tells CI to generate `.sig` files alongside installer artifacts.
+
+Install flow:
+
+```
+Update available dialog (Ok/Cancel)
+    → User confirms
+    → download_and_install()
+    → kill_sidecar() — releases ports :3478/:3479
+    → Poll /health until server stops responding (5s deadline)
+    → app.restart() — Tauri launches the new version
+```
+
+The sidecar kill before restart is required to prevent a port conflict when the new process starts up.
+
+### Origin Handling
+
+Production WebView requests use the `tauri://localhost` origin (Windows: `https://tauri.localhost`). The Tandem server's CORS and DNS-rebinding middleware accept this origin alongside `http://localhost:*` and `http://127.0.0.1:*`. This is handled in `createMcpExpressApp` and `apiMiddleware`.
+
+### Windows Path Prefix
+
+Tauri's `resource_dir()` and `app_data_dir()` return `\\?\`-prefixed extended-length paths on Windows. Node.js cannot resolve these. `strip_win_prefix()` in `lib.rs` strips the prefix before passing paths to the sidecar or the setup endpoint.
+
+### Capabilities
+
+Tauri v2 uses a capabilities model to grant permissions:
+
+- `capabilities/default.json` -- core window permissions, shell (sidecar), fs, dialog
+- `capabilities/desktop.json` -- desktop-only plugins: single-instance, window-state, updater
+
+`single-instance` must be the **first** plugin registered in `lib.rs` — later registration breaks instance detection. When a second instance is launched, it brings the existing window to the front (future: pass file path arguments to open the file in the running instance).
+
 ## Design Decisions
 
 See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-021), covering:
@@ -549,6 +654,15 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `ChatPanel` -- Shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
 - `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the Toolbar (not StatusBar); client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
 - `ReviewSummary` -- Overlay shown when all pending annotations are resolved
+
+### Tauri Desktop (`src-tauri/`)
+
+- `Cargo.toml` -- Rust dependencies: tauri v2, tauri-plugin-shell, tauri-plugin-fs, tauri-plugin-dialog, tauri-plugin-single-instance, tauri-plugin-window-state, tauri-plugin-process, tauri-plugin-updater, tauri-plugin-log, reqwest, tokio, serde_json
+- `tauri.conf.json` -- App config: identifier (`com.tandem.editor`), window dimensions (1200×800, min 800×600), `bundle.externalBin` (node-sidecar), `bundle.resources` (dist/server/, dist/channel/, dist/client/, sample/), CSP, updater endpoint (GitHub Releases `latest.json`), `bundle.createUpdaterArtifacts: true`
+- `capabilities/default.json` -- Core permissions: window events, shell sidecar, fs read/write, dialog
+- `capabilities/desktop.json` -- Desktop-only permissions: single-instance, window-state save/restore, updater
+- `src/lib.rs` -- All Tauri logic: plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `run_setup()` (POST /api/setup), system tray build + event handlers, window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
+- `src/main.rs` -- Entry point, delegates to `lib::run()`
 
 ### Shared (`src/shared/`)
 

@@ -1,9 +1,17 @@
 import type { Express, NextFunction, Request, Response } from "express";
 
 import {
+  applyConfig,
+  buildMcpEntries,
+  type DetectedTarget,
+  detectTargets,
+  installSkill,
+} from "../../cli/setup.js";
+import {
   CHANNEL_SSE_KEEPALIVE_MS,
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  TAURI_HOSTNAME,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -23,13 +31,119 @@ export type Handler = (req: Request, res: Response, next: NextFunction) => void;
 /** Check if a Host header value is allowed (localhost only). Exported for testing. */
 export function isHostAllowed(host: string | undefined): boolean {
   const reqHost = (host ?? "").split(":")[0];
-  return reqHost === "localhost" || reqHost === "127.0.0.1";
+  return reqHost === "localhost" || reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Check if an Origin header is a localhost URL. Exported for testing. */
-export const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+export const LOCALHOST_ORIGIN_RE = new RegExp(
+  `^https?://(localhost|127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
+);
 export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");
+}
+
+/** Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM hash leaks. */
+function hasUncPrefix(p: string): boolean {
+  return p.startsWith("\\\\") || p.startsWith("//");
+}
+
+/** basename() on Linux doesn't treat `\` as a separator, so Windows-style paths
+ *  like `C:\Program Files\node.exe` return the whole string. Split on both. */
+function crossBasename(p: string): string {
+  return p.split(/[/\\]/).pop() || "";
+}
+
+/** Validate that a nodeBinary path points to a Node.js binary, not an arbitrary executable. */
+const VALID_NODE_BASENAME_RE = /^node(-sidecar(-[a-z0-9_-]+)?)?(\.exe)?$/;
+export function isValidNodeBinary(nodeBinary: string): boolean {
+  if (!nodeBinary) return false;
+  if (nodeBinary.includes("..")) return false;
+  if (hasUncPrefix(nodeBinary)) return false;
+  return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
+}
+
+/** Validate that a channelPath points to a JS file without traversal or UNC paths. */
+export function isValidChannelPath(channelPath: string): boolean {
+  if (!channelPath) return false;
+  if (!crossBasename(channelPath).endsWith(".js")) return false;
+  if (channelPath.includes("..")) return false;
+  if (hasUncPrefix(channelPath)) return false;
+  return true;
+}
+
+interface SetupResult {
+  status: number;
+  body: {
+    error?: string;
+    message?: string;
+    data?: {
+      targets: DetectedTarget[];
+      configured: string[];
+      errors: string[];
+      skillInstalled: boolean;
+    };
+  };
+}
+
+export async function runSetupHandler(
+  input: Record<string, unknown>,
+  homeOverride?: string,
+): Promise<SetupResult> {
+  const { nodeBinary, channelPath } = input;
+
+  if (!nodeBinary || typeof nodeBinary !== "string") {
+    return { status: 400, body: { error: "BAD_REQUEST", message: "nodeBinary is required" } };
+  }
+  if (!channelPath || typeof channelPath !== "string") {
+    return { status: 400, body: { error: "BAD_REQUEST", message: "channelPath is required" } };
+  }
+  if (!isValidNodeBinary(nodeBinary)) {
+    return {
+      status: 400,
+      body: { error: "BAD_REQUEST", message: "nodeBinary must be a node binary" },
+    };
+  }
+  if (!isValidChannelPath(channelPath)) {
+    return {
+      status: 400,
+      body: {
+        error: "BAD_REQUEST",
+        message: "channelPath must be a .js file without path traversal",
+      },
+    };
+  }
+
+  const targets = detectTargets({ homeOverride });
+  const entries = buildMcpEntries(channelPath, nodeBinary);
+
+  const configured: string[] = [];
+  const errors: string[] = [];
+
+  for (const target of targets) {
+    try {
+      await applyConfig(target.configPath, entries);
+      configured.push(target.label);
+    } catch (err) {
+      errors.push(`${target.label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  let skillInstalled = false;
+  try {
+    await installSkill({ homeOverride });
+    skillInstalled = true;
+  } catch (err) {
+    errors.push(`Skill install: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return {
+    status: 200,
+    body: { data: { targets, configured, errors, skillInstalled } },
+  };
 }
 
 /** Map error code to HTTP status. Exported for testing. */
@@ -279,6 +393,20 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
       res.json({ data: result });
     } catch (err: unknown) {
       sendApiError(res, err);
+    }
+  });
+
+  app.options("/api/setup", apiMiddleware);
+  app.post("/api/setup", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+    try {
+      const result = await runSetupHandler((req.body ?? {}) as Record<string, unknown>);
+      res.status(result.status).json(result.body);
+    } catch (err: unknown) {
+      console.error("[Tandem] Setup handler threw:", err);
+      res.status(500).json({
+        error: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   });
 }

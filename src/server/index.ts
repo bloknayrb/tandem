@@ -190,7 +190,8 @@ async function main() {
 
     // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session).
     if (docCount() === 0 && !process.env.TANDEM_NO_SAMPLE) {
-      const samplePath = path.join(projectRoot, "sample/welcome.md");
+      const sampleBase = process.env.TANDEM_DATA_DIR || projectRoot;
+      const samplePath = path.join(sampleBase, "sample/welcome.md");
       try {
         await openFileByPath(samplePath);
         try {

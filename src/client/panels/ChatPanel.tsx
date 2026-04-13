@@ -2,7 +2,7 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import * as Y from "yjs";
-import { CLAUDE_PRESENCE_COLOR, Y_MAP_CHAT } from "../../shared/constants";
+import { CLAUDE_PRESENCE_COLOR, DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
@@ -149,7 +149,7 @@ export function ChatPanel({
 
   const clearChat = useCallback(async () => {
     try {
-      await fetch("/api/chat", { method: "DELETE" });
+      await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
     } catch (err) {
       console.warn("[ChatPanel] Failed to clear chat:", err);
     }

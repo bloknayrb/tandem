@@ -104,3 +104,6 @@ export const CHANNEL_EVENT_BUFFER_AGE_MS = 60_000; // 60 seconds
 export const CHANNEL_SSE_KEEPALIVE_MS = 15_000; // 15 seconds
 export const CHANNEL_MAX_RETRIES = 5;
 export const CHANNEL_RETRY_DELAY_MS = 2_000;
+
+/** Tauri WebView origin hostname — must be accepted alongside localhost. */
+export const TAURI_HOSTNAME = "tauri.localhost";

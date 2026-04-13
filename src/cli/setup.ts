@@ -27,14 +27,14 @@ export interface McpEntries {
   "tandem-channel": McpEntry;
 }
 
-export function buildMcpEntries(channelPath: string): McpEntries {
+export function buildMcpEntries(channelPath: string, nodeBinary = "node"): McpEntries {
   return {
     tandem: {
       type: "http",
       url: `${MCP_URL}/mcp`,
     },
     "tandem-channel": {
-      command: "node",
+      command: nodeBinary,
       args: [channelPath],
       env: { TANDEM_URL: MCP_URL },
     },
