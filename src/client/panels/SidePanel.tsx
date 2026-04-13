@@ -1,7 +1,11 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import {
+  DEFAULT_MCP_PORT,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+} from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, AnnotationReply, AnnotationType, TandemMode } from "../../shared/types";
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
@@ -307,7 +311,7 @@ export function SidePanel({
 
   async function handleReply(annotationId: string, text: string): Promise<boolean> {
     try {
-      const res = await fetch("/api/annotation-reply", {
+      const res = await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/annotation-reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ annotationId, text, documentId }),
@@ -766,7 +770,7 @@ export function SidePanel({
               return (
                 <>
                   <span style={{ fontSize: "11px", color: "#374151" }}>
-                    {isAccept ? "Acknowledge" : "Dismiss"}{" "}
+                    {isAccept ? "Accept" : "Reject"}{" "}
                     {pending.length === allPending.length
                       ? `${pending.length} annotations?`
                       : `${pending.length} of ${allPending.length} pending?`}
@@ -801,14 +805,14 @@ export function SidePanel({
                 onClick={() => setBulkConfirm("accept")}
                 style={{ ...SMALL_BTN, background: "#f0fdf4", color: "#166534" }}
               >
-                Acknowledge All ({pending.length})
+                Accept All ({pending.length})
               </button>
               <button
                 data-testid="bulk-dismiss-btn"
                 onClick={() => setBulkConfirm("dismiss")}
                 style={{ ...SMALL_BTN, background: "#fef2f2", color: "#991b1b" }}
               >
-                Dismiss All
+                Reject All
               </button>
             </>
           )}

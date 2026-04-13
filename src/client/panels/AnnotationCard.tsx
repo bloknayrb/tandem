@@ -399,7 +399,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 cursor: "pointer",
               }}
             >
-              {hasSuggestedText ? "Accept" : "Acknowledge"}
+              Accept
             </button>
           )}
           {onDismiss && (
@@ -419,7 +419,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 cursor: "pointer",
               }}
             >
-              Dismiss
+              Reject
             </button>
           )}
         </div>
