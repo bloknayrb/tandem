@@ -53,7 +53,6 @@ function buildAwarenessDecorations(doc: PmNode, awareness: ClaudeAwareness | nul
 
       const pmPos = flatOffsetToPmPos(doc, toFlatOffset(focusOffset));
 
-      // Cursor widget: a zero-width element rendered at the cursor position
       const idleClass = active === false ? " tandem-claude-cursor-idle" : "";
       decorations.push(
         Decoration.widget(pmPos, () => {
