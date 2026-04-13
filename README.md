@@ -8,12 +8,15 @@ Have you ever been working on a document (or any multi-paragraph piece of text) 
 
 ## Quick Start
 
-### Prerequisites
+### Option A: Desktop App
 
-- **Node.js 22+** ([download](https://nodejs.org))
-- **Claude Code** (`irm https://claude.ai/install.ps1 | iex`)
+Download the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest).
 
-### Install and Run
+The desktop app bundles everything — no Node.js required. It auto-configures Claude Code on launch, manages the server as a background process, and updates itself automatically. Just install and open.
+
+### Option B: npm Global Install
+
+Requires **Node.js 22+** ([download](https://nodejs.org)) and **Claude Code** (`npm install -g @anthropic-ai/claude-code`).
 
 ```bash
 npm install -g tandem-editor
@@ -26,6 +29,8 @@ tandem           # starts server + opens browser
 ### Connect Claude Code
 
 For the full Tandem experience, start Claude Code with the **channel push** flag:
+
+> **Desktop app users:** Claude Code is configured automatically on every launch — skip `tandem setup` and just start Claude Code. The `tandem_*` tools will be available immediately.
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
@@ -79,7 +84,7 @@ Or check the raw health endpoint:
 
 ```bash
 curl http://localhost:3479/health
-# → {"status":"ok","version":"0.3.0","transport":"http","hasSession":false}
+# → {"status":"ok","version":"0.4.0","transport":"http","hasSession":false}
 ```
 
 `hasSession` becomes `true` once Claude Code connects.
@@ -144,9 +149,8 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 
 ## Where Tandem is headed
 
-Tandem v1 covers the core loop well — single user editing prose with Claude, with `.md`/`.txt`/`.html` round-trip and `.docx` review. A few directions on the radar for later releases:
+Tandem v0.4.0 ships a native desktop app (macOS, Linux, Windows) alongside the existing npm CLI. A few directions on the radar for later releases:
 
-- **Progressive Web App** — install Tandem from the browser for a real app window, taskbar icon, and offline-capable shell.
 - **High-fidelity .docx round-trip** — current `.docx` support is review-only; LibreOffice-headless-based production export is planned so you can stay in Tandem through the final draft.
 - **Claude Desktop parity** — the MCP server already works with Claude Desktop; polish and documentation for a first-class experience there is in the works.
 - **Exportable annotated documents** — PDF (and eventually `.docx`) with annotations baked in, so you can share reviewed drafts outside Tandem.
@@ -162,8 +166,8 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: document review, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-021
-- [Lessons Learned](docs/lessons-learned.md) — 31 implementation lessons
+- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-022
+- [Lessons Learned](docs/lessons-learned.md) — 37 implementation lessons
 
 ## CLI Commands
 
@@ -246,5 +250,9 @@ On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or dele
 | `npm test` | Run vitest (unit tests) |
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Playwright UI mode |
+| `cargo tauri dev` | Tauri desktop app (dev mode with hot-reload) |
+| `cargo tauri build` | Tauri production build (installer output) |
+
+**Tauri development** requires the [Rust toolchain](https://www.rust-lang.org/tools/install) and [Tauri CLI](https://v2.tauri.app/start/prerequisites/). Web-only development (`npm run dev:standalone`) does not require Rust.
 
 **Tech Stack:** React 19, Tiptap, Vite, TypeScript | Node.js, Hocuspocus (Yjs WebSocket), MCP SDK, Express | Yjs (CRDT), y-prosemirror | mammoth.js (.docx), unified/remark (.md)

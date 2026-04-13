@@ -10,6 +10,8 @@ Tandem is an AI document reviewer. You open a document — a progress report, RF
 
 Tandem runs as a local server with two surfaces: a **browser editor** where you read and edit documents, and **Claude Code** where Claude connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
+Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`). The desktop app manages the server automatically; the npm install requires starting it from the terminal. Once running, the browser experience is identical either way.
+
 ## First Launch
 
 On first run, Tandem opens `sample/welcome.md` automatically. Three tutorial annotations appear in the document — a highlight, a comment, and a comment with replacement text — so you have something to interact with immediately.
@@ -23,6 +25,8 @@ A floating tutorial card appears at the bottom-left of the editor with three ste
 The tutorial dismisses after all three steps and won't appear again (progress is saved to localStorage).
 
 **Tip:** Start the Tandem server first, then open Claude Code with the channel flag. Having Claude connected before the tutorial means you'll see real responses when you ask a question in step 2.
+
+**Desktop app users:** The server starts automatically when you open Tandem. Claude Code is configured on every launch — no need to run `tandem setup`.
 
 ## The Editor
 
@@ -259,6 +263,8 @@ Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets
 
 Start the Tandem server first (`tandem` for global install, `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available automatically via the MCP configuration written by `tandem setup` (global) or `.mcp.json` (development).
 
+**Desktop app:** The server is already running. Claude Code is auto-configured on every launch — your `tandem_*` tools are available immediately. Skip to [Real-Time Push](#real-time-push-recommended) if you want channel notifications.
+
 Claude can check the connection with `tandem_status`, which reports open documents, connection state, and your current mode (Solo or Tandem).
 
 ### Real-Time Push (Recommended)
@@ -347,3 +353,7 @@ Make sure Claude Code is running and connected. Check `tandem_status` from Claud
 If using channels, the server must be running before Claude Code starts. If you restarted the server, restart Claude Code or run `/mcp`.
 
 For server-side and MCP troubleshooting, see the [README](../README.md#troubleshooting).
+
+### Desktop app: server won't start
+
+The desktop app runs the server as a background sidecar process. Check the system tray — if Tandem's icon is there, the server is running. If the icon is missing or the app shows an error dialog, the sidecar failed to start (port conflict, missing resources, or crash). Restart the app. For persistent issues, check the Tauri log output in the system console.

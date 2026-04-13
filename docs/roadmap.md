@@ -306,47 +306,46 @@ These are intentional scope boundaries, not bugs:
 
 ---
 
-## Tauri Desktop (feat/tauri-desktop branch) — STEPS 1-6 DONE
+## Tauri Desktop — DONE (v0.4.0, PR #257)
 
 Native desktop distribution via Tauri v2. The Node.js server runs as a bundled sidecar; the WebView loads the existing web client unchanged.
 
-### Step 1: Scaffold + sidecar wiring — DONE (PR #256)
+### Step 1: Scaffold + sidecar wiring — DONE
 
 Tauri project scaffolded (`src-tauri/`), Node.js bundled as `node-sidecar` via `externalBin`, server resources bundled (`dist/server/`, `dist/channel/`, `dist/client/`, `sample/`). Sidecar spawned on launch; `TANDEM_OPEN_BROWSER=0` prevents double browser open.
 
-### Step 2: Origin + permissions — DONE (PR #257)
+### Step 2: Origin + permissions — DONE
 
 Production WebView uses `tauri://localhost` origin. Server CORS and DNS-rebinding middleware updated to accept it. CSP configured in `tauri.conf.json`. Capabilities split: `default.json` (core + shell + fs + dialog), `desktop.json` (single-instance + window-state + updater).
 
-### Step 3: Sidecar lifecycle hardening — DONE (PR #258)
+### Step 3: Sidecar lifecycle hardening — DONE
 
 Health polling (200ms interval, 15s timeout), exponential backoff restart (up to 3 attempts), early-exit if sidecar dies before healthy, error dialog on exhausted retries. `kill_sidecar()` on `RunEvent::Exit` prevents orphan processes.
 
-### Step 4: MCP auto-setup — DONE (PR #259)
+### Step 4: MCP auto-setup — DONE
 
 `run_setup()` POSTs to `/api/setup` with bundled `nodeBinary` + `channelPath` after health check. Runs on every launch (idempotent). Shows "Claude not found" dialog if no Claude installation detected. Tray "Setup Claude" item re-runs setup on demand with result dialog.
 
-### Step 5: System tray + window management — DONE (PR #260)
+### Step 5: System tray + window management — DONE
 
 Window hide-on-close (tray "Quit" is the exit path). Tray menu: Open Editor, Setup Claude, Check for Updates (separator), About, Quit. Left-click tray icon shows window. Single-instance plugin: second launch focuses existing window instead of spawning a new one.
 
-### Step 6: Auto-updater — DONE (PR #261)
+### Step 6: Auto-updater — DONE
 
 `tauri-plugin-updater` checks GitHub Releases `latest.json` on launch and every 8 hours. Ed25519-signed artifacts (`TAURI_SIGNING_PRIVATE_KEY` secret). `bundle.createUpdaterArtifacts: true` generates `.sig` files in CI. Before `app.restart()`, kills sidecar and waits for port to clear.
 
-### Step 7: Build pipeline + CI — IN PROGRESS
+### Step 7: Build pipeline + CI — DONE
 
-GitHub Actions workflow (`.github/workflows/tauri-release.yml`) — builds on Windows/macOS/Linux, signs with `tauri-action`, publishes installers + `latest.json` to GitHub Releases.
+GitHub Actions workflow (`.github/workflows/tauri-release.yml`) — builds on Windows/macOS/Linux, signs with `tauri-action`, publishes installers + `latest.json` to GitHub Releases. Cross-platform basename fix and CodeQL security hardening applied post-merge.
 
-Remaining:
+Future hardening (not blocking release):
 - Verify end-to-end update flow (download → install → restart) on all three platforms
 - Code-sign macOS `.app` (requires Apple Developer certificate)
 - Windows MSIX / NSIS installer smoke test
 
-### Remaining Tauri work
+### Future Tauri Enhancements
 
 - **File association**: Register `.md`/`.docx`/`.txt` file extensions so double-clicking opens in Tandem
-- **CLI path**: `tandem setup` in the desktop build should point to the bundled sidecar binary, not rely on `node` in PATH
 - **Deep link / open-with**: Pass file path from second-instance launch into the running server via `POST /api/open`
 - **macOS notarization**: Required for Gatekeeper-clean distribution outside the App Store
 - **Linux tray fallback**: Improve UX when `libappindicator3-dev` is absent (currently logs and continues)
@@ -355,7 +354,7 @@ Remaining:
 
 ## Future Extensions (v2+)
 
-- **Progressive Web App (PWA)** — Add a web app manifest + service worker so users can "install" Tandem from the browser. Gives a real app window (no browser chrome), taskbar icon, and offline-capable shell. Vite has `vite-plugin-pwa` for zero-config setup. Pairs well with auto-start — user clicks the PWA icon, server starts, editor opens.
+- **Progressive Web App (PWA)** — Lower priority now that the desktop app ships. Would still be useful as a lighter-weight alternative for users who prefer not to install a native app.
 - Spreadsheet component (Handsontable/AG Grid)
 - Claude Desktop support (MCP server already exists)
 - Drawing/freeform annotation layer

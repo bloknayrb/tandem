@@ -4,6 +4,8 @@
 
 Real-world patterns for using Tandem with Claude on toll consulting documents.
 
+> **Desktop app users:** These workflows apply to you too — the only difference is how the server starts. With the desktop app, the server runs automatically and Claude Code is configured on launch. Skip the `npm install` / `tandem setup` steps below and go straight to starting Claude Code.
+
 ## Quick Start (Global Install)
 
 **Setup:** First-time user installs Tandem globally and connects Claude.
