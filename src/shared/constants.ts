@@ -107,3 +107,9 @@ export const CHANNEL_RETRY_DELAY_MS = 2_000;
 
 /** Tauri WebView origin hostname — must be accepted alongside localhost. */
 export const TAURI_HOSTNAME = "tauri.localhost";
+
+// Zoom persistence (Tauri desktop)
+export const ZOOM_STORAGE_KEY = "tandem:zoomLevel";
+export const ZOOM_MIN = 0.5;
+export const ZOOM_MAX = 2.0;
+export const ZOOM_DEFAULT = 1.0;
