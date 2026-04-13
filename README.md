@@ -2,9 +2,17 @@
   <img src="docs/assets/banner.png" alt="Tandem — Collaborative AI-Human Document Editor" width="800">
 </p>
 
-Have you ever been working on a document (or any multi-paragraph piece of text) with Claude and wondered aloud, "Why isn't there an easier way to do this?" Well look no further, because now there is! My goal with this was to try to create an experience kind of similar to editing a Google doc with another person except that that other person is Claude Code. 
+Have you ever been working on a piece of writing with an LLM and caught yourself copy-pasting the same paragraph into the chat for the fifth time just so the model knows what you're talking about? That's the friction Tandem eliminates. Open a file directly, or just tell Claude "let's work on my draft in tandem" — the document appears in the editor, and from that point on you highlight text and Claude sees it directly. No pasting, no "here's the paragraph I mean," no losing your place.
+
+And because Tandem hooks into Claude as an MCP server, you're not stuck in some stripped-down document-editing silo. It's the full Claude — with all its knowledge, your conversation context, and every tool it has access to — just now it can also see and edit your document.
 
 ![Tandem editor showing a document with annotations, side panel, and Claude's presence](docs/screenshots/01-editor-overview.png)
+
+## Why Tandem?
+
+- **No more copy-paste ping-pong.** Select text in the editor, and Claude reads your selection directly. Ask "what do you think of this?" or "make this more concise" — Claude knows exactly which text you mean.
+- **Your full LLM, not a toy editor.** Tandem connects via MCP, so Claude keeps all its knowledge, all its tools, and your full conversation context. Need it to cross-reference your document against a codebase, a URL, or another file? It can — it's still Claude.
+- **Iterate in place.** Claude can suggest rewrites, leave comments, flag issues, and edit text — all appearing as annotations you accept, dismiss, or tweak right in the document.
 
 ## Quick Start
 
@@ -105,27 +113,29 @@ Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatical
 
 ## Using Tandem
 
-A one-minute mental model of the daily loop:
+You point at text, Claude sees it. Here's how that plays out day-to-day:
 
-- **Open a document.** Ask Claude (`"open notes.md"`), drag a file onto the browser, or click the **+** in the tab bar. `.md`, `.txt`, `.html`, and `.docx` (review-only) are supported.
-- **Talk about specific text.** Select it in the browser editor, then ask Claude about "this paragraph" in the terminal. Claude reads your selection from `tandem_checkInbox` — no copy/paste. Hold the selection still for about a second so it registers (dwell-time gating filters out incidental clicks).
-- **Review what Claude suggests.** Annotations appear in the side panel. Press **Ctrl+Shift+R** to enter keyboard review mode: **Tab** to navigate, **Y** accept, **N** dismiss, **E** edit, **Z** undo within a 10-second window.
+- **Open a document.** Ask Claude (`"let's work on notes.md in tandem"`), drag a file onto the browser, or click the **+** in the tab bar. `.md`, `.txt`, `.html`, and `.docx` (review-only) are supported.
+- **Point at what you mean.** Select text in the editor and ask Claude about "this paragraph" in the terminal — or just wait for Claude to react if you have channels on. Claude reads your selection directly, no copy-paste needed. Hold the selection for about a second so it registers (dwell-time gating filters out incidental clicks).
+- **Iterate on Claude's response.** Claude's suggestions appear as annotations in the side panel — accept, dismiss, edit, or ask follow-up questions. Each round refines the text without you ever leaving the document. Press **Ctrl+Shift+R** for keyboard review mode: **Tab** to navigate, **Y** accept, **N** dismiss, **E** edit, **Z** undo within a 10-second window.
 - **Heads-down vs collaborative.** Toggle **Solo** mode when you want to write without interruptions — Tandem queues non-urgent annotations until you flip back to **Tandem** mode. Both `tandem_status` and `tandem_checkInbox` return the current mode so Claude adapts its behavior automatically.
 - **Save.** Ask Claude ("save the file"), press the save button, or let session auto-persistence take over — your documents and annotations survive server restarts either way.
 
 ## Features
 
-### Annotations
-
-![Side panel showing annotation cards with filtering, bulk actions, and text previews](docs/screenshots/03-side-panel.png)
-
-Claude adds highlights, comments, suggestions, and flags directly in the document. Suggestion cards show a visual diff — original text in red strikethrough, replacement in green. The side panel lists all annotations with filtering by type, author, and status. Accept, dismiss, or edit each one individually — or use bulk actions to process them in batches.
+Everything in Tandem is built around one idea: you work in the document, Claude works alongside you, and neither of you has to leave your surface to stay in sync.
 
 ### Chat
 
 ![Chat sidebar showing messages, typing indicator, and panel toggle](docs/screenshots/02-chat-sidebar.png)
 
-Send freeform messages to Claude alongside annotation review. Select text before sending to attach it as a clickable anchor — clicking it later scrolls back to that passage.
+Send messages to Claude alongside your document. Select text before sending to attach it as context — Claude sees exactly what you mean. Clicking an anchored selection later scrolls back to that passage.
+
+### Annotations
+
+![Side panel showing annotation cards with filtering, bulk actions, and text previews](docs/screenshots/03-side-panel.png)
+
+This is how Claude's feedback shows up in the document. Claude adds highlights, comments, suggestions, and flags directly on the text. Suggestion cards show a visual diff — original text in red strikethrough, replacement in green. The side panel lists all annotations with filtering by type, author, and status. Accept, dismiss, or edit each one individually — or use bulk actions to process them in batches.
 
 ### Review Mode
 
@@ -135,11 +145,11 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 
 ### More
 
+- **Full LLM via MCP** — Claude connects through MCP tools, so it retains all its knowledge, conversation context, and tool access while working on your document
 - **Multi-document tabs** — open `.md`, `.txt`, `.html`, `.docx` files side by side; drag to reorder
 - **.docx review-only mode** — open Word documents for annotation; imported Word comments appear alongside Claude's
 - **Session persistence** — documents and annotations survive server restarts
 - **Solo / Tandem mode** — flip to Solo when you want to write heads-down; Tandem queues non-urgent annotations until you're ready
-- **Selection-aware chat** — highlight text in the browser, ask Claude about "this" in the terminal; Claude reads your selection directly, no copy/paste
 - **Real-time channel push** *(recommended)* — with the `--dangerously-load-development-channels` Claude Code flag, selections, annotations, and chat push to Claude instantly, making Tandem feel like a live collaborator watching over your shoulder
 - **Keyboard shortcuts** — press `?` for the full reference
 - **Unsaved-changes indicator** — dot on tab title when a document has pending edits
