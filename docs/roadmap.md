@@ -353,6 +353,71 @@ Future hardening (not blocking release):
 
 ---
 
+## v1.0 Release Plan
+
+Six-phase plan to ship Tandem v1.0. Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop). Remaining work focuses on stability, UI polish, and API cleanup.
+
+### Phase 1: Bug Fixes
+
+- **#268 — Session persistence bug:** `closeDocumentById()` saves the session on close instead of marking it closed, causing closed tabs to reopen on restart. Fix: add `open: boolean` flag to `SessionData`. On tab close, save with `open: false`. On restore, filter to `open !== false`. Preserves session data for future recovery UI (#103).
+  - Files: `src/shared/types.ts`, `src/server/mcp/document-service.ts`, `src/server/session/manager.ts`
+- **#267 — Tab bar height:** Fix unnecessary vertical scrollbar in tab container.
+  - Files: `src/client/components/DocumentTabs.tsx`
+
+### Phase 2: Tailwind CSS 4 Migration (#24)
+
+Estimated 10–12 dev days. Replaces ~294 inline `style={{}}` objects across 23 files. Foundation for dark mode, design consistency, and faster UI iteration.
+
+1. **Infrastructure:** Install Tailwind CSS 4 + Vite plugin. Configure theme (primary indigo, gray scale, status colors, highlight colors). Create `editor.css` for Tiptap/ProseMirror content. Configure `dark:` via `class` strategy on `<html>`.
+2. **Extract reusable components first:** `Button` (variants: primary/secondary/ghost/danger), `PanelHeader`, `Badge`/`Pill`.
+3. **Migrate small files first:** StatusBar, DocumentTabs, OnboardingTutorial, ToastContainer, FileOpenDialog, ToolbarButton.
+4. **Migrate large files:** Toolbar (547 LOC), SettingsPopover (326 LOC), ChatPanel (426 LOC), SidePanel (881 LOC), App (889 LOC).
+5. **Verify:** Typecheck, E2E tests (use `data-testid`, unaffected by style changes), visual inspection.
+
+### Phase 3: MCP Tool Consolidation (#259)
+
+Clean up API surface before v1.0 locks it. Breaking changes are acceptable pre-1.0 but not after.
+
+| Tool | Action |
+|------|--------|
+| `tandem_suggest` | Deprecate (keep shim with warning, hard-remove in v1.1) |
+| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`, 0 test deps) |
+| `tandem_getSelections` | Hard-remove (redundant with `tandem_checkInbox.activity.selectedText`) |
+| `tandem_setStatus` | Merge into `tandem_status` (make read/write with optional params) |
+| `tandem_getActivity` | Keep (distinct semantic: user activity vs. editor state) |
+| `tandem_getContext` | Keep (low cost, distinct purpose from text reads) |
+| `tandem_removeAnnotation` | Keep (orphan-reply cleanup logic must stay explicit) |
+
+Net result: ~28 tools (down from 31). Files: `document.ts`, `awareness.ts`, `navigation.ts`, `annotations.ts`, `docs/mcp-tools.md`.
+
+### Phase 4: Dark Theme (#59)
+
+Depends on Phase 2. Tailwind `dark:` classes on `<html>`, toggle in settings, `prefers-color-scheme` default, localStorage persistence, `editor.css` dark overrides, annotation highlight legibility verification.
+
+### Phase 5: First-Run & Session UX
+
+- **#265 — Welcome tutorial update:** Update `sample/welcome.md`, tutorial annotations, and onboarding steps for current UI (Solo/Tandem mode, unified comment button, etc.).
+- **#103 — Session management UI:** Session browser in FileOpenDialog. List sessions with metadata (path, date, annotation count, open/closed). Actions: reopen, delete, clear all. Depends on Phase 1 (`open` flag) and Phase 2 (Tailwind).
+
+### Phase 6: Version Bump to 1.0.0
+
+Bump version, update CHANGELOG, update roadmap, final E2E pass + full build verification.
+
+### Deferred to Post-v1.0
+
+| Item | Reason |
+|------|--------|
+| #260 — Coordinate system refactoring | Risky refactor; tests solid; historical bugs fixed |
+| #153 — Inline images | Nice-to-have, not core |
+| #244 — Windows Playwright deadlock | Investigation-only, CI workaround exists |
+| Three-way merge / conflict UI (5c partial) | Complex; reload behavior acceptable for v1.0 |
+| RANGE_MOVED auto-retry | Edge case |
+| Flag markers / highlight color picker | Minor toolbar gaps |
+| #269 — Desktop UI exploration | Needs scoping |
+| #266 — Keyboard shortcuts (Ctrl+Tab etc.) | Nice-to-have |
+
+---
+
 ## Future Extensions (v2+)
 
 - **Progressive Web App (PWA)** — Lower priority now that the desktop app ships. Would still be useful as a lighter-weight alternative for users who prefer not to install a native app.
