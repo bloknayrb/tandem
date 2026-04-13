@@ -13,7 +13,8 @@ export function loadRecentFiles(): string[] {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((x): x is string => typeof x === "string");
-  } catch {
+  } catch (err) {
+    console.warn("[tandem] failed to load recent files:", err);
     return [];
   }
 }
@@ -21,15 +22,15 @@ export function loadRecentFiles(): string[] {
 export function saveRecentFiles(list: string[]): void {
   try {
     localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(list));
-  } catch {
-    // localStorage unavailable (incognito, storage-disabled)
+  } catch (err) {
+    console.warn("[tandem] failed to save recent files:", err);
   }
 }
 
 export function clearRecentFiles(): void {
   try {
     localStorage.removeItem(RECENT_FILES_KEY);
-  } catch {
-    // localStorage unavailable (incognito, storage-disabled)
+  } catch (err) {
+    console.warn("[tandem] failed to clear recent files:", err);
   }
 }

@@ -1,25 +1,9 @@
 import { describe, expect, it } from "vitest";
-
-/**
- * Tests for the tab-cycling logic used by useTabCycleKeyboard.
- * Extracted to avoid needing a full React/DOM environment.
- */
-
-function cycleTab(
-  tabs: { id: string }[],
-  activeTabId: string | null,
-  shiftKey: boolean,
-): string | null {
-  if (tabs.length < 2) return null;
-  const currentIdx = tabs.findIndex((t) => t.id === activeTabId);
-  const direction = shiftKey ? -1 : 1;
-  const nextIdx = (currentIdx + direction + tabs.length) % tabs.length;
-  return tabs[nextIdx].id;
-}
+import { cycleTab } from "../../src/client/hooks/useTabCycleKeyboard.js";
 
 const tabs = [{ id: "a" }, { id: "b" }, { id: "c" }];
 
-describe("tab cycle logic", () => {
+describe("cycleTab", () => {
   it("cycles forward from first tab", () => {
     expect(cycleTab(tabs, "a", false)).toBe("b");
   });
@@ -38,6 +22,10 @@ describe("tab cycle logic", () => {
 
   it("returns null with fewer than 2 tabs", () => {
     expect(cycleTab([{ id: "only" }], "only", false)).toBeNull();
+  });
+
+  it("returns null with zero tabs", () => {
+    expect(cycleTab([], null, false)).toBeNull();
   });
 
   it("handles unknown activeTabId by cycling from index -1", () => {
