@@ -6,6 +6,7 @@ import * as Y from "yjs";
 import { AUTHORSHIP_TOGGLE_KEY, Y_MAP_AUTHORSHIP } from "../../../shared/constants";
 import { toPmPos } from "../../../shared/positions/types";
 import type { AuthorshipRange } from "../../../shared/types";
+import { generateAuthorshipId } from "../../../shared/utils";
 import { flatOffsetToPmPos, pmPosToFlatOffset, relRangeToPmPositions } from "../../positions";
 
 export const authorshipPluginKey = new PluginKey("tandemAuthorship");
@@ -55,12 +56,8 @@ function buildAuthorshipDecorations(
     const { from, to } = resolved;
     if (from >= to || from < 0 || to > maxPos) return;
 
-    const isUser = entry.author === "user";
     const attrs: Record<string, string> = {
       class: `tandem-authorship tandem-authorship--${entry.author}`,
-      style: isUser
-        ? "background: rgba(59, 130, 246, 0.08);"
-        : "background: rgba(34, 197, 94, 0.08);",
     };
 
     try {
@@ -220,7 +217,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
             const flatTo = pmPosToFlatOffset(pmDoc, toPmPos(newStart + insertedLen));
             if (flatTo <= flatFrom) return;
 
-            const rangeId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const rangeId = generateAuthorshipId("user");
             const entry: AuthorshipRange = {
               id: rangeId,
               author: "user",
