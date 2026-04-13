@@ -273,8 +273,7 @@ All MCP-initiated Y.Map writes use `doc.transact(() => { ... }, 'mcp')`. The eve
 | `annotation:created` | User creates highlight/comment/question | `annotationId`, `annotationType`, `content`, `textSnippet` |
 | `annotation:accepted` | User accepts Claude's annotation | `annotationId`, `textSnippet` |
 | `annotation:dismissed` | User dismisses Claude's annotation | `annotationId`, `textSnippet` |
-| `chat:message` | User sends chat message | `messageId`, `text`, `replyTo`, `anchor` |
-| `selection:changed` | User selects text (debounced 1.5s, cleared selections dropped) | `from`, `to`, `selectedText` |
+| `chat:message` | User sends chat message | `messageId`, `text`, `replyTo`, `anchor`, `selection?` |
 | `document:opened` | New document opened in browser | `fileName`, `format` |
 | `document:closed` | Document closed | `fileName` |
 | `document:switched` | User switches tabs | `fileName` |
@@ -330,7 +329,7 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 | `annotations` | Client React hook | `src/client/hooks/useYjsSync.ts` → `setupTabObservers()` | Drive sidebar annotation list via `setAnnotations()` |
 | `annotations` | Client ProseMirror | `src/client/editor/extensions/annotation.ts` → `buildDecorations()` | Render inline highlights/underlines |
 | `awareness` | Client React hook | `useYjsSync.ts` → `setupTabObservers()` | Drive "Claude -- typing" status indicator |
-| `userAwareness` | Server event queue | `queue.ts` → `attachObservers()` | Emit selection:changed events to channel |
+| `userAwareness` | Server event queue | `queue.ts` → `attachObservers()` | Buffer selection for chat messages |
 | `documentMeta` | Client React hook | `useYjsSync.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
 | `documentMeta` (per-doc) | Client React hook | `useYjsSync.ts` → `setupTabObservers()` | Sync readOnly flag per tab |
 

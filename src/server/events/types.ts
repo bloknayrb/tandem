@@ -32,12 +32,8 @@ export interface ChatMessagePayload {
   text: string;
   replyTo: string | null;
   anchor: { from: number; to: number; textSnapshot: string } | null;
-}
-
-export interface SelectionChangedPayload {
-  from: number;
-  to: number;
-  selectedText: string;
+  /** Buffered selection context at the time the chat message was sent. */
+  selection?: { from: number; to: number; selectedText: string } | { selectedText: string };
 }
 
 export interface DocumentOpenedPayload {
@@ -68,7 +64,6 @@ export type TandemEvent =
   | (TandemEventBase & { type: "annotation:accepted"; payload: AnnotationAcceptedPayload })
   | (TandemEventBase & { type: "annotation:dismissed"; payload: AnnotationDismissedPayload })
   | (TandemEventBase & { type: "chat:message"; payload: ChatMessagePayload })
-  | (TandemEventBase & { type: "selection:changed"; payload: SelectionChangedPayload })
   | (TandemEventBase & { type: "document:opened"; payload: DocumentOpenedPayload })
   | (TandemEventBase & { type: "document:closed"; payload: DocumentClosedPayload })
   | (TandemEventBase & { type: "document:switched"; payload: DocumentSwitchedPayload });
@@ -86,7 +81,6 @@ const VALID_EVENT_TYPES = new Set<TandemEventType>([
   "annotation:accepted",
   "annotation:dismissed",
   "chat:message",
-  "selection:changed",
   "document:opened",
   "document:closed",
   "document:switched",
@@ -141,14 +135,13 @@ export function formatEventContent(event: TandemEvent): string {
       return `User dismissed annotation ${annotationId}${textSnippet ? ` ("${textSnippet}")` : ""}${doc}`;
     }
     case "chat:message": {
-      const { text, replyTo } = event.payload;
+      const { text, replyTo, selection } = event.payload;
       const reply = replyTo ? ` (replying to ${replyTo})` : "";
-      return `User says${reply}: ${text}${doc}`;
-    }
-    case "selection:changed": {
-      const { from, to, selectedText } = event.payload;
-      if (!selectedText) return `User cleared selection${doc}`;
-      return `User is pointing at text (${from}-${to}): "${selectedText}"${doc} — respond via tandem_reply`;
+      const sel =
+        selection && selection.selectedText
+          ? ` [selection: "${selection.selectedText}"${"from" in selection ? ` (${selection.from}-${selection.to})` : ""}]`
+          : "";
+      return `User says${reply}: ${text}${sel}${doc}`;
     }
     case "document:opened": {
       const { fileName, format } = event.payload;
@@ -187,9 +180,7 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
       break;
     case "chat:message":
       meta.message_id = event.payload.messageId;
-      break;
-    case "selection:changed":
-      meta.respond_via = "tandem_reply";
+      if (event.payload.selection?.selectedText) meta.has_selection = "true";
       break;
     case "document:opened":
     case "document:closed":

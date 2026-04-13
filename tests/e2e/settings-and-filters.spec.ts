@@ -1,11 +1,9 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
 import {
-  CTRL_ROOM,
   DEFAULT_MCP_PORT,
   LEFT_PANEL_WIDTH_KEY,
   PANEL_WIDTH_KEY,
-  SELECTION_DWELL_DEFAULT_MS,
   TANDEM_MODE_KEY,
   TANDEM_SETTINGS_KEY,
 } from "../../src/shared/constants";
@@ -776,77 +774,22 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await expect(reloadedSlider).toHaveValue("2000");
 });
 
-// Bridge-layer coverage that cannot be exercised by
-// `tests/server/event-queue-dwell.test.ts:122` ("respects custom dwell time
-// from CTRL_ROOM awareness"). The unit test writes directly to the server-side
-// CTRL_ROOM awareness map and drives `vi.advanceTimersByTime`, bypassing:
-//   1. SettingsPopover → useTandemSettings → localStorage persistence
-//   2. App.tsx useEffect → awareness.set(Y_MAP_DWELL_MS, value) broadcast
-//   3. Hocuspocus client → server sync of CTRL_ROOM awareness
-//   4. awareness.ts editor extension writing real DOM selection into
-//      per-document user awareness
-//   5. SSE channel delivery through /api/events
-// This E2E proves all five links are wired correctly; do not delete it as
-// "already covered by unit tests."
-test("dwell-time slider value is honored by the selection event pipeline", async ({ page }) => {
-  // Capture the fixture's documentId so the positive assertion below can
-  // match against the actual document, not just `toBeTruthy()`. This closes
-  // a silent-failure hole: without the strict match, a selection event from
-  // an unrelated document (or a future regression that leaks CTRL_ROOM
-  // events) would pass the check trivially.
-  const openResult = (await mcp.callTool("tandem_open", {
+// Verifies that selections are buffered server-side and no longer emitted
+// as standalone SSE events (#188). This E2E proves the full pipeline from
+// browser selection → server awareness → SSE endpoint produces no
+// selection:changed events.
+test("selections are buffered, not pushed as SSE events (#188)", async ({ page }) => {
+  // Verify that making a selection does NOT produce a selection:changed SSE
+  // event — selections are now buffered per-document and attached to chat
+  // messages instead of firing as standalone events.
+  await mcp.callTool("tandem_open", {
     filePath: path.join(tmpDir, "sample.md"),
-  })) as { error: false; data: { documentId: string } } | { error: true };
-  if (openResult.error !== false) {
-    throw new Error("tandem_open failed in dwell-time test setup");
-  }
-  const fixtureDocId = openResult.data.documentId;
+  });
 
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 10_000 });
 
-  // --- Step 0: Reset CTRL_ROOM dwell to default before doing anything.
-  // CTRL_ROOM's Y_MAP_DWELL_MS is server-side state shared across every
-  // E2E test within the same webServer lifetime. Playwright's per-context
-  // isolation does NOT reset it, so a preceding test that set dwell=2000
-  // (the persistence test above) would leave stale CTRL_ROOM state. Without
-  // this reset, the negative-window assertion below can pass for the wrong
-  // reason (stale 2000ms value happens to exceed the 1500ms negative wait).
-  //
-  // Route through the slider UI so App.tsx's broadcast useEffect fires, which
-  // is the only non-invasive way to rewrite CTRL_ROOM's awareness map.
-  // We bounce through a non-default value first to guarantee React's onChange
-  // fires (React skips no-op value writes on controlled inputs, and a fresh
-  // page's in-memory state is already SELECTION_DWELL_DEFAULT_MS so a
-  // direct single write of that value would be a no-op that neither persists
-  // to localStorage nor triggers App.tsx's broadcast effect).
-  const bounceValue = SELECTION_DWELL_DEFAULT_MS + 100;
-  await setDwellSliderValue(page, bounceValue);
-  await setDwellSliderValue(page, SELECTION_DWELL_DEFAULT_MS);
-  await expect
-    .poll(
-      async () =>
-        page.evaluate((key) => {
-          const raw = localStorage.getItem(key);
-          return raw ? (JSON.parse(raw) as { selectionDwellMs?: number }).selectionDwellMs : null;
-        }, TANDEM_SETTINGS_KEY),
-      { timeout: 2_000 },
-    )
-    .toBe(SELECTION_DWELL_DEFAULT_MS);
-  // Give the Hocuspocus client a beat to push the awareness write to the
-  // server before we start relying on it.
-  await page.waitForTimeout(250);
-  // Close the popover so future clicks in the editor dispatch selection.
-  // Wait for the hidden state explicitly — otherwise the next
-  // `setDwellSliderValue(2500)` call races the close animation and its
-  // `isVisible()` branch would skip the re-open click.
-  await page.keyboard.press("Escape");
-  await expect(page.locator("[data-testid='settings-popover']")).toBeHidden({ timeout: 2_000 });
-
-  // --- Step 3: Subscribe to SSE with an absolute URL.
-  // `page.evaluate(() => new EventSource("/api/events"))` would resolve
-  // against the page origin (Vite :5173), which does NOT proxy /api/events.
-  // Must be absolute to the MCP HTTP server (:3479).
+  // Subscribe to SSE events
   const eventsUrl = `http://localhost:${DEFAULT_MCP_PORT}/api/events`;
   await page.evaluate((url) => {
     (window as unknown as { __tandemEvents: unknown[] }).__tandemEvents = [];
@@ -863,138 +806,30 @@ test("dwell-time slider value is honored by the selection event pipeline", async
     };
   }, eventsUrl);
 
-  // --- Step 4: Open settings popover and set slider to 2500ms.
-  await setDwellSliderValue(page, 2500);
-
-  // --- Step 5: Pre-assertion — localStorage reflects the broadcast.
-  // Catches broadcast-key regressions without requiring timing. If this
-  // fails, the pipeline is broken upstream of the server and there's no
-  // point proceeding to the timing checks.
-  const savedDwell = await page.evaluate((key) => {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as { selectionDwellMs?: number }).selectionDwellMs : null;
-  }, TANDEM_SETTINGS_KEY);
-  expect(savedDwell).toBe(2500);
-
-  // --- Step 6: Close settings popover so selection clicks reach the editor.
-  await page.keyboard.press("Escape");
-  await expect(page.locator("[data-testid='settings-popover']")).toBeHidden({ timeout: 2_000 });
-
-  // --- Step 7: Wait for SSE subscription to be OPEN before making the
-  // selection. Without this, the test can silently false-pass because the
-  // selection event fires before the subscription was established.
+  // Wait for SSE subscription to be OPEN
   await page.waitForFunction(
     () =>
       (window as unknown as { __tandemEventSource?: EventSource }).__tandemEventSource
-        ?.readyState === 1, // EventSource.OPEN
+        ?.readyState === 1,
     null,
     { timeout: 5_000 },
   );
 
-  // Give the awareness write from setDwellSliderValue a beat to propagate to
-  // the server — otherwise the selection dwell timer we're about to trigger
-  // would schedule with the stale value.
-  await page.waitForTimeout(250);
-
-  // --- Step 8: Make a real selection in the editor. Mirror how the
-  // persistence test dispatches events: use the ProseMirror DOM API via
-  // Playwright so the editor's awareness plugin picks it up exactly as a
-  // human-driven selection would.
+  // Make a selection in the editor
   const prose = page.locator(".ProseMirror");
-  await prose.click(); // focus the editor
-  // Select the phrase "Test Document" in the H1. `selectText()` selects
-  // the entire element; for a steady, non-trivial selection that's fine
-  // since the awareness plugin writes the range with truncated text.
+  await prose.click();
   await prose.locator("h1").first().selectText();
 
-  // Mark start time so we can assert the negative window wasn't cut short
-  // by CI runner scheduling. Not a strict guard, but a diagnostic hook.
-  const negativeStart = Date.now();
+  // Wait well past the maximum dwell time (3000ms max + headroom)
+  await page.waitForTimeout(4000);
 
-  // --- Step 9: Negative window (fixed wait).
-  // The default dwell is 1000ms. A regression to default would fire at
-  // ~1000ms — this 1500ms wait catches that with 500ms of headroom. Any
-  // faster-than-2500ms regression (500ms, 0ms, etc.) is also caught.
-  await page.waitForTimeout(1500);
-  const negativeElapsed = Date.now() - negativeStart;
-  // Diagnostic: a runner preempted for >1500ms would extend the wait,
-  // so < 1500 is only possible via clock skew. Log it as a warning rather
-  // than failing so CI artifacts show the shape of the flake if it happens.
-  if (negativeElapsed < 1500) {
-    console.warn(
-      `[test] negative-window wait returned early: ${negativeElapsed}ms; this should not happen`,
-    );
-  }
-
-  const afterNegative = await page.evaluate(
-    () => (window as unknown as { __tandemEvents: unknown[] }).__tandemEvents?.length ?? 0,
-  );
-  expect(
-    afterNegative,
-    "selection:changed fired before the configured dwell elapsed — slider is not controlling the server pipeline",
-  ).toBe(0);
-
-  // --- Step 10: Positive window (bounded poll).
-  // Total time-of-selection budget: up to 1500 (neg) + 4000 (poll) = 5500ms,
-  // well over the 2500ms dwell even on a slow CI. The poll cadence is
-  // [100, 200, 400] so we settle quickly once the event lands.
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(
-          () => (window as unknown as { __tandemEvents: unknown[] }).__tandemEvents?.length ?? 0,
-        ),
-      { timeout: 4_000, intervals: [100, 200, 400] },
-    )
-    .toBeGreaterThanOrEqual(1);
-
-  // Verify the received event shape — at least one must be a
-  // selection:changed for a real document (not CTRL_ROOM), with a
-  // non-empty selectedText payload matching what we selected.
+  // No selection:changed events should have been emitted
   const events = (await page.evaluate(
     () => (window as unknown as { __tandemEvents: unknown[] }).__tandemEvents ?? [],
-  )) as Array<{
-    type?: string;
-    documentId?: string;
-    payload?: { selectedText?: string };
-  }>;
+  )) as Array<{ type?: string }>;
   const selectionEvents = events.filter((e) => e?.type === "selection:changed");
-  expect(selectionEvents.length).toBeGreaterThanOrEqual(1);
-  const first = selectionEvents[0];
-  // Strict positive match against the fixture's actual documentId. This
-  // implicitly excludes CTRL_ROOM (which is `CTRL_ROOM` from shared
-  // constants, not the previously-hardcoded "tandem:ctrl" literal that
-  // could never match anything), and also catches any regression that
-  // leaks an event from an unrelated document into this test's context.
-  expect(first.documentId).toBe(fixtureDocId);
-  expect(first.documentId).not.toBe(CTRL_ROOM);
-  expect(first.payload?.selectedText ?? "").toContain("Test Document");
+  expect(
+    selectionEvents.length,
+    "selection:changed events should no longer be emitted — selections are buffered per-document (#188)",
+  ).toBe(0);
 });
-
-/**
- * Open the settings popover (if not already open), set the dwell-time slider
- * to the given value, and verify the input reflects it. Uses the React
- * native-setter trick so React's onChange actually fires — a plain `.fill()`
- * doesn't round-trip through React's controlled-input tracking. Leaves the
- * popover open. Safe to call repeatedly.
- */
-async function setDwellSliderValue(
-  page: import("@playwright/test").Page,
-  value: number,
-): Promise<void> {
-  const popover = page.locator("[data-testid='settings-popover']");
-  const isOpen = await popover.isVisible().catch(() => false);
-  if (!isOpen) {
-    await page.locator("[data-testid='settings-btn']").click();
-    await expect(popover).toBeVisible({ timeout: 2_000 });
-  }
-  const slider = page.locator("[data-testid='dwell-time-slider']");
-  await expect(slider).toBeVisible({ timeout: 2_000 });
-  await slider.evaluate((el, v) => {
-    const input = el as HTMLInputElement;
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    nativeSetter?.call(input, String(v));
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }, value);
-  await expect(slider).toHaveValue(String(value));
-}

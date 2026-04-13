@@ -70,31 +70,31 @@ describe("formatEventContent", () => {
     expect(formatEventContent(event)).toBe("User says (replying to msg_1): Thanks [doc: doc1]");
   });
 
-  it("selection:changed with text", () => {
+  it("chat:message with buffered selection (full offsets)", () => {
     const event = makeEvent(
-      "selection:changed",
-      { from: 5, to: 10, selectedText: "world" },
+      "chat:message",
+      { text: "What about this?", selection: { from: 5, to: 10, selectedText: "world" } },
       "doc1",
     );
     expect(formatEventContent(event)).toBe(
-      'User is pointing at text (5-10): "world" [doc: doc1] — respond via tandem_reply',
+      'User says: What about this? [selection: "world" (5-10)] [doc: doc1]',
     );
   });
 
-  it("selection:changed cleared", () => {
-    const event = makeEvent("selection:changed", { from: 0, to: 0 }, "doc1");
-    expect(formatEventContent(event)).toBe("User cleared selection [doc: doc1]");
-  });
-
-  it("selection:changed with truncated text", () => {
-    const longText = "a".repeat(250);
+  it("chat:message with buffered selection (text only, no offsets)", () => {
     const event = makeEvent(
-      "selection:changed",
-      { from: 0, to: 250, selectedText: longText },
+      "chat:message",
+      { text: "Fix this", selection: { selectedText: "broken text" } },
       "doc1",
     );
-    const expected = `User is pointing at text (0-250): "${"a".repeat(250)}" [doc: doc1] — respond via tandem_reply`;
-    expect(formatEventContent(event)).toBe(expected);
+    expect(formatEventContent(event)).toBe(
+      'User says: Fix this [selection: "broken text"] [doc: doc1]',
+    );
+  });
+
+  it("chat:message without selection", () => {
+    const event = makeEvent("chat:message", { text: "Hello" }, "doc1");
+    expect(formatEventContent(event)).toBe("User says: Hello [doc: doc1]");
   });
 
   it("document:opened", () => {
@@ -155,20 +155,25 @@ describe("formatEventMeta", () => {
     expect(formatEventMeta(event).message_id).toBe("msg_1");
   });
 
-  it("omits annotation_id and message_id when not in payload", () => {
-    const event = makeEvent("selection:changed", { from: 0, to: 0 }, "doc1");
+  it("omits annotation_id and message_id for document events", () => {
+    const event = makeEvent("document:opened", { fileName: "test.md", format: "markdown" }, "doc1");
     const meta = formatEventMeta(event);
     expect(meta).not.toHaveProperty("annotation_id");
     expect(meta).not.toHaveProperty("message_id");
   });
 
-  it("selection:changed includes respond_via tandem_reply", () => {
+  it("chat:message with selection includes has_selection meta", () => {
     const event = makeEvent(
-      "selection:changed",
-      { from: 5, to: 10, selectedText: "world" },
+      "chat:message",
+      { messageId: "msg_1", text: "hi", selection: { from: 5, to: 10, selectedText: "world" } },
       "doc1",
     );
-    expect(formatEventMeta(event).respond_via).toBe("tandem_reply");
+    expect(formatEventMeta(event).has_selection).toBe("true");
+  });
+
+  it("chat:message without selection omits has_selection", () => {
+    const event = makeEvent("chat:message", { messageId: "msg_1", text: "hi" }, "doc1");
+    expect(formatEventMeta(event)).not.toHaveProperty("has_selection");
   });
 
   it("all keys use underscores (no hyphens)", () => {

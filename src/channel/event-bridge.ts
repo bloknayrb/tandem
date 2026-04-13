@@ -9,7 +9,6 @@ import { formatEventContent, formatEventMeta, parseTandemEvent } from "../server
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
-const SELECTION_DEBOUNCE_MS = 300;
 const MODE_CACHE_TTL_MS = 2000;
 
 export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<void> {
@@ -116,39 +115,7 @@ async function connectAndStream(
     awarenessTimer = setTimeout(flushAwareness, AWARENESS_DEBOUNCE_MS);
   }
 
-  // Debounced selection: coalesce rapid selection changes, skip cleared selections
-  let selectionTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingSelection: { event: TandemEvent; eventId?: string } | null = null;
-  let transportBroken = false;
-
-  async function flushSelection() {
-    if (!pendingSelection) return;
-    const { event, eventId } = pendingSelection;
-    pendingSelection = null;
-    if (eventId) onEventId(eventId);
-    try {
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: formatEventContent(event),
-          meta: formatEventMeta(event),
-        },
-      });
-    } catch (err) {
-      console.error("[Channel] MCP notification failed (transport broken?):", err);
-      transportBroken = true;
-      return;
-    }
-    scheduleAwareness(event);
-  }
-
-  function isSelectionCleared(event: TandemEvent): boolean {
-    const p = event.payload as { from?: number; to?: number; selectedText?: string } | undefined;
-    return !p || (p.from === p.to && !p.selectedText);
-  }
-
   while (true) {
-    if (transportBroken) throw new Error("MCP transport broken (detected in debounced flush)");
     const { done, value } = await reader.read();
     if (done) throw new Error("SSE stream ended");
 
@@ -191,16 +158,6 @@ async function connectAndStream(
           if (eventId) onEventId(eventId);
           continue;
         }
-      }
-
-      // Selection events: drop cleared selections, debounce the rest
-      if (event.type === "selection:changed") {
-        if (eventId) onEventId(eventId);
-        if (isSelectionCleared(event)) continue; // silently drop
-        pendingSelection = { event, eventId };
-        if (selectionTimer) clearTimeout(selectionTimer);
-        selectionTimer = setTimeout(flushSelection, SELECTION_DEBOUNCE_MS);
-        continue;
       }
 
       if (eventId) onEventId(eventId);

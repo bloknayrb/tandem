@@ -4,6 +4,7 @@ import {
   attachCtrlObservers,
   attachObservers,
   detachObservers,
+  getBufferedSelection,
   MCP_ORIGIN,
   reattachObservers,
   replaySince,
@@ -366,9 +367,9 @@ describe("subscriber error isolation", () => {
   });
 });
 
-// --- Selection event filtering ---
+// --- Selection buffering (#188) ---
 
-describe("selection event filtering", () => {
+describe("selection buffering", () => {
   let doc: Y.Doc;
 
   beforeEach(() => {
@@ -383,23 +384,18 @@ describe("selection event filtering", () => {
     vi.useRealTimers();
   });
 
-  it("filters out cursor-only selections (from === to)", () => {
-    const { events, cleanup } = collectEvents();
+  it("does not buffer cursor-only selections (from === to)", () => {
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
-
-    // Simulate a click (cursor position, no range)
     awareness.set("selection", { from: 42, to: 42, timestamp: Date.now() });
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS * 2);
 
-    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
-    cleanup();
+    expect(getBufferedSelection("sel-doc")).toBeUndefined();
   });
 
-  it("emits selection:changed for real text selections (from !== to)", () => {
+  it("buffers real text selections after dwell (no event emitted)", () => {
     const { events, cleanup } = collectEvents();
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
 
-    // Simulate a text selection with selectedText
     awareness.set("selection", {
       from: 10,
       to: 50,
@@ -407,35 +403,32 @@ describe("selection event filtering", () => {
       timestamp: Date.now(),
     });
 
-    // Must advance past dwell timer
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
-    const selEvents = events.filter((e) => e.type === "selection:changed");
-    expect(selEvents).toHaveLength(1);
-    expect(selEvents[0].payload.from).toBe(10);
-    expect(selEvents[0].payload.to).toBe(50);
-    expect(selEvents[0].payload.selectedText).toBe("some selected text");
+    // No selection:changed event emitted
+    expect(events).toHaveLength(0);
+    // But selection is buffered
+    expect(getBufferedSelection("sel-doc")).toEqual({
+      from: 10,
+      to: 50,
+      selectedText: "some selected text",
+    });
     cleanup();
   });
 
-  it("emits selection:changed with empty selectedText when field is missing", () => {
-    const { events, cleanup } = collectEvents();
+  it("buffers with empty selectedText when field is missing", () => {
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
-
-    // Simulate a selection without selectedText field (backward compat)
     awareness.set("selection", { from: 10, to: 50, timestamp: Date.now() });
-
-    // Must advance past dwell timer
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
-    const selEvents = events.filter((e) => e.type === "selection:changed");
-    expect(selEvents).toHaveLength(1);
-    expect(selEvents[0].payload.selectedText).toBe("");
-    cleanup();
+    expect(getBufferedSelection("sel-doc")).toEqual({
+      from: 10,
+      to: 50,
+      selectedText: "",
+    });
   });
 
-  it("does not emit for MCP-origin selection writes", () => {
-    const { events, cleanup } = collectEvents();
+  it("does not buffer for MCP-origin selection writes", () => {
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
 
     doc.transact(() => {
@@ -448,9 +441,20 @@ describe("selection event filtering", () => {
     }, MCP_ORIGIN);
 
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS * 2);
+    expect(getBufferedSelection("sel-doc")).toBeUndefined();
+  });
 
-    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
-    cleanup();
+  it("clears buffer when selection is cleared (from === to)", () => {
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    // Buffer a selection
+    awareness.set("selection", { from: 5, to: 20, selectedText: "hello" });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+    expect(getBufferedSelection("sel-doc")).toBeDefined();
+
+    // Clear selection
+    awareness.set("selection", { from: 3, to: 3 });
+    expect(getBufferedSelection("sel-doc")).toBeUndefined();
   });
 });
 
@@ -626,6 +630,13 @@ vi.mock("../../src/server/mcp/document-service.js", () => ({
   getOpenDocs: () => new Map(),
 }));
 
+// Mock validateRange so we can control whether buffered selection offsets are kept or dropped.
+// Default: return { ok: true } so offsets pass through.
+let _validateRangeResult: { ok: boolean } = { ok: true };
+vi.mock("../../src/server/positions.js", () => ({
+  validateRange: () => _validateRangeResult,
+}));
+
 describe("attachCtrlObservers (CTRL_ROOM)", () => {
   beforeEach(() => {
     _ctrlTestDoc = new Y.Doc();
@@ -696,6 +707,150 @@ describe("attachCtrlObservers (CTRL_ROOM)", () => {
     });
 
     expect(events.filter((e) => e.type === "chat:message")).toHaveLength(0);
+
+    cleanup();
+  });
+});
+
+// --- Chat attaches buffered selection (#188 integration) ---
+
+describe("chat attaches buffered selection", () => {
+  let selDoc: Y.Doc;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _ctrlTestDoc = new Y.Doc();
+    selDoc = new Y.Doc();
+    _validateRangeResult = { ok: true };
+    attachObservers("sel-chat-doc", selDoc);
+    attachCtrlObservers();
+  });
+
+  afterEach(() => {
+    detachObservers("sel-chat-doc");
+    selDoc.destroy();
+    _ctrlTestDoc.destroy();
+    vi.useRealTimers();
+  });
+
+  it("attaches buffered selection with offsets to chat:message when range is valid", () => {
+    const { events, cleanup } = collectEvents();
+
+    // Buffer a selection on the document
+    const awareness = selDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("selection", { from: 10, to: 50, selectedText: "selected text" });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+
+    // Verify selection is buffered
+    expect(getBufferedSelection("sel-chat-doc")).toBeDefined();
+
+    // Send a chat message referencing the same document
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_sel_1", {
+      id: "msg_sel_1",
+      author: "user",
+      text: "What about this passage?",
+      timestamp: Date.now(),
+      documentId: "sel-chat-doc",
+      read: false,
+    });
+
+    const chatEvents = events.filter((e) => e.type === "chat:message");
+    expect(chatEvents).toHaveLength(1);
+    expect(chatEvents[0].payload.selection).toEqual({
+      from: 10,
+      to: 50,
+      selectedText: "selected text",
+    });
+
+    cleanup();
+  });
+
+  it("consumes the buffer: second chat message has no selection", () => {
+    const { events, cleanup } = collectEvents();
+
+    // Buffer a selection
+    const awareness = selDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("selection", { from: 10, to: 50, selectedText: "selected text" });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+
+    // First chat consumes the buffer
+    chatMap.set("msg_consume_1", {
+      id: "msg_consume_1",
+      author: "user",
+      text: "First message",
+      timestamp: Date.now(),
+      documentId: "sel-chat-doc",
+      read: false,
+    });
+
+    // Second chat — buffer is gone
+    chatMap.set("msg_consume_2", {
+      id: "msg_consume_2",
+      author: "user",
+      text: "Second message",
+      timestamp: Date.now(),
+      documentId: "sel-chat-doc",
+      read: false,
+    });
+
+    const chatEvents = events.filter((e) => e.type === "chat:message");
+    expect(chatEvents).toHaveLength(2);
+    expect(chatEvents[0].payload.selection).toBeDefined();
+    expect(chatEvents[1].payload.selection).toBeUndefined();
+
+    // Buffer is empty
+    expect(getBufferedSelection("sel-chat-doc")).toBeUndefined();
+
+    cleanup();
+  });
+
+  it("chat message with no buffered selection has no selection field", () => {
+    const { events, cleanup } = collectEvents();
+
+    // No selection buffered — send chat directly
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_no_sel", {
+      id: "msg_no_sel",
+      author: "user",
+      text: "Just a question",
+      timestamp: Date.now(),
+      documentId: "sel-chat-doc",
+      read: false,
+    });
+
+    const chatEvents = events.filter((e) => e.type === "chat:message");
+    expect(chatEvents).toHaveLength(1);
+    expect(chatEvents[0].payload.selection).toBeUndefined();
+
+    cleanup();
+  });
+
+  it("falls back to text-only selection when validateRange fails", () => {
+    const { events, cleanup } = collectEvents();
+    _validateRangeResult = { ok: false };
+
+    // Buffer a selection
+    const awareness = selDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("selection", { from: 10, to: 50, selectedText: "stale text" });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_stale", {
+      id: "msg_stale",
+      author: "user",
+      text: "What about this?",
+      timestamp: Date.now(),
+      documentId: "sel-chat-doc",
+      read: false,
+    });
+
+    const chatEvents = events.filter((e) => e.type === "chat:message");
+    expect(chatEvents).toHaveLength(1);
+    // Should have text but no offsets
+    expect(chatEvents[0].payload.selection).toEqual({ selectedText: "stale text" });
 
     cleanup();
   });
