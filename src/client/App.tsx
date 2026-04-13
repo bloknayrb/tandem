@@ -174,15 +174,19 @@ export default function App() {
   // Dep is tabs.length (not tabs) to avoid spurious fires from array identity changes.
   useEffect(() => {
     if (tabs.length === 0) return;
-    const before = loadRecentFiles();
-    let recent = before;
-    for (const tab of tabs) {
-      if (!tab.filePath.startsWith("upload://")) {
-        recent = addRecentFile(recent, tab.filePath);
+    try {
+      const before = loadRecentFiles();
+      let recent = before;
+      for (const tab of tabs) {
+        if (!tab.filePath.startsWith("upload://")) {
+          recent = addRecentFile(recent, tab.filePath);
+        }
       }
-    }
-    if (recent.length !== before.length || recent.some((p, i) => p !== before[i])) {
-      saveRecentFiles(recent);
+      if (recent.length !== before.length || recent.some((p, i) => p !== before[i])) {
+        saveRecentFiles(recent);
+      }
+    } catch (err) {
+      console.warn("[tandem] failed to sync recent files:", err);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs.length]);
