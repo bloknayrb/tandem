@@ -38,6 +38,15 @@ const SECTIONS: ShortcutSection[] = [
     rows: [{ keys: ["Enter"], description: "Send message" }],
   },
   {
+    title: "Tabs",
+    rows: [
+      { keys: ["Ctrl", "Tab"], description: "Next tab" },
+      { keys: ["Ctrl", "Shift", "Tab"], description: "Previous tab" },
+      { keys: ["Alt", "←"], description: "Move tab left" },
+      { keys: ["Alt", "→"], description: "Move tab right" },
+    ],
+  },
+  {
     title: "General",
     rows: [{ keys: ["?"], description: "Show / hide this help" }],
   },

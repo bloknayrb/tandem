@@ -27,6 +27,7 @@ import { useModeGate } from "./hooks/useModeGate";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useSaveShortcut } from "./hooks/useSaveShortcut";
+import { useTabCycleKeyboard } from "./hooks/useTabCycleKeyboard";
 import { useTabOrder } from "./hooks/useTabOrder";
 import { useTandemSettings } from "./hooks/useTandemSettings";
 import { useTutorial } from "./hooks/useTutorial";
@@ -40,6 +41,7 @@ import { pmSelectionToFlat } from "./positions";
 import { StatusBar } from "./status/StatusBar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
 import type { DocListEntry, OpenTab } from "./types";
+import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 export type { DocListEntry, OpenTab };
 
@@ -166,6 +168,28 @@ export default function App() {
   } = useYjsSync();
 
   const { orderedTabs, reorder } = useTabOrder(tabs);
+  useTabCycleKeyboard(orderedTabs, activeTabId, setActiveTabId);
+
+  // Sync open tabs into the recent files list so files opened by Claude also appear.
+  // Dep is tabs.length (not tabs) to avoid spurious fires from array identity changes.
+  useEffect(() => {
+    if (tabs.length === 0) return;
+    try {
+      const before = loadRecentFiles();
+      let recent = before;
+      for (const tab of tabs) {
+        if (!tab.filePath.startsWith("upload://")) {
+          recent = addRecentFile(recent, tab.filePath);
+        }
+      }
+      if (recent.length !== before.length || recent.some((p, i) => p !== before[i])) {
+        saveRecentFiles(recent);
+      }
+    } catch (err) {
+      console.warn("[tandem] failed to sync recent files:", err);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs.length]);
 
   // Tandem mode — persisted to localStorage
   const [tandemMode, setTandemMode] = useState<TandemMode>(() => {
