@@ -19,10 +19,10 @@ export interface TandemSettings {
 }
 
 const DEFAULTS: TandemSettings = {
-  layout: "tabbed",
+  layout: "three-panel",
   primaryTab: "chat",
   panelOrder: "chat-editor-annotations",
-  editorWidthPercent: 100,
+  editorWidthPercent: 50,
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
 };
 
@@ -41,13 +41,19 @@ export function loadSettings(): TandemSettings {
     if (saved) {
       const parsed = JSON.parse(saved);
       return {
-        layout: parsed.layout === "three-panel" ? "three-panel" : "tabbed",
+        layout:
+          parsed.layout === "three-panel" || parsed.layout === "tabbed"
+            ? parsed.layout
+            : DEFAULTS.layout,
         primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
         panelOrder:
           parsed.panelOrder === "annotations-editor-chat"
             ? "annotations-editor-chat"
             : "chat-editor-annotations",
-        editorWidthPercent: Math.max(50, Math.min(100, Number(parsed.editorWidthPercent) || 100)),
+        editorWidthPercent: Math.max(
+          50,
+          Math.min(100, Number(parsed.editorWidthPercent) || DEFAULTS.editorWidthPercent),
+        ),
         selectionDwellMs: Math.max(
           SELECTION_DWELL_MIN_MS,
           Math.min(
