@@ -292,21 +292,6 @@ Closing a tab in the browser now actually closes the document on the server. Pre
 
 ---
 
-## Known Limitations (v1)
-
-These are intentional scope boundaries, not bugs:
-
-- .docx is review-only — use Word for final formatting/production
-- No formula support in tables
-- No .xlsx/.csv support (deferred to v2)
-- No drawing/freeform annotation (deferred to v2)
-- Single user + Claude only (no multi-human collaboration)
-- Documents over ~50 pages may be slow to render
-- No plugin/extension architecture — custom extensions require code changes
-- No synchronized scrolling between split panes
-
----
-
 ## Tauri Desktop — DONE (v0.4.0, PR #257)
 
 Native desktop distribution via Tauri v2. The Node.js server runs as a bundled sidecar; the WebView loads the existing web client unchanged.
@@ -355,23 +340,18 @@ Future hardening (not blocking release):
 
 ## v1.0 Release Plan
 
-Six-phase plan to ship Tandem v1.0. Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop). Remaining work focuses on stability, UI polish, and API cleanup.
+Five-phase plan to ship Tandem v1.0. Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop). Remaining work focuses on UI polish and API cleanup.
 
-### Phase 1: Bug Fixes
-
-- **#268 — Session persistence bug:** `closeDocumentById()` saves the session on close instead of marking it closed, causing closed tabs to reopen on restart. Fix: add `open: boolean` flag to `SessionData`. On tab close, save with `open: false`. On restore, filter to `open !== false`. Preserves session data for future recovery UI (#103).
-  - Files: `src/shared/types.ts`, `src/server/mcp/document-service.ts`, `src/server/session/manager.ts`
-- **#267 — Tab bar height:** Fix unnecessary vertical scrollbar in tab container.
-  - Files: `src/client/components/DocumentTabs.tsx`
+> **Phase 1 (Bug Fixes) is done.** #268 (session persistence), #267 (tab bar height), and #266 (keyboard shortcuts) were all fixed in PR #278.
 
 ### Phase 2: Tailwind CSS 4 Migration (#24)
 
-Estimated 10–12 dev days. Replaces ~294 inline `style={{}}` objects across 23 files. Foundation for dark mode, design consistency, and faster UI iteration.
+Estimated 10–12 dev days. Replaces ~290 inline `style={{}}` objects across ~22 files. Foundation for dark mode, design consistency, and faster UI iteration.
 
 1. **Infrastructure:** Install Tailwind CSS 4 + Vite plugin. Configure theme (primary indigo, gray scale, status colors, highlight colors). Create `editor.css` for Tiptap/ProseMirror content. Configure `dark:` via `class` strategy on `<html>`.
 2. **Extract reusable components first:** `Button` (variants: primary/secondary/ghost/danger), `PanelHeader`, `Badge`/`Pill`.
 3. **Migrate small files first:** StatusBar, DocumentTabs, OnboardingTutorial, ToastContainer, FileOpenDialog, ToolbarButton.
-4. **Migrate large files:** Toolbar (547 LOC), SettingsPopover (326 LOC), ChatPanel (426 LOC), SidePanel (881 LOC), App (889 LOC).
+4. **Migrate large files:** Toolbar (547 LOC), SettingsPopover (326 LOC), ChatPanel (426 LOC), SidePanel (881 LOC), App (913 LOC).
 5. **Verify:** Typecheck, E2E tests (use `data-testid`, unaffected by style changes), visual inspection.
 
 ### Phase 3: MCP Tool Consolidation (#259)
@@ -381,7 +361,7 @@ Clean up API surface before v1.0 locks it. Breaking changes are acceptable pre-1
 | Tool | Action |
 |------|--------|
 | `tandem_suggest` | Deprecate (keep shim with warning, hard-remove in v1.1) |
-| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`, 0 test deps) |
+| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`, 1 test dep in `document-tools.test.ts`) |
 | `tandem_getSelections` | Hard-remove (redundant with `tandem_checkInbox.activity.selectedText`) |
 | `tandem_setStatus` | Merge into `tandem_status` (make read/write with optional params) |
 | `tandem_getActivity` | Keep (distinct semantic: user activity vs. editor state) |
@@ -397,11 +377,11 @@ Depends on Phase 2. Tailwind `dark:` classes on `<html>`, toggle in settings, `p
 ### Phase 5: First-Run & Session UX
 
 - **#265 — Welcome tutorial update:** Update `sample/welcome.md`, tutorial annotations, and onboarding steps for current UI (Solo/Tandem mode, unified comment button, etc.).
-- **#103 — Session management UI:** Session browser in FileOpenDialog. List sessions with metadata (path, date, annotation count, open/closed). Actions: reopen, delete, clear all. Depends on Phase 1 (`open` flag) and Phase 2 (Tailwind).
+- **#103 — Session management UI:** Session browser in FileOpenDialog. List sessions with metadata (path, date, annotation count, open/closed). Actions: reopen, delete, clear all. Depends on Phase 2 (Tailwind).
 
 ### Phase 6: Version Bump to 1.0.0
 
-Bump version, update CHANGELOG, update roadmap, final E2E pass + full build verification.
+Bump version, update CHANGELOG, update roadmap, update `CLAUDE.md` and `docs/mcp-tools.md` to reflect any tool removals from Phase 3, final E2E pass + full build verification.
 
 ### Deferred to Post-v1.0
 
@@ -414,7 +394,21 @@ Bump version, update CHANGELOG, update roadmap, final E2E pass + full build veri
 | RANGE_MOVED auto-retry | Edge case |
 | Flag markers / highlight color picker | Minor toolbar gaps |
 | #269 — Desktop UI exploration | Needs scoping |
-| #266 — Keyboard shortcuts (Ctrl+Tab etc.) | Nice-to-have |
+
+---
+
+## Known Limitations (v1)
+
+These are intentional scope boundaries, not bugs:
+
+- .docx is review-only — use Word for final formatting/production
+- No formula support in tables
+- No .xlsx/.csv support (deferred to v2)
+- No drawing/freeform annotation (deferred to v2)
+- Single user + Claude only (no multi-human collaboration)
+- Documents over ~50 pages may be slow to render
+- No plugin/extension architecture — custom extensions require code changes
+- No synchronized scrolling between split panes
 
 ---
 

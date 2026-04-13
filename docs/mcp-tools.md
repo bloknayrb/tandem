@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 30 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 31 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -566,6 +566,38 @@ tandem_editAnnotation({
 - Only pending annotations can be edited — accepted or dismissed annotations return an error.
 - Sets `editedAt` timestamp on the annotation. The browser shows an "(edited)" indicator.
 - `newText` sets the `suggestedText` field directly on the annotation, turning a plain comment into a replacement suggestion (or updating an existing one).
+
+---
+
+### tandem_annotationReply
+
+Reply to an annotation thread. Only works on pending annotations.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `annotationId` | string | yes | The annotation ID to reply to |
+| `text` | string | yes | Reply text |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3" }
+```
+
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `ANNOTATION_RESOLVED` (annotation already resolved).
+
+**Example:**
+```
+tandem_annotationReply({
+  annotationId: "ann_1710936000000_a1b2c3",
+  text: "Good point — I'll revise the wording in the next edit."
+})
+```
+
+**Notes:**
+- Replies are threaded under the parent annotation. The browser renders them as a conversation.
+- Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
+- The reply author is set to `"claude"` when called via MCP.
 
 ---
 

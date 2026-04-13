@@ -16,7 +16,7 @@
 - **Start the server before connecting Claude Code.** `npm run dev:standalone` runs both. Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 30 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 31 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems, file map
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
@@ -117,7 +117,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 30 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.4.0), 1012 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.4.0), 1014 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 
