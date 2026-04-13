@@ -98,6 +98,21 @@ export type Annotation =
       directedAt?: undefined;
     });
 
+/**
+ * Authorship tracking range stored in Y.Map('authorship').
+ * Uses the same flat-offset coordinate system as annotations.
+ * RelativePositions anchor the range to survive concurrent edits.
+ */
+export interface AuthorshipRange {
+  id: string;
+  author: "user" | "claude";
+  range: DocumentRange;
+  /** CRDT-anchored range for edit survival. */
+  relRange?: RelativeRange;
+  /** Timestamp of when this range was created. */
+  timestamp: number;
+}
+
 export interface AnchoredRange {
   start: { nodeId: string; offset: number };
   end: { nodeId: string; offset: number };

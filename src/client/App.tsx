@@ -20,6 +20,7 @@ import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { ToastContainer } from "./components/ToastContainer";
 import { Editor } from "./editor/Editor";
+import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { Toolbar } from "./editor/toolbar/Toolbar";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useModeGate } from "./hooks/useModeGate";
@@ -232,6 +233,17 @@ export default function App() {
     const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
     awareness.set(Y_MAP_DWELL_MS, settings.selectionDwellMs);
   }, [settings.selectionDwellMs, bootstrapYdoc]);
+
+  // Dispatch authorship toggle to the ProseMirror plugin when the setting changes
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const tr = editor.state.tr.setMeta(authorshipPluginKey, {
+      type: "toggle",
+      visible: settings.showAuthorship,
+    });
+    editor.view.dispatch(tr);
+  }, [settings.showAuthorship]);
 
   const [reviewMode, setReviewMode] = useState(false);
   const [showChat, setShowChat] = useState(() => settings.primaryTab === "chat");

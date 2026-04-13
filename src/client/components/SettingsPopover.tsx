@@ -259,6 +259,34 @@ export function SettingsPopover({
         </div>
       </div>
 
+      {/* Authorship tracking toggle */}
+      <div>
+        <div style={sectionLabelStyle}>Authorship</div>
+        <label
+          data-testid="authorship-toggle"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            cursor: "pointer",
+            fontSize: "12px",
+            color: "#374151",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={settings.showAuthorship}
+            onChange={(e) => onUpdate({ showAuthorship: e.target.checked })}
+            style={{ accentColor: "#6366f1" }}
+          />
+          <span>Show who wrote what</span>
+        </label>
+        <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+          Highlights text by author: <span style={{ color: "#3b82f6" }}>you</span> /{" "}
+          <span style={{ color: "#22c55e" }}>Claude</span>
+        </div>
+      </div>
+
       {/* Selection sensitivity (dwell time) */}
       <div>
         <div style={sectionLabelStyle}>

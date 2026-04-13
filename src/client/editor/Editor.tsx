@@ -15,6 +15,7 @@ import React, { useCallback, useEffect } from "react";
 import * as Y from "yjs";
 import { USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants.js";
 import { AnnotationExtension } from "./extensions/annotation";
+import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 
 interface EditorProps {
@@ -71,6 +72,7 @@ export function Editor({
           },
         }),
         AnnotationExtension.configure({ ydoc }),
+        AuthorshipExtension.configure({ ydoc }),
         AwarenessExtension.configure({ ydoc }),
       ],
       editorProps: {
@@ -192,6 +194,11 @@ export function Editor({
           outline-offset: 1px;
           border-radius: 2px;
         }
+
+        /* Authorship decorations — user=blue, claude=green */
+        .tandem-authorship { border-radius: 2px; transition: background 0.2s; }
+        .tandem-authorship--user { background: rgba(59, 130, 246, 0.08); }
+        .tandem-authorship--claude { background: rgba(34, 197, 94, 0.08); }
 
         /* Claude focus paragraph */
         .tandem-claude-focus {

@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import {
+  AUTHORSHIP_TOGGLE_KEY,
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
@@ -16,6 +17,7 @@ export interface TandemSettings {
   panelOrder: PanelOrder;
   editorWidthPercent: number;
   selectionDwellMs: number;
+  showAuthorship: boolean;
 }
 
 const DEFAULTS: TandemSettings = {
@@ -24,6 +26,7 @@ const DEFAULTS: TandemSettings = {
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 50,
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
+  showAuthorship: false,
 };
 
 /**
@@ -61,6 +64,7 @@ export function loadSettings(): TandemSettings {
             Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
           ),
         ),
+        showAuthorship: parsed.showAuthorship === true,
       };
     }
   } catch {
@@ -86,6 +90,8 @@ export function useTandemSettings() {
       };
       try {
         localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
+        // Mirror authorship toggle to dedicated key for ProseMirror plugin init
+        localStorage.setItem(AUTHORSHIP_TOGGLE_KEY, String(next.showAuthorship));
       } catch {
         // localStorage unavailable (incognito/storage-disabled)
       }
