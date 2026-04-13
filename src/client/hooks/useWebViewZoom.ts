@@ -15,11 +15,14 @@ import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, ZOOM_STORAGE_KEY } from "../../shared
  */
 export function useWebViewZoom(): void {
   useEffect(() => {
+    let tornDown = false;
     let cleanup: (() => void) | undefined;
 
     // Dynamic import — silently fails outside Tauri, making the hook a no-op
     import("@tauri-apps/api/webview")
       .then(({ getCurrentWebview }) => {
+        if (tornDown) return; // Component already unmounted
+
         const webview = getCurrentWebview();
 
         // Restore persisted zoom level
@@ -30,6 +33,8 @@ export function useWebViewZoom(): void {
             const parsed = Number(raw);
             if (Number.isFinite(parsed)) {
               currentZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, parsed));
+            } else {
+              console.warn(`[tandem] ignoring invalid stored zoom: ${raw}`);
             }
           }
         } catch {
@@ -37,7 +42,9 @@ export function useWebViewZoom(): void {
         }
 
         if (currentZoom !== ZOOM_DEFAULT) {
-          webview.setZoom(currentZoom).catch(() => {});
+          webview.setZoom(currentZoom).catch((err: unknown) => {
+            console.warn("[tandem] failed to restore zoom level:", err);
+          });
         }
 
         function persist(zoom: number): void {
@@ -57,7 +64,9 @@ export function useWebViewZoom(): void {
           e.stopPropagation();
 
           currentZoom = ZOOM_DEFAULT;
-          webview.setZoom(ZOOM_DEFAULT).catch(() => {});
+          webview.setZoom(ZOOM_DEFAULT).catch((err: unknown) => {
+            console.warn("[tandem] failed to reset zoom:", err);
+          });
           persist(ZOOM_DEFAULT);
         };
 
@@ -91,6 +100,9 @@ export function useWebViewZoom(): void {
         // Not running in Tauri — hook is a no-op
       });
 
-    return () => cleanup?.();
+    return () => {
+      tornDown = true;
+      cleanup?.();
+    };
   }, []);
 }
