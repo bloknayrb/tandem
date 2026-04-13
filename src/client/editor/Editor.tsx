@@ -212,6 +212,38 @@ export function Editor({
           0%, 100% { opacity: 0.4; }
           50% { opacity: 1; }
         }
+
+        /* Claude character-level cursor */
+        .tandem-claude-cursor {
+          position: relative;
+          display: inline;
+          border-left: 2px solid #8b5cf6;
+          margin-left: -1px;
+          z-index: 10;
+          animation: tandem-claude-blink 1.2s step-end infinite;
+        }
+        .tandem-claude-cursor-idle {
+          opacity: 0.3;
+          animation: none;
+        }
+        .tandem-claude-cursor-label {
+          position: absolute;
+          top: -1.4em;
+          left: -1px;
+          font-size: 11px;
+          font-weight: 500;
+          white-space: nowrap;
+          padding: 0 4px;
+          border-radius: 3px 3px 3px 0;
+          background: #8b5cf6;
+          color: white;
+          pointer-events: none;
+          z-index: 11;
+        }
+        @keyframes tandem-claude-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
       `}</style>
     </div>
   );

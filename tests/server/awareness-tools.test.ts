@@ -287,16 +287,61 @@ describe("tandem_setStatus — real Y.Map operations", () => {
       timestamp: Date.now(),
       active: true,
       focusParagraph: 2,
+      focusOffset: null,
     });
 
     const claude = awarenessMap.get("claude") as {
       status: string;
       active: boolean;
       focusParagraph: number | null;
+      focusOffset: number | null;
     };
     expect(claude.status).toBe("Reviewing section 3...");
     expect(claude.active).toBe(true);
     expect(claude.focusParagraph).toBe(2);
+    expect(claude.focusOffset).toBeNull();
+  });
+
+  it("writes focusOffset for character-level cursor positioning", () => {
+    const ydoc = setupDoc("status-2", "Hello world, this is a test document.");
+    const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
+
+    awarenessMap.set("claude", {
+      status: "Editing at position 15...",
+      timestamp: Date.now(),
+      active: true,
+      focusParagraph: 0,
+      focusOffset: 15,
+    });
+
+    const claude = awarenessMap.get("claude") as {
+      status: string;
+      active: boolean;
+      focusParagraph: number | null;
+      focusOffset: number | null;
+    };
+    expect(claude.focusOffset).toBe(15);
+    expect(claude.focusParagraph).toBe(0);
+  });
+
+  it("supports focusOffset without focusParagraph", () => {
+    const ydoc = setupDoc("status-3", "Hello world");
+    const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
+
+    awarenessMap.set("claude", {
+      status: "Working...",
+      timestamp: Date.now(),
+      active: true,
+      focusParagraph: null,
+      focusOffset: 5,
+    });
+
+    const claude = awarenessMap.get("claude") as {
+      focusParagraph: number | null;
+      focusOffset: number | null;
+    };
+    expect(claude.focusParagraph).toBeNull();
+    expect(claude.focusOffset).toBe(5);
   });
 });
 

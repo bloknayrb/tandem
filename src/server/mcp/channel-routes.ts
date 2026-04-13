@@ -27,7 +27,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Channel awareness: shim posts Claude's status for browser StatusBar
   app.options("/api/channel-awareness", apiMiddleware);
   app.post("/api/channel-awareness", apiMiddleware, (req: Request, res: Response) => {
-    const { documentId, status, active, focusParagraph } = (req.body ?? {}) as Record<
+    const { documentId, status, active, focusParagraph, focusOffset } = (req.body ?? {}) as Record<
       string,
       unknown
     >;
@@ -45,6 +45,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
         timestamp: Date.now(),
         active: active === true,
         focusParagraph: typeof focusParagraph === "number" ? focusParagraph : null,
+        focusOffset: typeof focusOffset === "number" ? focusOffset : null,
       };
       doc.transact(() => awarenessMap.set("claude", state), MCP_ORIGIN);
     }

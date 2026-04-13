@@ -177,6 +177,8 @@ export interface ClaudeAwareness {
   timestamp: number;
   active: boolean;
   focusParagraph: number | null;
+  /** Flat character offset for character-level cursor positioning. */
+  focusOffset: number | null;
 }
 
 export interface SessionData {
