@@ -30,6 +30,7 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
   return {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
+    deleteSession: vi.fn().mockResolvedValue(undefined),
     stopAutoSave: vi.fn(),
   };
 });
@@ -353,6 +354,15 @@ describe("closeDocumentById", () => {
 
     await closeDocumentById("final-doc");
     expect(stopAutoSave).toHaveBeenCalled();
+  });
+
+  it("deletes the session file on close", async () => {
+    const { deleteSession } = await import("../../src/server/session/manager.js");
+    addDoc("del-session", makeOpenDoc("del-session", "/tmp/del.md"));
+    setActiveDocId("del-session");
+
+    await closeDocumentById("del-session");
+    expect(deleteSession).toHaveBeenCalledWith("/tmp/del.md");
   });
 
   it("broadcasts updated doc list after close", async () => {

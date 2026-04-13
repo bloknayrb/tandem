@@ -389,6 +389,7 @@ export function DocumentTabs({
           gap: "1px",
           flex: 1,
           overflowX: "auto",
+          overflowY: "hidden",
           padding: "0 4px",
         }}
       >

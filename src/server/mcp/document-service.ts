@@ -288,15 +288,14 @@ export async function closeDocumentById(
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
   savingDocs.delete(id);
 
-  // Best-effort persist before removing — save failure should not prevent close
-  try {
-    const doc = getOrCreateDocument(id);
-    await saveSession(docState.filePath, docState.format, doc);
-  } catch (err) {
-    console.error(`[Tandem] Failed to save session before closing ${id}:`, err);
-  }
-
   removeDoc(id);
+
+  // Delete the session file so this document doesn't reopen on restart
+  try {
+    await deleteSession(docState.filePath);
+  } catch (err) {
+    console.error(`[Tandem] Failed to delete session for ${id}:`, err);
+  }
 
   if (getActiveDocId() === id) {
     const remaining = Array.from(openDocs.keys());
