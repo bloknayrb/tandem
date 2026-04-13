@@ -357,12 +357,32 @@ describe("closeDocumentById", () => {
   });
 
   it("deletes the session file on close", async () => {
-    const { deleteSession } = await import("../../src/server/session/manager.js");
+    const { deleteSession, saveSession } = await import("../../src/server/session/manager.js");
+    vi.mocked(saveSession).mockClear();
     addDoc("del-session", makeOpenDoc("del-session", "/tmp/del.md"));
     setActiveDocId("del-session");
 
     await closeDocumentById("del-session");
     expect(deleteSession).toHaveBeenCalledWith("/tmp/del.md");
+    expect(saveSession).not.toHaveBeenCalled();
+  });
+
+  it("succeeds even when deleteSession rejects", async () => {
+    const { deleteSession } = await import("../../src/server/session/manager.js");
+    vi.mocked(deleteSession).mockClear();
+    vi.mocked(deleteSession).mockRejectedValueOnce(new Error("EPERM"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    addDoc("fail-del", makeOpenDoc("fail-del", "/tmp/fail.md"));
+    setActiveDocId("fail-del");
+
+    const result = await closeDocumentById("fail-del");
+    expect(result.success).toBe(true);
+    expect(hasDoc("fail-del")).toBe(false);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to delete session"),
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
   });
 
   it("broadcasts updated doc list after close", async () => {
