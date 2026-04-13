@@ -23,6 +23,7 @@ import {
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
+import { validateRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
@@ -61,6 +62,9 @@ function getDwellMs(): number {
 type EventCallback = (event: TandemEvent) => void;
 
 const docObservers = new Map<string, Array<() => void>>();
+
+/** Per-document selection buffer. Selections are stored here instead of being pushed as events. They get attached to the next chat:message for the same document. */
+const selectionBuffer = new Map<string, { from: number; to: number; selectedText: string }>();
 
 /** O(1) dedup: ref-counted annotation/message IDs that have been pushed via channel. */
 const emittedPayloadIds = new Map<string, number>();
@@ -140,6 +144,13 @@ export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
 }
 
+/** Read the buffered selection for a document. For tests and checkInbox. */
+export function getBufferedSelection(
+  docName: string,
+): { from: number; to: number; selectedText: string } | undefined {
+  return selectionBuffer.get(docName);
+}
+
 // --- Y.Map observer attachment ---
 
 /** Attach observers to a document's Y.Maps. Call after doc swap in onLoadDocument. */
@@ -211,7 +222,9 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   annotationsMap.observe(annotationsObs);
   cleanups.push(() => annotationsMap.unobserve(annotationsObs));
 
-  // 2. User awareness observer (selection changes)
+  // 2. User awareness observer (selection buffering)
+  // Selections are buffered per-document and attached to the next chat:message,
+  // rather than firing as standalone events (#188).
   const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
   let selectionDwellTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -229,22 +242,19 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
         selectionDwellTimer = null;
       }
 
-      // Skip cleared selections
-      if (!selection || selection.from === selection.to) return;
+      // Skip cleared selections — also clear the buffer
+      if (!selection || selection.from === selection.to) {
+        selectionBuffer.delete(docName);
+        return;
+      }
 
-      // Start dwell timer — only emit after user holds selection steady
+      // Buffer after dwell to filter transient drag selections
       selectionDwellTimer = setTimeout(() => {
         selectionDwellTimer = null;
-        pushEvent({
-          id: generateEventId(),
-          type: "selection:changed",
-          timestamp: Date.now(),
-          documentId: docName,
-          payload: {
-            from: selection.from,
-            to: selection.to,
-            selectedText: selection.selectedText ?? "",
-          },
+        selectionBuffer.set(docName, {
+          from: selection.from,
+          to: selection.to,
+          selectedText: selection.selectedText ?? "",
         });
       }, getDwellMs());
     }
@@ -253,6 +263,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   cleanups.push(() => {
     userAwareness.unobserve(awarenessObs);
     if (selectionDwellTimer) clearTimeout(selectionDwellTimer);
+    selectionBuffer.delete(docName);
   });
 
   docObservers.set(docName, cleanups);
@@ -296,6 +307,36 @@ export function attachCtrlObservers(): void {
       const msg = chatMap.get(key) as ChatMessage | undefined;
       if (!msg || msg.author !== "user") continue;
 
+      // Attach buffered selection context if available for this document
+      let selection:
+        | { from: number; to: number; selectedText: string }
+        | { selectedText: string }
+        | undefined;
+      if (msg.documentId) {
+        const buffered = selectionBuffer.get(msg.documentId);
+        if (buffered) {
+          selectionBuffer.delete(msg.documentId);
+          // Validate range is still valid before attaching offsets
+          try {
+            const doc = getOrCreateDocument(msg.documentId);
+            const validation = validateRange(
+              doc,
+              buffered.from as FlatOffset,
+              buffered.to as FlatOffset,
+            );
+            if (validation.ok) {
+              selection = buffered;
+            } else {
+              // Range went stale — attach text only (no offsets)
+              selection = { selectedText: buffered.selectedText };
+            }
+          } catch {
+            // Document may not exist — attach text only
+            selection = { selectedText: buffered.selectedText };
+          }
+        }
+      }
+
       pushEvent({
         id: generateEventId(),
         type: "chat:message",
@@ -306,6 +347,7 @@ export function attachCtrlObservers(): void {
           text: msg.text,
           replyTo: msg.replyTo ?? null,
           anchor: msg.anchor ?? null,
+          ...(selection ? { selection } : {}),
         },
       });
     }
@@ -396,6 +438,7 @@ export function resetForTesting(): void {
   buffer.length = 0;
   subscribers.clear();
   emittedPayloadIds.clear();
+  selectionBuffer.clear();
   for (const cleanups of docObservers.values()) {
     for (const cleanup of cleanups) cleanup();
   }

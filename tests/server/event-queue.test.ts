@@ -4,6 +4,7 @@ import {
   attachCtrlObservers,
   attachObservers,
   detachObservers,
+  getBufferedSelection,
   MCP_ORIGIN,
   reattachObservers,
   replaySince,
@@ -366,9 +367,9 @@ describe("subscriber error isolation", () => {
   });
 });
 
-// --- Selection event filtering ---
+// --- Selection buffering (#188) ---
 
-describe("selection event filtering", () => {
+describe("selection buffering", () => {
   let doc: Y.Doc;
 
   beforeEach(() => {
@@ -383,23 +384,18 @@ describe("selection event filtering", () => {
     vi.useRealTimers();
   });
 
-  it("filters out cursor-only selections (from === to)", () => {
-    const { events, cleanup } = collectEvents();
+  it("does not buffer cursor-only selections (from === to)", () => {
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
-
-    // Simulate a click (cursor position, no range)
     awareness.set("selection", { from: 42, to: 42, timestamp: Date.now() });
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS * 2);
 
-    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
-    cleanup();
+    expect(getBufferedSelection("sel-doc")).toBeUndefined();
   });
 
-  it("emits selection:changed for real text selections (from !== to)", () => {
+  it("buffers real text selections after dwell (no event emitted)", () => {
     const { events, cleanup } = collectEvents();
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
 
-    // Simulate a text selection with selectedText
     awareness.set("selection", {
       from: 10,
       to: 50,
@@ -407,35 +403,32 @@ describe("selection event filtering", () => {
       timestamp: Date.now(),
     });
 
-    // Must advance past dwell timer
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
-    const selEvents = events.filter((e) => e.type === "selection:changed");
-    expect(selEvents).toHaveLength(1);
-    expect(selEvents[0].payload.from).toBe(10);
-    expect(selEvents[0].payload.to).toBe(50);
-    expect(selEvents[0].payload.selectedText).toBe("some selected text");
+    // No selection:changed event emitted
+    expect(events).toHaveLength(0);
+    // But selection is buffered
+    expect(getBufferedSelection("sel-doc")).toEqual({
+      from: 10,
+      to: 50,
+      selectedText: "some selected text",
+    });
     cleanup();
   });
 
-  it("emits selection:changed with empty selectedText when field is missing", () => {
-    const { events, cleanup } = collectEvents();
+  it("buffers with empty selectedText when field is missing", () => {
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
-
-    // Simulate a selection without selectedText field (backward compat)
     awareness.set("selection", { from: 10, to: 50, timestamp: Date.now() });
-
-    // Must advance past dwell timer
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
-    const selEvents = events.filter((e) => e.type === "selection:changed");
-    expect(selEvents).toHaveLength(1);
-    expect(selEvents[0].payload.selectedText).toBe("");
-    cleanup();
+    expect(getBufferedSelection("sel-doc")).toEqual({
+      from: 10,
+      to: 50,
+      selectedText: "",
+    });
   });
 
-  it("does not emit for MCP-origin selection writes", () => {
-    const { events, cleanup } = collectEvents();
+  it("does not buffer for MCP-origin selection writes", () => {
     const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
 
     doc.transact(() => {
@@ -448,9 +441,20 @@ describe("selection event filtering", () => {
     }, MCP_ORIGIN);
 
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS * 2);
+    expect(getBufferedSelection("sel-doc")).toBeUndefined();
+  });
 
-    expect(events.filter((e) => e.type === "selection:changed")).toHaveLength(0);
-    cleanup();
+  it("clears buffer when selection is cleared (from === to)", () => {
+    const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+
+    // Buffer a selection
+    awareness.set("selection", { from: 5, to: 20, selectedText: "hello" });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+    expect(getBufferedSelection("sel-doc")).toBeDefined();
+
+    // Clear selection
+    awareness.set("selection", { from: 3, to: 3 });
+    expect(getBufferedSelection("sel-doc")).toBeUndefined();
   });
 });
 
