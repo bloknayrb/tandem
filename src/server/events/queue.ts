@@ -330,8 +330,11 @@ export function attachCtrlObservers(): void {
               // Range went stale — attach text only (no offsets)
               selection = { selectedText: buffered.selectedText };
             }
-          } catch {
-            // Document may not exist — attach text only
+          } catch (err) {
+            console.warn(
+              `[EventQueue] Failed to validate buffered selection for doc=${msg.documentId}:`,
+              err,
+            );
             selection = { selectedText: buffered.selectedText };
           }
         }

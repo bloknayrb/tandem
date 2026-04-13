@@ -221,7 +221,7 @@ Real-time push notifications from browser to Claude Code via the Channels API, r
 - **SSE endpoint** (`GET /api/events`): Server-Sent Events stream with `Last-Event-ID` reconnection replay and 15s keepalive.
 - **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `/api/launch-claude`, `DELETE /api/chat`
 - **Build**: tsup produces three bundles — `dist/server/index.js` + `dist/channel/index.js` + `dist/cli/index.js`
-- **8 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `chat:message`, `selection:changed`, `document:opened`, `document:closed`, `document:switched`
+- **7 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `chat:message`, `document:opened`, `document:closed`, `document:switched`
 
 ### Known Issues from Channel Implementation
 

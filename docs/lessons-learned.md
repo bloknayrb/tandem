@@ -295,12 +295,12 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 
 Initial attempts to filter at the bridge and server levels had no effect because the filters checked `from === to` (cursor-only), but real selections had `from !== to` — they just lacked text content. The "cleared selection" label sent debugging down the wrong path for several hours.
 
-**Solution:** Three-layer fix:
+**Solution:** Three-layer fix, culminating in the removal of `selection:changed` as a standalone event type (#188):
 1. **Client** (`awareness.ts`): Extract selected text via `state.doc.textBetween()`, truncate to 200 chars, debounce Y.Map writes at 150ms during drag. Cancel debounce on deselect.
-2. **Server** (`queue.ts`): Filter `from === to` selections (cursor-only) before they reach the SSE stream.
-3. **Bridge** (`event-bridge.ts`): Drop cleared selections (`isSelectionCleared`), debounce real selections at 1.5s before forwarding to Claude Code.
+2. **Server** (`queue.ts`): Replaced standalone `selection:changed` events with a per-document selection buffer. Selections are stored after a configurable dwell time and attached to the next `chat:message` for the same document. This eliminates context-window flooding while preserving selection context where it matters — alongside the user's question.
+3. **Bridge** (`event-bridge.ts`): Selection debouncing and filtering remains as defense-in-depth, but no `selection:changed` events flow through the channel anymore.
 
-**Key principle:** When debugging event pipelines, inspect the raw wire format at each layer (SSE stream, bridge input, channel output). Misleading labels can send you on a multi-hour chase — the "User cleared selection" label masked that these were real selections with missing data. Also: channel events that map to high-frequency UI interactions need aggressive debouncing before reaching the LLM.
+**Key principle:** When debugging event pipelines, inspect the raw wire format at each layer (SSE stream, bridge input, channel output). Misleading labels can send you on a multi-hour chase — the "User cleared selection" label masked that these were real selections with missing data. High-frequency UI interactions should be batched with their semantic trigger (e.g., selection with the chat message that references it) rather than pushed as standalone events.
 
 ## 33. Security Audit Patterns
 
