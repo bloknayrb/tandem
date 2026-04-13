@@ -4,14 +4,16 @@ import { z } from "zod";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  Y_MAP_AUTHORSHIP,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
+import type { AuthorshipRange } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 // Position system
-import { resolveToElement, validateRange } from "../positions.js";
+import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
@@ -379,6 +381,27 @@ export function registerDocumentTools(server: McpServer): void {
               textNode.insert(startPos.textOffset, newText);
             }
           }, MCP_ORIGIN);
+        }
+
+        // Record authorship for the inserted text (Y.Map overlay strategy)
+        if (newText.length > 0) {
+          const newFrom = from;
+          const newTo = toFlatOffset(newFrom + newText.length);
+          const anchored = anchoredRange(r.doc, newFrom, newTo);
+          if (anchored.ok) {
+            const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
+            const rangeId = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const entry: AuthorshipRange = {
+              id: rangeId,
+              author: "claude",
+              range: anchored.range,
+              relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+              timestamp: Date.now(),
+            };
+            r.doc.transact(() => {
+              authorshipMap.set(rangeId, entry);
+            }, MCP_ORIGIN);
+          }
         }
 
         return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
