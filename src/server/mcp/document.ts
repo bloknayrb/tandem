@@ -4,18 +4,12 @@ import { z } from "zod";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
-  Y_MAP_DOCUMENT_META,
   Y_MAP_MODE,
-  Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
-import { generateNotificationId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
-import { atomicWrite, getAdapter } from "../file-io/index.js";
-import { suppressNextChange } from "../file-watcher.js";
-import { pushNotification } from "../notifications.js";
 // Position system
 import { resolveToElement, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
@@ -33,6 +27,7 @@ import {
   getOpenDocs,
   hasDoc,
   requireDocument,
+  saveDocumentToDisk,
   setActiveDocId,
   toDocListEntry,
 } from "./document-service.js";
@@ -78,6 +73,7 @@ export {
 export type { OpenDoc } from "./document-service.js";
 export {
   addDoc,
+  autoSaveAllToDisk,
   docCount,
   getActiveDocId,
   getCurrentDoc,
@@ -88,6 +84,7 @@ export {
   restoreCtrlSession,
   restoreOpenDocuments,
   saveCurrentSession,
+  saveDocumentToDisk,
   setActiveDocId,
   toDocListEntry,
   writeGenerationId,
@@ -401,65 +398,52 @@ export function registerDocumentTools(server: McpServer): void {
     withErrorBoundary("tandem_save", async ({ documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
-      try {
-        const docState = getCurrentDoc(documentId);
-        const format = docState?.format ?? "txt";
-        const readOnly = docState?.readOnly ?? false;
 
-        // Uploaded files have no disk path — session-only save
-        if (docState?.source === "upload") {
-          await saveSession(r.filePath, format, r.doc);
-          return mcpSuccess({
-            saved: true,
-            sessionOnly: true,
-            filePath: r.filePath,
-            message:
-              "Session saved (annotations preserved). This file was uploaded — no disk path to save to.",
-          });
-        }
+      const docState = getCurrentDoc(documentId);
+      const format = docState?.format ?? "txt";
+      const readOnly = docState?.readOnly ?? false;
 
-        const adapter = getAdapter(format);
-
-        if (readOnly || !adapter.canSave) {
-          await saveSession(r.filePath, format, r.doc);
-          return mcpSuccess({
-            saved: true,
-            sessionOnly: true,
-            filePath: r.filePath,
-            message:
-              "Session saved (annotations preserved). Source file unchanged — document is read-only.",
-          });
-        }
-
-        const output = adapter.save(r.doc)!;
-        suppressNextChange(r.filePath);
-        await atomicWrite(r.filePath, output);
+      // Uploaded files have no disk path — session-only save
+      if (docState?.source === "upload") {
         await saveSession(r.filePath, format, r.doc);
-
-        // Mark document clean: bump savedAtVersion so client resets dirty flag
-        const meta = r.doc.getMap(Y_MAP_DOCUMENT_META);
-        r.doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
-
-        return mcpSuccess({ saved: true, filePath: r.filePath });
-      } catch (err: unknown) {
-        const errCode = (err as NodeJS.ErrnoException).code;
-        const msg = getErrorMessage(err);
-        pushNotification({
-          id: generateNotificationId(),
-          type: "save-error",
-          severity: "error",
-          message: `Save failed: ${msg}`,
-          toolName: "tandem_save",
-          errorCode: errCode ?? "UNKNOWN",
-          documentId: r.docId,
-          dedupKey: `save:${r.docId}`,
-          timestamp: Date.now(),
+        return mcpSuccess({
+          saved: true,
+          sessionOnly: true,
+          filePath: r.filePath,
+          message:
+            "Session saved (annotations preserved). This file was uploaded — no disk path to save to.",
         });
-        if (errCode === "EACCES" || errCode === "EPERM") {
-          return mcpError("FILE_LOCKED", msg);
-        }
-        return mcpError("FORMAT_ERROR", `Save failed: ${msg}`);
       }
+
+      // Read-only documents (e.g. .docx) — session-only save
+      if (readOnly) {
+        await saveSession(r.filePath, format, r.doc);
+        return mcpSuccess({
+          saved: true,
+          sessionOnly: true,
+          filePath: r.filePath,
+          message:
+            "Session saved (annotations preserved). Source file unchanged — document is read-only.",
+        });
+      }
+
+      // Delegate to shared save function
+      const result = await saveDocumentToDisk(r.docId);
+      if (result.status === "saved") {
+        return mcpSuccess({ saved: true, filePath: r.filePath });
+      }
+      if (result.status === "skipped") {
+        // Fall back to session-only save for skipped formats
+        await saveSession(r.filePath, format, r.doc);
+        return mcpSuccess({
+          saved: true,
+          sessionOnly: true,
+          filePath: r.filePath,
+          message: `Session saved. Disk save skipped: ${result.reason}`,
+        });
+      }
+      // result.status === "error"
+      return mcpError("FORMAT_ERROR", `Save failed: ${result.reason}`);
     }),
   );
 

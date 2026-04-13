@@ -40,6 +40,7 @@ import { sanitizeAnnotation } from "./annotations.js";
 import { detectFormat, docIdFromPath, extractText, populateYDoc } from "./document-model.js";
 import {
   addDoc,
+  autoSaveAllToDisk,
   broadcastOpenDocs,
   getOpenDocs,
   type OpenDoc,
@@ -534,9 +535,12 @@ function wireFileWatcher(id: string, filePath: string, format: string): void {
 function ensureAutoSave(): void {
   if (isAutoSaveRunning()) return;
   startAutoSave(async () => {
+    // Session saves (all documents — preserves CRDT state for restart recovery)
     for (const [docId, state] of getOpenDocs()) {
       const d = getOrCreateDocument(docId);
       await saveSession(state.filePath, state.format, d);
     }
+    // Disk saves (eligible .md/.txt documents only)
+    await autoSaveAllToDisk();
   });
 }

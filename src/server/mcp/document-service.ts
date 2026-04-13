@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
+import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
-import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../shared/constants.js";
+import { CTRL_ROOM, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import { generateNotificationId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
-import { unwatchFile } from "../file-watcher.js";
+import { atomicWrite, getAdapter } from "../file-io/index.js";
+import { suppressNextChange, unwatchFile } from "../file-watcher.js";
+import { pushNotification } from "../notifications.js";
 import {
   deleteSession,
   listSessionFilePaths,
@@ -86,6 +90,129 @@ export function requireDocument(
     filePath: current.filePath,
     docId: current.id,
   };
+}
+
+// --- Disk save ---
+
+/** Per-document save lock to prevent concurrent auto-save + manual save races. */
+const savingDocs = new Set<string>();
+
+/** Formats eligible for disk auto-save (adapter.canSave && not binary). */
+const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
+
+export interface SaveResult {
+  status: "saved" | "skipped" | "error";
+  reason?: string;
+}
+
+/**
+ * Save a document to disk. Shared by tandem_save, POST /api/save, and auto-save.
+ *
+ * Guards:
+ * - Only .md and .txt formats (adapter.canSave)
+ * - Not read-only, not upload://
+ * - Checks source file mtime to skip if externally modified
+ * - Per-document lock prevents concurrent writes
+ */
+export async function saveDocumentToDisk(docId: string): Promise<SaveResult> {
+  const docState = openDocs.get(docId);
+  if (!docState) return { status: "skipped", reason: "Document not open" };
+
+  // Exclude non-saveable documents
+  if (docState.source === "upload") {
+    return { status: "skipped", reason: "Upload-only document" };
+  }
+  if (docState.readOnly) {
+    return { status: "skipped", reason: "Read-only document" };
+  }
+  if (!AUTO_SAVE_FORMATS.has(docState.format)) {
+    return { status: "skipped", reason: `Format '${docState.format}' not eligible for disk save` };
+  }
+
+  const adapter = getAdapter(docState.format);
+  if (!adapter.canSave) {
+    return { status: "skipped", reason: "Adapter cannot save" };
+  }
+
+  // Per-document lock
+  if (savingDocs.has(docId)) {
+    return { status: "skipped", reason: "Save already in progress" };
+  }
+
+  savingDocs.add(docId);
+  try {
+    // Guard against overwriting external modifications
+    try {
+      const stat = await fs.stat(docState.filePath);
+      // Compare to the session's mtime — if the file changed externally, skip
+      // We use a 1-second tolerance because fs.watch debounce + atomic rename
+      // can cause minor mtime drift
+      const meta = getOrCreateDocument(docId).getMap(Y_MAP_DOCUMENT_META);
+      const lastSavedAt = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
+      // If the file is newer than our last save, someone else modified it
+      if (lastSavedAt && stat.mtimeMs > lastSavedAt + 1000) {
+        return { status: "skipped", reason: "File modified externally" };
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        return { status: "skipped", reason: "Source file no longer exists" };
+      }
+      // Other stat errors — proceed with save attempt
+    }
+
+    const doc = getOrCreateDocument(docId);
+    const output = adapter.save(doc);
+    if (output == null) {
+      return { status: "skipped", reason: "Adapter returned null" };
+    }
+
+    suppressNextChange(docState.filePath);
+    await atomicWrite(docState.filePath, output);
+    await saveSession(docState.filePath, docState.format, doc);
+
+    // Mark document clean
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
+
+    return { status: "saved" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    pushNotification({
+      id: generateNotificationId(),
+      type: "save-error",
+      severity: "error",
+      message: `Auto-save failed for ${path.basename(docState.filePath)}: ${msg}`,
+      toolName: "auto-save",
+      errorCode: errCode,
+      documentId: docId,
+      dedupKey: `auto-save:${docId}`,
+      timestamp: Date.now(),
+    });
+    return { status: "error", reason: msg };
+  } finally {
+    savingDocs.delete(docId);
+  }
+}
+
+/**
+ * Auto-save all eligible open documents to disk.
+ * Called by the 60-second auto-save timer.
+ */
+export async function autoSaveAllToDisk(): Promise<void> {
+  for (const [docId, state] of openDocs) {
+    if (state.source === "upload" || state.readOnly) continue;
+    if (!AUTO_SAVE_FORMATS.has(state.format)) continue;
+    try {
+      const result = await saveDocumentToDisk(docId);
+      if (result.status === "saved") {
+        console.error(`[AutoSave] Saved ${path.basename(state.filePath)} to disk`);
+      }
+    } catch (err) {
+      console.error(`[AutoSave] Unexpected error saving ${state.filePath}:`, err);
+    }
+  }
 }
 
 /** Build the document list entry for a single OpenDoc */
