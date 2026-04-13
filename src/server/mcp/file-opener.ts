@@ -40,6 +40,7 @@ import { sanitizeAnnotation } from "./annotations.js";
 import { detectFormat, docIdFromPath, extractText, populateYDoc } from "./document-model.js";
 import {
   addDoc,
+  autoSaveAllToDisk,
   broadcastOpenDocs,
   getOpenDocs,
   type OpenDoc,
@@ -188,7 +189,7 @@ export async function openFileByPath(
   addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
-  initSavedBaseline(doc);
+  await initSavedBaseline(doc, resolved);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -247,7 +248,7 @@ export async function openFileFromContent(
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
-  initSavedBaseline(doc);
+  await initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -358,10 +359,18 @@ async function clearAndReload(
   console.error(`[Tandem] clearAndReload: complete for ${id}`);
 }
 
-/** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
-function initSavedBaseline(doc: Y.Doc): void {
+/**
+ * Set the initial savedAtVersion baseline so the client knows the file is clean on open.
+ * Uses the file's mtime when available so the first auto-save can detect external modifications.
+ */
+async function initSavedBaseline(doc: Y.Doc, filePath?: string): Promise<void> {
+  let baseline = Date.now();
+  if (filePath) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat) baseline = stat.mtimeMs;
+  }
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
+  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, baseline), MCP_ORIGIN);
 }
 
 function writeDocMeta(
@@ -534,9 +543,12 @@ function wireFileWatcher(id: string, filePath: string, format: string): void {
 function ensureAutoSave(): void {
   if (isAutoSaveRunning()) return;
   startAutoSave(async () => {
+    // Session saves (all documents — preserves CRDT state for restart recovery)
     for (const [docId, state] of getOpenDocs()) {
       const d = getOrCreateDocument(docId);
       await saveSession(state.filePath, state.format, d);
     }
+    // Disk saves (eligible .md/.txt documents only)
+    await autoSaveAllToDisk();
   });
 }

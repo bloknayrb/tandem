@@ -25,6 +25,7 @@ import { useFileDrop } from "./hooks/useFileDrop";
 import { useModeGate } from "./hooks/useModeGate";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
+import { useSaveShortcut } from "./hooks/useSaveShortcut";
 import { useTabOrder } from "./hooks/useTabOrder";
 import { useTandemSettings } from "./hooks/useTandemSettings";
 import { useTutorial } from "./hooks/useTutorial";
@@ -211,6 +212,7 @@ export default function App() {
   const { visibleAnnotations, heldCount } = useModeGate(annotations, tandemMode);
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
+  const { saving } = useSaveShortcut(activeTabId);
   const { toasts, dismiss: dismissToast } = useNotifications();
   const { fileDragOver, handleEditorDragOver, handleEditorDragLeave, handleEditorDrop } =
     useFileDrop();
@@ -841,6 +843,7 @@ export default function App() {
         claudeActive={claudeActive}
         readOnly={readOnly}
         documentCount={tabs.length}
+        saving={saving}
       />
       {showReviewSummary && reviewSummaryData && (
         <ReviewSummary

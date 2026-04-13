@@ -21,7 +21,7 @@ import { subscribe as subscribeNotifications } from "../notifications.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 import { detectFormat } from "./document-model.js";
-import { closeDocumentById } from "./document-service.js";
+import { closeDocumentById, getActiveDocId, saveDocumentToDisk } from "./document-service.js";
 import { applyChangesCore } from "./docx-apply.js";
 import { openFileByPath, openFileFromContent } from "./file-opener.js";
 
@@ -308,6 +308,26 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
       res.json({
         data: { closedPath: result.closedPath, activeDocumentId: result.activeDocumentId },
       });
+    } catch (err: unknown) {
+      sendApiError(res, err);
+    }
+  });
+
+  app.options("/api/save", apiMiddleware);
+  app.post("/api/save", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+    const { documentId } = (req.body ?? {}) as Record<string, unknown>;
+    if (documentId !== undefined && typeof documentId !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
+      return;
+    }
+    const targetId = (documentId as string | undefined) ?? getActiveDocId();
+    if (!targetId) {
+      res.status(404).json({ error: "NOT_FOUND", message: "No document to save." });
+      return;
+    }
+    try {
+      const result = await saveDocumentToDisk(targetId, "manual");
+      res.json({ data: result });
     } catch (err: unknown) {
       sendApiError(res, err);
     }

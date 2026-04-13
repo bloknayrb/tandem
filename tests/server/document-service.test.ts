@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import {
   addDoc,
+  autoSaveAllToDisk,
   broadcastOpenDocs,
   closeDocumentById,
   docCount,
@@ -12,11 +13,16 @@ import {
   hasDoc,
   removeDoc,
   requireDocument,
+  saveDocumentToDisk,
   setActiveDocId,
   toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../src/shared/constants.js";
 
 // Mock session manager to avoid filesystem side effects
 vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
@@ -25,6 +31,46 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
     stopAutoSave: vi.fn(),
+  };
+});
+
+// Mock file-io for save tests
+vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    atomicWrite: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+// Mock file-watcher
+vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    suppressNextChange: vi.fn(),
+    unwatchFile: vi.fn(),
+  };
+});
+
+// Mock notifications
+vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    pushNotification: vi.fn(),
+  };
+});
+
+// Mock fs/promises for stat checks
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    default: {
+      ...(actual.default as Record<string, unknown>),
+      stat: vi.fn().mockResolvedValue({ mtimeMs: 0 }),
+    },
   };
 });
 
@@ -322,5 +368,151 @@ describe("closeDocumentById", () => {
     const docs = meta.get("openDocuments") as any[];
     expect(docs).toHaveLength(1);
     expect(docs[0].id).toBe("bc-close-2");
+  });
+});
+
+describe("saveDocumentToDisk", () => {
+  it("skips non-existent documents", async () => {
+    const result = await saveDocumentToDisk("nonexistent");
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toContain("not open");
+  });
+
+  it("skips upload-only documents", async () => {
+    addDoc("upload-doc", {
+      id: "upload-doc",
+      filePath: "upload://uuid/file.md",
+      format: "md",
+      readOnly: true,
+      source: "upload",
+    });
+    const result = await saveDocumentToDisk("upload-doc");
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toContain("Upload");
+  });
+
+  it("skips read-only documents", async () => {
+    addDoc("ro-doc", {
+      id: "ro-doc",
+      filePath: "/tmp/file.docx",
+      format: "docx",
+      readOnly: true,
+      source: "file",
+    });
+    const result = await saveDocumentToDisk("ro-doc");
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toContain("Read-only");
+  });
+
+  it("skips .html format", async () => {
+    addDoc("html-doc", {
+      id: "html-doc",
+      filePath: "/tmp/file.html",
+      format: "html",
+      readOnly: false,
+      source: "file",
+    });
+    const result = await saveDocumentToDisk("html-doc");
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toContain("not eligible");
+  });
+
+  it("saves eligible .md documents to disk", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    const { suppressNextChange } = await import("../../src/server/file-watcher.js");
+
+    addDoc("md-doc", makeOpenDoc("md-doc", "/tmp/test.md"));
+
+    // Populate the Y.Doc so the adapter has content to save
+    const doc = getOrCreateDocument("md-doc");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    const text = new Y.XmlText("Hello world");
+    p.insert(0, [text]);
+
+    // Set baseline so external-modification check passes
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    const result = await saveDocumentToDisk("md-doc");
+    expect(result.status).toBe("saved");
+    expect(atomicWrite).toHaveBeenCalled();
+    expect(suppressNextChange).toHaveBeenCalledWith("/tmp/test.md");
+  });
+
+  it("saves eligible .txt documents to disk", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+
+    addDoc("txt-doc", {
+      id: "txt-doc",
+      filePath: "/tmp/test.txt",
+      format: "txt",
+      readOnly: false,
+      source: "file",
+    });
+
+    const doc = getOrCreateDocument("txt-doc");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    const text = new Y.XmlText("Hello");
+    p.insert(0, [text]);
+
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    const result = await saveDocumentToDisk("txt-doc");
+    expect(result.status).toBe("saved");
+    expect(atomicWrite).toHaveBeenCalled();
+  });
+
+  it("updates Y_MAP_SAVED_AT_VERSION after successful save", async () => {
+    addDoc("ver-doc", makeOpenDoc("ver-doc", "/tmp/ver.md"));
+    const doc = getOrCreateDocument("ver-doc");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    const text = new Y.XmlText("content");
+    p.insert(0, [text]);
+
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    const before = Date.now() - 10000;
+    meta.set(Y_MAP_SAVED_AT_VERSION, before);
+
+    await saveDocumentToDisk("ver-doc");
+
+    const after = meta.get(Y_MAP_SAVED_AT_VERSION) as number;
+    expect(after).toBeGreaterThan(before);
+  });
+});
+
+describe("autoSaveAllToDisk", () => {
+  it("saves only eligible documents", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    // Add one eligible .md doc
+    addDoc("auto-md", makeOpenDoc("auto-md", "/tmp/auto.md"));
+    const doc1 = getOrCreateDocument("auto-md");
+    const frag1 = doc1.getXmlFragment("default");
+    const p1 = new Y.XmlElement("paragraph");
+    frag1.insert(0, [p1]);
+    p1.insert(0, [new Y.XmlText("content")]);
+    doc1.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    // Add one ineligible .docx doc
+    addDoc("auto-docx", {
+      id: "auto-docx",
+      filePath: "/tmp/auto.docx",
+      format: "docx",
+      readOnly: true,
+      source: "file",
+    });
+
+    await autoSaveAllToDisk();
+
+    // Only the .md doc should have been saved
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
   });
 });

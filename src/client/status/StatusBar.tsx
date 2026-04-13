@@ -11,6 +11,7 @@ interface StatusBarProps {
   claudeActive: boolean;
   readOnly?: boolean;
   documentCount?: number;
+  saving?: boolean;
 }
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -24,6 +25,7 @@ export function StatusBar({
   claudeActive,
   readOnly,
   documentCount = 0,
+  saving = false,
 }: StatusBarProps) {
   const [userName, setUserName] = useState(() => {
     try {
@@ -122,6 +124,11 @@ export function StatusBar({
         {documentCount > 0 && (
           <span style={{ color: "#9ca3af" }}>
             {documentCount} doc{documentCount !== 1 ? "s" : ""} open
+          </span>
+        )}
+        {saving && (
+          <span data-testid="save-indicator" style={{ color: "#6366f1", fontStyle: "italic" }}>
+            Saving...
           </span>
         )}
       </div>
