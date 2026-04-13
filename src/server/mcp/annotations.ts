@@ -99,7 +99,7 @@ export function addReplyToAnnotation(
   if (origin) {
     ydoc.transact(() => repliesMap.set(replyId, reply), origin);
   } else {
-    repliesMap.set(replyId, reply);
+    ydoc.transact(() => repliesMap.set(replyId, reply));
   }
 
   return { ok: true, replyId };
@@ -493,7 +493,17 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
       if (!da.map.has(id)) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
-      da.ydoc.transact(() => da.map.delete(id), MCP_ORIGIN);
+      da.ydoc.transact(() => {
+        da.map.delete(id);
+        // Clean up orphaned replies for the deleted annotation
+        const repliesMap = getRepliesMap(da.ydoc);
+        const toDelete: string[] = [];
+        repliesMap.forEach((value, key) => {
+          const reply = value as { annotationId?: string };
+          if (reply && reply.annotationId === id) toDelete.push(key);
+        });
+        for (const key of toDelete) repliesMap.delete(key);
+      }, MCP_ORIGIN);
       return mcpSuccess({ removed: true, id });
     }),
   );
@@ -621,7 +631,13 @@ export function registerAnnotationTools(server: McpServer): void {
         MCP_ORIGIN,
       );
       if (!result.ok) {
-        return mcpError("INVALID_RANGE", result.error);
+        const code =
+          result.code === "NOT_FOUND"
+            ? "NOT_FOUND"
+            : result.code === "ANNOTATION_RESOLVED"
+              ? "ANNOTATION_RESOLVED"
+              : "INVALID_RANGE";
+        return mcpError(code, result.error);
       }
       return mcpSuccess({ replyId: result.replyId, annotationId });
     }),

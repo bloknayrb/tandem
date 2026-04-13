@@ -305,23 +305,25 @@ export function SidePanel({
     map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
   }
 
-  function handleReply(annotationId: string, text: string) {
-    fetch("/api/annotation-reply", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ annotationId, text, documentId }),
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-          console.warn(
-            `[SidePanel] Reply failed (${res.status}): ${data.message ?? "unknown error"}`,
-          );
-        }
-      })
-      .catch((err) => {
-        console.error("[SidePanel] Reply request failed:", err);
+  async function handleReply(annotationId: string, text: string): Promise<boolean> {
+    try {
+      const res = await fetch("/api/annotation-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ annotationId, text, documentId }),
       });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        console.warn(
+          `[SidePanel] Reply failed (${res.status}): ${data.message ?? "unknown error"}`,
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error("[SidePanel] Reply request failed:", err);
+      return false;
+    }
   }
 
   function handleBulkAccept() {

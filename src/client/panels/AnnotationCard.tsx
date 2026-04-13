@@ -11,7 +11,7 @@ export interface AnnotationCardProps {
   onDismiss?: (id: string) => void;
   onUndo?: (id: string) => void;
   onEdit?: (id: string, newContent: string) => void;
-  onReply?: (id: string, text: string) => void;
+  onReply?: (id: string, text: string) => Promise<boolean>;
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
@@ -48,6 +48,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   const [editReason, setEditReason] = useState("");
   const [isReplying, setIsReplying] = useState(false);
   const [replyText, setReplyText] = useState("");
+  const [isSendingReply, setIsSendingReply] = useState(false);
 
   const hasSuggestedText = annotation.suggestedText !== undefined;
 
@@ -92,12 +93,19 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     }
   }
 
-  function handleSendReply() {
+  async function handleSendReply() {
     const trimmed = replyText.trim();
-    if (!trimmed) return;
-    onReply?.(annotation.id, trimmed);
-    setReplyText("");
-    setIsReplying(false);
+    if (!trimmed || isSendingReply) return;
+    setIsSendingReply(true);
+    try {
+      const ok = await onReply?.(annotation.id, trimmed);
+      if (ok !== false) {
+        setReplyText("");
+        setIsReplying(false);
+      }
+    } finally {
+      setIsSendingReply(false);
+    }
   }
 
   const textareaStyle: React.CSSProperties = {
@@ -474,7 +482,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 <button
                   data-testid={`reply-send-btn-${annotation.id}`}
                   onClick={handleSendReply}
-                  disabled={!replyText.trim()}
+                  disabled={!replyText.trim() || isSendingReply}
                   style={{
                     padding: "2px 8px",
                     fontSize: "11px",

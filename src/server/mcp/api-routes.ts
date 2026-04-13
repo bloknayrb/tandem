@@ -18,7 +18,8 @@ import {
 } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
-import { subscribe as subscribeNotifications } from "../notifications.js";
+import { generateNotificationId } from "../../shared/utils.js";
+import { pushNotification, subscribe as subscribeNotifications } from "../notifications.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { addReplyToAnnotation } from "./annotations.js";
 import { convertToMarkdown } from "./convert.js";
@@ -458,6 +459,14 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
     const result = addReplyToAnnotation(ydoc, annotationsMap, annotationId, text, "user");
     if (!result.ok) {
       const status = result.code === "ANNOTATION_RESOLVED" ? 409 : 404;
+      pushNotification({
+        id: generateNotificationId(),
+        type: "annotation-error",
+        severity: "error",
+        message: `Reply failed: ${result.error}`,
+        dedupKey: `reply-error:${annotationId}`,
+        timestamp: Date.now(),
+      });
       res.status(status).json({ error: result.code, message: result.error });
       return;
     }
