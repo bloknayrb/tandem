@@ -48,6 +48,8 @@ describe("loadSettings — selectionDwellMs clamping", () => {
 
   it("returns default when no settings are stored", () => {
     const settings = loadSettings();
+    expect(settings.layout).toBe("three-panel");
+    expect(settings.editorWidthPercent).toBe(50);
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
 
