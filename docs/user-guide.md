@@ -257,7 +257,7 @@ Press `?` to open the in-app shortcuts reference at any time.
 
 ## Working with Claude Code
 
-Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 30 tools for reading documents, creating annotations, searching text, managing files, and communicating with you.
+Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 31 tools for reading documents, creating annotations, searching text, managing files, and communicating with you.
 
 ### Connection
 
@@ -318,7 +318,7 @@ Previously-open documents are auto-restored when the server starts — no manual
 
 ### Further Reading
 
-- [MCP Tool Reference](mcp-tools.md) — Full documentation for all 30 tools
+- [MCP Tool Reference](mcp-tools.md) — Full documentation for all 31 tools
 - [Workflows](workflows.md) — Advanced Claude Code patterns: cross-referencing documents, multi-model collaboration, RFP drafting, session handoff details
 - [Architecture](architecture.md) — System design, coordinate systems, data flows
 
