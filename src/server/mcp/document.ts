@@ -428,7 +428,7 @@ export function registerDocumentTools(server: McpServer): void {
       }
 
       // Delegate to shared save function
-      const result = await saveDocumentToDisk(r.docId);
+      const result = await saveDocumentToDisk(r.docId, "mcp");
       if (result.status === "saved") {
         return mcpSuccess({ saved: true, filePath: r.filePath });
       }
@@ -443,7 +443,10 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
       // result.status === "error"
-      return mcpError("FORMAT_ERROR", `Save failed: ${result.reason}`);
+      if (result.errorCode === "EACCES" || result.errorCode === "EPERM") {
+        return mcpError("FILE_LOCKED", result.reason ?? "Save failed");
+      }
+      return mcpError("FORMAT_ERROR", result.reason ?? "Save failed");
     }),
   );
 

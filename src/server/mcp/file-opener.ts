@@ -189,7 +189,7 @@ export async function openFileByPath(
   addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
-  initSavedBaseline(doc);
+  await initSavedBaseline(doc, resolved);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -248,7 +248,7 @@ export async function openFileFromContent(
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
-  initSavedBaseline(doc);
+  await initSavedBaseline(doc);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -359,10 +359,18 @@ async function clearAndReload(
   console.error(`[Tandem] clearAndReload: complete for ${id}`);
 }
 
-/** Set the initial savedAtVersion baseline so the client knows the file is clean on open. */
-function initSavedBaseline(doc: Y.Doc): void {
+/**
+ * Set the initial savedAtVersion baseline so the client knows the file is clean on open.
+ * Uses the file's mtime when available so the first auto-save can detect external modifications.
+ */
+async function initSavedBaseline(doc: Y.Doc, filePath?: string): Promise<void> {
+  let baseline = Date.now();
+  if (filePath) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat) baseline = stat.mtimeMs;
+  }
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
+  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, baseline), MCP_ORIGIN);
 }
 
 function writeDocMeta(

@@ -326,7 +326,7 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
       return;
     }
     try {
-      const result = await saveDocumentToDisk(targetId);
+      const result = await saveDocumentToDisk(targetId, "manual");
       res.json({ data: result });
     } catch (err: unknown) {
       sendApiError(res, err);

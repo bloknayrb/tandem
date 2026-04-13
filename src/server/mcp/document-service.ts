@@ -103,6 +103,7 @@ const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
+  errorCode?: string;
 }
 
 /**
@@ -114,7 +115,10 @@ export interface SaveResult {
  * - Checks source file mtime to skip if externally modified
  * - Per-document lock prevents concurrent writes
  */
-export async function saveDocumentToDisk(docId: string): Promise<SaveResult> {
+export async function saveDocumentToDisk(
+  docId: string,
+  source: "auto-save" | "manual" | "mcp" = "auto-save",
+): Promise<SaveResult> {
   const docState = openDocs.get(docId);
   if (!docState) return { status: "skipped", reason: "Document not open" };
 
@@ -158,7 +162,8 @@ export async function saveDocumentToDisk(docId: string): Promise<SaveResult> {
       if (code === "ENOENT") {
         return { status: "skipped", reason: "Source file no longer exists" };
       }
-      // Other stat errors — proceed with save attempt
+      console.error(`[AutoSave] Unexpected stat error for ${docState.filePath}:`, err);
+      return { status: "skipped", reason: `Cannot verify file state: ${code}` };
     }
 
     const doc = getOrCreateDocument(docId);
@@ -183,14 +188,14 @@ export async function saveDocumentToDisk(docId: string): Promise<SaveResult> {
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Auto-save failed for ${path.basename(docState.filePath)}: ${msg}`,
-      toolName: "auto-save",
+      message: `Save failed for ${path.basename(docState.filePath)}: ${msg}`,
+      toolName: source,
       errorCode: errCode,
       documentId: docId,
-      dedupKey: `auto-save:${docId}`,
+      dedupKey: `${source}:${docId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg };
+    return { status: "error", reason: msg, errorCode: (err as NodeJS.ErrnoException).code };
   } finally {
     savingDocs.delete(docId);
   }
@@ -279,6 +284,9 @@ export async function closeDocumentById(
 
   // Stop watching for external changes before removing the document
   unwatchFile(docState.filePath);
+
+  // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
+  savingDocs.delete(id);
 
   // Best-effort persist before removing — save failure should not prevent close
   try {
