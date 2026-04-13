@@ -73,7 +73,7 @@ Close the browser, restart the server, reopen — document and annotations are s
   - Browser-open tracking
 - **Save triggers:**
   - On `tandem_save()` — save session alongside file save
-  - On `tandem_close()` — save session before clearing state
+  - On `tandem_close()` — delete session file (so closed docs don't reopen on restart)
   - Auto-save every 60 seconds while a document is open
   - On server shutdown (SIGTERM/SIGINT handler)
 - **Resume flow:**
@@ -184,6 +184,7 @@ Remaining:
 - ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
 - ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
 - ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, HTML5 drag-and-drop reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
+- ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
 - Highlight color picker (5 colors available server-side, UI picker not yet built)
 
 ### Verification

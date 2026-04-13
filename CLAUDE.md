@@ -117,7 +117,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 30 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.4.0), 951 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 30 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.4.0), 1012 tests. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 
