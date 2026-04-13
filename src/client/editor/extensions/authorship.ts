@@ -25,6 +25,7 @@ function resolveAuthorshipRange(
     if (resolved && resolved.from < resolved.to) return resolved;
   }
   if (entry.range) {
+    console.warn("[authorship] Falling back to flat offsets for range", entry.id);
     const from = flatOffsetToPmPos(pmDoc, entry.range.from);
     const to = flatOffsetToPmPos(pmDoc, entry.range.to);
     if (from < to) return { from, to };
@@ -64,6 +65,7 @@ function buildAuthorshipDecorations(
       decorations.push(Decoration.inline(from, to, attrs));
     } catch (err) {
       if (!(err instanceof RangeError)) throw err;
+      console.warn("[authorship] Decoration RangeError for entry", entry.id, err);
     }
   });
 
@@ -103,8 +105,8 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
     let visible = false;
     try {
       visible = localStorage.getItem(AUTHORSHIP_TOGGLE_KEY) === "true";
-    } catch {
-      // localStorage unavailable
+    } catch (err) {
+      console.warn("[authorship] localStorage unavailable", err);
     }
 
     return [
@@ -214,7 +216,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
         if (insertedLen > 0) {
           try {
             const flatFrom = pmPosToFlatOffset(pmDoc, toPmPos(newStart));
-            const flatTo = pmPosToFlatOffset(pmDoc, toPmPos(newStart + insertedLen));
+            const flatTo = pmPosToFlatOffset(pmDoc, toPmPos(newEnd));
             if (flatTo <= flatFrom) return;
 
             const rangeId = generateAuthorshipId("user");
@@ -225,8 +227,8 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
               timestamp: Date.now(),
             };
             authorshipMap.set(rangeId, entry);
-          } catch {
-            // Position conversion can fail during complex edits; skip silently
+          } catch (err) {
+            console.warn("[authorship] Position conversion failed during user attribution", err);
           }
         }
       });
