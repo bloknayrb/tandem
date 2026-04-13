@@ -11,6 +11,6 @@
   "permissions": [
     "window-state:default",
     "updater:default",
-    "webview:allow-set-webview-zoom"
+    "core:webview:allow-set-webview-zoom"
   ]
 }
