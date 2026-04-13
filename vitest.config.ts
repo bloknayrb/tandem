@@ -13,10 +13,8 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      include: [
-        "src/client/editor/extensions/annotation.ts",
-        "src/client/editor/extensions/awareness.ts",
-      ],
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.d.ts"],
     },
   },
 });

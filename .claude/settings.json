@@ -22,6 +22,14 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/typecheck-on-edit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-ymap-keys.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-extract-markdown.sh"
           }
         ]
       }

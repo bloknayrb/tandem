@@ -85,6 +85,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **Stale browser tabs merge old CRDT state back.** If you change a file on disk and restart the server, an open browser tab will sync its old Y.Doc state back on reconnect, reverting your changes. Close all tabs before restarting, or use `force: true` to reload.
 - **Force-reload clears in-place.** `tandem_open` with `force: true` clears annotations, awareness, and content in a single transaction. Don't use mid-review -- annotations are still lost. See observer ownership table in [architecture.md](docs/architecture.md#y-map-observer-ownership).
 - **CRDT fallback logging.** `buildDecorations()` emits `console.warn` when an annotation falls back to flat offsets. Check the browser console -- these indicate CRDT degradation.
+- **Dead CRDT RelativePositions must be stripped, not preserved.** After `reloadFromDisk` replaces Y.Doc content, old `relRange` RelativePositions reference deleted items. `refreshRange` strips dead `relRange` and re-anchors from flat offsets. A stale `relRange` that resolves to null blocks the lazy re-attachment recovery path -- deletion is better than preservation.
 - **Hocuspocus replaces Y.Doc in `onLoadDocument`.** The `onDocSwapped` callback in `provider.ts` reattaches server event queue observers to the new instance. A runtime warning fires if the callback is missing. See #178 audit.
 - **Y.js "Invalid access" warnings** during session restore are harmless stderr noise.
 
@@ -103,6 +104,8 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 ### Files, Sessions & Lifecycle
 - **Session files** via `env-paths`: `%LOCALAPPDATA%\tandem\Data\sessions\` on Windows, `~/Library/Application Support/tandem/sessions/` on macOS, `~/.local/share/tandem/sessions/` on Linux. Delete to force fresh load.
 - **Auto-open `sample/welcome.md`** on first run. On upgrade, `CHANGELOG.md` opens instead. Both open **before** Hocuspocus/MCP start.
+- **Startup document opens must precede server bind (HTTP mode only).** Any document that should appear on startup must be opened before Hocuspocus binds. Stale browser tabs reconnecting can CRDT-merge incomplete `openDocuments` lists, removing tabs that were added after the server started accepting connections. Stdio mode has no startup document opens.
+- **File watcher suppression checks at event arrival, not delivery.** `suppressNextChange()` is consumed in the `fs.watch` callback (arrival), not inside the debounce timer callback (delivery). Checking at delivery time creates a race where an external edit arriving within the debounce window gets suppressed instead of the self-write.
 - **Word comment offsets need re-anchoring.** `.docx` comment ranges reference HTML-converted content. `docx-comments.ts` re-resolves via `anchoredRange()` after Y.Doc population.
 - **Exception handler is narrowed, not blanket.** `uncaughtException`/`unhandledRejection` only swallow known Hocuspocus/ws errors (via `isKnownHocuspocusError`). Unknown errors call `process.exit(1)`.
 

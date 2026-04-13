@@ -47,7 +47,7 @@ test("document loads in editor", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
-  const editor = page.locator(".ProseMirror");
+  const editor = page.locator(".tandem-editor");
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await expect(editor).toContainText(TITLE_TEXT);
 });
@@ -60,7 +60,7 @@ test.skip("annotation appears as decoration", async ({ page }) => {
   await openWithComment(tmpDir, "Great title!");
 
   await page.goto("/");
-  const editor = page.locator(".ProseMirror");
+  const editor = page.locator(".tandem-editor");
   await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
   const decoration = page.locator("[data-annotation-id]");
   await expect(decoration.first()).toBeVisible({ timeout: 15_000 });
@@ -121,7 +121,7 @@ test("suggestion accept applies text change", async ({ page }) => {
   await expect(acceptBtn.first()).toBeVisible({ timeout: 10_000 });
   await acceptBtn.first().click();
 
-  const editor = page.locator(".ProseMirror");
+  const editor = page.locator(".tandem-editor");
   await expect(editor).toContainText("Updated Title", { timeout: 5_000 });
 });
 
@@ -138,7 +138,7 @@ test("tab switching shows different documents", async ({ page }) => {
   }
 
   await page.goto("/");
-  const editor = page.locator(".ProseMirror");
+  const editor = page.locator(".tandem-editor");
   await expect(editor).toBeVisible({ timeout: 10_000 });
 
   // Both tabs should appear (use data-active attribute to select only tab containers, not child spans)
