@@ -181,8 +181,14 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
           };
           authorshipMap.observe(observer);
 
+          // Rebuild after initial sync — data may arrive before the observer is attached
+          const syncRebuild = setTimeout(() => {
+            if (authorshipMap.size > 0) observer();
+          }, 500);
+
           return {
             destroy() {
+              clearTimeout(syncRebuild);
               authorshipMap.unobserve(observer);
             },
           };

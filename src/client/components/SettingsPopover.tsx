@@ -283,7 +283,7 @@ export function SettingsPopover({
         </label>
         <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
           Highlights text by author: <span style={{ color: "#3b82f6" }}>you</span> /{" "}
-          <span style={{ color: "#22c55e" }}>Claude</span>
+          <span style={{ color: "#ea8a1e" }}>Claude</span>
         </div>
       </div>
 
