@@ -1,7 +1,7 @@
 {
   "name": "tandem-editor",
   "version": "0.4.0",
-  "description": "Collaborative AI-human document editor with MCP tool integration for Claude",
+  "description": "Edit and iterate on documents with Claude — no copy-paste, full LLM access via MCP",
   "repository": {
     "type": "git",
     "url": "https://github.com/bloknayrb/tandem"

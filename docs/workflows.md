@@ -48,10 +48,10 @@ claude --dangerously-load-development-channels server:tandem-channel
 
 Then try:
 ```
-"Review the welcome document with me"
+"Let's work on the welcome document together"
 ```
 
-Claude connects to the running Tandem server, opens the document, and begins reviewing. With the channel active, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
+Claude connects to the running Tandem server, opens the document, and starts reading. With the channel active, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
 
 **After upgrading** (re-run setup to update the skill and MCP paths):
 ```bash
@@ -59,7 +59,7 @@ npm update -g tandem-editor
 tandem setup    # re-writes MCP config with new paths
 ```
 
-## Reviewing a DRPA Progress Report
+## Editing a DRPA Progress Report
 
 **Setup:** Bryan has a monthly progress report draft that needs review before submitting to DRPA.
 
@@ -82,10 +82,10 @@ Claude: tandem_getOutline()
   ]}
 ```
 
-Claude reviews section by section without loading the full doc:
+Claude reads section by section without loading the full doc:
 
 ```
-Claude: tandem_setStatus("Reviewing Cost Summary...", { focusParagraph: 8 })
+Claude: tandem_setStatus("Working on Cost Summary...", { focusParagraph: 8 })
 Claude: tandem_getTextContent({ section: "Cost Summary" })
 ```
 
@@ -117,7 +117,7 @@ Bryan sees the suggestion in the side panel -- accepts or rejects with one click
 When done:
 ```
 Claude: tandem_save()
-Claude: tandem_setStatus("Review complete")
+Claude: tandem_setStatus("Done")
 ```
 
 ## Cross-Referencing an Invoice (Multi-Document)
@@ -221,7 +221,7 @@ Claude: tandem_getTextContent({ section: "Technical Approach" })
 
 ## Multi-Model Workflow
 
-**Setup:** Large document that benefits from parallel review. Opus orchestrates, Sonnet agents handle sections.
+**Setup:** Large document that benefits from parallel processing. Opus orchestrates, Sonnet agents handle sections.
 
 Opus reads the outline:
 ```
@@ -250,7 +250,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 
 ## Keyboard Review Mode
 
-**Setup:** Claude has finished reviewing and left 15+ annotations. Bryan wants to process them efficiently.
+**Setup:** Claude has finished and left 15+ annotations. Bryan wants to process them efficiently.
 
 The browser's side panel shows all pending annotations with filter controls:
 - Filter by type (highlights, comments, flags) — comments with replacement text show as "With replacement", comments with `directedAt` show as "For Claude"
