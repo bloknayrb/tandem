@@ -28,6 +28,7 @@ import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useTabOrder } from "./hooks/useTabOrder";
 import { useTandemSettings } from "./hooks/useTandemSettings";
 import { useTutorial } from "./hooks/useTutorial";
+import { useWebViewZoom } from "./hooks/useWebViewZoom";
 import { useYjsSync } from "./hooks/useYjsSync";
 import type { PanelLayout } from "./panel-layout";
 import { ChatPanel } from "./panels/ChatPanel";
@@ -142,6 +143,8 @@ function loadPanelWidth(side: PanelSide): number {
 }
 
 export default function App() {
+  useWebViewZoom();
+
   const {
     tabs,
     activeTabId,
