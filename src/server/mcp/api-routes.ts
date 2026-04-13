@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import type { Express, NextFunction, Request, Response } from "express";
 
 import {
@@ -35,9 +34,13 @@ export function isHostAllowed(host: string | undefined): boolean {
   return reqHost === "localhost" || reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME;
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Check if an Origin header is a localhost URL. Exported for testing. */
 export const LOCALHOST_ORIGIN_RE = new RegExp(
-  `^https?://(localhost|127\\.0\\.0\\.1|${TAURI_HOSTNAME.replace(/\./g, "\\.")})(:\\d+)?$`,
+  `^https?://(localhost|127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
 );
 export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");
@@ -48,19 +51,25 @@ function hasUncPrefix(p: string): boolean {
   return p.startsWith("\\\\") || p.startsWith("//");
 }
 
+/** basename() on Linux doesn't treat `\` as a separator, so Windows-style paths
+ *  like `C:\Program Files\node.exe` return the whole string. Split on both. */
+function crossBasename(p: string): string {
+  return p.split(/[/\\]/).pop() || "";
+}
+
 /** Validate that a nodeBinary path points to a Node.js binary, not an arbitrary executable. */
 const VALID_NODE_BASENAME_RE = /^node(-sidecar(-[a-z0-9_-]+)?)?(\.exe)?$/;
 export function isValidNodeBinary(nodeBinary: string): boolean {
   if (!nodeBinary) return false;
   if (nodeBinary.includes("..")) return false;
   if (hasUncPrefix(nodeBinary)) return false;
-  return VALID_NODE_BASENAME_RE.test(basename(nodeBinary));
+  return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
 }
 
 /** Validate that a channelPath points to a JS file without traversal or UNC paths. */
 export function isValidChannelPath(channelPath: string): boolean {
   if (!channelPath) return false;
-  if (!basename(channelPath).endsWith(".js")) return false;
+  if (!crossBasename(channelPath).endsWith(".js")) return false;
   if (channelPath.includes("..")) return false;
   if (hasUncPrefix(channelPath)) return false;
   return true;

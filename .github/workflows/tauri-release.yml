@@ -107,6 +107,7 @@ jobs:
           args: ${{ matrix.args }}
 
   release-check:
+    permissions: {}
     needs: build-tauri
     if: always()
     runs-on: ubuntu-latest
