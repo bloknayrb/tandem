@@ -43,6 +43,18 @@ export default defineConfig([
     ...selfContained,
   },
   {
+    entry: ["src/monitor/index.ts"],
+    outDir: "dist/monitor",
+    format: ["esm"],
+    target: "node22",
+    platform: "node",
+    splitting: false,
+    clean: true,
+    dts: false,
+    sourcemap: true,
+    ...selfContained,
+  },
+  {
     entry: ["src/cli/index.ts"],
     outDir: "dist/cli",
     format: ["esm"],

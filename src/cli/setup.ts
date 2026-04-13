@@ -12,6 +12,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Absolute path to dist/channel/index.js (sibling of dist/cli/)
 const CHANNEL_DIST = resolve(__dirname, "../channel/index.js");
 
+// Absolute path to the Tandem package root (dist/cli/ -> ..)
+const PACKAGE_ROOT = resolve(__dirname, "../..");
+
 const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
 
 export interface McpEntry {
@@ -219,14 +222,16 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
     );
   }
 
-  // Channel activation instructions (shown on all successful setups)
+  // Plugin install instructions (shown on all successful setups)
   if (failures < targets.length) {
     console.error(
-      "\n\x1b[1mReal-time push notifications (optional):\x1b[0m\n" +
-        "  To receive chat messages and events instantly (instead of polling),\n" +
-        "  start Claude Code with the channel flag:\n\n" +
-        "    claude --dangerously-load-development-channels server:tandem-channel\n\n" +
-        "  Without this flag, Claude still works but relies on tandem_checkInbox polling.\n",
+      "\n\x1b[1mReal-time push notifications (recommended):\x1b[0m\n" +
+        "  Install the Tandem plugin for instant events (one-time):\n\n" +
+        "    claude plugin marketplace add bloknayrb/tandem\n" +
+        "    claude plugin install tandem@tandem-editor\n\n" +
+        "  Or for development, load directly from this package:\n\n" +
+        `    claude --plugin-dir ${PACKAGE_ROOT}\n\n` +
+        "  Without the plugin, Claude still works but relies on tandem_checkInbox polling.\n",
     );
   }
 }
