@@ -45,6 +45,14 @@ export interface DocumentClosedPayload {
   fileName: string;
 }
 
+export interface AnnotationReplyPayload {
+  annotationId: string;
+  replyId: string;
+  replyText: string;
+  replyAuthor: "user" | "claude";
+  textSnippet: string;
+}
+
 export interface DocumentSwitchedPayload {
   fileName: string;
 }
@@ -63,6 +71,7 @@ export type TandemEvent =
   | (TandemEventBase & { type: "annotation:created"; payload: AnnotationCreatedPayload })
   | (TandemEventBase & { type: "annotation:accepted"; payload: AnnotationAcceptedPayload })
   | (TandemEventBase & { type: "annotation:dismissed"; payload: AnnotationDismissedPayload })
+  | (TandemEventBase & { type: "annotation:reply"; payload: AnnotationReplyPayload })
   | (TandemEventBase & { type: "chat:message"; payload: ChatMessagePayload })
   | (TandemEventBase & { type: "document:opened"; payload: DocumentOpenedPayload })
   | (TandemEventBase & { type: "document:closed"; payload: DocumentClosedPayload })
@@ -80,6 +89,7 @@ const VALID_EVENT_TYPES = new Set<TandemEventType>([
   "annotation:created",
   "annotation:accepted",
   "annotation:dismissed",
+  "annotation:reply",
   "chat:message",
   "document:opened",
   "document:closed",
@@ -134,6 +144,12 @@ export function formatEventContent(event: TandemEvent): string {
       const { annotationId, textSnippet } = event.payload;
       return `User dismissed annotation ${annotationId}${textSnippet ? ` ("${textSnippet}")` : ""}${doc}`;
     }
+    case "annotation:reply": {
+      const { annotationId, replyAuthor, replyText, textSnippet } = event.payload;
+      const who = replyAuthor === "claude" ? "Claude" : "User";
+      const snippet = textSnippet ? ` (on "${textSnippet}")` : "";
+      return `${who} replied to annotation ${annotationId}${snippet}: ${replyText}${doc}`;
+    }
     case "chat:message": {
       const { text, replyTo, selection } = event.payload;
       const reply = replyTo ? ` (replying to ${replyTo})` : "";
@@ -177,6 +193,10 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
     case "annotation:accepted":
     case "annotation:dismissed":
       meta.annotation_id = event.payload.annotationId;
+      break;
+    case "annotation:reply":
+      meta.annotation_id = event.payload.annotationId;
+      meta.reply_id = event.payload.replyId;
       break;
     case "chat:message":
       meta.message_id = event.payload.messageId;

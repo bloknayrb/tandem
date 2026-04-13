@@ -43,6 +43,17 @@ export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 
+// --- Reply types ---
+
+export interface AnnotationReply {
+  id: string;
+  annotationId: string;
+  author: "user" | "claude";
+  text: string;
+  timestamp: number;
+  editedAt?: number;
+}
+
 // --- Annotation types ---
 
 interface AnnotationBase {

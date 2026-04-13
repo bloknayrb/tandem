@@ -12,6 +12,7 @@ import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
   TAURI_HOSTNAME,
+  Y_MAP_ANNOTATIONS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -19,7 +20,9 @@ import type { TandemNotification } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { subscribe as subscribeNotifications } from "../notifications.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { addReplyToAnnotation } from "./annotations.js";
 import { convertToMarkdown } from "./convert.js";
+import { getCurrentDoc } from "./document.js";
 import { detectFormat } from "./document-model.js";
 import { closeDocumentById, getActiveDocId, saveDocumentToDisk } from "./document-service.js";
 import { applyChangesCore } from "./docx-apply.js";
@@ -428,5 +431,36 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  });
+
+  // Annotation reply: browser user posts a reply to an annotation thread
+  app.options("/api/annotation-reply", apiMiddleware);
+  app.post("/api/annotation-reply", apiMiddleware, largeBody, (req: Request, res: Response) => {
+    const { annotationId, text, documentId } = (req.body ?? {}) as Record<string, unknown>;
+    if (!annotationId || typeof annotationId !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "annotationId is required" });
+      return;
+    }
+    if (!text || typeof text !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
+      return;
+    }
+
+    const doc = getCurrentDoc(typeof documentId === "string" ? documentId : undefined);
+    if (!doc) {
+      res.status(404).json({ error: "NOT_FOUND", message: "No document open" });
+      return;
+    }
+    const ydoc = getOrCreateDocument(doc.docName);
+    const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // No origin tag — allows event emission so Claude sees user replies
+    const result = addReplyToAnnotation(ydoc, annotationsMap, annotationId, text, "user");
+    if (!result.ok) {
+      const status = result.code === "ANNOTATION_RESOLVED" ? 409 : 404;
+      res.status(status).json({ error: result.code, message: result.error });
+      return;
+    }
+    res.json({ data: { replyId: result.replyId, annotationId } });
   });
 }

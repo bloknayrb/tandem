@@ -14,6 +14,10 @@ export function generateEventId(): string {
   return generateId("evt");
 }
 
+export function generateReplyId(): string {
+  return generateId("rpl");
+}
+
 export function generateNotificationId(): string {
   return generateId("ntf");
 }

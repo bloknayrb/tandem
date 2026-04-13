@@ -70,7 +70,7 @@ const mcp = new Server(
     instructions: [
       'Events from Tandem arrive as <channel source="tandem-channel" event_type="..." document_id="...">.',
       "These are real-time push notifications of user actions in the collaborative document editor.",
-      "Event types: annotation:created, annotation:accepted, annotation:dismissed,",
+      "Event types: annotation:created, annotation:accepted, annotation:dismissed, annotation:reply,",
       "chat:message, document:opened, document:closed, document:switched.",
       "Chat messages may include a 'selection' field with buffered selection context.",
       "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_highlight, etc.) to act on them.",

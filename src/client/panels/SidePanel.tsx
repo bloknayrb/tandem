@@ -1,9 +1,9 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
+import type { Annotation, AnnotationReply, AnnotationType, TandemMode } from "../../shared/types";
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 import { annotationToPmRange } from "../positions";
@@ -107,6 +107,39 @@ export function SidePanel({
   const editorRef = useRef(editor);
   ydocRef.current = ydoc;
   editorRef.current = editor;
+
+  // Replies: observe the annotationReplies Y.Map
+  const [repliesMap, setRepliesMap] = useState<Map<string, AnnotationReply[]>>(new Map());
+  useEffect(() => {
+    if (!ydoc) {
+      setRepliesMap(new Map());
+      return;
+    }
+
+    const ymap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+
+    function rebuild() {
+      const grouped = new Map<string, AnnotationReply[]>();
+      ymap.forEach((value) => {
+        const reply = value as AnnotationReply;
+        if (reply && typeof reply === "object" && reply.annotationId) {
+          const list = grouped.get(reply.annotationId) ?? [];
+          list.push(reply);
+          grouped.set(reply.annotationId, list);
+        }
+      });
+      // Sort each group chronologically
+      for (const list of grouped.values()) {
+        list.sort((a, b) => a.timestamp - b.timestamp);
+      }
+      setRepliesMap(grouped);
+    }
+
+    rebuild();
+    const obs = () => rebuild();
+    ymap.observe(obs);
+    return () => ymap.unobserve(obs);
+  }, [ydoc]);
 
   // Single-pass filtering + categorization
   const { filtered, pending, resolved, allPending } = useMemo(() => {
@@ -270,6 +303,25 @@ export function SidePanel({
       return; // Never fall through to raw-content write for suggestedText annotations
     }
     map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
+  }
+
+  function handleReply(annotationId: string, text: string) {
+    fetch("/api/annotation-reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ annotationId, text, documentId }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+          console.warn(
+            `[SidePanel] Reply failed (${res.status}): ${data.message ?? "unknown error"}`,
+          );
+        }
+      })
+      .catch((err) => {
+        console.error("[SidePanel] Reply request failed:", err);
+      });
   }
 
   function handleBulkAccept() {
@@ -777,10 +829,12 @@ export function SidePanel({
                 <AnnotationCard
                   key={ann.id}
                   annotation={ann}
+                  replies={repliesMap.get(ann.id) ?? []}
                   isReviewTarget={isTarget}
                   onAccept={handleAccept}
                   onDismiss={handleDismiss}
                   onEdit={handleEdit}
+                  onReply={handleReply}
                   onClick={() => scrollToAnnotation(ann)}
                 />
               );
@@ -795,6 +849,7 @@ export function SidePanel({
                     <AnnotationCard
                       key={ann.id}
                       annotation={ann}
+                      replies={repliesMap.get(ann.id) ?? []}
                       onUndo={handleUndo}
                       undoable={recentlyResolved.has(ann.id)}
                       onClick={() => scrollToAnnotation(ann)}

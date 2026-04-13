@@ -9,6 +9,7 @@ import {
   MAX_FILE_SIZE,
   SUPPORTED_EXTENSIONS,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
@@ -312,6 +313,9 @@ async function clearAndReload(
       // Clear Y.Maps
       const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
       annotations.forEach((_, k) => annotations.delete(k));
+
+      const annotationReplies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+      annotationReplies.forEach((_, k) => annotationReplies.delete(k));
 
       const awareness = doc.getMap(Y_MAP_AWARENESS);
       awareness.forEach((_, k) => awareness.delete(k));

@@ -1,10 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
-import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
+import type {
+  Annotation,
+  AnnotationReply,
+  AnnotationType,
+  HighlightColor,
+} from "../../shared/types.js";
 import {
   AnnotationActionSchema,
   AnnotationStatusSchema,
@@ -14,7 +19,11 @@ import {
   HighlightColorSchema,
   toFlatOffset,
 } from "../../shared/types.js";
-import { generateAnnotationId, generateNotificationId } from "../../shared/utils.js";
+import {
+  generateAnnotationId,
+  generateNotificationId,
+  generateReplyId,
+} from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { pushNotification } from "../notifications.js";
@@ -29,6 +38,71 @@ function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<un
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
   return { ydoc, map: ydoc.getMap(Y_MAP_ANNOTATIONS) };
+}
+
+/** Get the annotation replies Y.Map for a document. */
+function getRepliesMap(ydoc: Y.Doc): Y.Map<unknown> {
+  return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+}
+
+/** Collect all replies for a given annotation from the replies Y.Map. */
+export function collectRepliesForAnnotation(
+  repliesMap: Y.Map<unknown>,
+  annotationId: string,
+): AnnotationReply[] {
+  const replies: AnnotationReply[] = [];
+  repliesMap.forEach((value) => {
+    const reply = value as AnnotationReply;
+    if (reply && typeof reply === "object" && reply.annotationId === annotationId) {
+      replies.push(reply);
+    }
+  });
+  // Sort chronologically
+  replies.sort((a, b) => a.timestamp - b.timestamp);
+  return replies;
+}
+
+/**
+ * Add a reply to an annotation. Writes to the separate annotationReplies Y.Map.
+ * Returns the reply ID on success, or an error string on failure.
+ */
+export function addReplyToAnnotation(
+  ydoc: Y.Doc,
+  annotationsMap: Y.Map<unknown>,
+  annotationId: string,
+  text: string,
+  author: "user" | "claude",
+  origin?: string,
+): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
+  const raw = annotationsMap.get(annotationId) as Annotation | undefined;
+  if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
+
+  const ann = sanitizeAnnotation(raw);
+  if (ann.status !== "pending") {
+    return {
+      ok: false,
+      error: `Cannot reply to a ${ann.status} annotation`,
+      code: "ANNOTATION_RESOLVED",
+    };
+  }
+
+  const replyId = generateReplyId();
+  const reply: AnnotationReply = {
+    id: replyId,
+    annotationId,
+    author,
+    text,
+    timestamp: Date.now(),
+  };
+
+  const repliesMap = getRepliesMap(ydoc);
+  if (origin) {
+    ydoc.transact(() => repliesMap.set(replyId, reply), origin);
+  } else {
+    repliesMap.set(replyId, reply);
+  }
+
+  return { ok: true, replyId };
 }
 
 /** Human-readable message for a range validation failure. */
@@ -364,7 +438,16 @@ export function registerAnnotationTools(server: McpServer): void {
       if (type) results = results.filter((a) => a.type === type);
       if (status) results = results.filter((a) => a.status === status);
 
-      return mcpSuccess({ annotations: results, count: results.length });
+      const repliesMap = getRepliesMap(da.ydoc);
+      const annotationsWithReplies = results.map((ann) => ({
+        ...ann,
+        replies: collectRepliesForAnnotation(repliesMap, ann.id),
+      }));
+
+      return mcpSuccess({
+        annotations: annotationsWithReplies,
+        count: annotationsWithReplies.length,
+      });
     }),
   );
 
@@ -494,10 +577,13 @@ export function registerAnnotationTools(server: McpServer): void {
       const annotations = refreshAllRanges(collectAnnotations(da.map), da.ydoc, da.map);
       const { ydoc } = da;
 
+      const repliesMap = getRepliesMap(ydoc);
+
       if (format === "json") {
         const fullText = extractText(ydoc);
         const enriched = annotations.map((ann) => ({
           ...ann,
+          replies: collectRepliesForAnnotation(repliesMap, ann.id),
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
             Math.min(fullText.length, ann.range.to),
@@ -508,6 +594,36 @@ export function registerAnnotationTools(server: McpServer): void {
 
       const markdown = exportAnnotations(ydoc, annotations);
       return mcpSuccess({ markdown, count: annotations.length });
+    }),
+  );
+
+  server.tool(
+    "tandem_annotationReply",
+    "Reply to an annotation thread. Only works on pending annotations.",
+    {
+      annotationId: z.string().describe("The annotation ID to reply to"),
+      text: z.string().describe("Reply text"),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
+    },
+    withErrorBoundary("tandem_annotationReply", async ({ annotationId, text, documentId }) => {
+      const da = getDocAndAnnotations(documentId);
+      if (!da) return noDocumentError();
+
+      const result = addReplyToAnnotation(
+        da.ydoc,
+        da.map,
+        annotationId,
+        text,
+        "claude",
+        MCP_ORIGIN,
+      );
+      if (!result.ok) {
+        return mcpError("INVALID_RANGE", result.error);
+      }
+      return mcpSuccess({ replyId: result.replyId, annotationId });
     }),
   );
 }
