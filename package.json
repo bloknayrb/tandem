@@ -71,6 +71,9 @@
     ],
     "*.json !package-lock.json": [
       "biome check --write"
+    ],
+    "*.{yml,yaml,md}": [
+      "node scripts/normalize-eol.mjs"
     ]
   },
   "dependencies": {
