@@ -4256,7 +4256,7 @@ dependencies = [
 
 [[package]]
 name = "tandem-desktop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "log",
  "reqwest 0.12.28",

@@ -5,6 +5,31 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-13
+
+### Added
+
+- **Authorship tracking** — Y.Map overlay marks text as user-written or Claude-written, with text-color styling (blue for user, orange for Claude) (#190)
+- **Threaded annotation replies** — reply to annotations with back-and-forth conversation threads (#187)
+- **Claude cursor decoration** — character-level cursor shows where Claude is editing in real time (#209)
+- **Auto-save** — documents save automatically on change; Ctrl+S triggers immediate manual save (#272)
+- **Text zoom** — keyboard shortcuts (Ctrl+=/Ctrl+-) for adjusting text size in the Tauri desktop app (#273)
+- **Three-panel default layout** — editor, side panel, and chat visible by default (#264)
+- **Selection event suppression** — selection events only fire after a chat message is sent, reducing noise (#270)
+- V1.0 release plan added to roadmap (#279)
+
+### Fixed
+
+- Session persistence, tab bar horizontal scrollbar, and tab cycling keyboard shortcuts (#278)
+- Authorship styling uses text color instead of background highlight; reopen sync corrected
+- Annotation replies renamed from Acknowledge/Dismiss to Accept/Reject for clarity
+
+### Changed
+
+- Pinned Hocuspocus and Y.js dependency versions to prevent upstream breakage (#271)
+- EOL normalizer added to lint-staged for .yml and .md files (#263)
+- Lessons learned applied to codebase and tooling (#280)
+
 ## [0.4.0] - 2026-04-12
 
 ### Added
