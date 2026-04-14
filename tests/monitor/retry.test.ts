@@ -82,6 +82,22 @@ describe("retry counter semantics", () => {
     );
     expect(exitLine).toBeDefined();
   });
+
+  it("retries on a 503 from /api/events (non-ok response, not a thrown error)", async () => {
+    let connectAttempts = 0;
+    stub.on("/api/events", () => {
+      connectAttempts++;
+      return new Response("unavailable", { status: 503 });
+    });
+
+    const mainPromise = main().catch(() => {});
+    await vi.advanceTimersByTimeAsync(200_000);
+    await mainPromise;
+
+    // CHANNEL_MAX_RETRIES = 5; expect at least that many connect attempts.
+    expect(connectAttempts).toBeGreaterThanOrEqual(5);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("exponential backoff", () => {
