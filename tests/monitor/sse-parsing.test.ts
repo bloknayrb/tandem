@@ -71,3 +71,54 @@ describe("SSE parsing error isolation", () => {
     errSpy.mockRestore();
   });
 });
+
+describe("SSE buffer overflow", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let stream: ControllableStream;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.useRealTimers();
+    stdoutSpy.mockRestore();
+  });
+
+  it("throws when the buffer grows past 1MB without a frame boundary", async () => {
+    const promise = connectAndStream(
+      undefined,
+      () => {},
+      () => {},
+    );
+    stream.push("data: " + "x".repeat(1_100_000));
+    await expect(promise).rejects.toThrow(/SSE buffer exceeded/);
+  });
+
+  it("allows a single 900KB event that ends with a proper boundary", async () => {
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId, () => {});
+
+    const payload = JSON.stringify({
+      id: "big",
+      type: "chat:message",
+      timestamp: 1,
+      payload: { messageId: "m", text: "x".repeat(900_000), replyTo: null, anchor: null },
+    });
+    stream.push(`id: big\ndata: ${payload}\n\n`);
+    stream.end();
+    await promise.catch(() => {});
+
+    expect(onEventId).toHaveBeenCalledWith("big");
+  });
+});
