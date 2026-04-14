@@ -42,6 +42,8 @@ const CONNECT_FETCH_TIMEOUT_MS = 10_000; // /api/events initial handshake
 const MODE_FETCH_TIMEOUT_MS = 2_000; // /api/mode cache refresh
 const AWARENESS_FETCH_TIMEOUT_MS = 5_000; // /api/channel-awareness POST
 const ERROR_REPORT_TIMEOUT_MS = 3_000; // /api/channel-error POST on exit
+const STABLE_CONNECTION_MS = 60_000; // Reset retries after this much continuous uptime
+const CHANNEL_RETRY_MAX_DELAY_MS = 30_000; // Exponential backoff cap
 
 // AbortSignal.timeout is supported on Node 20+; tsup target is node22.
 async function fetchWithTimeout(
@@ -67,10 +69,17 @@ export async function main(): Promise<void> {
 
   while (retries < CHANNEL_MAX_RETRIES) {
     try {
-      await connectAndStream(lastEventId, (id) => {
-        lastEventId = id;
-        retries = 0;
-      });
+      await connectAndStream(
+        lastEventId,
+        (id) => {
+          lastEventId = id;
+          // retries is NOT reset here — only on stable uptime (onStable callback)
+        },
+        () => {
+          // Stable connection — reset retry budget
+          retries = 0;
+        },
+      );
     } catch (err) {
       retries++;
       console.error(
@@ -102,7 +111,15 @@ export async function main(): Promise<void> {
         process.exit(1);
       }
 
-      await new Promise((r) => setTimeout(r, CHANNEL_RETRY_DELAY_MS));
+      // Exponential backoff: 2s, 4s, 8s, 16s, 30s (capped)
+      const delay = Math.min(
+        CHANNEL_RETRY_DELAY_MS * 2 ** (retries - 1),
+        CHANNEL_RETRY_MAX_DELAY_MS,
+      );
+      console.error(
+        `[Monitor] Retrying in ${delay}ms (attempt ${retries}/${CHANNEL_MAX_RETRIES})...`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
 }
@@ -110,6 +127,7 @@ export async function main(): Promise<void> {
 export async function connectAndStream(
   lastEventId: string | undefined,
   onEventId: (id: string) => void,
+  onStable: () => void = () => {},
 ): Promise<void> {
   const headers: Record<string, string> = { Accept: "text/event-stream" };
   if (lastEventId) headers["Last-Event-ID"] = lastEventId;
@@ -121,6 +139,10 @@ export async function connectAndStream(
   );
   if (!res.ok) throw new Error(`SSE endpoint returned ${res.status}`);
   if (!res.body) throw new Error("SSE endpoint returned no body");
+
+  // Schedule the stable-uptime reset. If the connection stays healthy for
+  // STABLE_CONNECTION_MS, signal the caller to reset its retry budget.
+  const stableTimer = setTimeout(onStable, STABLE_CONNECTION_MS);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -251,6 +273,7 @@ export async function connectAndStream(
       }
     }
   } finally {
+    clearTimeout(stableTimer);
     // Prevent timers leaking across reconnects — stale awareness POSTs
     // from a dead connection would otherwise collide with a new one.
     if (awarenessTimer) clearTimeout(awarenessTimer);
