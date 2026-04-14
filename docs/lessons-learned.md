@@ -392,7 +392,10 @@ Initial attempts to filter at the bridge and server levels had no effect because
 
 ```ts
 const connectCtrl = new AbortController();
-const connectTimer = setTimeout(() => connectCtrl.abort(), CONNECT_FETCH_TIMEOUT_MS);
+const connectTimer = setTimeout(
+  () => connectCtrl.abort(new Error("handshake timeout")),
+  CONNECT_FETCH_TIMEOUT_MS,
+);
 let res: Response;
 try {
   res = await fetch(url, { headers, signal: connectCtrl.signal });
@@ -401,6 +404,8 @@ try {
 }
 ```
 
+Pass an `Error` argument to `abort()` so the reason flows through to `fetch`'s rejection — a bare `abort()` loses the handshake-vs-body distinction when you later surface the error to logs.
+
 **Follow-on gotcha:** `reader.cancel(reason)` resolves the pending `read()` with `{done: true}` — it does NOT reject, and the `reason` argument is not surfaced to the caller. To propagate the cause (e.g., "was this a natural end-of-stream or a watchdog cancel?"), set a local flag before cancelling and branch on it after `done: true`:
 
 ```ts
@@ -408,7 +413,7 @@ let inactivityTimedOut = false;
 const watchdog = setInterval(() => {
   if (Date.now() - lastActivityAt > SSE_INACTIVITY_TIMEOUT_MS) {
     inactivityTimedOut = true;
-    reader.cancel().catch(() => {});
+    reader.cancel(new Error("SSE inactivity timeout")).catch(() => {});
   }
 }, SSE_INACTIVITY_TIMEOUT_MS / 4);
 // ...
