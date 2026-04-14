@@ -191,8 +191,11 @@ describe("background mode refresh", () => {
 
     // Advance time but DO NOT resolve /api/mode
     await vi.advanceTimersByTimeAsync(100);
-    // stdout should already have the event (cached default is "tandem", non-blocking)
-    expect(stdoutSpy).toHaveBeenCalled();
+    // stdout should already have the event (cached default is "tandem", non-blocking).
+    // Verify the actual event payload reached stdout, not just any stdout write.
+    const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stdoutWrites).toMatch(/document|opened/);
+    expect(stdoutWrites).toMatch(/a\.md/);
 
     // Now resolve mode and end the stream
     modeResolve?.(new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
