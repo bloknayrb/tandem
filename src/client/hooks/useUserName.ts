@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants";
-
-const USER_NAME_EVENT = "tandem:user-name-changed";
+import { USER_NAME_DEFAULT, USER_NAME_EVENT, USER_NAME_KEY } from "../../shared/constants";
 
 export function resolveUserName(stored: string | null | undefined): string {
   return stored?.trim() || USER_NAME_DEFAULT;
 }
 
-function readStoredName(): string {
+export function readStoredName(): string {
   try {
     return resolveUserName(localStorage.getItem(USER_NAME_KEY));
   } catch {

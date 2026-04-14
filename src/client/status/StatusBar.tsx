@@ -30,9 +30,6 @@ export function StatusBar({
 }: StatusBarProps) {
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
-  useEffect(() => {
-    setNameInput(userName);
-  }, [userName]);
   const commitName = () => {
     setUserName(nameInput);
   };

@@ -31,9 +31,6 @@ export function SettingsPopover({
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
-  useEffect(() => {
-    setNameInput(userName);
-  }, [userName]);
 
   // Track viewport width for three-panel availability (only while open)
   useEffect(() => {

@@ -13,7 +13,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import React, { useCallback, useEffect } from "react";
 import * as Y from "yjs";
-import { USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants.js";
+import { readStoredName } from "../hooks/useUserName";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
@@ -61,13 +61,7 @@ export function Editor({
         CollaborationCursor.configure({
           provider: provider,
           user: {
-            name: (() => {
-              try {
-                return localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT;
-              } catch {
-                return USER_NAME_DEFAULT;
-              }
-            })(),
+            name: readStoredName(),
             color: "#f59e0b",
           },
         }),
