@@ -21,10 +21,13 @@ import type { TandemMode } from "../shared/types.js";
 
 const VALID_MODES = new Set<TandemMode>(["solo", "tandem"]);
 
-// stdout is the monitor event wire — redirect console to stderr
-console.log = console.error;
-console.warn = console.error;
-console.info = console.error;
+// Guard the redirect so test imports don't pollute vitest's console routing.
+// Production runs set VITEST !== "true".
+if (process.env.VITEST !== "true") {
+  console.log = console.error;
+  console.warn = console.error;
+  console.info = console.error;
+}
 
 const TANDEM_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
 const AWARENESS_DEBOUNCE_MS = 500;
@@ -210,6 +213,15 @@ async function connectAndStream(
   }
 }
 
+// Placeholder bindings — populated by later tasks (shutdown and mode-refresh).
+// Declared here so _resetMonitorStateForTests can reference them safely.
+const shutdownTimers: {
+  awarenessTimer: ReturnType<typeof setTimeout> | null;
+  clearAwarenessTimer: ReturnType<typeof setTimeout> | null;
+  lastDocumentId: string | null;
+} = { awarenessTimer: null, clearAwarenessTimer: null, lastDocumentId: null };
+let _modeRefreshInFlight: Promise<void> | null = null;
+
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
 
@@ -235,6 +247,25 @@ async function getCachedMode(): Promise<TandemMode> {
   // Rate-limit retries even on failure — avoid pounding the server.
   cachedModeAt = now;
   return cachedMode;
+}
+
+/**
+ * Testing-only. Resets module-level state so tests within a single file
+ * don't contaminate each other. Also strips any process signal handlers
+ * registered by previous main() calls to prevent listener accumulation
+ * (Node emits MaxListenersExceededWarning after 10).
+ *
+ * DO NOT call this from production code.
+ */
+export function _resetMonitorStateForTests(): void {
+  cachedMode = TANDEM_MODE_DEFAULT;
+  cachedModeAt = 0;
+  _modeRefreshInFlight = null;
+  shutdownTimers.awarenessTimer = null;
+  shutdownTimers.clearAwarenessTimer = null;
+  shutdownTimers.lastDocumentId = null;
+  process.removeAllListeners("SIGINT");
+  process.removeAllListeners("SIGTERM");
 }
 
 main().catch((err) => {
