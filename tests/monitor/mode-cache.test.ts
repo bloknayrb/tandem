@@ -61,6 +61,40 @@ describe("getCachedMode fail-closed", () => {
     await mod.getCachedMode();
     expect(mod.getModeSync()).toBe("solo");
   });
+
+  it("fails closed to 'solo' when /api/mode returns non-JSON (HTML)", async () => {
+    stub.on(
+      "/api/mode",
+      () =>
+        new Response("<html><body>proxy error</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }),
+    );
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("solo");
+  });
+
+  it("fails closed to 'solo' when /api/mode returns an unrecognized mode value", async () => {
+    stub.on(
+      "/api/mode",
+      () => new Response(JSON.stringify({ mode: "enterprise" }), { status: 200 }),
+    );
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("solo");
+  });
+
+  it("fails closed to 'solo' when /api/mode omits the mode field", async () => {
+    stub.on("/api/mode", () => new Response(JSON.stringify({}), { status: 200 }));
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("solo");
+  });
+
+  it("fails closed to 'solo' when /api/mode returns mode as a non-string", async () => {
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: 42 }), { status: 200 }));
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("solo");
+  });
 });
 
 describe("startup cache warm", () => {
