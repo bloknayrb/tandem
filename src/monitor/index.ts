@@ -38,6 +38,20 @@ const MODE_CACHE_TTL_MS = 2000;
 // Bound the SSE buffer so a misbehaving server that never sends frame
 // boundaries can't wedge the monitor with unbounded string growth.
 const MAX_SSE_BUFFER_BYTES = 1_000_000;
+const CONNECT_FETCH_TIMEOUT_MS = 10_000; // /api/events initial handshake
+const MODE_FETCH_TIMEOUT_MS = 2_000; // /api/mode cache refresh
+const AWARENESS_FETCH_TIMEOUT_MS = 5_000; // /api/channel-awareness POST
+const ERROR_REPORT_TIMEOUT_MS = 3_000; // /api/channel-error POST on exit
+
+// AbortSignal.timeout is supported on Node 20+; tsup target is node22.
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  return fetch(url, { ...init, signal });
+}
 
 export async function main(): Promise<void> {
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
@@ -61,14 +75,18 @@ export async function main(): Promise<void> {
       if (retries >= CHANNEL_MAX_RETRIES) {
         console.error("[Monitor] SSE connection exhausted, exiting");
         try {
-          await fetch(`${TANDEM_URL}/api/channel-error`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              error: "MONITOR_CONNECT_FAILED",
-              message: `Monitor lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
-            }),
-          });
+          await fetchWithTimeout(
+            `${TANDEM_URL}/api/channel-error`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                error: "MONITOR_CONNECT_FAILED",
+                message: `Monitor lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
+              }),
+            },
+            ERROR_REPORT_TIMEOUT_MS,
+          );
         } catch (reportErr) {
           console.error(
             "[Monitor] Could not report failure to server:",
@@ -90,7 +108,11 @@ export async function connectAndStream(
   const headers: Record<string, string> = { Accept: "text/event-stream" };
   if (lastEventId) headers["Last-Event-ID"] = lastEventId;
 
-  const res = await fetch(`${TANDEM_URL}/api/events`, { headers });
+  const res = await fetchWithTimeout(
+    `${TANDEM_URL}/api/events`,
+    { headers },
+    CONNECT_FETCH_TIMEOUT_MS,
+  );
   if (!res.ok) throw new Error(`SSE endpoint returned ${res.status}`);
   if (!res.body) throw new Error("SSE endpoint returned no body");
 
@@ -104,15 +126,19 @@ export async function connectAndStream(
   let pendingAwareness: TandemEvent | null = null;
 
   function clearAwareness(documentId?: string) {
-    fetch(`${TANDEM_URL}/api/channel-awareness`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        documentId: documentId ?? null,
-        status: "idle",
-        active: false,
-      }),
-    }).catch((err) => {
+    fetchWithTimeout(
+      `${TANDEM_URL}/api/channel-awareness`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: documentId ?? null,
+          status: "idle",
+          active: false,
+        }),
+      },
+      AWARENESS_FETCH_TIMEOUT_MS,
+    ).catch((err) => {
       console.error("[Monitor] Awareness clear failed:", err instanceof Error ? err.message : err);
     });
   }
@@ -121,15 +147,19 @@ export async function connectAndStream(
     if (!pendingAwareness) return;
     const event = pendingAwareness;
     pendingAwareness = null;
-    fetch(`${TANDEM_URL}/api/channel-awareness`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        documentId: event.documentId,
-        status: `processing: ${event.type}`,
-        active: true,
-      }),
-    }).catch((err) => {
+    fetchWithTimeout(
+      `${TANDEM_URL}/api/channel-awareness`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: event.documentId,
+          status: `processing: ${event.type}`,
+          active: true,
+        }),
+      },
+      AWARENESS_FETCH_TIMEOUT_MS,
+    ).catch((err) => {
       console.error("[Monitor] Awareness update failed:", err instanceof Error ? err.message : err);
     });
 
@@ -231,7 +261,7 @@ export async function getCachedMode(): Promise<TandemMode> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
   try {
-    const res = await fetch(`${TANDEM_URL}/api/mode`);
+    const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
     if (res.ok) {
       const body = (await res.json()) as { mode?: unknown };
       cachedMode = VALID_MODES.has(body.mode as TandemMode)
