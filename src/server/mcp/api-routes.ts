@@ -145,8 +145,18 @@ export async function runSetupHandler(
     errors.push(`Skill install: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // HTTP status reflects outcome:
+  //   200 — every attempt succeeded (at least one configured target + skill installed)
+  //   207 — partial failure (some targets configured or skill installed, but not all)
+  //   500 — total failure (no targets configured AND skill install failed)
+  const totalFailed = configured.length === 0 && !skillInstalled;
+  const anyFailed = errors.length > 0;
+  let status: number = 200;
+  if (totalFailed) status = 500;
+  else if (anyFailed) status = 207;
+
   return {
-    status: 200,
+    status,
     body: { data: { targets, configured, errors, skillInstalled } },
   };
 }
