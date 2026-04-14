@@ -56,6 +56,7 @@ async function fetchWithTimeout(
 }
 
 export async function main(): Promise<void> {
+  installShutdownHandlers();
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
 
   // Warm the mode cache before the first event so we don't default-suppress
@@ -175,6 +176,7 @@ export async function connectAndStream(
     if (!pendingAwareness) return;
     const event = pendingAwareness;
     pendingAwareness = null;
+    shutdownTimers.lastDocumentId = event.documentId ?? null;
     fetchWithTimeout(
       `${TANDEM_URL}/api/channel-awareness`,
       {
@@ -194,12 +196,14 @@ export async function connectAndStream(
     // Auto-clear after timeout so the indicator doesn't stick
     if (clearAwarenessTimer) clearTimeout(clearAwarenessTimer);
     clearAwarenessTimer = setTimeout(() => clearAwareness(event.documentId), AWARENESS_CLEAR_MS);
+    shutdownTimers.clearAwarenessTimer = clearAwarenessTimer;
   }
 
   function scheduleAwareness(event: TandemEvent) {
     pendingAwareness = event;
     if (awarenessTimer) clearTimeout(awarenessTimer);
     awarenessTimer = setTimeout(flushAwareness, AWARENESS_DEBOUNCE_MS);
+    shutdownTimers.awarenessTimer = awarenessTimer;
   }
 
   try {
@@ -290,6 +294,61 @@ const shutdownTimers: {
   lastDocumentId: string | null;
 } = { awarenessTimer: null, clearAwarenessTimer: null, lastDocumentId: null };
 let _modeRefreshInFlight: Promise<void> | null = null;
+
+async function finalClearAwareness(): Promise<void> {
+  if (shutdownTimers.awarenessTimer) clearTimeout(shutdownTimers.awarenessTimer);
+  if (shutdownTimers.clearAwarenessTimer) clearTimeout(shutdownTimers.clearAwarenessTimer);
+  // If no awareness was ever scheduled for a document, skip the POST —
+  // sending {documentId: null} is ambiguous and the server may reject it.
+  if (shutdownTimers.lastDocumentId === null) return;
+  try {
+    await fetchWithTimeout(
+      `${TANDEM_URL}/api/channel-awareness`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: shutdownTimers.lastDocumentId,
+          status: "idle",
+          active: false,
+        }),
+      },
+      AWARENESS_FETCH_TIMEOUT_MS,
+    );
+  } catch (err) {
+    console.error(
+      "[Monitor] Shutdown awareness clear failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/** Exposed for testing. Callers should NOT invoke this outside tests. */
+export async function shutdownForTests(signal: string): Promise<void> {
+  console.error(`[Monitor] Received ${signal}, clearing awareness and exiting`);
+  await finalClearAwareness();
+  process.exit(0);
+}
+
+/** Exposed for testing only — seeds the lastDocumentId that shutdown reads. */
+export function _setLastDocumentIdForTests(id: string | null): void {
+  shutdownTimers.lastDocumentId = id;
+}
+
+function installShutdownHandlers(): void {
+  // Never install real signal handlers under vitest — tests drive
+  // shutdownForTests() directly. Prevents listener accumulation and
+  // stray real-SIGINT mid-test process.exit.
+  if (process.env.VITEST === "true") return;
+  const handler = (signal: string) => {
+    shutdownForTests(signal).catch((err) => {
+      console.error("[Monitor] Shutdown handler failed:", err);
+      process.exit(1);
+    });
+  };
+  process.on("SIGINT", () => handler("SIGINT"));
+  process.on("SIGTERM", () => handler("SIGTERM"));
+}
 
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
