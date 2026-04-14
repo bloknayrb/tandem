@@ -133,7 +133,9 @@ export async function runSetupHandler(
       await applyConfig(target.configPath, entries);
       configured.push(target.label);
     } catch (err) {
-      errors.push(`${target.label}: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${target.label}: ${msg}`);
+      console.error(`[Setup] target=${target.label} failed: ${msg}`);
     }
   }
 
@@ -142,7 +144,9 @@ export async function runSetupHandler(
     await installSkill({ homeOverride });
     skillInstalled = true;
   } catch (err) {
-    errors.push(`Skill install: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Skill install: ${msg}`);
+    console.error(`[Setup] skill install failed: ${msg}`);
   }
 
   // HTTP status reflects outcome:
