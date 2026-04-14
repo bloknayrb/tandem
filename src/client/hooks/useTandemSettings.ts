@@ -47,10 +47,6 @@ const DEFAULTS: TandemSettings = {
   textSize: "m",
 };
 
-function toTextSize(raw: unknown): TextSize {
-  return raw === "s" || raw === "m" || raw === "l" ? raw : DEFAULTS.textSize;
-}
-
 /**
  * Read and normalize settings from localStorage.
  *
@@ -89,7 +85,10 @@ export function loadSettings(): TandemSettings {
         showAuthorship: parsed.showAuthorship === true,
         reduceMotion:
           typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
-        textSize: toTextSize(parsed.textSize),
+        textSize:
+          parsed.textSize === "s" || parsed.textSize === "m" || parsed.textSize === "l"
+            ? parsed.textSize
+            : DEFAULTS.textSize,
       };
     }
   } catch {
