@@ -28,47 +28,59 @@ describe("runSetupHandler — HTTP status reflects outcome", () => {
       home,
     );
     const data = result.body.data!;
-    if (data.configured.length > 0 && data.skillInstalled) {
-      expect(result.status).toBe(200);
-    }
+    expect(data.configured.length).toBeGreaterThan(0);
+    expect(data.skillInstalled).toBe(true);
+    expect(result.status).toBe(200);
   });
 
-  it("returns 500 when every target fails AND skill install fails", async () => {
-    // Block both target-config writes AND skill install by making ~/.claude a
-    // directory whose child .claude.json slot is occupied by a non-writable
-    // directory (forces applyConfig ENOTDIR/EEXIST) and ~/.claude itself is
-    // read-only (forces installSkill to fail creating the skills subtree).
-    const claudeDir = join(home, ".claude");
-    mkdirSync(claudeDir, { recursive: true });
-    // Place a directory where the .claude.json file should go.
-    mkdirSync(join(home, ".claude.json"), { recursive: true });
-    chmodSync(claudeDir, 0o500); // read+execute, no write
+  // chmod 0o500 is a no-op on Windows, so the read-only precondition required
+  // to force applyConfig/installSkill failures cannot be established. Skip on
+  // win32 rather than assert conditionally — a guard would let the test pass
+  // without exercising the 500/207 branches at all.
+  it.skipIf(process.platform === "win32")(
+    "returns 500 when every target fails AND skill install fails",
+    async () => {
+      // Block both target-config writes AND skill install by making ~/.claude a
+      // directory whose child .claude.json slot is occupied by a non-writable
+      // directory (forces applyConfig ENOTDIR/EEXIST) and ~/.claude itself is
+      // read-only (forces installSkill to fail creating the skills subtree).
+      const claudeDir = join(home, ".claude");
+      mkdirSync(claudeDir, { recursive: true });
+      // Place a directory where the .claude.json file should go.
+      mkdirSync(join(home, ".claude.json"), { recursive: true });
+      chmodSync(claudeDir, 0o500); // read+execute, no write
 
-    const result = await runSetupHandler(
-      { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
-      home,
-    );
-    const data = result.body.data!;
-    if (data.configured.length === 0 && !data.skillInstalled) {
+      const result = await runSetupHandler(
+        { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
+        home,
+      );
+      const data = result.body.data!;
+      expect(data.configured.length).toBe(0);
+      expect(data.skillInstalled).toBe(false);
       expect(result.status).toBe(500);
       expect(data.errors.length).toBeGreaterThan(0);
-    }
-  });
+      expect(data.errors.some((e) => e.startsWith("Skill install:"))).toBe(true);
+    },
+  );
 
-  it("returns 207 when at least one attempt succeeds but another failed", async () => {
-    // Make ~/.claude readonly to block skill install while leaving target
-    // config writes possible (claude.json at a writable tmp location).
-    const claudeDir = join(home, ".claude");
-    mkdirSync(claudeDir, { recursive: true });
-    chmodSync(claudeDir, 0o500);
+  it.skipIf(process.platform === "win32")(
+    "returns 207 when at least one attempt succeeds but another failed",
+    async () => {
+      // Make ~/.claude readonly to block skill install while leaving target
+      // config writes possible (claude.json at a writable tmp location).
+      const claudeDir = join(home, ".claude");
+      mkdirSync(claudeDir, { recursive: true });
+      chmodSync(claudeDir, 0o500);
 
-    const result = await runSetupHandler(
-      { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
-      home,
-    );
-    const data = result.body.data!;
-    if (data.configured.length > 0 && !data.skillInstalled) {
+      const result = await runSetupHandler(
+        { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
+        home,
+      );
+      const data = result.body.data!;
+      expect(data.configured.length).toBeGreaterThan(0);
+      expect(data.skillInstalled).toBe(false);
       expect(result.status).toBe(207);
-    }
-  });
+      expect(data.errors.length).toBeGreaterThan(0);
+    },
+  );
 });
