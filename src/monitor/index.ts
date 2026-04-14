@@ -7,6 +7,15 @@
  *
  * Replaces the channel shim for event delivery without requiring
  * --dangerously-load-development-channels.
+ *
+ * **STDOUT IS RESERVED** (CLAUDE.md rule #3). The only writes to stdout are
+ * the formatted event notification inside `connectAndStream` and the
+ * exhaustion notice inside `main`. Everything else — including anything that
+ * would otherwise call `console.log/warn/info` — is redirected to stderr by
+ * the guard immediately below this comment. When adding a new dependency,
+ * grep its source for `process.stdout.write` and `console.log` before
+ * accepting; a stdout-writing dep bundled into this file would corrupt the
+ * plugin-host line protocol silently.
  */
 
 import { resolve as resolvePath } from "node:path";
