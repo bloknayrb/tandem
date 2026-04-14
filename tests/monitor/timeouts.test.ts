@@ -36,3 +36,36 @@ describe("fetch timeout", () => {
     expect(mode).toBe("solo");
   });
 });
+
+describe("mode cache under clock skew", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+
+  beforeEach(async () => {
+    installMonitorFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("backward Date.now() jump does not wedge the mode cache permanently", async () => {
+    const mod = await import("../../src/monitor/index.js");
+    expect(await mod.getCachedMode()).toBe("tandem");
+
+    const realNow = Date.now;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() - 60 * 60 * 1000);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await mod.getCachedMode()).toBe("tandem"); // stuck-but-safe
+
+    vi.restoreAllMocks();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await mod.getCachedMode()).toBe("tandem"); // recovers
+  });
+});
