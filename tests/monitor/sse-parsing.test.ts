@@ -70,6 +70,26 @@ describe("SSE parsing error isolation", () => {
     expect(msgs.some((m) => m.includes("JSON") || m.includes("parse"))).toBe(true);
     errSpy.mockRestore();
   });
+
+  it("handles a frame split across multiple chunks (decoder.decode stream: true)", async () => {
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId);
+
+    const payload = JSON.stringify({
+      id: "split",
+      type: "chat:message",
+      timestamp: 1,
+      payload: { messageId: "m", text: "hi", replyTo: null, anchor: null },
+    });
+    const frame = `id: split\ndata: ${payload}\n\n`;
+    stream.push(frame.slice(0, 15));
+    stream.push(frame.slice(15, 40));
+    stream.push(frame.slice(40));
+    stream.end();
+
+    await promise.catch(() => {});
+    expect(onEventId).toHaveBeenCalledWith("split");
+  });
 });
 
 describe("SSE buffer overflow", () => {
