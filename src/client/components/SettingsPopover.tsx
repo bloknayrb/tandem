@@ -37,6 +37,7 @@ export function SettingsPopover({
 }: SettingsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const threePanelDisabled = viewportWidth < 768;
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
 
@@ -49,6 +50,7 @@ export function SettingsPopover({
     settings.layout,
     ["tabbed", "three-panel"] as const,
     (l) => onUpdate({ layout: l }),
+    (l) => l === "three-panel" && threePanelDisabled,
   );
   const primaryTabRg = useRadioGroup<PrimaryTab>(
     settings.primaryTab,
@@ -133,8 +135,6 @@ export function SettingsPopover({
   }, [open, onClose]);
 
   if (!open || !anchorRect) return null;
-
-  const threePanelDisabled = viewportWidth < 768;
 
   // Position below the anchor, centered horizontally
   const left = Math.max(
@@ -284,7 +284,6 @@ export function SettingsPopover({
             <button
               key={t}
               data-testid={`theme-${t}-btn`}
-              data-radio-value={t}
               role="radio"
               aria-checked={settings.theme === t}
               tabIndex={themeRg.tabIndexFor(t)}
@@ -310,7 +309,6 @@ export function SettingsPopover({
         >
           <button
             data-testid="layout-tabbed-btn"
-            data-radio-value="tabbed"
             role="radio"
             aria-checked={settings.layout === "tabbed"}
             tabIndex={layoutRg.tabIndexFor("tabbed")}
@@ -322,7 +320,6 @@ export function SettingsPopover({
           </button>
           <button
             data-testid="layout-three-panel-btn"
-            data-radio-value="three-panel"
             role="radio"
             aria-checked={settings.layout === "three-panel"}
             aria-disabled={threePanelDisabled || undefined}
@@ -358,7 +355,6 @@ export function SettingsPopover({
           >
             <button
               data-testid="default-tab-chat-btn"
-              data-radio-value="chat"
               role="radio"
               aria-checked={settings.primaryTab === "chat"}
               tabIndex={primaryTabRg.tabIndexFor("chat")}
@@ -369,7 +365,6 @@ export function SettingsPopover({
             </button>
             <button
               data-testid="default-tab-annotations-btn"
-              data-radio-value="annotations"
               role="radio"
               aria-checked={settings.primaryTab === "annotations"}
               tabIndex={primaryTabRg.tabIndexFor("annotations")}
@@ -396,7 +391,6 @@ export function SettingsPopover({
           >
             <button
               data-testid="panel-order-cea-btn"
-              data-radio-value="chat-editor-annotations"
               role="radio"
               aria-checked={settings.panelOrder === "chat-editor-annotations"}
               tabIndex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
@@ -407,7 +401,6 @@ export function SettingsPopover({
             </button>
             <button
               data-testid="panel-order-aec-btn"
-              data-radio-value="annotations-editor-chat"
               role="radio"
               aria-checked={settings.panelOrder === "annotations-editor-chat"}
               tabIndex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
@@ -498,7 +491,6 @@ export function SettingsPopover({
             <button
               key={size}
               data-testid={`text-size-${size}-btn`}
-              data-radio-value={size}
               role="radio"
               aria-checked={settings.textSize === size}
               tabIndex={textSizeRg.tabIndexFor(size)}

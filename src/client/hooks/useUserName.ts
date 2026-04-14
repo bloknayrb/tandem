@@ -33,6 +33,23 @@ export function persistUserName(name: string): string {
 }
 
 /**
+ * Subscribe to display-name changes from any source (in-tab via the custom
+ * event, cross-tab via storage). Returns an unsubscribe function.
+ */
+export function subscribeToUserName(onChange: (name: string) => void): () => void {
+  const onCustom = () => onChange(readStoredName());
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === USER_NAME_KEY) onChange(resolveUserName(e.newValue));
+  };
+  window.addEventListener(USER_NAME_EVENT, onCustom);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(USER_NAME_EVENT, onCustom);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+/**
  * Shared display-name state. Persists to localStorage and broadcasts via a
  * custom event so every in-tab subscriber updates together; the `storage`
  * event covers cross-tab.
@@ -43,19 +60,7 @@ export function useUserName(): {
 } {
   const [userName, setUserNameState] = useState(readStoredName);
 
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== USER_NAME_KEY) return;
-      setUserNameState(resolveUserName(e.newValue));
-    };
-    const onCustom = () => setUserNameState(readStoredName());
-    window.addEventListener("storage", onStorage);
-    window.addEventListener(USER_NAME_EVENT, onCustom);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener(USER_NAME_EVENT, onCustom);
-    };
-  }, []);
+  useEffect(() => subscribeToUserName(setUserNameState), []);
 
   const setUserName = useCallback((next: string) => {
     const trimmed = persistUserName(next);

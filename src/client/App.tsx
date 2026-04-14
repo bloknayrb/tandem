@@ -254,9 +254,8 @@ export default function App() {
   const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  const openSettings = useCallback(() => {
-    const rect = settingsBtnRef.current?.getBoundingClientRect() ?? null;
-    setSettingsAnchor(rect);
+  const openAtButton = useCallback(() => {
+    setSettingsAnchor(settingsBtnRef.current?.getBoundingClientRect() ?? null);
     setSettingsOpen(true);
   }, []);
   const settingsOpenRef = useRef(settingsOpen);
@@ -266,10 +265,8 @@ export default function App() {
       setSettingsOpen(false);
       return;
     }
-    const rect = settingsBtnRef.current?.getBoundingClientRect() ?? null;
-    setSettingsAnchor(rect);
-    setSettingsOpen(true);
-  }, []);
+    openAtButton();
+  }, [openAtButton]);
   useSettingsShortcut(toggleSettings);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
@@ -511,7 +508,7 @@ export default function App() {
       <Toolbar
         editor={editorRef.current}
         ydoc={activeTab?.ydoc ?? null}
-        onSettingsOpen={openSettings}
+        onSettingsOpen={openAtButton}
         settingsBtnRef={settingsBtnRef}
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
