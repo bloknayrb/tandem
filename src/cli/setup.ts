@@ -172,11 +172,28 @@ export async function installSkill(opts: { homeOverride?: string } = {}): Promis
   await atomicWrite(SKILL_CONTENT, skillPath);
 }
 
+/**
+ * Returns true if the channel-shim build artifact exists at the given path.
+ * Exported so the prereq check can be tested without spawning runSetup.
+ */
+export function validateChannelShimPrereq(channelPath: string): boolean {
+  return existsSync(channelPath);
+}
+
 /** Run the setup command. Writes MCP config to all detected Claude installs. */
 export async function runSetup(
   opts: { force?: boolean; withChannelShim?: boolean } = {},
 ): Promise<void> {
   console.error("\nTandem Setup\n");
+
+  if (opts.withChannelShim && !validateChannelShimPrereq(CHANNEL_DIST)) {
+    console.error(
+      `Error: --with-channel-shim requires dist/channel/index.js at ${CHANNEL_DIST}\n` +
+        `Run 'npm run build' first, or drop --with-channel-shim to use the plugin monitor.`,
+    );
+    process.exit(1);
+  }
+
   console.error("Detecting Claude installations...");
 
   const targets = detectTargets({ force: opts.force });
