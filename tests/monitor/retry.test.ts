@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { main } from "../../src/monitor/index.js";
+import { connectAndStream, main } from "../../src/monitor/index.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -138,6 +138,16 @@ describe("retry counter semantics", () => {
     // Drain remaining retries so main() exits via the MAX branch.
     await vi.advanceTimersByTimeAsync(200_000);
     await p;
+  });
+
+  it("503 response does not leak handshake/stable/watchdog timers", async () => {
+    const beforeTimerCount = vi.getTimerCount();
+    stub.on("/api/events", () => new Response("", { status: 503 }));
+
+    await connectAndStream(undefined, () => {}).catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(beforeTimerCount);
   });
 });
 
