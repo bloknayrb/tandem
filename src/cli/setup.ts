@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { SKILL_CONTENT } from "./skill-content.js";
@@ -140,9 +140,24 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
     if (code === "ENOENT") {
       // File doesn't exist yet — start fresh
     } else if (err instanceof SyntaxError) {
-      console.error(
-        `  Warning: ${configPath} contains malformed JSON — replacing with fresh config`,
-      );
+      // Don't silently wipe the user's other mcpServers. Copy the malformed
+      // file to a .broken-<ts> sibling first so they can recover it. If the
+      // backup itself fails, refuse to overwrite — runSetup's per-target
+      // try/catch reports the partial failure.
+      const backupPath = `${configPath}.broken-${Date.now()}`;
+      try {
+        await copyFile(configPath, backupPath);
+        console.error(
+          `  Warning: ${configPath} contains malformed JSON — backed up to ${basename(backupPath)}, replacing with fresh config`,
+        );
+      } catch (copyErr) {
+        console.error(
+          `  Warning: ${configPath} contains malformed JSON and backup failed (${
+            copyErr instanceof Error ? copyErr.message : copyErr
+          }) — refusing to overwrite. Fix the JSON manually and rerun 'tandem setup'.`,
+        );
+        throw copyErr;
+      }
     } else {
       throw err; // Permission errors, disk errors, etc. should not be silently swallowed
     }
