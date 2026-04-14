@@ -38,12 +38,12 @@ Standard workflow:
 
 Choose the right type for each finding:
 
-- **`tandem_highlight`** — Visual marker with a short note. Colors: green (verified/good), red (problem), yellow (needs attention). Use when the finding is self-evident from the color and a brief note.
+- **`tandem_highlight`** — Visual marker with a short note. Colors (full set): `green` (verified/good), `red` (problem), `yellow` (needs attention), `blue` (informational), `purple` (style/tone). Prefer the first three for review work; `blue`/`purple` are available when a fourth/fifth category is meaningful. Use when the finding is self-evident from the color and a brief note.
 - **`tandem_comment`** — Observation requiring explanation. Use when you need more than one sentence to convey reasoning.
 - **`tandem_suggest`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
 - **`tandem_flag`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
 
-**User-created types:** `question` annotation is created by users, not Claude. When you see a `question` in `tandem_checkInbox` or `tandem_getAnnotations`, respond with a `tandem_comment` on the same range or `tandem_reply` for conversational answers.
+**User questions to Claude.** Users can author a "question" annotation in the UI. The server normalizes it to `type: "comment"` with `directedAt: "claude"` before returning it — so when scanning `tandem_checkInbox` or `tandem_getAnnotations`, match on `type === "comment" && directedAt === "claude" && author === "user"`, not `type === "question"`. Respond with `tandem_reply` for conversational answers, or a new `tandem_comment` on the same range for a textual annotation.
 
 ## Collaboration Mode
 
