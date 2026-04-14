@@ -13,7 +13,8 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import React, { useCallback, useEffect } from "react";
 import * as Y from "yjs";
-import { readStoredName } from "../hooks/useUserName";
+import { USER_NAME_EVENT, USER_NAME_KEY } from "../../shared/constants.js";
+import { readStoredName, resolveUserName } from "../hooks/useUserName";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
@@ -86,6 +87,24 @@ export function Editor({
       editor.setEditable(!readOnly);
     }
   }, [editor, readOnly]);
+
+  // Keep the CollaborationCursor label in sync with the display name. The
+  // cursor user is captured at editor creation, so a later name edit from
+  // StatusBar or Settings won't propagate without this subscription.
+  useEffect(() => {
+    if (!editor) return;
+    const sync = () => editor.commands.updateUser({ name: readStoredName() });
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === USER_NAME_KEY)
+        editor.commands.updateUser({ name: resolveUserName(e.newValue) });
+    };
+    window.addEventListener(USER_NAME_EVENT, sync);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(USER_NAME_EVENT, sync);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [editor]);
 
   useEffect(() => {
     onEditorReady?.(editor);

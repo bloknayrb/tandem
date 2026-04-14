@@ -259,7 +259,18 @@ export default function App() {
     setSettingsAnchor(rect);
     setSettingsOpen(true);
   }, []);
-  useSettingsShortcut(openSettings);
+  const settingsOpenRef = useRef(settingsOpen);
+  settingsOpenRef.current = settingsOpen;
+  const toggleSettings = useCallback(() => {
+    if (settingsOpenRef.current) {
+      setSettingsOpen(false);
+      return;
+    }
+    const rect = settingsBtnRef.current?.getBoundingClientRect() ?? null;
+    setSettingsAnchor(rect);
+    setSettingsOpen(true);
+  }, []);
+  useSettingsShortcut(toggleSettings);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
   useEffect(() => {
@@ -290,8 +301,7 @@ export default function App() {
   useTheme(settings.theme);
 
   // Expose editor font-size as a CSS custom property so the editor style
-  // picks it up without recreating the Tiptap instance. Reading-density
-  // convenience only — browser zoom (Ctrl+=/-) remains the WCAG 1.4.4 path.
+  // picks it up without recreating the Tiptap instance.
   useEffect(() => {
     const px = TEXT_SIZE_PX[settings.textSize];
     document.documentElement.style.setProperty("--tandem-editor-font-size", `${px}px`);

@@ -32,13 +32,9 @@ describe("isSettingsShortcut", () => {
   });
 
   it("accepts shifted form (QWERTZ users must Shift to reach comma)", () => {
-    expect(
-      isSettingsShortcut({
-        code: "Comma",
-        ctrlKey: true,
-        metaKey: false,
-        isComposing: false,
-      }),
-    ).toBe(true);
+    // The matcher doesn't gate on shiftKey, so Ctrl+Shift+Comma still matches.
+    // Pick<> doesn't include shiftKey, so this test documents intent: the
+    // matcher is Shift-agnostic by design.
+    expect(isSettingsShortcut(evt({ ctrlKey: true }))).toBe(true);
   });
 });

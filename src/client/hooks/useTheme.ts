@@ -3,7 +3,7 @@ import type { ThemePreference } from "./useTandemSettings";
 
 export type ResolvedTheme = "light" | "dark";
 
-function systemTheme(): ResolvedTheme {
+export function systemTheme(): ResolvedTheme {
   try {
     if (typeof window === "undefined") return "light";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -12,7 +12,7 @@ function systemTheme(): ResolvedTheme {
   }
 }
 
-function resolve(pref: ThemePreference): ResolvedTheme {
+export function resolveTheme(pref: ThemePreference): ResolvedTheme {
   return pref === "system" ? systemTheme() : pref;
 }
 
@@ -25,7 +25,7 @@ function resolve(pref: ThemePreference): ResolvedTheme {
 export function useTheme(pref: ThemePreference): void {
   useEffect(() => {
     const root = document.documentElement;
-    root.setAttribute("data-theme", resolve(pref));
+    root.setAttribute("data-theme", resolveTheme(pref));
 
     if (pref !== "system") {
       return () => root.removeAttribute("data-theme");

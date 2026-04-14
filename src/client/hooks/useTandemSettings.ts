@@ -60,9 +60,15 @@ const DEFAULTS: TandemSettings = {
  * intentional — `0` is not a valid dwell or width anyway).
  */
 export function loadSettings(): TandemSettings {
+  let saved: string | null;
   try {
-    const saved = localStorage.getItem(TANDEM_SETTINGS_KEY);
-    if (saved) {
+    saved = localStorage.getItem(TANDEM_SETTINGS_KEY);
+  } catch {
+    // localStorage unavailable (incognito/storage-disabled) — fall through.
+    saved = null;
+  }
+  if (saved) {
+    try {
       const parsed = JSON.parse(saved);
       return {
         layout:
@@ -97,9 +103,11 @@ export function loadSettings(): TandemSettings {
             ? parsed.theme
             : DEFAULTS.theme,
       };
+    } catch (err) {
+      // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
+      // of silently clobbered on the next write.
+      console.warn("[tandem] settings JSON is corrupt, resetting to defaults:", err);
     }
-  } catch {
-    // localStorage unavailable (incognito/storage-disabled)
   }
   return { ...DEFAULTS, reduceMotion: prefersReducedMotion() };
 }

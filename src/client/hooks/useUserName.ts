@@ -13,12 +13,23 @@ export function readStoredName(): string {
   }
 }
 
-function writeStoredName(name: string): void {
+/**
+ * Persist a display name to localStorage and broadcast the change so other
+ * hook instances (StatusBar, Settings popover, Editor cursor) pick it up
+ * in-tab. Pure — no React — so the write+notify contract is testable.
+ * Returns the trimmed value actually written.
+ */
+export function persistUserName(name: string): string {
+  const trimmed = resolveUserName(name);
   try {
-    localStorage.setItem(USER_NAME_KEY, name);
+    localStorage.setItem(USER_NAME_KEY, trimmed);
   } catch {
     // localStorage unavailable (incognito/storage-disabled) — in-memory only.
   }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(USER_NAME_EVENT));
+  }
+  return trimmed;
 }
 
 /**
@@ -47,10 +58,8 @@ export function useUserName(): {
   }, []);
 
   const setUserName = useCallback((next: string) => {
-    const trimmed = resolveUserName(next);
-    writeStoredName(trimmed);
+    const trimmed = persistUserName(next);
     setUserNameState(trimmed);
-    window.dispatchEvent(new Event(USER_NAME_EVENT));
   }, []);
 
   return { userName, setUserName };

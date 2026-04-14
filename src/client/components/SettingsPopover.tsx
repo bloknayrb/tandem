@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../shared/constants";
-import type { TandemSettings } from "../hooks/useTandemSettings";
+import { useRadioGroup } from "../hooks/useRadioGroup";
+import type {
+  LayoutMode,
+  PanelOrder,
+  PrimaryTab,
+  TandemSettings,
+  TextSize,
+  ThemePreference,
+} from "../hooks/useTandemSettings";
 import { useUserName } from "../hooks/useUserName";
 
 interface SettingsPopoverProps {
@@ -31,6 +39,30 @@ export function SettingsPopover({
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
+
+  const themeRg = useRadioGroup<ThemePreference>(
+    settings.theme,
+    ["light", "dark", "system"] as const,
+    (t) => onUpdate({ theme: t }),
+  );
+  const layoutRg = useRadioGroup<LayoutMode>(
+    settings.layout,
+    ["tabbed", "three-panel"] as const,
+    (l) => onUpdate({ layout: l }),
+  );
+  const primaryTabRg = useRadioGroup<PrimaryTab>(
+    settings.primaryTab,
+    ["chat", "annotations"] as const,
+    (p) => onUpdate({ primaryTab: p }),
+  );
+  const panelOrderRg = useRadioGroup<PanelOrder>(
+    settings.panelOrder,
+    ["chat-editor-annotations", "annotations-editor-chat"] as const,
+    (p) => onUpdate({ panelOrder: p }),
+  );
+  const textSizeRg = useRadioGroup<TextSize>(settings.textSize, ["s", "m", "l"] as const, (t) =>
+    onUpdate({ textSize: t }),
+  );
 
   // Track viewport width for three-panel availability (only while open)
   useEffect(() => {
@@ -206,7 +238,6 @@ export function SettingsPopover({
         </button>
       </div>
 
-      {/* Display name */}
       <div>
         <label htmlFor="settings-display-name" style={sectionLabelStyle}>
           Display Name
@@ -239,7 +270,6 @@ export function SettingsPopover({
         />
       </div>
 
-      {/* Theme */}
       <div>
         <div id="settings-theme-label" style={sectionLabelStyle}>
           Theme
@@ -247,14 +277,17 @@ export function SettingsPopover({
         <div
           role="radiogroup"
           aria-labelledby="settings-theme-label"
+          onKeyDown={themeRg.handleKeyDown}
           style={{ display: "flex", gap: "8px" }}
         >
           {(["light", "dark", "system"] as const).map((t) => (
             <button
               key={t}
               data-testid={`theme-${t}-btn`}
+              data-radio-value={t}
               role="radio"
               aria-checked={settings.theme === t}
+              tabIndex={themeRg.tabIndexFor(t)}
               onClick={() => onUpdate({ theme: t })}
               style={cardStyle(settings.theme === t)}
             >
@@ -272,12 +305,15 @@ export function SettingsPopover({
         <div
           role="radiogroup"
           aria-labelledby="settings-layout-label"
+          onKeyDown={layoutRg.handleKeyDown}
           style={{ display: "flex", gap: "8px" }}
         >
           <button
             data-testid="layout-tabbed-btn"
+            data-radio-value="tabbed"
             role="radio"
             aria-checked={settings.layout === "tabbed"}
+            tabIndex={layoutRg.tabIndexFor("tabbed")}
             onClick={() => onUpdate({ layout: "tabbed" })}
             style={cardStyle(settings.layout === "tabbed")}
           >
@@ -286,9 +322,11 @@ export function SettingsPopover({
           </button>
           <button
             data-testid="layout-three-panel-btn"
+            data-radio-value="three-panel"
             role="radio"
             aria-checked={settings.layout === "three-panel"}
             aria-disabled={threePanelDisabled || undefined}
+            tabIndex={layoutRg.tabIndexFor("three-panel")}
             onClick={() => {
               if (!threePanelDisabled) onUpdate({ layout: "three-panel" });
             }}
@@ -315,12 +353,15 @@ export function SettingsPopover({
           <div
             role="radiogroup"
             aria-labelledby="settings-default-tab-label"
+            onKeyDown={primaryTabRg.handleKeyDown}
             style={{ display: "flex", gap: "8px" }}
           >
             <button
               data-testid="default-tab-chat-btn"
+              data-radio-value="chat"
               role="radio"
               aria-checked={settings.primaryTab === "chat"}
+              tabIndex={primaryTabRg.tabIndexFor("chat")}
               onClick={() => onUpdate({ primaryTab: "chat" })}
               style={cardStyle(settings.primaryTab === "chat")}
             >
@@ -328,8 +369,10 @@ export function SettingsPopover({
             </button>
             <button
               data-testid="default-tab-annotations-btn"
+              data-radio-value="annotations"
               role="radio"
               aria-checked={settings.primaryTab === "annotations"}
+              tabIndex={primaryTabRg.tabIndexFor("annotations")}
               onClick={() => onUpdate({ primaryTab: "annotations" })}
               style={cardStyle(settings.primaryTab === "annotations")}
             >
@@ -348,12 +391,15 @@ export function SettingsPopover({
           <div
             role="radiogroup"
             aria-labelledby="settings-panel-order-label"
+            onKeyDown={panelOrderRg.handleKeyDown}
             style={{ display: "flex", gap: "8px" }}
           >
             <button
               data-testid="panel-order-cea-btn"
+              data-radio-value="chat-editor-annotations"
               role="radio"
               aria-checked={settings.panelOrder === "chat-editor-annotations"}
+              tabIndex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
               onClick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
               style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
             >
@@ -361,8 +407,10 @@ export function SettingsPopover({
             </button>
             <button
               data-testid="panel-order-aec-btn"
+              data-radio-value="annotations-editor-chat"
               role="radio"
               aria-checked={settings.panelOrder === "annotations-editor-chat"}
+              tabIndex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
               onClick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
               style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
             >
@@ -436,7 +484,6 @@ export function SettingsPopover({
         </div>
       </div>
 
-      {/* Text size */}
       <div>
         <div id="settings-text-size-label" style={sectionLabelStyle}>
           Text Size
@@ -444,14 +491,17 @@ export function SettingsPopover({
         <div
           role="radiogroup"
           aria-labelledby="settings-text-size-label"
+          onKeyDown={textSizeRg.handleKeyDown}
           style={{ display: "flex", gap: "8px" }}
         >
           {(["s", "m", "l"] as const).map((size) => (
             <button
               key={size}
               data-testid={`text-size-${size}-btn`}
+              data-radio-value={size}
               role="radio"
               aria-checked={settings.textSize === size}
+              tabIndex={textSizeRg.tabIndexFor(size)}
               onClick={() => onUpdate({ textSize: size })}
               style={cardStyle(settings.textSize === size)}
             >
@@ -464,7 +514,6 @@ export function SettingsPopover({
         </div>
       </div>
 
-      {/* Reduce motion */}
       <div>
         <label
           data-testid="reduce-motion-toggle"
