@@ -383,3 +383,59 @@ Initial attempts to filter at the bridge and server levels had no effect because
 **Solution:** Export a `_resetForTests()` helper from any module with stateful singletons and call it in every `beforeEach`. Guard module-level side effects behind `process.env.VITEST !== "true"` so importing the module in a test context doesn't activate production behavior.
 
 **Key insight:** Vitest's module isolation boundary is the test file, not the test. Treat module-level state the same way you treat global DOM state in browser tests — reset it explicitly, don't assume isolation.
+
+## 42. AbortSignal Passed to fetch Governs the Response Body Too
+
+**Problem:** `fetchWithTimeout(..., CONNECT_FETCH_TIMEOUT_MS)` wrapped the `/api/events` fetch with `AbortSignal.timeout(10_000)` intending a 10s *handshake* budget. But undici's `AbortSignal` governs the *entire* response lifecycle including the body `ReadableStream`, so every SSE stream aborted at 10s. The 60s `STABLE_CONNECTION_MS` retry reset was unreachable — no connection ever stayed up long enough to qualify as "stable."
+
+**Fix:** Split handshake timeout from stream lifetime. Use a local `AbortController` + `setTimeout` that is cleared as soon as the fetch settles, then install a separate inactivity watchdog that resets `lastActivityAt` on each successful `reader.read()`:
+
+```ts
+const connectCtrl = new AbortController();
+const connectTimer = setTimeout(() => connectCtrl.abort(), CONNECT_FETCH_TIMEOUT_MS);
+let res: Response;
+try {
+  res = await fetch(url, { headers, signal: connectCtrl.signal });
+} finally {
+  clearTimeout(connectTimer);
+}
+```
+
+**Follow-on gotcha:** `reader.cancel(reason)` resolves the pending `read()` with `{done: true}` — it does NOT reject, and the `reason` argument is not surfaced to the caller. To propagate the cause (e.g., "was this a natural end-of-stream or a watchdog cancel?"), set a local flag before cancelling and branch on it after `done: true`:
+
+```ts
+let inactivityTimedOut = false;
+const watchdog = setInterval(() => {
+  if (Date.now() - lastActivityAt > SSE_INACTIVITY_TIMEOUT_MS) {
+    inactivityTimedOut = true;
+    reader.cancel().catch(() => {});
+  }
+}, SSE_INACTIVITY_TIMEOUT_MS / 4);
+// ...
+if (done) throw inactivityTimedOut ? new Error("SSE inactivity timeout") : new Error("SSE stream ended");
+```
+
+**Key insight:** `AbortSignal` on fetch is an all-or-nothing contract — it doesn't distinguish "connect" from "read" the way curl's `--connect-timeout` vs `--max-time` do. If you want separable timeouts, split handshake and body into two mechanisms (controller + watchdog). Streaming clients always need the split.
+
+## 43. Fire-and-Forget POSTs Must Be Drained Before process.exit
+
+**Problem:** `clearAwareness` and `flushAwareness` issued `fetch(...).catch(...)` without awaiting — the standard fire-and-forget pattern for best-effort telemetry. But under SIGINT, the shutdown handler called `process.exit(0)` while those POSTs were still in flight. The server saw a stale `active: true` update as the last awareness message, not the shutdown `active: false` clear.
+
+**Fix:** Track outstanding POSTs in a module-level `Set<Promise<unknown>>`, add each on issue, remove in `.finally()`. The shutdown handler `Promise.allSettled`s the set before issuing its own clear:
+
+```ts
+const outstandingAwareness = new Set<Promise<unknown>>();
+function trackAwareness(p: Promise<unknown>): void {
+  outstandingAwareness.add(p);
+  p.finally(() => outstandingAwareness.delete(p));
+}
+
+async function finalClearAwareness(): Promise<void> {
+  if (outstandingAwareness.size > 0) await Promise.allSettled(outstandingAwareness);
+  // ... issue shutdown clear
+}
+```
+
+The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `.catch()` is needed.
+
+**Key insight:** Fire-and-forget is only safe inside a process that will keep running. The moment you introduce a shutdown path, fire-and-forget becomes fire-and-lose. Any side effect whose ordering matters relative to exit needs a drain set. Corollary: the `AWARENESS_FETCH_TIMEOUT_MS` bound on each individual POST is what keeps the drain itself bounded — shutdown can't hang forever on a stuck server.
