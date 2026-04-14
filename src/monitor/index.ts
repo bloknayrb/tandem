@@ -221,7 +221,10 @@ export async function connectAndStream(
     if (!pendingAwareness) return;
     const event = pendingAwareness;
     pendingAwareness = null;
-    shutdownTimers.lastDocumentId = event.documentId ?? null;
+    // Only update when the event has a real documentId. A doc-less event
+    // (e.g. chat:message) must NOT wipe the last-known docId — finalClearAwareness
+    // needs a non-null id to send the shutdown clear.
+    if (event.documentId) shutdownTimers.lastDocumentId = event.documentId;
     const p = fetchWithTimeout(
       `${TANDEM_URL}/api/channel-awareness`,
       {
@@ -406,6 +409,11 @@ export const shutdownForTests = shutdownMonitor;
 /** Exposed for testing only — seeds the lastDocumentId that shutdown reads. */
 export function _setLastDocumentIdForTests(id: string | null): void {
   shutdownTimers.lastDocumentId = id;
+}
+
+/** Exposed for testing only — reads the last document id that shutdown would send. */
+export function _getLastDocumentIdForTests(): string | null {
+  return shutdownTimers.lastDocumentId;
 }
 
 /** Exposed for testing only — seeds an outstanding awareness POST so the
