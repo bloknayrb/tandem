@@ -352,8 +352,9 @@ export async function connectAndStream(
   }
 }
 
-// Placeholder bindings — populated by later tasks (shutdown and mode-refresh).
-// Declared here so _resetMonitorStateForTests can reference them safely.
+// Module-level shutdown timers + mode-refresh lock. Declared at module scope
+// so _resetMonitorStateForTests can clear them in a single call and
+// finalClearAwareness can flush them from the signal handler.
 const shutdownTimers: {
   awarenessTimer: ReturnType<typeof setTimeout> | null;
   clearAwarenessTimer: ReturnType<typeof setTimeout> | null;
