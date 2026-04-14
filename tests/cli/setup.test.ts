@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -135,6 +143,18 @@ describe("applyConfig", () => {
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toBeDefined();
     expect(Object.keys(written)).toEqual(["mcpServers"]);
+  });
+
+  it("backs up malformed .claude.json before overwriting", async () => {
+    const configPath = join(tmpDir, ".claude.json");
+    const badContent = "{ malformed }";
+    writeFileSync(configPath, badContent);
+    const entries = buildMcpEntries("/fake/channel/index.js");
+    await applyConfig(configPath, entries);
+
+    const backups = readdirSync(tmpDir).filter((n) => n.startsWith(".claude.json.broken-"));
+    expect(backups.length).toBe(1);
+    expect(readFileSync(join(tmpDir, backups[0]!), "utf-8")).toBe(badContent);
   });
 
   it("propagates permission errors instead of silently swallowing", async () => {
