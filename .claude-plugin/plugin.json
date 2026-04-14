@@ -1,7 +1,7 @@
 {
   "name": "tandem",
   "version": "0.5.1",
-  "description": "Collaborative AI-human document editor with real-time event push",
+  "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
   "author": {
     "name": "Tandem"
   },
