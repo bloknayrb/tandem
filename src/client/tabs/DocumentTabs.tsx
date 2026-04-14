@@ -9,6 +9,7 @@ interface DocumentTabsProps {
   onTabSwitch: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
   reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
+  reduceMotion?: boolean;
 }
 
 const FORMAT_ICONS: Record<string, string> = {
@@ -203,7 +204,9 @@ export function DocumentTabs({
   onTabSwitch,
   onTabClose,
   reorder,
+  reduceMotion,
 }: DocumentTabsProps) {
+  const scrollBehavior: ScrollBehavior = reduceMotion ? "auto" : "smooth";
   const [showDialog, setShowDialog] = useState(false);
   /** Prevent double-click on close button from firing multiple close requests. */
   const closingIdsRef = useRef<Set<string>>(new Set());
@@ -270,10 +273,10 @@ export function DocumentTabs({
       (el as HTMLElement).scrollIntoView({
         inline: "nearest",
         block: "nearest",
-        behavior: "smooth",
+        behavior: scrollBehavior,
       });
     }
-  }, [activeTabId]);
+  }, [activeTabId, scrollBehavior]);
 
   // Clear drag state when tab list changes mid-drag
   useEffect(() => {
@@ -348,12 +351,12 @@ export function DocumentTabs({
   );
 
   const scrollLeft = useCallback(() => {
-    scrollRef.current?.scrollBy({ left: -150, behavior: "smooth" });
-  }, []);
+    scrollRef.current?.scrollBy({ left: -150, behavior: scrollBehavior });
+  }, [scrollBehavior]);
 
   const scrollRight = useCallback(() => {
-    scrollRef.current?.scrollBy({ left: 150, behavior: "smooth" });
-  }, []);
+    scrollRef.current?.scrollBy({ left: 150, behavior: scrollBehavior });
+  }, [scrollBehavior]);
 
   const singleTab = tabs.length <= 1;
 

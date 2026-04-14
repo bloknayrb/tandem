@@ -89,6 +89,8 @@ export const RECENT_FILES_CAP = 20;
 
 export const USER_NAME_KEY = "tandem:userName";
 export const USER_NAME_DEFAULT = "You";
+export const USER_NAME_EVENT = "tandem:user-name-changed";
+export const USER_NAME_MAX_LEN = 40;
 
 // Toast notifications
 export const TOAST_DISMISS_MS = { error: 8000, warning: 6000, info: 4000 } as const;

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR, USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants";
+import { CLAUDE_PRESENCE_COLOR, USER_NAME_MAX_LEN } from "../../shared/constants";
+import { useUserName } from "../hooks/useUserName";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -27,24 +28,21 @@ export function StatusBar({
   documentCount = 0,
   saving = false,
 }: StatusBarProps) {
-  const [userName, setUserName] = useState(() => {
-    try {
-      return localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT;
-    } catch {
-      return USER_NAME_DEFAULT;
-    }
-  });
+  const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
+  const inputRef = useRef<HTMLInputElement>(null);
   const commitName = () => {
-    const trimmed = nameInput.trim() || USER_NAME_DEFAULT;
-    setUserName(trimmed);
-    setNameInput(trimmed);
-    try {
-      localStorage.setItem(USER_NAME_KEY, trimmed);
-    } catch {
-      // localStorage unavailable (incognito/storage-disabled)
-    }
+    setUserName(nameInput);
   };
+  // Idle-sync: commit c9a63de dropped the always-sync effect because it
+  // clobbered in-progress edits. This version syncs only when the input
+  // is NOT focused and the value actually differs — so cross-surface
+  // changes propagate, but typing is never interrupted.
+  useEffect(() => {
+    if (nameInput !== userName && document.activeElement !== inputRef.current) {
+      setNameInput(userName);
+    }
+  }, [userName, nameInput]);
   const [showReconnectedFlash, setShowReconnectedFlash] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const prevConnected = useRef(connected);
@@ -144,6 +142,7 @@ export function StatusBar({
       >
         <span>You:</span>
         <input
+          ref={inputRef}
           data-testid="user-name-input"
           type="text"
           value={nameInput}
@@ -157,8 +156,8 @@ export function StatusBar({
             }
           }}
           aria-label="Display name"
-          title="Your display name (updates on next tab switch or refresh)"
-          maxLength={40}
+          title="Your display name"
+          maxLength={USER_NAME_MAX_LEN}
           style={{
             background: "transparent",
             border: "none",

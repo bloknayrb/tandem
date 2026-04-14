@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../../src/client/hooks/useTandemSettings.js";
+import {
+  loadSettings,
+  mergeAndClampSettings,
+  type TandemSettings,
+} from "../../src/client/hooks/useTandemSettings.js";
 import {
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
@@ -127,5 +131,173 @@ describe("loadSettings — editorWidthPercent clamping (regression guard)", () =
   it("clamps editorWidthPercent below 50 up to 50", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorWidthPercent: 10 }));
     expect(loadSettings().editorWidthPercent).toBe(50);
+  });
+});
+
+describe("loadSettings — textSize", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to 'm' when no stored value", () => {
+    expect(loadSettings().textSize).toBe("m");
+  });
+
+  it("accepts 's'", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: "s" }));
+    expect(loadSettings().textSize).toBe("s");
+  });
+
+  it("accepts 'l'", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: "l" }));
+    expect(loadSettings().textSize).toBe("l");
+  });
+
+  it("falls back to 'm' for unknown values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: "xl" }));
+    expect(loadSettings().textSize).toBe("m");
+  });
+
+  it("falls back to 'm' for non-string values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: 42 }));
+    expect(loadSettings().textSize).toBe("m");
+  });
+});
+
+describe("loadSettings — theme", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to 'system' when no stored value", () => {
+    expect(loadSettings().theme).toBe("system");
+  });
+
+  it.each(["light", "dark", "system"] as const)("accepts '%s'", (value) => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: value }));
+    expect(loadSettings().theme).toBe(value);
+  });
+
+  it("falls back to 'system' for unknown values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: "sepia" }));
+    expect(loadSettings().theme).toBe("system");
+  });
+
+  it("falls back to 'system' for non-string values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: true }));
+    expect(loadSettings().theme).toBe("system");
+  });
+});
+
+describe("loadSettings — reduceMotion", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+    // Stub matchMedia to a predictable default so tests that don't set
+    // reduceMotion explicitly get a deterministic fallback.
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to false when no OS preference and no stored value", () => {
+    expect(loadSettings().reduceMotion).toBe(false);
+  });
+
+  it("honors OS preference when no stored value", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
+    expect(loadSettings().reduceMotion).toBe(true);
+  });
+
+  it("stored true overrides OS preference false", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: true }));
+    expect(loadSettings().reduceMotion).toBe(true);
+  });
+
+  it("stored false overrides OS preference true", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: false }));
+    expect(loadSettings().reduceMotion).toBe(false);
+  });
+
+  it("non-boolean stored value falls back to OS preference", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: "garbage" }));
+    expect(loadSettings().reduceMotion).toBe(true);
+  });
+});
+
+describe("useTandemSettings — updateSettings write path", () => {
+  // mergeAndClampSettings is the pure core of updateSettings — exercising it
+  // directly covers the clamp-on-write contract without spinning up a React
+  // render environment (no @testing-library/react in this project).
+
+  const BASE: TandemSettings = {
+    layout: "three-panel",
+    primaryTab: "chat",
+    panelOrder: "chat-editor-annotations",
+    editorWidthPercent: 75,
+    selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
+    showAuthorship: false,
+    reduceMotion: false,
+    textSize: "m",
+    theme: "system",
+  };
+
+  it("clamps editorWidthPercent above 100 down to 100", () => {
+    const next = mergeAndClampSettings(BASE, { editorWidthPercent: 120 });
+    expect(next.editorWidthPercent).toBe(100);
+  });
+
+  it("clamps editorWidthPercent below 50 up to 50", () => {
+    const next = mergeAndClampSettings(BASE, { editorWidthPercent: 10 });
+    expect(next.editorWidthPercent).toBe(50);
+  });
+
+  it("clamps selectionDwellMs above max down to SELECTION_DWELL_MAX_MS", () => {
+    const next = mergeAndClampSettings(BASE, { selectionDwellMs: 99_999 });
+    expect(next.selectionDwellMs).toBe(SELECTION_DWELL_MAX_MS);
+  });
+
+  it("clamps selectionDwellMs below min up to SELECTION_DWELL_MIN_MS", () => {
+    const next = mergeAndClampSettings(BASE, { selectionDwellMs: 100 });
+    expect(next.selectionDwellMs).toBe(SELECTION_DWELL_MIN_MS);
+  });
+
+  it("preserves unchanged fields when a single field is updated", () => {
+    const next = mergeAndClampSettings(BASE, { theme: "dark" });
+    expect(next.theme).toBe("dark");
+    expect(next.layout).toBe(BASE.layout);
+    expect(next.primaryTab).toBe(BASE.primaryTab);
+    expect(next.panelOrder).toBe(BASE.panelOrder);
+    expect(next.editorWidthPercent).toBe(BASE.editorWidthPercent);
+    expect(next.selectionDwellMs).toBe(BASE.selectionDwellMs);
+    expect(next.showAuthorship).toBe(BASE.showAuthorship);
+    expect(next.reduceMotion).toBe(BASE.reduceMotion);
+    expect(next.textSize).toBe(BASE.textSize);
+  });
+
+  it("passes in-range numeric values through unchanged", () => {
+    const next = mergeAndClampSettings(BASE, {
+      editorWidthPercent: 80,
+      selectionDwellMs: 1500,
+    });
+    expect(next.editorWidthPercent).toBe(80);
+    expect(next.selectionDwellMs).toBe(1500);
   });
 });

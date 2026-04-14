@@ -7,7 +7,68 @@
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body, #root { height: 100%; }
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: var(--tandem-bg, #fff);
+        color: var(--tandem-fg, #111827);
+      }
+
+      /* Tandem theme tokens.
+         Light is the default; dark overrides via [data-theme="dark"] on <html>.
+         Pairs meet WCAG AA (4.5:1 for small text, 3:1 for large/non-text). */
+      :root {
+        --tandem-bg: #ffffff;
+        --tandem-fg: #111827;
+        --tandem-surface: #ffffff;
+        --tandem-surface-muted: #f9fafb;
+        --tandem-border: #e5e7eb;
+        --tandem-border-strong: #d1d5db;
+        --tandem-fg-muted: #6b7280;
+        --tandem-fg-subtle: #9ca3af;
+        --tandem-accent: #6366f1;
+        --tandem-accent-fg: #ffffff;
+        --tandem-accent-bg: #eef2ff;
+        --tandem-accent-fg-strong: #4338ca;
+        --tandem-author-user: #3b82f6;
+        --tandem-author-claude: #ea8a1e;
+      }
+
+      [data-theme="dark"] {
+        --tandem-bg: #0f172a;
+        --tandem-fg: #f3f4f6;
+        --tandem-surface: #1e293b;
+        --tandem-surface-muted: #111827;
+        --tandem-border: #334155;
+        --tandem-border-strong: #475569;
+        --tandem-fg-muted: #cbd5e1;
+        --tandem-fg-subtle: #94a3b8;
+        --tandem-accent: #818cf8;
+        --tandem-accent-fg: #0f172a;
+        --tandem-accent-bg: #312e81;
+        --tandem-accent-fg-strong: #c7d2fe;
+        --tandem-author-user: #60a5fa;
+        --tandem-author-claude: #fbbf24;
+      }
+
+      /* Windows High Contrast — let the OS drive everything. */
+      @media (forced-colors: active) {
+        :root, [data-theme="dark"] {
+          --tandem-bg: Canvas;
+          --tandem-fg: CanvasText;
+          --tandem-surface: Canvas;
+          --tandem-surface-muted: Canvas;
+          --tandem-border: CanvasText;
+          --tandem-border-strong: CanvasText;
+          --tandem-fg-muted: CanvasText;
+          --tandem-fg-subtle: GrayText;
+          --tandem-accent: Highlight;
+          --tandem-accent-fg: HighlightText;
+          --tandem-accent-bg: Canvas;
+          --tandem-accent-fg-strong: HighlightText;
+          --tandem-author-user: CanvasText;
+          --tandem-author-claude: CanvasText;
+        }
+      }
     </style>
   </head>
   <body>

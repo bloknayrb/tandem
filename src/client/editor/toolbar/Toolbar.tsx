@@ -23,7 +23,10 @@ type ToolbarMode = "idle" | "comment";
 interface ToolbarProps {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
-  onSettingsClick?: (rect: DOMRect) => void;
+  onSettingsOpen?: () => void;
+  /** Forwarded ref for the settings gear button — needed so a keyboard shortcut
+   * can anchor the popover and so focus can return here when it closes. */
+  settingsBtnRef?: React.RefObject<HTMLButtonElement | null>;
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
   heldCount?: number;
@@ -32,7 +35,8 @@ interface ToolbarProps {
 export function Toolbar({
   editor,
   ydoc,
-  onSettingsClick,
+  onSettingsOpen,
+  settingsBtnRef,
   tandemMode,
   onModeChange,
   heldCount,
@@ -522,12 +526,14 @@ export function Toolbar({
             </button>
           </div>
         )}
-        {onSettingsClick && (
+        {onSettingsOpen && (
           <button
+            ref={settingsBtnRef}
             data-testid="settings-btn"
-            onClick={(e) => onSettingsClick(e.currentTarget.getBoundingClientRect())}
-            title="Layout settings"
-            aria-label="Layout settings"
+            onClick={onSettingsOpen}
+            title="Settings (Ctrl+,)"
+            aria-label="Settings"
+            aria-keyshortcuts="Control+Comma"
             style={{
               background: "none",
               border: "1px solid #d1d5db",
@@ -536,6 +542,7 @@ export function Toolbar({
               color: "#6b7280",
               fontSize: "13px",
               padding: "4px 12px",
+              minHeight: "24px",
             }}
           >
             Settings

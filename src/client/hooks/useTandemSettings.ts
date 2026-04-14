@@ -10,6 +10,8 @@ import {
 export type LayoutMode = "tabbed" | "three-panel";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
+export type TextSize = "s" | "m" | "l";
+export type ThemePreference = "light" | "dark" | "system";
 
 export interface TandemSettings {
   layout: LayoutMode;
@@ -18,6 +20,22 @@ export interface TandemSettings {
   editorWidthPercent: number;
   selectionDwellMs: number;
   showAuthorship: boolean;
+  reduceMotion: boolean;
+  textSize: TextSize;
+  theme: ThemePreference;
+}
+
+export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
+
+// OS-level reduced-motion preference — used as the default so users who have
+// already opted in at the system level don't see any animations on first run.
+function prefersReducedMotion(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
 }
 
 const DEFAULTS: TandemSettings = {
@@ -27,6 +45,9 @@ const DEFAULTS: TandemSettings = {
   editorWidthPercent: 50,
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   showAuthorship: false,
+  reduceMotion: false,
+  textSize: "m",
+  theme: "system",
 };
 
 /**
@@ -39,9 +60,15 @@ const DEFAULTS: TandemSettings = {
  * intentional — `0` is not a valid dwell or width anyway).
  */
 export function loadSettings(): TandemSettings {
+  let saved: string | null;
   try {
-    const saved = localStorage.getItem(TANDEM_SETTINGS_KEY);
-    if (saved) {
+    saved = localStorage.getItem(TANDEM_SETTINGS_KEY);
+  } catch {
+    // localStorage unavailable (incognito/storage-disabled) — fall through.
+    saved = null;
+  }
+  if (saved) {
+    try {
       const parsed = JSON.parse(saved);
       return {
         layout:
@@ -65,12 +92,44 @@ export function loadSettings(): TandemSettings {
           ),
         ),
         showAuthorship: parsed.showAuthorship === true,
+        reduceMotion:
+          typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
+        textSize:
+          parsed.textSize === "s" || parsed.textSize === "m" || parsed.textSize === "l"
+            ? parsed.textSize
+            : DEFAULTS.textSize,
+        theme:
+          parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
+            ? parsed.theme
+            : DEFAULTS.theme,
       };
+    } catch (err) {
+      // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
+      // of silently clobbered on the next write.
+      console.warn("[tandem] settings JSON is corrupt, resetting to defaults:", err);
     }
-  } catch {
-    // localStorage unavailable (incognito/storage-disabled)
   }
-  return DEFAULTS;
+  return { ...DEFAULTS, reduceMotion: prefersReducedMotion() };
+}
+
+/**
+ * Merge a partial update into the current settings and clamp numeric fields
+ * to their valid ranges. Pure — no React, no storage — so the clamp-on-write
+ * contract is directly testable.
+ */
+export function mergeAndClampSettings(
+  prev: TandemSettings,
+  partial: Partial<TandemSettings>,
+): TandemSettings {
+  const merged = { ...prev, ...partial };
+  return {
+    ...merged,
+    editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
+    selectionDwellMs: Math.max(
+      SELECTION_DWELL_MIN_MS,
+      Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
+    ),
+  };
 }
 
 export function useTandemSettings() {
@@ -78,16 +137,7 @@ export function useTandemSettings() {
 
   const updateSettings = useCallback((partial: Partial<TandemSettings>) => {
     setSettingsState((prev) => {
-      const merged = { ...prev, ...partial };
-      // Clamp numeric values on write (same rules as loadSettings)
-      const next: TandemSettings = {
-        ...merged,
-        editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
-        selectionDwellMs: Math.max(
-          SELECTION_DWELL_MIN_MS,
-          Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
-        ),
-      };
+      const next = mergeAndClampSettings(prev, partial);
       try {
         localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
         // Mirror authorship toggle to dedicated key for ProseMirror plugin init

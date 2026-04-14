@@ -27,9 +27,11 @@ import { useModeGate } from "./hooks/useModeGate";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useSaveShortcut } from "./hooks/useSaveShortcut";
+import { useSettingsShortcut } from "./hooks/useSettingsShortcut";
 import { useTabCycleKeyboard } from "./hooks/useTabCycleKeyboard";
 import { useTabOrder } from "./hooks/useTabOrder";
-import { useTandemSettings } from "./hooks/useTandemSettings";
+import { TEXT_SIZE_PX, useTandemSettings } from "./hooks/useTandemSettings";
+import { useTheme } from "./hooks/useTheme";
 import { useTutorial } from "./hooks/useTutorial";
 import { useWebViewZoom } from "./hooks/useWebViewZoom";
 import { useYjsSync } from "./hooks/useYjsSync";
@@ -250,6 +252,22 @@ export default function App() {
   const { settings, updateSettings } = useTandemSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const openAtButton = useCallback(() => {
+    setSettingsAnchor(settingsBtnRef.current?.getBoundingClientRect() ?? null);
+    setSettingsOpen(true);
+  }, []);
+  const settingsOpenRef = useRef(settingsOpen);
+  settingsOpenRef.current = settingsOpen;
+  const toggleSettings = useCallback(() => {
+    if (settingsOpenRef.current) {
+      setSettingsOpen(false);
+      return;
+    }
+    openAtButton();
+  }, [openAtButton]);
+  useSettingsShortcut(toggleSettings);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
   useEffect(() => {
@@ -268,6 +286,26 @@ export default function App() {
     });
     editor.view.dispatch(tr);
   }, [settings.showAuthorship]);
+
+  // Body class mirrors the reduce-motion setting so CSS rules (animations,
+  // transitions) can be scoped without a media query alone. JS-level gating
+  // of scrollIntoView `behavior` still happens in the panels.
+  useEffect(() => {
+    document.body.classList.toggle("tandem-reduce-motion", settings.reduceMotion);
+    return () => document.body.classList.remove("tandem-reduce-motion");
+  }, [settings.reduceMotion]);
+
+  useTheme(settings.theme);
+
+  // Expose editor font-size as a CSS custom property so the editor style
+  // picks it up without recreating the Tiptap instance.
+  useEffect(() => {
+    const px = TEXT_SIZE_PX[settings.textSize];
+    document.documentElement.style.setProperty("--tandem-editor-font-size", `${px}px`);
+    return () => {
+      document.documentElement.style.removeProperty("--tandem-editor-font-size");
+    };
+  }, [settings.textSize]);
 
   const [reviewMode, setReviewMode] = useState(false);
   const [showChat, setShowChat] = useState(() => settings.primaryTab === "chat");
@@ -470,10 +508,8 @@ export default function App() {
       <Toolbar
         editor={editorRef.current}
         ydoc={activeTab?.ydoc ?? null}
-        onSettingsClick={(rect) => {
-          setSettingsAnchor(rect);
-          setSettingsOpen(true);
-        }}
+        onSettingsOpen={toggleSettings}
+        settingsBtnRef={settingsBtnRef}
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
         heldCount={heldCount}
@@ -484,6 +520,7 @@ export default function App() {
         onTabSwitch={setActiveTabId}
         onTabClose={handleTabClose}
         reorder={reorder}
+        reduceMotion={settings.reduceMotion}
       />
       {panelLayout.kind === "three-panel" ? (
         /* ── Three-panel layout: Left | Editor | Right ── */
@@ -524,6 +561,7 @@ export default function App() {
                   capturedAnchor={capturedAnchor}
                   onCapturedAnchorChange={setCapturedAnchor}
                   inputRef={chatInputRef}
+                  reduceMotion={settings.reduceMotion}
                 />
               ) : (
                 <SidePanel
@@ -540,6 +578,7 @@ export default function App() {
                   onExitReviewMode={exitReviewMode}
                   activeAnnotationId={activeAnnotationId}
                   onActiveAnnotationChange={setActiveAnnotationId}
+                  reduceMotion={settings.reduceMotion}
                 />
               )}
             </div>
@@ -667,6 +706,7 @@ export default function App() {
                   onExitReviewMode={exitReviewMode}
                   activeAnnotationId={activeAnnotationId}
                   onActiveAnnotationChange={setActiveAnnotationId}
+                  reduceMotion={settings.reduceMotion}
                 />
               ) : (
                 <ChatPanel
@@ -680,6 +720,7 @@ export default function App() {
                   capturedAnchor={capturedAnchor}
                   onCapturedAnchorChange={setCapturedAnchor}
                   inputRef={chatInputRef}
+                  reduceMotion={settings.reduceMotion}
                 />
               )}
             </div>
@@ -844,6 +885,7 @@ export default function App() {
                 capturedAnchor={capturedAnchor}
                 onCapturedAnchorChange={setCapturedAnchor}
                 inputRef={chatInputRef}
+                reduceMotion={settings.reduceMotion}
               />
             </div>
             <div
@@ -868,6 +910,7 @@ export default function App() {
                 onExitReviewMode={exitReviewMode}
                 activeAnnotationId={activeAnnotationId}
                 onActiveAnnotationChange={setActiveAnnotationId}
+                reduceMotion={settings.reduceMotion}
               />
             </div>
           </div>
@@ -898,6 +941,8 @@ export default function App() {
         anchorRect={settingsAnchor}
         settings={settings}
         onUpdate={updateSettings}
+        returnFocusRef={settingsBtnRef}
+        anchorRef={settingsBtnRef}
       />
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

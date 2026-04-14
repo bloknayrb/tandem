@@ -13,7 +13,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import React, { useCallback, useEffect } from "react";
 import * as Y from "yjs";
-import { USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants.js";
+import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
@@ -61,13 +61,7 @@ export function Editor({
         CollaborationCursor.configure({
           provider: provider,
           user: {
-            name: (() => {
-              try {
-                return localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT;
-              } catch {
-                return USER_NAME_DEFAULT;
-              }
-            })(),
+            name: readStoredName(),
             color: "#f59e0b",
           },
         }),
@@ -78,7 +72,8 @@ export function Editor({
       editorProps: {
         attributes: {
           class: "tandem-editor",
-          style: "outline: none; min-height: 500px; font-size: 16px; line-height: 1.6;",
+          style:
+            "outline: none; min-height: 500px; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
         },
       },
     },
@@ -91,6 +86,14 @@ export function Editor({
       editor.setEditable(!readOnly);
     }
   }, [editor, readOnly]);
+
+  // Keep the CollaborationCursor label in sync with the display name. The
+  // cursor user is captured at editor creation, so a later name edit from
+  // StatusBar or Settings won't propagate without this subscription.
+  useEffect(() => {
+    if (!editor) return;
+    return subscribeToUserName((name) => editor.commands.updateUser({ name }));
+  }, [editor]);
 
   useEffect(() => {
     onEditorReady?.(editor);
@@ -197,8 +200,8 @@ export function Editor({
 
         /* Authorship decorations — user=blue, claude=orange */
         .tandem-authorship { transition: color 0.2s; }
-        .tandem-authorship--user { color: rgb(59, 130, 246); }
-        .tandem-authorship--claude { color: rgb(234, 138, 30); }
+        .tandem-authorship--user { color: var(--tandem-author-user); }
+        .tandem-authorship--claude { color: var(--tandem-author-claude); }
 
         /* Claude focus paragraph */
         .tandem-claude-focus {

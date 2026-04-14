@@ -80,6 +80,22 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
 });
 
+test("Ctrl+, opens Settings popover", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).not.toBeVisible();
+
+  // Playwright maps "Control+," to the Comma key with Ctrl held — matches
+  // the hook's `e.code === "Comma" && e.ctrlKey` gate.
+  await page.keyboard.press("Control+Comma");
+
+  await expect(popover).toBeVisible({ timeout: 2_000 });
+});
+
 test("bulk-confirm resets when a filter changes (issue #199 regression)", async ({ page }) => {
   // Need 2+ pending annotations to show the "Acknowledge All" button
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });

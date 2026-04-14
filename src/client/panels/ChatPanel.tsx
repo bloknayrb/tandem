@@ -28,6 +28,7 @@ interface ChatPanelProps {
   capturedAnchor: CapturedAnchor | null;
   onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
+  reduceMotion?: boolean;
 }
 
 export function ChatPanel({
@@ -41,7 +42,9 @@ export function ChatPanel({
   capturedAnchor,
   onCapturedAnchorChange,
   inputRef: externalInputRef,
+  reduceMotion,
 }: ChatPanelProps) {
+  const scrollBehavior: ScrollBehavior = reduceMotion ? "auto" : "smooth";
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -82,15 +85,15 @@ export function ChatPanel({
       return;
     }
     prevClaudeActive.current = !!claudeActive;
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, claudeActive]);
+    messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior });
+  }, [messages, claudeActive, scrollBehavior]);
 
   // Scroll to bottom when panel becomes visible (display toggle means scrollIntoView no-ops while hidden)
   useEffect(() => {
     if (visible) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior });
     }
-  }, [visible]);
+  }, [visible, scrollBehavior]);
 
   const sendMessage = useCallback(() => {
     if (!ctrlYdoc || !inputText.trim()) return;
