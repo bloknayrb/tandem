@@ -389,6 +389,7 @@ function installShutdownHandlers(): void {
 
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
+let cachedModeFailedAt = 0;
 
 type FetchModeResult = { ok: true; mode: TandemMode } | { ok: false; reason: string };
 
@@ -449,6 +450,10 @@ function refreshMode(): void {
   if (_modeRefreshInFlight) return;
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return;
+  // Rate-limit retries after a failure so a server returning 500 quickly
+  // (or hanging up to MODE_FETCH_TIMEOUT_MS) doesn't spawn a new fetch on
+  // every hot-path event.
+  if (now - cachedModeFailedAt < MODE_CACHE_TTL_MS) return;
 
   _modeRefreshInFlight = (async () => {
     try {
@@ -456,7 +461,9 @@ function refreshMode(): void {
       if (result.ok) {
         cachedMode = result.mode;
         cachedModeAt = Date.now();
+        cachedModeFailedAt = 0;
       } else {
+        cachedModeFailedAt = Date.now();
         console.error(
           `[Monitor] Background mode refresh failed (${result.reason}), keeping cached`,
         );
@@ -478,6 +485,7 @@ function refreshMode(): void {
 export function _resetMonitorStateForTests(): void {
   cachedMode = TANDEM_MODE_DEFAULT;
   cachedModeAt = 0;
+  cachedModeFailedAt = 0;
   _modeRefreshInFlight = null;
   shutdownTimers.awarenessTimer = null;
   shutdownTimers.clearAwarenessTimer = null;
