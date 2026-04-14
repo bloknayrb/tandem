@@ -142,3 +142,80 @@ describe("SSE buffer overflow", () => {
     expect(onEventId).toHaveBeenCalledWith("big");
   });
 });
+
+describe("SSE resume behavior", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    installMonitorFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.useRealTimers();
+    stdoutSpy.mockRestore();
+  });
+
+  it("resume: Last-Event-ID header on reconnect matches the last delivered id", async () => {
+    const stream1 = new ControllableStream();
+    const stream2 = new ControllableStream();
+    let attempts = 0;
+    const headersSeen: Array<Record<string, string>> = [];
+
+    stub.on("/api/events", (_url, init) => {
+      attempts++;
+      const hdrs: Record<string, string> = {};
+      const raw = init?.headers;
+      if (raw && typeof raw === "object") {
+        if (raw instanceof Headers) {
+          raw.forEach((v, k) => {
+            hdrs[k.toLowerCase()] = v;
+          });
+        } else {
+          for (const [k, v] of Object.entries(raw as Record<string, string>)) {
+            hdrs[k.toLowerCase()] = String(v);
+          }
+        }
+      }
+      headersSeen.push(hdrs);
+      if (attempts === 1) return sseResponse(stream1);
+      return sseResponse(stream2);
+    });
+
+    let lastId: string | undefined;
+    const p1 = connectAndStream(undefined, (id) => {
+      lastId = id;
+    });
+    stream1.push(
+      sseFrame(
+        {
+          id: "e7",
+          type: "document:opened",
+          timestamp: 1,
+          payload: { fileName: "a.md", format: "md" },
+        },
+        "e7",
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    stream1.end();
+    await p1.catch(() => {});
+
+    expect(lastId).toBe("e7");
+
+    const p2 = connectAndStream(lastId, () => {});
+    stream2.end();
+    await p2.catch(() => {});
+
+    expect(headersSeen).toHaveLength(2);
+    expect(headersSeen[0]["last-event-id"]).toBeUndefined();
+    expect(headersSeen[1]["last-event-id"]).toBe("e7");
+  });
+});
