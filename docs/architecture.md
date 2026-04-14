@@ -329,7 +329,7 @@ Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry co
 
 On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
 1. POSTs `/api/channel-error` with `MONITOR_CONNECT_FAILED`.
-2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to resume real-time events."
+2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to restore real-time events."
 3. Calls `process.exit(1)`.
 
 ### Awareness Lifecycle
