@@ -43,10 +43,21 @@ export function SettingsPopover({
   anchorRef,
 }: SettingsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const threePanelDisabled = viewportWidth < 768;
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
+
+  // Idle-sync: commit c9a63de dropped the always-sync effect because it
+  // clobbered in-progress edits. This version syncs only when the input
+  // is NOT focused and the value actually differs — so cross-surface
+  // changes propagate, but typing is never interrupted.
+  useEffect(() => {
+    if (nameInput !== userName && document.activeElement !== inputRef.current) {
+      setNameInput(userName);
+    }
+  }, [userName, nameInput]);
 
   const themeRg = useRadioGroup<ThemePreference>(
     settings.theme,
@@ -255,6 +266,7 @@ export function SettingsPopover({
           Display Name
         </label>
         <input
+          ref={inputRef}
           id="settings-display-name"
           data-testid="settings-display-name"
           type="text"

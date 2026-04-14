@@ -30,9 +30,19 @@ export function StatusBar({
 }: StatusBarProps) {
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
+  const inputRef = useRef<HTMLInputElement>(null);
   const commitName = () => {
     setUserName(nameInput);
   };
+  // Idle-sync: commit c9a63de dropped the always-sync effect because it
+  // clobbered in-progress edits. This version syncs only when the input
+  // is NOT focused and the value actually differs — so cross-surface
+  // changes propagate, but typing is never interrupted.
+  useEffect(() => {
+    if (nameInput !== userName && document.activeElement !== inputRef.current) {
+      setNameInput(userName);
+    }
+  }, [userName, nameInput]);
   const [showReconnectedFlash, setShowReconnectedFlash] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const prevConnected = useRef(connected);
@@ -132,6 +142,7 @@ export function StatusBar({
       >
         <span>You:</span>
         <input
+          ref={inputRef}
           data-testid="user-name-input"
           type="text"
           value={nameInput}
@@ -145,7 +156,7 @@ export function StatusBar({
             }
           }}
           aria-label="Display name"
-          title="Your display name (updates on next tab switch or refresh)"
+          title="Your display name"
           maxLength={40}
           style={{
             background: "transparent",
