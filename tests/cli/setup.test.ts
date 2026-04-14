@@ -6,26 +6,29 @@ import { applyConfig, buildMcpEntries, detectTargets, installSkill } from "../..
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 
 describe("buildMcpEntries", () => {
-  it("returns tandem HTTP entry and channel node entry", () => {
+  it("returns only the tandem HTTP entry by default (plugin handles channel)", () => {
     const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js");
     expect(entries.tandem).toEqual({
       type: "http",
       url: `http://localhost:${DEFAULT_MCP_PORT}/mcp`,
     });
-    expect(entries["tandem-channel"].command).toBe("node");
-    expect(entries["tandem-channel"].args).toEqual(["/abs/path/to/dist/channel/index.js"]);
-    expect(entries["tandem-channel"].env).toEqual({
-      TANDEM_URL: `http://localhost:${DEFAULT_MCP_PORT}`,
+    expect(entries["tandem-channel"]).toBeUndefined();
+  });
+
+  it("includes tandem-channel when withChannelShim: true (legacy opt-in)", () => {
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+      withChannelShim: true,
     });
+    expect(entries["tandem-channel"]?.command).toBe("node");
+    expect(entries["tandem-channel"]?.args).toEqual(["/abs/path/to/dist/channel/index.js"]);
   });
 
   it("uses custom nodeBinary when provided (Tauri sidecar path)", () => {
-    const entries = buildMcpEntries(
-      "/app/Resources/dist/channel/index.js",
-      "/app/MacOS/node-sidecar",
-    );
-    expect(entries["tandem-channel"].command).toBe("/app/MacOS/node-sidecar");
-    expect(entries["tandem-channel"].args).toEqual(["/app/Resources/dist/channel/index.js"]);
+    const entries = buildMcpEntries("/app/Resources/dist/channel/index.js", {
+      withChannelShim: true,
+      nodeBinary: "/app/MacOS/node-sidecar",
+    });
+    expect(entries["tandem-channel"]?.command).toBe("/app/MacOS/node-sidecar");
   });
 });
 
@@ -49,7 +52,7 @@ describe("applyConfig", () => {
       type: "http",
       url: `http://localhost:${DEFAULT_MCP_PORT}/mcp`,
     });
-    expect(written.mcpServers["tandem-channel"].command).toBe("node");
+    expect(written.mcpServers["tandem-channel"]).toBeUndefined();
   });
 
   it("creates parent directory if it does not exist", async () => {

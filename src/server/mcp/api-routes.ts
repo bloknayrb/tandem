@@ -122,7 +122,8 @@ export async function runSetupHandler(
   }
 
   const targets = detectTargets({ homeOverride });
-  const entries = buildMcpEntries(channelPath, nodeBinary);
+  // Tauri setup always registers the channel shim — the sidecar IS the channel.
+  const entries = buildMcpEntries(channelPath, { withChannelShim: true, nodeBinary });
 
   const configured: string[] = [];
   const errors: string[] = [];

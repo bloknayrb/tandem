@@ -25,9 +25,10 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log(`tandem v${version}
 
 Usage:
-  tandem                  Start Tandem server and open the browser
-  tandem setup            Register MCP tools with Claude Code / Claude Desktop
-  tandem setup --force    Register to default paths regardless of detection
+  tandem                            Start Tandem server and open the browser
+  tandem setup                      Register MCP tools with Claude Code / Claude Desktop
+  tandem setup --force              Register to default paths regardless of detection
+  tandem setup --with-channel-shim  Also register the stdio channel shim (legacy opt-in)
   tandem --version
   tandem --help
 `);
@@ -42,7 +43,10 @@ if (args.includes("--version") || args.includes("-v")) {
 try {
   if (args[0] === "setup") {
     const { runSetup } = await import("./setup.js");
-    await runSetup({ force: args.includes("--force") });
+    await runSetup({
+      force: args.includes("--force"),
+      withChannelShim: args.includes("--with-channel-shim"),
+    });
   } else if (!args[0] || args[0] === "start") {
     const { runStart } = await import("./start.js");
     runStart();
