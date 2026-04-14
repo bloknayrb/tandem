@@ -351,3 +351,35 @@ Initial attempts to filter at the bridge and server levels had no effect because
 **Fix:** Check and clear the suppress flag at event arrival time (inside the `fs.watch` callback), before starting the debounce timer. This ensures the suppress only affects the immediate event batch from the self-write, not a later external edit that happens to arrive within the debounce window.
 
 **Key insight:** Debounce and suppression are independent concerns. Suppression answers "should I ignore this event?" — that's an arrival-time decision. Debounce answers "should I wait for more events before acting?" — that's a delivery-time decision. Mixing them (checking suppress at delivery time) creates a race where the suppress can consume the wrong event.
+
+## 38. Privacy Signals Fail Closed, Not Open
+
+**Problem:** Solo mode is a user-driven privacy preference — the user has explicitly asked Claude not to process events. If `/api/mode` fails and the monitor falls back to "tandem" (the permissive default), Claude silently gains access to activity the user asked to suppress.
+
+**Solution:** Startup mode warm-up (`getCachedMode()`) fails closed to "solo" on any error. The hot-path background refresh (`refreshMode()`) is fire-and-forget and leaves `cachedMode` unchanged on failure — stale-preferred, not fail-closed — to avoid randomly suppressing events mid-session when the server hiccups.
+
+**Key insight:** Distinct failure modes need distinct fallbacks. The cold-start case and the mid-session-transient case have opposite risk profiles: leaking activity on cold start is worse than the brief stale window from a transient mid-session failure.
+
+## 39. Retry Budgets Must Reset on Stable Uptime, Not Per Event
+
+**Problem:** Resetting the reconnect counter every time an event is successfully delivered lets a server that crashes after each event reconnect forever — the cap never fires because the counter resets before it exhausts.
+
+**Solution:** Reset the retry counter only after the connection has been healthy for a meaningful continuous window (`STABLE_CONNECTION_MS` = 60s here). This decouples the "is the server stable?" signal from event throughput.
+
+**Key insight:** The question the retry budget is trying to answer is "has this connection been healthy long enough to warrant resetting the budget?" — not "did any event arrive?" A server that delivers one event and then crashes is not a healthy server.
+
+## 40. Stdio Plugin Hosts Route stdout to the User, Not stderr
+
+**Problem:** Claude Code plugin hosts surface stdout lines as user-visible notifications and swallow stderr entirely. Any user-facing state — including "monitor died, restart Tandem" — written to stderr is invisible in normal operation.
+
+**Solution:** Write all user-facing output (formatted event notifications, exhaustion messages) to stdout. Reserve stderr for developer/debugging output that only matters when running the monitor by hand outside of Claude Code.
+
+**Key insight:** This is a platform contract, not a preference. Know which stream your host reads. For Claude Code plugins: stdout = user channel, stderr = dev null in production.
+
+## 41. Vitest Isolates Modules Per File, Not Per Test
+
+**Problem:** Module-level state (mode caches, registered signal handlers, in-flight promise locks) bleeds between tests in the same file, causing order-dependent failures. In development, module-level side effects like `console.*` redirects also pollute Vitest's own console routing when the module is imported for tests.
+
+**Solution:** Export a `_resetForTests()` helper from any module with stateful singletons and call it in every `beforeEach`. Guard module-level side effects behind `process.env.VITEST !== "true"` so importing the module in a test context doesn't activate production behavior.
+
+**Key insight:** Vitest's module isolation boundary is the test file, not the test. Treat module-level state the same way you treat global DOM state in browser tests — reset it explicitly, don't assume isolation.
