@@ -19,6 +19,12 @@ interface SettingsPopoverProps {
   onUpdate: (partial: Partial<TandemSettings>) => void;
   /** Element to return focus to on close (typically the settings gear button). */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * Element that toggles the popover. Excluded from outside-click detection
+   * so the anchor's own click handler (not the dismiss logic) controls
+   * close-while-open.
+   */
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
 const POPOVER_WIDTH = 320;
@@ -34,6 +40,7 @@ export function SettingsPopover({
   settings,
   onUpdate,
   returnFocusRef,
+  anchorRef,
 }: SettingsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
@@ -91,7 +98,12 @@ export function SettingsPopover({
   useEffect(() => {
     if (!open) return;
     const handler = (e: PointerEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      // Let the anchor's own click handler toggle the popover — otherwise the
+      // pointerdown-outside close races with the click-reopen and the popover
+      // re-opens immediately.
+      if (anchorRef?.current?.contains(target)) return;
+      if (popoverRef.current && !popoverRef.current.contains(target)) {
         onClose();
       }
     };
@@ -100,7 +112,7 @@ export function SettingsPopover({
       clearTimeout(timer);
       document.removeEventListener("pointerdown", handler);
     };
-  }, [open, onClose]);
+  }, [open, onClose, anchorRef]);
 
   // Escape to close + focus trap on Tab
   useEffect(() => {

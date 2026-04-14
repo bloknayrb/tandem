@@ -508,7 +508,7 @@ export default function App() {
       <Toolbar
         editor={editorRef.current}
         ydoc={activeTab?.ydoc ?? null}
-        onSettingsOpen={openAtButton}
+        onSettingsOpen={toggleSettings}
         settingsBtnRef={settingsBtnRef}
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
@@ -942,6 +942,7 @@ export default function App() {
         settings={settings}
         onUpdate={updateSettings}
         returnFocusRef={settingsBtnRef}
+        anchorRef={settingsBtnRef}
       />
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
