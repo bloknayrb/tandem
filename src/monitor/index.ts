@@ -357,7 +357,7 @@ let _modeRefreshInFlight: Promise<void> | null = null;
 const outstandingAwareness = new Set<Promise<unknown>>();
 function trackAwareness(p: Promise<unknown>): void {
   outstandingAwareness.add(p);
-  p.finally(() => outstandingAwareness.delete(p)).catch(() => {});
+  p.finally(() => outstandingAwareness.delete(p));
 }
 
 async function finalClearAwareness(): Promise<void> {
