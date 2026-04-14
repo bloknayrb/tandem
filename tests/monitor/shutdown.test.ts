@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFetchStub, installMonitorFakeTimers } from "./fetch-harness.js";
+import {
+  ControllableStream,
+  createFetchStub,
+  installMonitorFakeTimers,
+  sseFrame,
+  sseResponse,
+} from "./fetch-harness.js";
 
 describe("graceful shutdown", () => {
   let stub: ReturnType<typeof createFetchStub>;
@@ -91,5 +97,35 @@ describe("graceful shutdown", () => {
     await shutdown;
     expect(exitSpy).toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("regression: chat:message with no documentId does not wipe lastDocumentId from a prior doc event", async () => {
+    const stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+    const p = mod.connectAndStream(undefined, () => {});
+
+    // First event carries a documentId.
+    stream.push(
+      sseFrame(
+        { id: "e1", type: "annotation:created", timestamp: 1, documentId: "doc-x", payload: {} },
+        "e1",
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(600); // past AWARENESS_DEBOUNCE_MS
+
+    // Second event: chat:message without documentId.
+    stream.push(
+      sseFrame({ id: "e2", type: "chat:message", timestamp: 2, payload: { text: "hi" } }, "e2"),
+    );
+    await vi.advanceTimersByTimeAsync(600);
+
+    stream.end();
+    await p.catch(() => {});
+
+    expect(mod._getLastDocumentIdForTests()).toBe("doc-x");
   });
 });
