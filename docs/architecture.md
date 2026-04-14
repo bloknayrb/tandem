@@ -292,6 +292,67 @@ The shim coexists with the HTTP MCP server — Claude Code connects to both simu
 
 When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server. The browser can display permission prompts and submit verdicts via `POST /api/channel-permission-verdict`.
 
+## Plugin Monitor
+
+The plugin monitor (`src/monitor/index.ts`) is the recommended modern alternative to the channel shim for receiving real-time events from Tandem. It is installed as a Claude Code plugin rather than spawned as a stdio subprocess.
+
+### Role
+
+`main()` connects to `GET /api/events` (the same SSE endpoint used by the channel shim), decodes incoming events via `formatEventContent()`, and writes one notification line per event to stdout. Claude Code routes each stdout line to the user as a plugin notification — no polling, no `--dangerously-load-development-channels` flag required.
+
+### Startup
+
+`main()` warms the mode cache with a blocking `getCachedMode()` call before entering the reconnect loop. On error, this call fails closed to "solo" — the privacy-safe default. If the Tandem server is not yet running, the startup warm-up fails closed and the reconnect loop begins immediately.
+
+### Event Loop
+
+`connectAndStream` opens SSE with `Last-Event-ID` for resume, decodes frames, and processes each one:
+
+1. JSON parse errors are logged (event ID + frame tail) and skipped without advancing `lastEventId` — bad frames are re-delivered on reconnect.
+2. Schema validation errors are logged separately and also skip `lastEventId`.
+3. Valid events are formatted via `formatEventContent()` and written to stdout as a single line.
+
+### Contract Asymmetry: Mode Check
+
+Two distinct failure modes require two distinct fallbacks:
+
+| Path | Function | On error |
+|------|----------|----------|
+| Startup warm-up | `getCachedMode()` | Fails closed to "solo" |
+| Hot path (per-event) | `getModeSync()` + fire-and-forget `refreshMode()` | Leaves `cachedMode` unchanged (stale-preferred) |
+
+**Rationale:** Flipping to "solo" mid-session would randomly suppress events the user has not asked to suppress. Honoring the last known good value on transient failure is better UX without weakening the initial privacy signal — solo is still the default on a cold or erroring server.
+
+### Retry Semantics
+
+Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a server that crashes after each event reconnect forever, never exhausting the cap.
+
+On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
+1. POSTs `/api/channel-error` with `MONITOR_CONNECT_FAILED`.
+2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to resume real-time events."
+3. Calls `process.exit(1)`.
+
+### Awareness Lifecycle
+
+Each incoming event schedules a debounced (500ms) POST to `/api/channel-awareness` (`active: true, status: "processing: <type>"`), followed by an auto-clear POST 3s later (`active: false, status: "idle"`). The browser's `StatusBar` component observes these changes and shows "Claude is active."
+
+On SIGINT/SIGTERM, `finalClearAwareness()` POSTs a final clear with the last known `documentId` before `process.exit(0)`. VITEST guards (`process.env.VITEST !== "true"`) prevent signal-listener accumulation across test files.
+
+### Fetch Timeouts
+
+All outbound HTTP calls use an `AbortSignal.timeout`-wrapped helper with per-route budgets:
+
+| Route | Budget |
+|-------|--------|
+| SSE connect (`/api/events`) | 10s |
+| Mode check (`/api/mode`) | 2s |
+| Awareness POST (`/api/channel-awareness`) | 5s |
+| Error report (`/api/channel-error`) | 3s |
+
+### Why `tandem-channel` Is Now Opt-In
+
+Running the plugin alongside the channel shim subscribes `/api/events` twice, producing duplicate notifications for every event. `tandem setup` now writes only the HTTP `tandem` MCP entry. Legacy users who cannot install the plugin pass `--with-channel-shim` to restore the old behavior. The Tauri desktop app's `/api/setup` endpoint always includes the shim for internal Tauri-to-Claude wiring regardless of this setting.
+
 ---
 
 ## Shared State: Y.Doc
