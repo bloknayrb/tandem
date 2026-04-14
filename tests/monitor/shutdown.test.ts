@@ -59,4 +59,37 @@ describe("graceful shutdown", () => {
     expect(clears.length).toBe(0);
     exitSpy.mockRestore();
   });
+
+  it("awaits in-flight awareness POSTs before exiting", async () => {
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    mod._setLastDocumentIdForTests("doc-123");
+
+    let resolvePending: () => void = () => {};
+    const pending = new Promise<void>((r) => {
+      resolvePending = r;
+    });
+    mod._addOutstandingAwarenessForTests(pending);
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("exit");
+    }) as never);
+
+    let exited = false;
+    const shutdown = mod.shutdownForTests("SIGINT").catch(() => {
+      exited = true;
+    });
+
+    // Let microtasks settle; shutdown must still be waiting on the pending POST.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exited).toBe(false);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Resolve the outstanding POST; shutdown should now proceed to exit.
+    resolvePending();
+    await shutdown;
+    expect(exitSpy).toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
 });
