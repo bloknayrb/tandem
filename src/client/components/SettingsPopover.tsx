@@ -8,9 +8,15 @@ interface SettingsPopoverProps {
   anchorRect: DOMRect | null;
   settings: TandemSettings;
   onUpdate: (partial: Partial<TandemSettings>) => void;
+  /** Element to return focus to on close (typically the settings gear button). */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 const POPOVER_WIDTH = 320;
+const HEADING_ID = "tandem-settings-heading";
+
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function SettingsPopover({
   open,
@@ -18,6 +24,7 @@ export function SettingsPopover({
   anchorRect,
   settings,
   onUpdate,
+  returnFocusRef,
 }: SettingsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
@@ -31,27 +38,60 @@ export function SettingsPopover({
     return () => window.removeEventListener("resize", handler);
   }, [open]);
 
-  // Dismiss on outside click
+  // Initial focus + focus return on close
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    // Focus the dialog container so screen readers announce the heading;
+    // Tab then moves into the content.
+    const node = popoverRef.current;
+    node?.focus();
+    return () => {
+      returnFocusRef?.current?.focus();
+    };
+  }, [open, returnFocusRef]);
+
+  // Outside-dismiss on pointerdown (covers mouse + touch + pen)
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: PointerEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
         onClose();
       }
     };
-    // Delay listener attachment so the opening click doesn't immediately close
-    const timer = setTimeout(() => document.addEventListener("mousedown", handler), 0);
+    const timer = setTimeout(() => document.addEventListener("pointerdown", handler), 0);
     return () => {
       clearTimeout(timer);
-      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("pointerdown", handler);
     };
   }, [open, onClose]);
 
-  // Dismiss on Escape
+  // Escape to close + focus trap on Tab
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !popoverRef.current) return;
+      const focusables = popoverRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      // If focus has escaped the dialog entirely, pull it back in.
+      if (!popoverRef.current.contains(active)) {
+        e.preventDefault();
+        first.focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -83,6 +123,7 @@ export function SettingsPopover({
   const cardStyle = (selected: boolean, disabled?: boolean): React.CSSProperties => ({
     flex: 1,
     padding: "8px",
+    minHeight: "24px",
     border: selected ? "2px solid #6366f1" : "2px solid #e5e7eb",
     borderRadius: "6px",
     background: disabled ? "#f3f4f6" : selected ? "#eef2ff" : "#fff",
@@ -99,6 +140,10 @@ export function SettingsPopover({
     <div
       ref={popoverRef}
       data-testid="settings-popover"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={HEADING_ID}
+      tabIndex={-1}
       style={{
         position: "fixed",
         left: `${left}px`,
@@ -113,6 +158,7 @@ export function SettingsPopover({
         display: "flex",
         flexDirection: "column",
         gap: "14px",
+        outline: "none",
       }}
     >
       {/* Header */}
@@ -123,7 +169,9 @@ export function SettingsPopover({
           alignItems: "center",
         }}
       >
-        <span style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Layout Settings</span>
+        <span id={HEADING_ID} style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+          Settings
+        </span>
         <button
           onClick={onClose}
           style={{
@@ -133,7 +181,9 @@ export function SettingsPopover({
             color: "#9ca3af",
             fontSize: "16px",
             lineHeight: 1,
-            padding: "0 2px",
+            padding: "4px 6px",
+            minWidth: "24px",
+            minHeight: "24px",
           }}
           aria-label="Close settings"
         >
@@ -143,24 +193,33 @@ export function SettingsPopover({
 
       {/* Layout mode */}
       <div>
-        <div style={sectionLabelStyle}>Layout</div>
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div id="settings-layout-label" style={sectionLabelStyle}>
+          Layout
+        </div>
+        <div
+          role="radiogroup"
+          aria-labelledby="settings-layout-label"
+          style={{ display: "flex", gap: "8px" }}
+        >
           <button
             data-testid="layout-tabbed-btn"
+            role="radio"
+            aria-checked={settings.layout === "tabbed"}
             onClick={() => onUpdate({ layout: "tabbed" })}
             style={cardStyle(settings.layout === "tabbed")}
-            aria-pressed={settings.layout === "tabbed"}
           >
             <div style={{ fontSize: "18px", marginBottom: "2px" }}>{"[=|]"}</div>
             Tabbed
           </button>
           <button
             data-testid="layout-three-panel-btn"
+            role="radio"
+            aria-checked={settings.layout === "three-panel"}
+            aria-disabled={threePanelDisabled || undefined}
             onClick={() => {
               if (!threePanelDisabled) onUpdate({ layout: "three-panel" });
             }}
             style={cardStyle(settings.layout === "three-panel", threePanelDisabled)}
-            aria-pressed={settings.layout === "three-panel"}
             title={threePanelDisabled ? "Requires viewport wider than 768px" : undefined}
           >
             <div style={{ fontSize: "18px", marginBottom: "2px" }}>{"[|||]"}</div>
@@ -177,21 +236,29 @@ export function SettingsPopover({
       {/* Primary tab (tabbed mode only) */}
       {settings.layout === "tabbed" && (
         <div>
-          <div style={sectionLabelStyle}>Default Tab</div>
-          <div style={{ display: "flex", gap: "8px" }}>
+          <div id="settings-default-tab-label" style={sectionLabelStyle}>
+            Default Tab
+          </div>
+          <div
+            role="radiogroup"
+            aria-labelledby="settings-default-tab-label"
+            style={{ display: "flex", gap: "8px" }}
+          >
             <button
               data-testid="default-tab-chat-btn"
+              role="radio"
+              aria-checked={settings.primaryTab === "chat"}
               onClick={() => onUpdate({ primaryTab: "chat" })}
               style={cardStyle(settings.primaryTab === "chat")}
-              aria-pressed={settings.primaryTab === "chat"}
             >
               Chat
             </button>
             <button
               data-testid="default-tab-annotations-btn"
+              role="radio"
+              aria-checked={settings.primaryTab === "annotations"}
               onClick={() => onUpdate({ primaryTab: "annotations" })}
               style={cardStyle(settings.primaryTab === "annotations")}
-              aria-pressed={settings.primaryTab === "annotations"}
             >
               Annotations
             </button>
@@ -202,21 +269,29 @@ export function SettingsPopover({
       {/* Panel order (three-panel mode only) */}
       {settings.layout === "three-panel" && (
         <div>
-          <div style={sectionLabelStyle}>Panel Order</div>
-          <div style={{ display: "flex", gap: "8px" }}>
+          <div id="settings-panel-order-label" style={sectionLabelStyle}>
+            Panel Order
+          </div>
+          <div
+            role="radiogroup"
+            aria-labelledby="settings-panel-order-label"
+            style={{ display: "flex", gap: "8px" }}
+          >
             <button
               data-testid="panel-order-cea-btn"
+              role="radio"
+              aria-checked={settings.panelOrder === "chat-editor-annotations"}
               onClick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
               style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
-              aria-pressed={settings.panelOrder === "chat-editor-annotations"}
             >
               Chat | Editor | Ann.
             </button>
             <button
               data-testid="panel-order-aec-btn"
+              role="radio"
+              aria-checked={settings.panelOrder === "annotations-editor-chat"}
               onClick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
               style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
-              aria-pressed={settings.panelOrder === "annotations-editor-chat"}
             >
               Ann. | Editor | Chat
             </button>
@@ -271,6 +346,7 @@ export function SettingsPopover({
             cursor: "pointer",
             fontSize: "12px",
             color: "#374151",
+            minHeight: "24px",
           }}
         >
           <input

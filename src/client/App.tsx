@@ -250,6 +250,7 @@ export default function App() {
   const { settings, updateSettings } = useTandemSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
   useEffect(() => {
@@ -474,6 +475,7 @@ export default function App() {
           setSettingsAnchor(rect);
           setSettingsOpen(true);
         }}
+        settingsBtnRef={settingsBtnRef}
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
         heldCount={heldCount}
@@ -898,6 +900,7 @@ export default function App() {
         anchorRect={settingsAnchor}
         settings={settings}
         onUpdate={updateSettings}
+        returnFocusRef={settingsBtnRef}
       />
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
