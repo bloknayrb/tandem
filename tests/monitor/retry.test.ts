@@ -66,6 +66,22 @@ describe("retry counter semantics", () => {
     expect(connectAttempts).toBeLessThanOrEqual(6); // CHANNEL_MAX_RETRIES is 5
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+
+  it("writes a monitor:exit notification to stdout before process.exit(1)", async () => {
+    stub.on("/api/events", () => {
+      throw new Error("refused");
+    });
+
+    const mainPromise = main().catch(() => {});
+    await vi.advanceTimersByTimeAsync(200_000);
+    await mainPromise;
+
+    const stdoutCalls = stdoutSpy.mock.calls.map((c) => String(c[0]));
+    const exitLine = stdoutCalls.find(
+      (s) => s.includes("monitor:exit") || s.includes("Tandem monitor disconnected"),
+    );
+    expect(exitLine).toBeDefined();
+  });
 });
 
 describe("exponential backoff", () => {

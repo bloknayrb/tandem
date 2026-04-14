@@ -109,6 +109,11 @@ export async function main(): Promise<void> {
             reportErr instanceof Error ? reportErr.message : reportErr,
           );
         }
+        // Visible-to-Claude-Code notification. stderr is invisible to the plugin
+        // host, so the user would otherwise see events just stop with no signal.
+        process.stdout.write(
+          "Tandem monitor disconnected — restart Tandem to restore real-time events\n",
+        );
         process.exit(1);
       }
 
