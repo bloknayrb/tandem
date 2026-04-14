@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectAndStream, main } from "../../src/monitor/index.js";
+import { CHANNEL_MAX_RETRIES } from "../../src/shared/constants.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -62,8 +63,8 @@ describe("retry counter semantics", () => {
     await vi.advanceTimersByTimeAsync(200_000);
     await mainPromise;
 
-    // With the old bug, this would loop forever. With the fix, max 5 attempts.
-    expect(connectAttempts).toBeLessThanOrEqual(6); // CHANNEL_MAX_RETRIES is 5
+    // With the old bug, this would loop forever. With the fix, max attempts is CHANNEL_MAX_RETRIES.
+    expect(connectAttempts).toBeLessThanOrEqual(CHANNEL_MAX_RETRIES);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -94,8 +95,8 @@ describe("retry counter semantics", () => {
     await vi.advanceTimersByTimeAsync(200_000);
     await mainPromise;
 
-    // CHANNEL_MAX_RETRIES = 5; expect at least that many connect attempts.
-    expect(connectAttempts).toBeGreaterThanOrEqual(5);
+    // Expect at least CHANNEL_MAX_RETRIES connect attempts before exhaustion.
+    expect(connectAttempts).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
