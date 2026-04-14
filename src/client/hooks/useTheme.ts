@@ -18,25 +18,35 @@ export function resolveTheme(pref: ThemePreference): ResolvedTheme {
 
 /**
  * Apply the resolved theme to <html data-theme="…"> and, when the user's
+ * preference is "system", subscribe to OS-level changes. Returns a cleanup
+ * that removes the attribute and (for "system") the matchMedia listener.
+ *
+ * Exported so the DOM side-effect contract is directly testable without
+ * spinning up a React render environment.
+ */
+export function applyTheme(pref: ThemePreference): () => void {
+  const root = document.documentElement;
+  root.setAttribute("data-theme", resolveTheme(pref));
+
+  if (pref !== "system") {
+    return () => root.removeAttribute("data-theme");
+  }
+
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const onChange = () => root.setAttribute("data-theme", systemTheme());
+  mq.addEventListener("change", onChange);
+  return () => {
+    mq.removeEventListener("change", onChange);
+    root.removeAttribute("data-theme");
+  };
+}
+
+/**
+ * Apply the resolved theme to <html data-theme="…"> and, when the user's
  * preference is "system", re-apply on OS-level changes. Scoped to <html>
  * (not <body>) so CSS-custom-property overrides cascade into portals and
  * popovers rendered outside the React root.
  */
 export function useTheme(pref: ThemePreference): void {
-  useEffect(() => {
-    const root = document.documentElement;
-    root.setAttribute("data-theme", resolveTheme(pref));
-
-    if (pref !== "system") {
-      return () => root.removeAttribute("data-theme");
-    }
-
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => root.setAttribute("data-theme", systemTheme());
-    mq.addEventListener("change", onChange);
-    return () => {
-      mq.removeEventListener("change", onChange);
-      root.removeAttribute("data-theme");
-    };
-  }, [pref]);
+  useEffect(() => applyTheme(pref), [pref]);
 }

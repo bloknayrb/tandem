@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../../src/client/hooks/useTandemSettings.js";
+import {
+  loadSettings,
+  mergeAndClampSettings,
+  type TandemSettings,
+} from "../../src/client/hooks/useTandemSettings.js";
 import {
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
@@ -235,5 +239,65 @@ describe("loadSettings — reduceMotion", () => {
     vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: "garbage" }));
     expect(loadSettings().reduceMotion).toBe(true);
+  });
+});
+
+describe("useTandemSettings — updateSettings write path", () => {
+  // mergeAndClampSettings is the pure core of updateSettings — exercising it
+  // directly covers the clamp-on-write contract without spinning up a React
+  // render environment (no @testing-library/react in this project).
+
+  const BASE: TandemSettings = {
+    layout: "three-panel",
+    primaryTab: "chat",
+    panelOrder: "chat-editor-annotations",
+    editorWidthPercent: 75,
+    selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
+    showAuthorship: false,
+    reduceMotion: false,
+    textSize: "m",
+    theme: "system",
+  };
+
+  it("clamps editorWidthPercent above 100 down to 100", () => {
+    const next = mergeAndClampSettings(BASE, { editorWidthPercent: 120 });
+    expect(next.editorWidthPercent).toBe(100);
+  });
+
+  it("clamps editorWidthPercent below 50 up to 50", () => {
+    const next = mergeAndClampSettings(BASE, { editorWidthPercent: 10 });
+    expect(next.editorWidthPercent).toBe(50);
+  });
+
+  it("clamps selectionDwellMs above max down to SELECTION_DWELL_MAX_MS", () => {
+    const next = mergeAndClampSettings(BASE, { selectionDwellMs: 99_999 });
+    expect(next.selectionDwellMs).toBe(SELECTION_DWELL_MAX_MS);
+  });
+
+  it("clamps selectionDwellMs below min up to SELECTION_DWELL_MIN_MS", () => {
+    const next = mergeAndClampSettings(BASE, { selectionDwellMs: 100 });
+    expect(next.selectionDwellMs).toBe(SELECTION_DWELL_MIN_MS);
+  });
+
+  it("preserves unchanged fields when a single field is updated", () => {
+    const next = mergeAndClampSettings(BASE, { theme: "dark" });
+    expect(next.theme).toBe("dark");
+    expect(next.layout).toBe(BASE.layout);
+    expect(next.primaryTab).toBe(BASE.primaryTab);
+    expect(next.panelOrder).toBe(BASE.panelOrder);
+    expect(next.editorWidthPercent).toBe(BASE.editorWidthPercent);
+    expect(next.selectionDwellMs).toBe(BASE.selectionDwellMs);
+    expect(next.showAuthorship).toBe(BASE.showAuthorship);
+    expect(next.reduceMotion).toBe(BASE.reduceMotion);
+    expect(next.textSize).toBe(BASE.textSize);
+  });
+
+  it("passes in-range numeric values through unchanged", () => {
+    const next = mergeAndClampSettings(BASE, {
+      editorWidthPercent: 80,
+      selectionDwellMs: 1500,
+    });
+    expect(next.editorWidthPercent).toBe(80);
+    expect(next.selectionDwellMs).toBe(1500);
   });
 });

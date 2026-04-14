@@ -112,21 +112,32 @@ export function loadSettings(): TandemSettings {
   return { ...DEFAULTS, reduceMotion: prefersReducedMotion() };
 }
 
+/**
+ * Merge a partial update into the current settings and clamp numeric fields
+ * to their valid ranges. Pure — no React, no storage — so the clamp-on-write
+ * contract is directly testable.
+ */
+export function mergeAndClampSettings(
+  prev: TandemSettings,
+  partial: Partial<TandemSettings>,
+): TandemSettings {
+  const merged = { ...prev, ...partial };
+  return {
+    ...merged,
+    editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
+    selectionDwellMs: Math.max(
+      SELECTION_DWELL_MIN_MS,
+      Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
+    ),
+  };
+}
+
 export function useTandemSettings() {
   const [settings, setSettingsState] = useState<TandemSettings>(loadSettings);
 
   const updateSettings = useCallback((partial: Partial<TandemSettings>) => {
     setSettingsState((prev) => {
-      const merged = { ...prev, ...partial };
-      // Clamp numeric values on write (same rules as loadSettings)
-      const next: TandemSettings = {
-        ...merged,
-        editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
-        selectionDwellMs: Math.max(
-          SELECTION_DWELL_MIN_MS,
-          Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
-        ),
-      };
+      const next = mergeAndClampSettings(prev, partial);
       try {
         localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
         // Mirror authorship toggle to dedicated key for ProseMirror plugin init
