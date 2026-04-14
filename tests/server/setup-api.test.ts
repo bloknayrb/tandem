@@ -186,8 +186,9 @@ describe("runSetupHandler", () => {
 
   it("returns 207 on partial failure (some target configs fail, others succeed, skill installs)", async () => {
     // Create a directory at the config path to make applyConfig fail for it.
-    // Skill install still succeeds against ~/.claude, and detectTargets may produce
-    // additional targets on this platform — which is fine, the handler reports the mix.
+    // Skill install still succeeds against ~/.claude (writable in beforeEach),
+    // and detectTargets may produce additional targets on this platform — which
+    // is fine, the handler reports the mix.
     const configPath = join(tmpDir, ".claude.json");
     mkdirSync(configPath, { recursive: true });
     const result = await runSetupHandler(
@@ -195,12 +196,10 @@ describe("runSetupHandler", () => {
       tmpDir,
     );
     const data = result.body.data!;
+    expect(data.skillInstalled).toBe(true);
     expect(data.errors.length).toBeGreaterThan(0);
-    // If skill installed (always true when ~/.claude exists and isn't read-only),
-    // the outcome is partial, not total — 207.
-    if (data.skillInstalled) {
-      expect(result.status).toBe(207);
-    }
+    expect(data.errors.some((e) => e.includes("Claude Code"))).toBe(true);
+    expect(result.status).toBe(207);
   });
 
   it("uses custom nodeBinary in MCP config", async () => {
