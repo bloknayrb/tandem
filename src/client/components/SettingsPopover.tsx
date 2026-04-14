@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../shared/constants";
+import {
+  SELECTION_DWELL_MAX_MS,
+  SELECTION_DWELL_MIN_MS,
+  USER_NAME_MAX_LEN,
+} from "../../shared/constants";
 import { useRadioGroup } from "../hooks/useRadioGroup";
 import type {
   LayoutMode,
@@ -280,7 +284,7 @@ export function SettingsPopover({
               e.currentTarget.blur();
             }
           }}
-          maxLength={40}
+          maxLength={USER_NAME_MAX_LEN}
           style={{
             width: "100%",
             padding: "6px 8px",

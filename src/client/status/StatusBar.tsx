@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
+import { CLAUDE_PRESENCE_COLOR, USER_NAME_MAX_LEN } from "../../shared/constants";
 import { useUserName } from "../hooks/useUserName";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
@@ -157,7 +157,7 @@ export function StatusBar({
           }}
           aria-label="Display name"
           title="Your display name"
-          maxLength={40}
+          maxLength={USER_NAME_MAX_LEN}
           style={{
             background: "transparent",
             border: "none",
