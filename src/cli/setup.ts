@@ -222,13 +222,18 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
 
   // Plugin install instructions (shown on all successful setups)
   if (failures < targets.length) {
+    const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
+    const devInstructions = existsSync(pluginManifest)
+      ? `  Or for development, load directly from this package:\n\n` +
+        `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
+      : `  (Development plugin dir not found at ${pluginManifest}; skipping local-plugin instructions.)\n\n`;
+
     console.error(
       "\n\x1b[1mReal-time push notifications (recommended):\x1b[0m\n" +
         "  Install the Tandem plugin for instant events (one-time):\n\n" +
         "    claude plugin marketplace add bloknayrb/tandem\n" +
         "    claude plugin install tandem@tandem-editor\n\n" +
-        "  Or for development, load directly from this package:\n\n" +
-        `    claude --plugin-dir ${PACKAGE_ROOT}\n\n` +
+        devInstructions +
         "  Without the plugin, Claude still works but relies on tandem_checkInbox polling.\n",
     );
   }
