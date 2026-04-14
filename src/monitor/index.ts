@@ -518,6 +518,10 @@ function refreshMode(): void {
   // every hot-path event.
   if (now - cachedModeFailedAt < MODE_CACHE_TTL_MS) return;
 
+  // Fire-and-forget. The inner try/finally catches fetch errors, but we
+  // attach an outer .catch as a belt-and-suspenders guard against any future
+  // synchronous throw before the try escaping to the hot-path caller that
+  // cannot handle it.
   _modeRefreshInFlight = (async () => {
     try {
       const result = await fetchMode();
@@ -534,7 +538,10 @@ function refreshMode(): void {
     } finally {
       _modeRefreshInFlight = null;
     }
-  })();
+  })().catch((err) => {
+    console.error("[Monitor] refreshMode unexpected error:", err);
+    _modeRefreshInFlight = null;
+  });
 }
 
 /**
