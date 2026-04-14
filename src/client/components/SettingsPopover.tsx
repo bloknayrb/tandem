@@ -117,7 +117,7 @@ export function SettingsPopover({
   const sectionLabelStyle: React.CSSProperties = {
     fontSize: "11px",
     fontWeight: 600,
-    color: "#374151",
+    color: "var(--tandem-fg)",
     marginBottom: "6px",
     textTransform: "uppercase",
     letterSpacing: "0.5px",
@@ -127,13 +127,21 @@ export function SettingsPopover({
     flex: 1,
     padding: "8px",
     minHeight: "24px",
-    border: selected ? "2px solid #6366f1" : "2px solid #e5e7eb",
+    border: `2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"}`,
     borderRadius: "6px",
-    background: disabled ? "#f3f4f6" : selected ? "#eef2ff" : "#fff",
+    background: disabled
+      ? "var(--tandem-surface-muted)"
+      : selected
+        ? "var(--tandem-accent-bg)"
+        : "var(--tandem-surface)",
     cursor: disabled ? "not-allowed" : "pointer",
     textAlign: "center",
     fontSize: "11px",
-    color: disabled ? "#9ca3af" : selected ? "#4338ca" : "#6b7280",
+    color: disabled
+      ? "var(--tandem-fg-subtle)"
+      : selected
+        ? "var(--tandem-accent-fg-strong)"
+        : "var(--tandem-fg-muted)",
     fontWeight: selected ? 600 : 400,
     opacity: disabled ? 0.6 : 1,
     transition: "border-color 0.15s, background 0.15s",
@@ -152,8 +160,9 @@ export function SettingsPopover({
         left: `${left}px`,
         top: `${top}px`,
         width: `${POPOVER_WIDTH}px`,
-        background: "#fff",
-        border: "1px solid #e5e7eb",
+        background: "var(--tandem-surface)",
+        color: "var(--tandem-fg)",
+        border: "1px solid var(--tandem-border)",
         borderRadius: "8px",
         boxShadow: "0 4px 24px rgba(0,0,0,0.12)",
         padding: "16px",
@@ -172,7 +181,10 @@ export function SettingsPopover({
           alignItems: "center",
         }}
       >
-        <span id={HEADING_ID} style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+        <span
+          id={HEADING_ID}
+          style={{ fontSize: "13px", fontWeight: 600, color: "var(--tandem-fg)" }}
+        >
           Settings
         </span>
         <button
@@ -181,7 +193,7 @@ export function SettingsPopover({
             background: "none",
             border: "none",
             cursor: "pointer",
-            color: "#9ca3af",
+            color: "var(--tandem-fg-subtle)",
             fontSize: "16px",
             lineHeight: 1,
             padding: "4px 6px",
@@ -218,13 +230,38 @@ export function SettingsPopover({
             width: "100%",
             padding: "6px 8px",
             fontSize: "12px",
-            color: "#111827",
-            background: "#fff",
-            border: "1px solid #d1d5db",
+            color: "var(--tandem-fg)",
+            background: "var(--tandem-surface)",
+            border: "1px solid var(--tandem-border-strong)",
             borderRadius: "4px",
             outline: "none",
           }}
         />
+      </div>
+
+      {/* Theme */}
+      <div>
+        <div id="settings-theme-label" style={sectionLabelStyle}>
+          Theme
+        </div>
+        <div
+          role="radiogroup"
+          aria-labelledby="settings-theme-label"
+          style={{ display: "flex", gap: "8px" }}
+        >
+          {(["light", "dark", "system"] as const).map((t) => (
+            <button
+              key={t}
+              data-testid={`theme-${t}-btn`}
+              role="radio"
+              aria-checked={settings.theme === t}
+              onClick={() => onUpdate({ theme: t })}
+              style={cardStyle(settings.theme === t)}
+            >
+              {t === "light" ? "Light" : t === "dark" ? "Dark" : "System"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Layout mode */}
@@ -263,7 +300,7 @@ export function SettingsPopover({
           </button>
         </div>
         {threePanelDisabled && (
-          <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+          <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
             Three-panel requires a wider viewport
           </div>
         )}
@@ -343,7 +380,7 @@ export function SettingsPopover({
             {settings.editorWidthPercent}%
           </span>
         </div>
-        <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
+        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginBottom: "6px" }}>
           How much of the available space the editor text fills
         </div>
         <input
@@ -354,7 +391,7 @@ export function SettingsPopover({
           step={5}
           value={settings.editorWidthPercent}
           onChange={(e) => onUpdate({ editorWidthPercent: Number(e.target.value) })}
-          style={{ width: "100%", accentColor: "#6366f1" }}
+          style={{ width: "100%", accentColor: "var(--tandem-accent)" }}
           aria-label="Editor width"
         />
         <div
@@ -362,7 +399,7 @@ export function SettingsPopover({
             display: "flex",
             justifyContent: "space-between",
             fontSize: "10px",
-            color: "#9ca3af",
+            color: "var(--tandem-fg-subtle)",
           }}
         >
           <span>50%</span>
@@ -381,7 +418,7 @@ export function SettingsPopover({
             gap: "8px",
             cursor: "pointer",
             fontSize: "12px",
-            color: "#374151",
+            color: "var(--tandem-fg)",
             minHeight: "24px",
           }}
         >
@@ -389,11 +426,11 @@ export function SettingsPopover({
             type="checkbox"
             checked={settings.showAuthorship}
             onChange={(e) => onUpdate({ showAuthorship: e.target.checked })}
-            style={{ accentColor: "#6366f1" }}
+            style={{ accentColor: "var(--tandem-accent)" }}
           />
           <span>Show who wrote what</span>
         </label>
-        <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
           Highlights text by author: <span style={{ color: "#3b82f6" }}>you</span> /{" "}
           <span style={{ color: "#ea8a1e" }}>Claude</span>
         </div>
@@ -422,7 +459,7 @@ export function SettingsPopover({
             </button>
           ))}
         </div>
-        <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
           Reading density only — use browser zoom (Ctrl + =/−) to scale the whole UI.
         </div>
       </div>
@@ -437,7 +474,7 @@ export function SettingsPopover({
             gap: "8px",
             cursor: "pointer",
             fontSize: "12px",
-            color: "#374151",
+            color: "var(--tandem-fg)",
             minHeight: "24px",
           }}
         >
@@ -445,11 +482,11 @@ export function SettingsPopover({
             type="checkbox"
             checked={settings.reduceMotion}
             onChange={(e) => onUpdate({ reduceMotion: e.target.checked })}
-            style={{ accentColor: "#6366f1" }}
+            style={{ accentColor: "var(--tandem-accent)" }}
           />
           <span>Reduce motion</span>
         </label>
-        <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
           Disables smooth autoscroll and the annotation flash animation.
         </div>
       </div>
@@ -462,7 +499,7 @@ export function SettingsPopover({
             {(settings.selectionDwellMs / 1000).toFixed(1)}s
           </span>
         </div>
-        <div style={{ fontSize: "10px", color: "#9ca3af", marginBottom: "6px" }}>
+        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginBottom: "6px" }}>
           How long you must hold a selection before Claude notices it
         </div>
         <input
@@ -473,7 +510,7 @@ export function SettingsPopover({
           step={100}
           value={settings.selectionDwellMs}
           onChange={(e) => onUpdate({ selectionDwellMs: Number(e.target.value) })}
-          style={{ width: "100%", accentColor: "#6366f1" }}
+          style={{ width: "100%", accentColor: "var(--tandem-accent)" }}
           aria-label="Selection dwell time"
         />
         <div
@@ -481,7 +518,7 @@ export function SettingsPopover({
             display: "flex",
             justifyContent: "space-between",
             fontSize: "10px",
-            color: "#9ca3af",
+            color: "var(--tandem-fg-subtle)",
           }}
         >
           <span>{(SELECTION_DWELL_MIN_MS / 1000).toFixed(1)}s</span>

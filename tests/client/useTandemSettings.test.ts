@@ -166,6 +166,37 @@ describe("loadSettings — textSize", () => {
   });
 });
 
+describe("loadSettings — theme", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to 'system' when no stored value", () => {
+    expect(loadSettings().theme).toBe("system");
+  });
+
+  it.each(["light", "dark", "system"] as const)("accepts '%s'", (value) => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: value }));
+    expect(loadSettings().theme).toBe(value);
+  });
+
+  it("falls back to 'system' for unknown values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: "sepia" }));
+    expect(loadSettings().theme).toBe("system");
+  });
+
+  it("falls back to 'system' for non-string values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: true }));
+    expect(loadSettings().theme).toBe("system");
+  });
+});
+
 describe("loadSettings — reduceMotion", () => {
   let store: Map<string, string>;
 

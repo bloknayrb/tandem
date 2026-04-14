@@ -31,6 +31,7 @@ import { useSettingsShortcut } from "./hooks/useSettingsShortcut";
 import { useTabCycleKeyboard } from "./hooks/useTabCycleKeyboard";
 import { useTabOrder } from "./hooks/useTabOrder";
 import { TEXT_SIZE_PX, useTandemSettings } from "./hooks/useTandemSettings";
+import { useTheme } from "./hooks/useTheme";
 import { useTutorial } from "./hooks/useTutorial";
 import { useWebViewZoom } from "./hooks/useWebViewZoom";
 import { useYjsSync } from "./hooks/useYjsSync";
@@ -285,6 +286,8 @@ export default function App() {
     document.body.classList.toggle("tandem-reduce-motion", settings.reduceMotion);
     return () => document.body.classList.remove("tandem-reduce-motion");
   }, [settings.reduceMotion]);
+
+  useTheme(settings.theme);
 
   // Expose editor font-size as a CSS custom property so the editor style
   // picks it up without recreating the Tiptap instance. Reading-density

@@ -11,6 +11,7 @@ export type LayoutMode = "tabbed" | "three-panel";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
+export type ThemePreference = "light" | "dark" | "system";
 
 export interface TandemSettings {
   layout: LayoutMode;
@@ -21,6 +22,7 @@ export interface TandemSettings {
   showAuthorship: boolean;
   reduceMotion: boolean;
   textSize: TextSize;
+  theme: ThemePreference;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -45,6 +47,7 @@ const DEFAULTS: TandemSettings = {
   showAuthorship: false,
   reduceMotion: false,
   textSize: "m",
+  theme: "system",
 };
 
 /**
@@ -89,6 +92,10 @@ export function loadSettings(): TandemSettings {
           parsed.textSize === "s" || parsed.textSize === "m" || parsed.textSize === "l"
             ? parsed.textSize
             : DEFAULTS.textSize,
+        theme:
+          parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
+            ? parsed.theme
+            : DEFAULTS.theme,
       };
     }
   } catch {
