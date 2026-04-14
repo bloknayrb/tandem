@@ -363,7 +363,7 @@ function trackAwareness(p: Promise<unknown>): void {
   p.finally(() => outstandingAwareness.delete(p));
 }
 
-async function finalClearAwareness(): Promise<void> {
+async function finalClearAwareness(): Promise<boolean> {
   if (shutdownTimers.awarenessTimer) clearTimeout(shutdownTimers.awarenessTimer);
   if (shutdownTimers.clearAwarenessTimer) clearTimeout(shutdownTimers.clearAwarenessTimer);
   // Drain any in-flight awareness POSTs first so the shutdown "active:false"
@@ -373,9 +373,9 @@ async function finalClearAwareness(): Promise<void> {
   }
   // If no awareness was ever scheduled for a document, skip the POST —
   // sending {documentId: null} is ambiguous and the server may reject it.
-  if (shutdownTimers.lastDocumentId === null) return;
+  if (shutdownTimers.lastDocumentId === null) return true;
   try {
-    await fetchWithTimeout(
+    const res = await fetchWithTimeout(
       `${TANDEM_URL}/api/channel-awareness`,
       {
         method: "POST",
@@ -388,19 +388,25 @@ async function finalClearAwareness(): Promise<void> {
       },
       AWARENESS_FETCH_TIMEOUT_MS,
     );
+    if (!res.ok) {
+      console.error(`[Monitor] Shutdown awareness clear returned ${res.status}`);
+      return false;
+    }
+    return true;
   } catch (err) {
     console.error(
       "[Monitor] Shutdown awareness clear failed:",
       describeFetchError(err, "/api/channel-awareness shutdown", AWARENESS_FETCH_TIMEOUT_MS),
     );
+    return false;
   }
 }
 
 /** Called on SIGINT/SIGTERM and from tests. Flushes awareness then exits. */
 export async function shutdownMonitor(signal: string): Promise<void> {
   console.error(`[Monitor] Received ${signal}, clearing awareness and exiting`);
-  await finalClearAwareness();
-  process.exit(0);
+  const ok = await finalClearAwareness();
+  process.exit(ok ? 0 : 1);
 }
 
 /** @deprecated Use shutdownMonitor. Kept for backwards compatibility during the rename. */
