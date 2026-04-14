@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFetchStub, installMonitorFakeTimers } from "./fetch-harness.js";
+import { connectAndStream } from "../../src/monitor/index.js";
+import {
+  ControllableStream,
+  createFetchStub,
+  installMonitorFakeTimers,
+  sseFrame,
+  sseResponse,
+} from "./fetch-harness.js";
 
 describe("getCachedMode fail-closed", () => {
   let stub: ReturnType<typeof createFetchStub>;
@@ -87,5 +94,66 @@ describe("startup cache warm", () => {
     // Advance through full retry exhaustion
     await vi.advanceTimersByTimeAsync(5 * 30_000 + 5_000);
     await mainPromise;
+  });
+});
+
+describe("background mode refresh", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    installMonitorFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.useRealTimers();
+    stdoutSpy.mockRestore();
+  });
+
+  it("event delivery is not blocked by a slow /api/mode response", async () => {
+    let modeResolve: ((r: Response) => void) | undefined;
+    stub.on(
+      "/api/mode",
+      () =>
+        new Promise<Response>((resolve) => {
+          modeResolve = resolve;
+        }),
+    );
+
+    const stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+
+    const promise = connectAndStream(
+      undefined,
+      () => {},
+      () => {},
+    );
+    stream.push(
+      sseFrame(
+        {
+          id: "e1",
+          type: "document:opened",
+          timestamp: 1,
+          payload: { fileName: "a.md", format: "md" },
+        },
+        "e1",
+      ),
+    );
+
+    // Advance time but DO NOT resolve /api/mode
+    await vi.advanceTimersByTimeAsync(100);
+    // stdout should already have the event (cached default is "tandem", non-blocking)
+    expect(stdoutSpy).toHaveBeenCalled();
+
+    // Now resolve mode and end the stream
+    modeResolve?.(new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    stream.end();
+    await promise.catch(() => {});
   });
 });

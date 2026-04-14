@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectAndStream } from "../../src/monitor/index.js";
+import { connectAndStream, getCachedMode } from "../../src/monitor/index.js";
 import { ControllableStream, createFetchStub, sseFrame, sseResponse } from "./fetch-harness.js";
 
 describe("solo-mode event filtering", () => {
@@ -31,6 +31,11 @@ describe("solo-mode event filtering", () => {
       () => {},
       () => {},
     );
+
+    // Pre-warm the mode cache so getModeSync() sees "solo" when the hot path
+    // checks it. The hot path now reads synchronously (fire-and-forget refresh),
+    // so the cache must be seeded before the first event is processed.
+    await getCachedMode();
 
     stream.push(
       sseFrame(

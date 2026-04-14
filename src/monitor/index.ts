@@ -263,8 +263,8 @@ export async function connectAndStream(
 
         // Solo mode suppression: drop non-chat events when mode is "solo"
         if (event.type !== "chat:message") {
-          const mode = await getCachedMode();
-          if (mode === "solo") {
+          refreshMode(); // fire-and-forget
+          if (getModeSync() === "solo") {
             console.error(`[Monitor] Solo mode: suppressed ${event.type} event`);
             if (eventId) onEventId(eventId);
             continue;
@@ -398,6 +398,50 @@ export async function getCachedMode(): Promise<TandemMode> {
     );
     return "solo"; // do NOT update cache
   }
+}
+
+/** Sync reader — always returns the last known mode. Use this on the hot path. */
+export function getModeSync(): TandemMode {
+  return cachedMode;
+}
+
+/**
+ * Background refresh — fire-and-forget, deduplicated.
+ *
+ * Leaves `cachedMode` UNCHANGED on failure (stale-preferred over
+ * mid-session disruption). Distinct from getCachedMode which fails closed
+ * on failure — see commit message for the asymmetry rationale.
+ */
+function refreshMode(): void {
+  if (_modeRefreshInFlight) return;
+  const now = Date.now();
+  if (now - cachedModeAt < MODE_CACHE_TTL_MS) return;
+
+  _modeRefreshInFlight = (async () => {
+    try {
+      const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
+      if (res.ok) {
+        const body = (await res.json()) as { mode?: unknown };
+        if (VALID_MODES.has(body.mode as TandemMode)) {
+          cachedMode = body.mode as TandemMode;
+          cachedModeAt = Date.now(); // only on success
+        } else {
+          console.error(
+            `[Monitor] Mode refresh returned invalid mode ${JSON.stringify(body.mode)}`,
+          );
+        }
+      } else {
+        console.error(`[Monitor] Mode refresh returned ${res.status}`);
+      }
+    } catch (err) {
+      console.error(
+        "[Monitor] Background mode refresh failed (keeping cached):",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      _modeRefreshInFlight = null;
+    }
+  })();
 }
 
 /**
