@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.1] - 2026-04-13
 
+### Added
+
+- **Claude Code plugin support** — monitor-based event push (`src/monitor/index.ts`) gives real-time notifications without polling or the channel shim. Install via `claude plugin marketplace add bloknayrb/tandem`.
+- **`--with-channel-shim` opt-in** — `tandem setup --with-channel-shim` writes the legacy `tandem-channel` MCP entry for setups that can't install the plugin.
+
+### Changed
+
+- `tandem setup` no longer writes the `tandem-channel` MCP entry by default — running the plugin and the shim simultaneously produces duplicate event notifications. The shim is now opt-in only via `--with-channel-shim`.
+
 ### Fixed
 
 - **Windows update failure** — sidecar is now killed before the NSIS installer runs, preventing "Error opening file for writing: node-sidecar.exe" during updates
+- **Mode check fails closed** — `/api/mode` errors now fall back to "solo" at startup (privacy signal, not a permissive default) while the hot-path background refresh keeps the last known good value to avoid mid-session suppression.
+- **Retry counter resets on stable uptime** — retry count now resets only after 60s of continuous uptime, not on every delivered event; prevents infinite reconnect loops when the server crashes after each event.
+- **Exponential backoff on reconnect** — monitor reconnects use 2s/4s/8s/16s/30s backoff instead of a fixed 2s delay.
+- **SIGINT/SIGTERM clears awareness** — monitor posts a final `clearAwareness` before exit so the "Claude is active" indicator doesn't hang in the browser.
+- **Per-route fetch timeouts** — `AbortSignal.timeout` enforces budgets per route (connect 10s, mode 2s, awareness 5s, error report 3s) to prevent hung SSE connects or mode lookups from stalling the monitor.
+- **SSE parse errors don't advance `lastEventId`** — JSON parse failures and schema validation errors are logged with event ID + frame tail but do not advance `lastEventId`, so bad events are re-delivered on reconnect rather than silently dropped.
+- **SKILL.md corrected** — `question` annotation guidance now uses `type === 'comment' && directedAt === 'claude' && author === 'user'`; all 5 highlight colors listed (yellow, red, green, blue, purple).
 
 ## [0.5.0] - 2026-04-13
 
