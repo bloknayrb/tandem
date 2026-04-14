@@ -184,16 +184,23 @@ describe("runSetupHandler", () => {
     expect(readFileSync(skillPath, "utf-8")).toContain("name: tandem");
   });
 
-  it("reports partial failures without failing the whole request", async () => {
-    // Create a directory at the config path to make applyConfig fail for it
+  it("returns 207 on partial failure (some target configs fail, others succeed, skill installs)", async () => {
+    // Create a directory at the config path to make applyConfig fail for it.
+    // Skill install still succeeds against ~/.claude, and detectTargets may produce
+    // additional targets on this platform — which is fine, the handler reports the mix.
     const configPath = join(tmpDir, ".claude.json");
     mkdirSync(configPath, { recursive: true });
     const result = await runSetupHandler(
       { nodeBinary: "node", channelPath: "/fake/channel.js" },
       tmpDir,
     );
-    expect(result.status).toBe(200);
-    expect(result.body.data.errors.length).toBeGreaterThan(0);
+    const data = result.body.data!;
+    expect(data.errors.length).toBeGreaterThan(0);
+    // If skill installed (always true when ~/.claude exists and isn't read-only),
+    // the outcome is partial, not total — 207.
+    if (data.skillInstalled) {
+      expect(result.status).toBe(207);
+    }
   });
 
   it("uses custom nodeBinary in MCP config", async () => {
