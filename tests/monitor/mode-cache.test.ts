@@ -244,4 +244,42 @@ describe("background mode refresh", () => {
     const failureCalls = modeCallCount - successCalls;
     expect(failureCalls).toBeLessThanOrEqual(12);
   });
+
+  it("intermittent /api/mode during startup does not spam refreshes", async () => {
+    let modeCallCount = 0;
+    stub.on("/api/mode", () => {
+      modeCallCount++;
+      if (modeCallCount <= 5) return new Response("fail", { status: 503 });
+      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
+    });
+
+    const mod = await import("../../src/monitor/index.js");
+    await mod.getCachedMode();
+    expect(mod.getModeSync()).toBe("solo");
+    expect(modeCallCount).toBe(1);
+
+    const stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+    const p = mod.connectAndStream(undefined, () => {});
+
+    for (let i = 0; i < 10; i++) {
+      stream.push(
+        sseFrame(
+          {
+            id: `e${i}`,
+            type: "document:opened",
+            timestamp: i,
+            payload: { fileName: "x.md", format: "md" },
+          },
+          `e${i}`,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    stream.end();
+    await p.catch(() => {});
+
+    // Rate-limiter holds refreshes to <= 6 (1 startup + at most one per 2s window over 5s).
+    expect(modeCallCount).toBeLessThanOrEqual(6);
+  });
 });
