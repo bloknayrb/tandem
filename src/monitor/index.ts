@@ -37,7 +37,8 @@ const MODE_CACHE_TTL_MS = 2000;
 // Bound the SSE buffer so a misbehaving server that never sends frame
 // boundaries can't wedge the monitor with unbounded string growth.
 const MAX_SSE_BUFFER_BYTES = 1_000_000;
-const CONNECT_FETCH_TIMEOUT_MS = 10_000; // /api/events initial handshake
+const CONNECT_FETCH_TIMEOUT_MS = 10_000; // /api/events initial handshake only
+const SSE_INACTIVITY_TIMEOUT_MS = 60_000; // Cancel stream if no bytes arrive within this window
 const MODE_FETCH_TIMEOUT_MS = 2_000; // /api/mode cache refresh
 const AWARENESS_FETCH_TIMEOUT_MS = 5_000; // /api/channel-awareness POST
 const ERROR_REPORT_TIMEOUT_MS = 3_000; // /api/channel-error POST on exit
@@ -137,11 +138,22 @@ export async function connectAndStream(
   const headers: Record<string, string> = { Accept: "text/event-stream" };
   if (lastEventId) headers["Last-Event-ID"] = lastEventId;
 
-  const res = await fetchWithTimeout(
-    `${TANDEM_URL}/api/events`,
-    { headers },
+  // Split handshake timeout from body lifetime. Using AbortSignal.timeout on
+  // the fetch would kill the response body ReadableStream at CONNECT_FETCH_TIMEOUT_MS,
+  // causing every SSE stream to abort at 10s and making STABLE_CONNECTION_MS
+  // unreachable. A local AbortController that we clear immediately after the
+  // handshake settles means the body stream is no longer governed by it.
+  const connectCtrl = new AbortController();
+  const connectTimer = setTimeout(
+    () => connectCtrl.abort(new Error("handshake timeout")),
     CONNECT_FETCH_TIMEOUT_MS,
   );
+  let res: Response;
+  try {
+    res = await fetch(`${TANDEM_URL}/api/events`, { headers, signal: connectCtrl.signal });
+  } finally {
+    clearTimeout(connectTimer);
+  }
   if (!res.ok) throw new Error(`SSE endpoint returned ${res.status}`);
   if (!res.body) throw new Error("SSE endpoint returned no body");
 
@@ -152,6 +164,19 @@ export async function connectAndStream(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  // Inactivity watchdog: a healthy stream emits at least SSE keepalive comments
+  // periodically. If no bytes arrive for SSE_INACTIVITY_TIMEOUT_MS, cancel the
+  // reader and mark the cause — reader.cancel() resolves pending read() with
+  // {done: true} (doesn't reject), so we surface the reason via a local flag.
+  let lastActivityAt = Date.now();
+  let inactivityTimedOut = false;
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastActivityAt > SSE_INACTIVITY_TIMEOUT_MS) {
+      inactivityTimedOut = true;
+      reader.cancel(new Error("SSE inactivity timeout")).catch(() => {});
+    }
+  }, SSE_INACTIVITY_TIMEOUT_MS / 4);
 
   // shutdownTimers is the single source of truth for awareness timers so
   // finalClearAwareness() can flush them on SIGINT. Using locals alongside
@@ -214,7 +239,11 @@ export async function connectAndStream(
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) throw new Error("SSE stream ended");
+      if (done) {
+        if (inactivityTimedOut) throw new Error("SSE inactivity timeout");
+        throw new Error("SSE stream ended");
+      }
+      lastActivityAt = Date.now();
 
       buffer += decoder.decode(value, { stream: true });
 
@@ -283,6 +312,7 @@ export async function connectAndStream(
     }
   } finally {
     clearTimeout(stableTimer);
+    clearInterval(watchdog);
     // Prevent timers leaking across reconnects — stale awareness POSTs
     // from a dead connection would otherwise collide with a new one.
     if (shutdownTimers.awarenessTimer) clearTimeout(shutdownTimers.awarenessTimer);
