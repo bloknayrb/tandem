@@ -393,12 +393,15 @@ async function finalClearAwareness(): Promise<void> {
   }
 }
 
-/** Exposed for testing. Callers should NOT invoke this outside tests. */
-export async function shutdownForTests(signal: string): Promise<void> {
+/** Called on SIGINT/SIGTERM and from tests. Flushes awareness then exits. */
+export async function shutdownMonitor(signal: string): Promise<void> {
   console.error(`[Monitor] Received ${signal}, clearing awareness and exiting`);
   await finalClearAwareness();
   process.exit(0);
 }
+
+/** @deprecated Use shutdownMonitor. Kept for backwards compatibility during the rename. */
+export const shutdownForTests = shutdownMonitor;
 
 /** Exposed for testing only — seeds the lastDocumentId that shutdown reads. */
 export function _setLastDocumentIdForTests(id: string | null): void {
@@ -413,11 +416,11 @@ export function _addOutstandingAwarenessForTests(p: Promise<unknown>): void {
 
 function installShutdownHandlers(): void {
   // Never install real signal handlers under vitest — tests drive
-  // shutdownForTests() directly. Prevents listener accumulation and
+  // shutdownMonitor() directly. Prevents listener accumulation and
   // stray real-SIGINT mid-test process.exit.
   if (IS_VITEST) return;
   const handler = (signal: string) => {
-    shutdownForTests(signal).catch((err) => {
+    shutdownMonitor(signal).catch((err) => {
       console.error("[Monitor] Shutdown handler failed:", err);
       process.exit(1);
     });
