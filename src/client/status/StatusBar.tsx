@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR, USER_NAME_DEFAULT, USER_NAME_KEY } from "../../shared/constants";
+import { CLAUDE_PRESENCE_COLOR } from "../../shared/constants";
+import { useUserName } from "../hooks/useUserName";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
 interface StatusBarProps {
@@ -27,23 +28,13 @@ export function StatusBar({
   documentCount = 0,
   saving = false,
 }: StatusBarProps) {
-  const [userName, setUserName] = useState(() => {
-    try {
-      return localStorage.getItem(USER_NAME_KEY)?.trim() || USER_NAME_DEFAULT;
-    } catch {
-      return USER_NAME_DEFAULT;
-    }
-  });
+  const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
+  useEffect(() => {
+    setNameInput(userName);
+  }, [userName]);
   const commitName = () => {
-    const trimmed = nameInput.trim() || USER_NAME_DEFAULT;
-    setUserName(trimmed);
-    setNameInput(trimmed);
-    try {
-      localStorage.setItem(USER_NAME_KEY, trimmed);
-    } catch {
-      // localStorage unavailable (incognito/storage-disabled)
-    }
+    setUserName(nameInput);
   };
   const [showReconnectedFlash, setShowReconnectedFlash] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);

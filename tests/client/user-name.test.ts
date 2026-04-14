@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveUserName } from "../../src/client/hooks/useUserName.js";
 import { USER_NAME_DEFAULT } from "../../src/shared/constants.js";
-
-function resolveUserName(stored: string | null): string {
-  return stored?.trim() || USER_NAME_DEFAULT;
-}
 
 describe("resolveUserName", () => {
   it("returns stored name when valid", () => {
@@ -12,6 +9,10 @@ describe("resolveUserName", () => {
 
   it("returns default for null", () => {
     expect(resolveUserName(null)).toBe(USER_NAME_DEFAULT);
+  });
+
+  it("returns default for undefined", () => {
+    expect(resolveUserName(undefined)).toBe(USER_NAME_DEFAULT);
   });
 
   it("returns default for empty string", () => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../shared/constants";
 import type { TandemSettings } from "../hooks/useTandemSettings";
+import { useUserName } from "../hooks/useUserName";
 
 interface SettingsPopoverProps {
   open: boolean;
@@ -28,6 +29,11 @@ export function SettingsPopover({
 }: SettingsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const { userName, setUserName } = useUserName();
+  const [nameInput, setNameInput] = useState(userName);
+  useEffect(() => {
+    setNameInput(userName);
+  }, [userName]);
 
   // Track viewport width for three-panel availability (only while open)
   useEffect(() => {
@@ -189,6 +195,39 @@ export function SettingsPopover({
         >
           {"\u00d7"}
         </button>
+      </div>
+
+      {/* Display name */}
+      <div>
+        <label htmlFor="settings-display-name" style={sectionLabelStyle}>
+          Display Name
+        </label>
+        <input
+          id="settings-display-name"
+          data-testid="settings-display-name"
+          type="text"
+          value={nameInput}
+          onChange={(e) => setNameInput(e.target.value)}
+          onBlur={() => setUserName(nameInput)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Escape") {
+              setNameInput(userName);
+              e.currentTarget.blur();
+            }
+          }}
+          maxLength={40}
+          style={{
+            width: "100%",
+            padding: "6px 8px",
+            fontSize: "12px",
+            color: "#111827",
+            background: "#fff",
+            border: "1px solid #d1d5db",
+            borderRadius: "4px",
+            outline: "none",
+          }}
+        />
       </div>
 
       {/* Layout mode */}
