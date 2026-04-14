@@ -278,6 +278,14 @@ export default function App() {
     editor.view.dispatch(tr);
   }, [settings.showAuthorship]);
 
+  // Body class mirrors the reduce-motion setting so CSS rules (animations,
+  // transitions) can be scoped without a media query alone. JS-level gating
+  // of scrollIntoView `behavior` still happens in the panels.
+  useEffect(() => {
+    document.body.classList.toggle("tandem-reduce-motion", settings.reduceMotion);
+    return () => document.body.classList.remove("tandem-reduce-motion");
+  }, [settings.reduceMotion]);
+
   const [reviewMode, setReviewMode] = useState(false);
   const [showChat, setShowChat] = useState(() => settings.primaryTab === "chat");
 
@@ -531,6 +539,7 @@ export default function App() {
                   capturedAnchor={capturedAnchor}
                   onCapturedAnchorChange={setCapturedAnchor}
                   inputRef={chatInputRef}
+                  reduceMotion={settings.reduceMotion}
                 />
               ) : (
                 <SidePanel
@@ -547,6 +556,7 @@ export default function App() {
                   onExitReviewMode={exitReviewMode}
                   activeAnnotationId={activeAnnotationId}
                   onActiveAnnotationChange={setActiveAnnotationId}
+                  reduceMotion={settings.reduceMotion}
                 />
               )}
             </div>
@@ -674,6 +684,7 @@ export default function App() {
                   onExitReviewMode={exitReviewMode}
                   activeAnnotationId={activeAnnotationId}
                   onActiveAnnotationChange={setActiveAnnotationId}
+                  reduceMotion={settings.reduceMotion}
                 />
               ) : (
                 <ChatPanel
@@ -687,6 +698,7 @@ export default function App() {
                   capturedAnchor={capturedAnchor}
                   onCapturedAnchorChange={setCapturedAnchor}
                   inputRef={chatInputRef}
+                  reduceMotion={settings.reduceMotion}
                 />
               )}
             </div>
@@ -851,6 +863,7 @@ export default function App() {
                 capturedAnchor={capturedAnchor}
                 onCapturedAnchorChange={setCapturedAnchor}
                 inputRef={chatInputRef}
+                reduceMotion={settings.reduceMotion}
               />
             </div>
             <div
@@ -875,6 +888,7 @@ export default function App() {
                 onExitReviewMode={exitReviewMode}
                 activeAnnotationId={activeAnnotationId}
                 onActiveAnnotationChange={setActiveAnnotationId}
+                reduceMotion={settings.reduceMotion}
               />
             </div>
           </div>

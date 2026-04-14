@@ -399,6 +399,33 @@ export function SettingsPopover({
         </div>
       </div>
 
+      {/* Reduce motion */}
+      <div>
+        <label
+          data-testid="reduce-motion-toggle"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            cursor: "pointer",
+            fontSize: "12px",
+            color: "#374151",
+            minHeight: "24px",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={settings.reduceMotion}
+            onChange={(e) => onUpdate({ reduceMotion: e.target.checked })}
+            style={{ accentColor: "#6366f1" }}
+          />
+          <span>Reduce motion</span>
+        </label>
+        <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+          Disables smooth autoscroll and the annotation flash animation.
+        </div>
+      </div>
+
       {/* Selection sensitivity (dwell time) */}
       <div>
         <div style={sectionLabelStyle}>

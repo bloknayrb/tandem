@@ -28,6 +28,7 @@ interface SidePanelProps {
   onExitReviewMode: () => void;
   activeAnnotationId: string | null;
   onActiveAnnotationChange: (id: string | null) => void;
+  reduceMotion?: boolean;
 }
 
 const SMALL_BTN: React.CSSProperties = {
@@ -82,7 +83,9 @@ export function SidePanel({
   onExitReviewMode,
   activeAnnotationId,
   onActiveAnnotationChange,
+  reduceMotion,
 }: SidePanelProps) {
+  const scrollBehavior: ScrollBehavior = reduceMotion ? "auto" : "smooth";
   const [filterType, setFilterType] = useState<FilterType>("all");
   const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>("all");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
@@ -341,16 +344,19 @@ export function SidePanel({
   }
 
   // Scroll editor to an annotation's range
-  const scrollToAnnotation = useCallback((ann: Annotation) => {
-    const ed = editorRef.current;
-    if (!ed) return;
-    const resolved = annotationToPmRange(ann, ed.state.doc, ydocRef.current);
-    if (!resolved) return;
-    ed.chain().focus().setTextSelection({ from: resolved.from, to: resolved.to }).run();
-    const domAtPos = ed.view.domAtPos(resolved.from);
-    const el = domAtPos.node instanceof HTMLElement ? domAtPos.node : domAtPos.node.parentElement;
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, []);
+  const scrollToAnnotation = useCallback(
+    (ann: Annotation) => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const resolved = annotationToPmRange(ann, ed.state.doc, ydocRef.current);
+      if (!resolved) return;
+      ed.chain().focus().setTextSelection({ from: resolved.from, to: resolved.to }).run();
+      const domAtPos = ed.view.domAtPos(resolved.from);
+      const el = domAtPos.node instanceof HTMLElement ? domAtPos.node : domAtPos.node.parentElement;
+      el?.scrollIntoView({ behavior: scrollBehavior, block: "center" });
+    },
+    [scrollBehavior],
+  );
 
   // Stable keyboard review callbacks (use refs to avoid dep cascade)
   const navigateReview = useCallback(
@@ -519,7 +525,7 @@ export function SidePanel({
     const timer = setTimeout(() => {
       const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
       if (card) {
-        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        card.scrollIntoView({ behavior: scrollBehavior, block: "nearest" });
         card.classList.add("tandem-annotation-flash");
         const onEnd = () => card.classList.remove("tandem-annotation-flash");
         card.addEventListener("animationend", onEnd, { once: true });
@@ -534,7 +540,7 @@ export function SidePanel({
       }
     }, 50);
     return () => clearTimeout(timer);
-  }, [activeAnnotationId]);
+  }, [activeAnnotationId, scrollBehavior]);
 
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
   const activeReviewAnn =
@@ -875,6 +881,10 @@ export function SidePanel({
         .tandem-annotation-flash {
           animation: tandem-annotation-flash 0.8s ease-out;
         }
+        @media (prefers-reduced-motion: reduce) {
+          .tandem-annotation-flash { animation: none; }
+        }
+        body.tandem-reduce-motion .tandem-annotation-flash { animation: none; }
       `}</style>
     </div>
   );

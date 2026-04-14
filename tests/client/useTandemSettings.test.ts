@@ -129,3 +129,44 @@ describe("loadSettings — editorWidthPercent clamping (regression guard)", () =
     expect(loadSettings().editorWidthPercent).toBe(50);
   });
 });
+
+describe("loadSettings — reduceMotion", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+    // Stub matchMedia to a predictable default so tests that don't set
+    // reduceMotion explicitly get a deterministic fallback.
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to false when no OS preference and no stored value", () => {
+    expect(loadSettings().reduceMotion).toBe(false);
+  });
+
+  it("honors OS preference when no stored value", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    expect(loadSettings().reduceMotion).toBe(true);
+  });
+
+  it("stored true overrides OS preference false", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: true }));
+    expect(loadSettings().reduceMotion).toBe(true);
+  });
+
+  it("stored false overrides OS preference true", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: false }));
+    expect(loadSettings().reduceMotion).toBe(false);
+  });
+
+  it("non-boolean stored value falls back to OS preference", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: "garbage" }));
+    expect(loadSettings().reduceMotion).toBe(true);
+  });
+});

@@ -18,6 +18,18 @@ export interface TandemSettings {
   editorWidthPercent: number;
   selectionDwellMs: number;
   showAuthorship: boolean;
+  reduceMotion: boolean;
+}
+
+// OS-level reduced-motion preference — used as the default so users who have
+// already opted in at the system level don't see any animations on first run.
+function prefersReducedMotion(): boolean {
+  try {
+    if (typeof matchMedia === "undefined") return false;
+    return matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
 }
 
 const DEFAULTS: TandemSettings = {
@@ -27,6 +39,7 @@ const DEFAULTS: TandemSettings = {
   editorWidthPercent: 50,
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   showAuthorship: false,
+  reduceMotion: false,
 };
 
 /**
@@ -65,12 +78,14 @@ export function loadSettings(): TandemSettings {
           ),
         ),
         showAuthorship: parsed.showAuthorship === true,
+        reduceMotion:
+          typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
       };
     }
   } catch {
     // localStorage unavailable (incognito/storage-disabled)
   }
-  return DEFAULTS;
+  return { ...DEFAULTS, reduceMotion: prefersReducedMotion() };
 }
 
 export function useTandemSettings() {
