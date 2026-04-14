@@ -9,6 +9,8 @@
  * --dangerously-load-development-channels.
  */
 
+import { resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { TandemEvent } from "../server/events/types.js";
 import { formatEventContent, parseTandemEvent } from "../server/events/types.js";
 import {
@@ -37,7 +39,7 @@ const MODE_CACHE_TTL_MS = 2000;
 // boundaries can't wedge the monitor with unbounded string growth.
 const MAX_SSE_BUFFER_BYTES = 1_000_000;
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
 
   let retries = 0;
@@ -81,7 +83,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function connectAndStream(
+export async function connectAndStream(
   lastEventId: string | undefined,
   onEventId: (id: string) => void,
 ): Promise<void> {
@@ -225,7 +227,7 @@ let _modeRefreshInFlight: Promise<void> | null = null;
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
 
-async function getCachedMode(): Promise<TandemMode> {
+export async function getCachedMode(): Promise<TandemMode> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
   try {
@@ -268,7 +270,25 @@ export function _resetMonitorStateForTests(): void {
   process.removeAllListeners("SIGTERM");
 }
 
-main().catch((err) => {
-  console.error("[Monitor] Fatal error:", err);
-  process.exit(1);
-});
+// Auto-run when invoked directly (e.g. `node dist/monitor/index.js` or
+// `tsx src/monitor/index.ts`). Skipped under vitest so tests can import
+// and drive individual functions.
+//
+// Cross-platform direct-run detection: compare resolved file paths
+// (not URL strings) because Windows file:// URLs normalize differently
+// than process.argv[1] backslashes. Case-insensitive on win32 because
+// C:\ vs c:\ drive letters can drift depending on how the CLI was invoked.
+const __thisFile = fileURLToPath(import.meta.url);
+function normalizeForCompare(p: string): string {
+  const r = resolvePath(p);
+  return process.platform === "win32" ? r.toLowerCase() : r;
+}
+const isDirectRun =
+  typeof process.argv[1] === "string" &&
+  normalizeForCompare(process.argv[1]) === normalizeForCompare(__thisFile);
+if (isDirectRun && process.env.VITEST !== "true") {
+  main().catch((err) => {
+    console.error("[Monitor] Fatal error:", err);
+    process.exit(1);
+  });
+}
