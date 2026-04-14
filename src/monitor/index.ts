@@ -323,13 +323,19 @@ export async function connectAndStream(
           }
         }
 
-        if (eventId) onEventId(eventId);
-
         // Collapse newlines so multi-line content stays as a single
         // notification (each stdout line is delivered separately).
         const content = formatEventContent(event).replace(/\n/g, " ");
-        process.stdout.write(content + "\n");
+        try {
+          process.stdout.write(content + "\n");
+        } catch (err) {
+          // EPIPE on a closed plugin-host pipe — re-throw so main's retry loop
+          // can decide to exhaust and exit. Do NOT checkpoint lastEventId
+          // because the event wasn't delivered.
+          throw err;
+        }
 
+        if (eventId) onEventId(eventId);
         scheduleAwareness(event);
       }
     }
