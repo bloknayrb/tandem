@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyConfig, buildMcpEntries, detectTargets, installSkill } from "../../src/cli/setup.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
@@ -207,5 +207,12 @@ describe("installSkill", () => {
     expect(content).toContain("Collaboration Mode");
     expect(content).toContain("Error Recovery");
     expect(content).toContain("Session Handoff");
+  });
+});
+
+describe("runSetup plugin instructions", () => {
+  it("package .claude-plugin/plugin.json exists at expected path", () => {
+    const manifestPath = resolve(import.meta.dirname, "../../.claude-plugin/plugin.json");
+    expect(existsSync(manifestPath)).toBe(true);
   });
 });
