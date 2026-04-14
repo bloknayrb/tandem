@@ -78,7 +78,7 @@ describe("SSE buffer overflow", () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
+    installMonitorFakeTimers();
     stub = createFetchStub();
     stub.install();
     stream = new ControllableStream();

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFetchStub } from "./fetch-harness.js";
+import { createFetchStub, installMonitorFakeTimers } from "./fetch-harness.js";
 
 describe("graceful shutdown", () => {
   let stub: ReturnType<typeof createFetchStub>;
 
   beforeEach(() => {
-    vi.useFakeTimers();
+    installMonitorFakeTimers();
     stub = createFetchStub();
     stub.install();
   });
