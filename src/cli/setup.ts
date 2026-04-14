@@ -25,21 +25,32 @@ export interface McpEntry {
 
 export interface McpEntries {
   tandem: McpEntry;
-  "tandem-channel": McpEntry;
+  "tandem-channel"?: McpEntry;
 }
 
-export function buildMcpEntries(channelPath: string, nodeBinary = "node"): McpEntries {
-  return {
-    tandem: {
-      type: "http",
-      url: `${MCP_URL}/mcp`,
-    },
-    "tandem-channel": {
-      command: nodeBinary,
+export interface BuildMcpEntriesOptions {
+  /** Include the legacy stdio channel shim. Defaults to false — the plugin
+   *  monitor handles event push for modern installs. Users on older setups
+   *  can run `tandem setup --with-channel-shim` to preserve the shim. */
+  withChannelShim?: boolean;
+  nodeBinary?: string;
+}
+
+export function buildMcpEntries(
+  channelPath: string,
+  opts: BuildMcpEntriesOptions = {},
+): McpEntries {
+  const entries: McpEntries = {
+    tandem: { type: "http", url: `${MCP_URL}/mcp` },
+  };
+  if (opts.withChannelShim) {
+    entries["tandem-channel"] = {
+      command: opts.nodeBinary ?? "node",
       args: [channelPath],
       env: { TANDEM_URL: MCP_URL },
-    },
-  };
+    };
+  }
+  return entries;
 }
 
 export interface DetectedTarget {
@@ -162,7 +173,9 @@ export async function installSkill(opts: { homeOverride?: string } = {}): Promis
 }
 
 /** Run the setup command. Writes MCP config to all detected Claude installs. */
-export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
+export async function runSetup(
+  opts: { force?: boolean; withChannelShim?: boolean } = {},
+): Promise<void> {
   console.error("\nTandem Setup\n");
   console.error("Detecting Claude installations...");
 
@@ -182,7 +195,7 @@ export async function runSetup(opts: { force?: boolean } = {}): Promise<void> {
   }
 
   console.error("\nWriting MCP configuration...");
-  const entries = buildMcpEntries(CHANNEL_DIST);
+  const entries = buildMcpEntries(CHANNEL_DIST, { withChannelShim: opts.withChannelShim });
 
   let failures = 0;
   for (const t of targets) {
