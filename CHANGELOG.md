@@ -5,6 +5,23 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Settings expansion** — Settings popover grows from layout/dwell/authorship into a fuller preferences surface:
+  - Ctrl+, / Cmd+, hotkey (AZERTY/QWERTZ/IME-safe, survives non-QWERTY layouts)
+  - Display Name field, synced live with the StatusBar via a shared `useUserName` hook
+  - Reduce Motion toggle (JS-gates all autoscroll paths; defaults to `prefers-reduced-motion`)
+  - Text Size S/M/L for editor reading density (browser zoom remains the WCAG 1.4.4 path)
+  - Theme Light/Dark/System (CSS custom-property token system on `<html data-theme>` with `forced-colors` support for Windows High Contrast)
+- Tier 0 accessibility prerequisites on SettingsPopover: `role="dialog"` + `aria-modal`, focus trap, Escape-to-close, pointerdown outside-dismiss, radiogroup semantics, 24×24 hit targets, focus-return on close
+
+### Changed
+
+- Settings heading renamed "Layout Settings" → "Settings"
+- Settings popover hardcoded hex values swapped to CSS tokens (remaining components will migrate in a follow-up)
+
 ## [0.5.1] - 2026-04-13
 
 ### Fixed
