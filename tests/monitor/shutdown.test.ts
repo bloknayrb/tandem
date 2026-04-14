@@ -47,22 +47,22 @@ describe("graceful shutdown", () => {
     exitSpy.mockRestore();
   });
 
-  it("skips the awareness POST when no document is active (lastDocumentId === null)", async () => {
+  it("skips the shutdown awareness POST when no event with a documentId ever arrived", async () => {
+    const writes: unknown[] = [];
+    stub.on("/api/channel-awareness", async (_url, init) => {
+      if (typeof init?.body === "string") writes.push(JSON.parse(init.body));
+      return new Response("", { status: 200 });
+    });
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as never);
+
     const mod = await import("../../src/monitor/index.js");
     mod._resetMonitorStateForTests();
-    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
 
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new Error("exit");
-    }) as never);
-    try {
-      await mod.shutdownForTests("SIGINT");
-    } catch {
-      // exit thrown is expected
-    }
-
-    const clears = stub.calls.filter((c) => c.url.includes("/api/channel-awareness"));
-    expect(clears.length).toBe(0);
+    await expect(mod.shutdownMonitor("SIGINT")).rejects.toThrow("exit:0");
+    expect(writes).toEqual([]);
     exitSpy.mockRestore();
   });
 
