@@ -128,4 +128,34 @@ describe("graceful shutdown", () => {
 
     expect(mod._getLastDocumentIdForTests()).toBe("doc-x");
   });
+
+  it("exits 1 when the final awareness clear POST fails", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as never);
+
+    stub.on("/api/channel-awareness", () => new Response("boom", { status: 500 }));
+
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+    mod._setLastDocumentIdForTests("doc-a");
+
+    await expect(mod.shutdownMonitor("SIGINT")).rejects.toThrow("exit:1");
+    exitSpy.mockRestore();
+  });
+
+  it("exits 0 when the final awareness clear POST succeeds", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as never);
+
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+    mod._setLastDocumentIdForTests("doc-a");
+
+    await expect(mod.shutdownMonitor("SIGINT")).rejects.toThrow("exit:0");
+    exitSpy.mockRestore();
+  });
 });
