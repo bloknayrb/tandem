@@ -27,6 +27,7 @@ import { useModeGate } from "./hooks/useModeGate";
 import { useNotifications } from "./hooks/useNotifications";
 import { useReviewCompletion } from "./hooks/useReviewCompletion";
 import { useSaveShortcut } from "./hooks/useSaveShortcut";
+import { useSettingsShortcut } from "./hooks/useSettingsShortcut";
 import { useTabCycleKeyboard } from "./hooks/useTabCycleKeyboard";
 import { useTabOrder } from "./hooks/useTabOrder";
 import { useTandemSettings } from "./hooks/useTandemSettings";
@@ -251,6 +252,13 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const openSettings = useCallback(() => {
+    const rect = settingsBtnRef.current?.getBoundingClientRect() ?? null;
+    setSettingsAnchor(rect);
+    setSettingsOpen(true);
+  }, []);
+  useSettingsShortcut(openSettings);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
   useEffect(() => {
