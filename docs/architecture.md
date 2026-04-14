@@ -340,14 +340,18 @@ On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs 
 
 ### Fetch Timeouts
 
-All outbound HTTP calls use an `AbortSignal.timeout`-wrapped helper with per-route budgets:
+Outbound HTTP calls use two mechanisms:
 
-| Route | Budget |
-|-------|--------|
-| SSE connect (`/api/events`) | 10s |
-| Mode check (`/api/mode`) | 2s |
-| Awareness POST (`/api/channel-awareness`) | 5s |
-| Error report (`/api/channel-error`) | 3s |
+1. **`fetchWithTimeout(url, init, ms)`** — wraps `AbortSignal.timeout(ms)` around `fetch`. Used for all request-response routes.
+2. **Split handshake + inactivity watchdog** — used for the streaming `/api/events` route. A local `AbortController` bounds the handshake; once the response headers arrive the controller's timer is cleared, and a separate inactivity watchdog cancels the body stream if no bytes arrive for `SSE_INACTIVITY_TIMEOUT_MS`. See [lesson #42](./lessons-learned.md#42-abortsignal-passed-to-fetch-governs-the-response-body-too).
+
+| Route | Mechanism | Budget |
+|-------|-----------|--------|
+| SSE handshake (`/api/events`) | Local `AbortController` | 10s (handshake only) |
+| SSE body (`/api/events`) | Inactivity watchdog | 60s per-read |
+| Mode check (`/api/mode`) | `AbortSignal.timeout` | 2s |
+| Awareness POST (`/api/channel-awareness`) | `AbortSignal.timeout` | 5s |
+| Error report (`/api/channel-error`) | `AbortSignal.timeout` | 3s |
 
 ### Why `tandem-channel` Is Now Opt-In
 
