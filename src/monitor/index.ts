@@ -140,6 +140,11 @@ export async function main(): Promise<void> {
       await new Promise((r) => setTimeout(r, delay));
     }
   }
+  // Defensive: if connectAndStream ever returns normally (it always throws today),
+  // the retry loop exits without an explicit exit code. Claude Code would see the
+  // plugin just stop. Fail loudly instead so the invariant is enforced.
+  console.error("[Monitor] Retry loop exited unexpectedly without exhaustion");
+  process.exit(1);
 }
 
 export async function connectAndStream(
