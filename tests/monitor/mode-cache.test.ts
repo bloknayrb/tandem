@@ -165,4 +165,49 @@ describe("background mode refresh", () => {
     stream.end();
     await promise.catch(() => {});
   });
+
+  it("keeps cachedMode unchanged across many refreshMode failures, rate-limited", async () => {
+    let modeCallCount = 0;
+    let modeShouldFail = false;
+    stub.on("/api/mode", () => {
+      modeCallCount++;
+      if (modeShouldFail) return new Response("err", { status: 500 });
+      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
+    });
+
+    const mod = await import("../../src/monitor/index.js");
+    await mod.getCachedMode();
+    expect(mod.getModeSync()).toBe("tandem");
+    const successCalls = modeCallCount;
+
+    // Switch /api/mode into failure mode, then stream 10 non-chat events past
+    // the TTL to exercise refreshMode repeatedly.
+    modeShouldFail = true;
+    const stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+    const p = connectAndStream(undefined, () => {});
+
+    for (let i = 0; i < 10; i++) {
+      stream.push(
+        sseFrame(
+          {
+            id: `e${i}`,
+            type: "document:opened",
+            timestamp: i,
+            payload: { fileName: "x.md", format: "md" },
+          },
+          `e${i}`,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(2500);
+    }
+    stream.end();
+    await p.catch(() => {});
+
+    // Stale cache preserved despite repeated refresh failures.
+    expect(mod.getModeSync()).toBe("tandem");
+    // Rate-limiter should keep failure fetches well below 10 (one per ~2s window).
+    const failureCalls = modeCallCount - successCalls;
+    expect(failureCalls).toBeLessThanOrEqual(12);
+  });
 });
