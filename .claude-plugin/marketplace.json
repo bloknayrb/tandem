@@ -13,7 +13,7 @@
         "source": "npm",
         "package": "tandem-editor"
       },
-      "description": "Collaborative AI-human document editor with real-time event push"
+      "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor"
     }
   ]
 }
