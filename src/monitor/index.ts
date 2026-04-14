@@ -210,15 +210,23 @@ export async function connectAndStream(
 
         if (!data) continue;
 
-        let event: TandemEvent | null;
+        let raw: unknown;
         try {
-          event = parseTandemEvent(JSON.parse(data));
-        } catch {
-          console.error("[Monitor] Malformed SSE event data (skipping):", data.slice(0, 200));
+          raw = JSON.parse(data);
+        } catch (err) {
+          console.error(
+            `[Monitor] SSE JSON parse failed (eventId=${eventId ?? "none"}, len=${data.length}): ${
+              err instanceof Error ? err.message : err
+            }. Tail:`,
+            data.slice(Math.max(0, data.length - 200)),
+          );
           continue;
         }
+        const event = parseTandemEvent(raw);
         if (!event) {
-          console.error("[Monitor] Received invalid SSE event, skipping");
+          console.error(
+            `[Monitor] SSE event failed validation (eventId=${eventId ?? "none"}): shape mismatch`,
+          );
           continue;
         }
 
