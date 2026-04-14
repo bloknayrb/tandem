@@ -184,7 +184,7 @@ export async function connectAndStream(
   let pendingAwareness: TandemEvent | null = null;
 
   function clearAwareness(documentId?: string) {
-    fetchWithTimeout(
+    const p = fetchWithTimeout(
       `${TANDEM_URL}/api/channel-awareness`,
       {
         method: "POST",
@@ -199,6 +199,7 @@ export async function connectAndStream(
     ).catch((err) => {
       console.error("[Monitor] Awareness clear failed:", err instanceof Error ? err.message : err);
     });
+    trackAwareness(p);
   }
 
   function flushAwareness() {
@@ -206,7 +207,7 @@ export async function connectAndStream(
     const event = pendingAwareness;
     pendingAwareness = null;
     shutdownTimers.lastDocumentId = event.documentId ?? null;
-    fetchWithTimeout(
+    const p = fetchWithTimeout(
       `${TANDEM_URL}/api/channel-awareness`,
       {
         method: "POST",
@@ -221,6 +222,7 @@ export async function connectAndStream(
     ).catch((err) => {
       console.error("[Monitor] Awareness update failed:", err instanceof Error ? err.message : err);
     });
+    trackAwareness(p);
 
     // Auto-clear after timeout so the indicator doesn't stick
     if (shutdownTimers.clearAwarenessTimer) clearTimeout(shutdownTimers.clearAwarenessTimer);
@@ -332,9 +334,22 @@ const shutdownTimers: {
 } = { awarenessTimer: null, clearAwarenessTimer: null, lastDocumentId: null };
 let _modeRefreshInFlight: Promise<void> | null = null;
 
+// Outstanding awareness POSTs — drained on shutdown so the server's last
+// seen awareness is the shutdown "active:false", not a racing update.
+const outstandingAwareness = new Set<Promise<unknown>>();
+function trackAwareness(p: Promise<unknown>): void {
+  outstandingAwareness.add(p);
+  p.finally(() => outstandingAwareness.delete(p)).catch(() => {});
+}
+
 async function finalClearAwareness(): Promise<void> {
   if (shutdownTimers.awarenessTimer) clearTimeout(shutdownTimers.awarenessTimer);
   if (shutdownTimers.clearAwarenessTimer) clearTimeout(shutdownTimers.clearAwarenessTimer);
+  // Drain any in-flight awareness POSTs first so the shutdown "active:false"
+  // is the last message the server observes.
+  if (outstandingAwareness.size > 0) {
+    await Promise.allSettled(outstandingAwareness);
+  }
   // If no awareness was ever scheduled for a document, skip the POST —
   // sending {documentId: null} is ambiguous and the server may reject it.
   if (shutdownTimers.lastDocumentId === null) return;
@@ -370,6 +385,12 @@ export async function shutdownForTests(signal: string): Promise<void> {
 /** Exposed for testing only — seeds the lastDocumentId that shutdown reads. */
 export function _setLastDocumentIdForTests(id: string | null): void {
   shutdownTimers.lastDocumentId = id;
+}
+
+/** Exposed for testing only — seeds an outstanding awareness POST so the
+ *  shutdown test can assert the drain-before-exit behavior. */
+export function _addOutstandingAwarenessForTests(p: Promise<unknown>): void {
+  trackAwareness(p);
 }
 
 function installShutdownHandlers(): void {
@@ -490,6 +511,7 @@ export function _resetMonitorStateForTests(): void {
   shutdownTimers.awarenessTimer = null;
   shutdownTimers.clearAwarenessTimer = null;
   shutdownTimers.lastDocumentId = null;
+  outstandingAwareness.clear();
   process.removeAllListeners("SIGINT");
   process.removeAllListeners("SIGTERM");
 }
