@@ -484,8 +484,8 @@ export function SettingsPopover({
           <span>Show who wrote what</span>
         </label>
         <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
-          Highlights text by author: <span style={{ color: "#3b82f6" }}>you</span> /{" "}
-          <span style={{ color: "#ea8a1e" }}>Claude</span>
+          Highlights text by author: <span style={{ color: "var(--tandem-author-user)" }}>you</span>{" "}
+          / <span style={{ color: "var(--tandem-author-claude)" }}>Claude</span>
         </div>
       </div>
 

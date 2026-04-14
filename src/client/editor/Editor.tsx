@@ -200,8 +200,8 @@ export function Editor({
 
         /* Authorship decorations — user=blue, claude=orange */
         .tandem-authorship { transition: color 0.2s; }
-        .tandem-authorship--user { color: rgb(59, 130, 246); }
-        .tandem-authorship--claude { color: rgb(234, 138, 30); }
+        .tandem-authorship--user { color: var(--tandem-author-user); }
+        .tandem-authorship--claude { color: var(--tandem-author-claude); }
 
         /* Claude focus paragraph */
         .tandem-claude-focus {
