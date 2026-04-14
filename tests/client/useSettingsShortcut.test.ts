@@ -32,8 +32,6 @@ describe("isSettingsShortcut", () => {
   });
 
   it("accepts shifted form (QWERTZ users must Shift to reach comma)", () => {
-    // Shift handling is implicit — we don't gate on shiftKey, so a Shift+Ctrl+,
-    // on QWERTZ still matches as long as code === "Comma".
     expect(
       isSettingsShortcut({
         code: "Comma",

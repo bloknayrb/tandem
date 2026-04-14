@@ -1,11 +1,6 @@
 import { useEffect } from "react";
 
-/**
- * Pure matcher so the hotkey logic can be unit-tested without a DOM.
- * `e.code === "Comma"` survives AZERTY/QWERTZ/IME layouts where `,` lives on
- * a different physical key; QWERTZ users must Shift to type it, so the shifted
- * form is accepted. Bail during IME composition.
- */
+// `e.code` (not `e.key`) so non-QWERTY layouts still hit; bail during IME.
 export function isSettingsShortcut(
   e: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "isComposing">,
 ): boolean {
@@ -14,7 +9,6 @@ export function isSettingsShortcut(
   return e.ctrlKey || e.metaKey;
 }
 
-/** Ctrl+, / Cmd+, opens the Settings popover. */
 export function useSettingsShortcut(onOpen: () => void): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

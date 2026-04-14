@@ -479,10 +479,7 @@ export default function App() {
       <Toolbar
         editor={editorRef.current}
         ydoc={activeTab?.ydoc ?? null}
-        onSettingsClick={(rect) => {
-          setSettingsAnchor(rect);
-          setSettingsOpen(true);
-        }}
+        onSettingsOpen={openSettings}
         settingsBtnRef={settingsBtnRef}
         tandemMode={tandemMode}
         onModeChange={setTandemMode}
