@@ -56,6 +56,12 @@ async function fetchWithTimeout(
 export async function main(): Promise<void> {
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
 
+  // Warm the mode cache before the first event so we don't default-suppress
+  // or default-deliver under an unknown user setting.
+  await getCachedMode().catch(() => {
+    // Already logged inside getCachedMode; continue with fail-closed default
+  });
+
   let retries = 0;
   let lastEventId: string | undefined;
 
@@ -257,28 +263,46 @@ let _modeRefreshInFlight: Promise<void> | null = null;
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
 
+/**
+ * Get the current collaboration mode, with a 2s TTL cache.
+ *
+ * **Fail-closed to "solo"** on any failure (network, non-2xx, JSON
+ * parse, shape mismatch). Solo is a user-driven privacy signal; leaking
+ * events when the mode endpoint is broken is strictly worse than
+ * temporarily over-suppressing them. The user will notice missed events
+ * sooner than they'll notice leaked ones in a supposedly-quiet session.
+ *
+ * Cache timestamp is ONLY updated on success. On failure, cachedModeAt
+ * is NOT updated — so the next call retries immediately instead of being
+ * rate-limited for 2s.
+ */
 export async function getCachedMode(): Promise<TandemMode> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
+
   try {
     const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
-    if (res.ok) {
-      const body = (await res.json()) as { mode?: unknown };
-      cachedMode = VALID_MODES.has(body.mode as TandemMode)
-        ? (body.mode as TandemMode)
-        : TANDEM_MODE_DEFAULT;
-    } else {
-      console.error(`[Monitor] Mode check returned ${res.status}, using cached: "${cachedMode}"`);
+    if (!res.ok) {
+      console.error(`[Monitor] Mode check returned ${res.status}, failing closed to 'solo'`);
+      return "solo"; // do NOT update cache
     }
+    const body = (await res.json()) as { mode?: unknown };
+    if (!VALID_MODES.has(body.mode as TandemMode)) {
+      console.error(
+        `[Monitor] Mode check returned invalid mode ${JSON.stringify(body.mode)}, failing closed to 'solo'`,
+      );
+      return "solo"; // do NOT update cache
+    }
+    cachedMode = body.mode as TandemMode;
+    cachedModeAt = now; // only on success
+    return cachedMode;
   } catch (err) {
     console.error(
-      "[Monitor] Mode check failed, delivering event (fail-open):",
+      "[Monitor] Mode check failed, failing closed to 'solo':",
       err instanceof Error ? err.message : err,
     );
+    return "solo"; // do NOT update cache
   }
-  // Rate-limit retries even on failure — avoid pounding the server.
-  cachedModeAt = now;
-  return cachedMode;
 }
 
 /**

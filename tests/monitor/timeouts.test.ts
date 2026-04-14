@@ -36,6 +36,6 @@ describe("fetch timeout", () => {
     // Note: Current getCachedMode still fail-open — B3 will change it to fail-closed.
     // This test just validates that the fetch is actually aborted (not hanging forever).
     // The mode value here will be whatever the current default is.
-    expect(mode).toBeDefined(); // will be "tandem" currently, "solo" after B3
+    expect(mode).toBe("solo");
   });
 });
