@@ -34,6 +34,33 @@ tandem           # starts server + opens browser
 
 `tandem setup` auto-detects Claude Code and Claude Desktop, writes MCP configuration, and installs a skill (`~/.claude/skills/tandem/SKILL.md`) that teaches Claude how to use Tandem's tools effectively. Re-run after upgrading (`npm update -g tandem-editor && tandem setup`).
 
+### Quickstart: Claude Code plugin (recommended)
+
+Install the plugin to get real-time push of editor events (selections, chat messages, document opens) without polling or the `--dangerously-load-development-channels` flag:
+
+```bash
+claude plugin marketplace add bloknayrb/tandem
+claude plugin install tandem@tandem-editor
+```
+
+This enables the monitor-based event stream. No other setup needed beyond running the Tandem server (`tandem start` or `npm run dev:server`).
+
+### Legacy stdio channel shim
+
+If you can't install the plugin, use the older channel shim:
+
+```bash
+tandem setup --with-channel-shim
+```
+
+This writes a `tandem-channel` entry to your Claude Code MCP config. Start Claude Code with:
+
+```bash
+claude --dangerously-load-development-channels server:tandem-channel
+```
+
+Don't combine this with the plugin — both subscribe to `/api/events` and you'll get duplicate notifications for every event.
+
 ### Connect Claude Code
 
 For the full Tandem experience, start Claude Code with the **channel push** flag:
