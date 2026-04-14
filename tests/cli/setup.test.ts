@@ -2,7 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyConfig, buildMcpEntries, detectTargets, installSkill } from "../../src/cli/setup.js";
+import {
+  applyConfig,
+  buildMcpEntries,
+  detectTargets,
+  installSkill,
+  validateChannelShimPrereq,
+} from "../../src/cli/setup.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 
 describe("buildMcpEntries", () => {
@@ -29,6 +35,27 @@ describe("buildMcpEntries", () => {
       nodeBinary: "/app/MacOS/node-sidecar",
     });
     expect(entries["tandem-channel"]?.command).toBe("/app/MacOS/node-sidecar");
+  });
+});
+
+describe("validateChannelShimPrereq", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "tandem-prereq-"));
+  });
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns false when the channel bundle does not exist", () => {
+    expect(validateChannelShimPrereq(join(tmpDir, "missing", "channel.js"))).toBe(false);
+  });
+
+  it("returns true when the channel bundle exists", () => {
+    const p = join(tmpDir, "channel.js");
+    writeFileSync(p, "");
+    expect(validateChannelShimPrereq(p)).toBe(true);
   });
 });
 
