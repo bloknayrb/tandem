@@ -98,6 +98,47 @@ describe("retry counter semantics", () => {
     expect(connectAttempts).toBeGreaterThanOrEqual(5);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+
+  it("retry counter resets after STABLE_CONNECTION_MS of continuous uptime", async () => {
+    let attempt = 0;
+    const stream1 = new ControllableStream();
+    const stream2 = new ControllableStream();
+    stub.on("/api/events", () => {
+      attempt++;
+      if (attempt === 1) return sseResponse(stream1);
+      if (attempt === 2) return sseResponse(stream2);
+      throw new Error("unexpected attempt");
+    });
+
+    const p = main().catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    stream1.push(
+      sseFrame(
+        {
+          id: "e1",
+          type: "document:opened",
+          timestamp: 1,
+          payload: { fileName: "a.md", format: "md" },
+        },
+        "e1",
+      ),
+    );
+
+    // Past STABLE_CONNECTION_MS (60s) — onStable resets retries to 0.
+    await vi.advanceTimersByTimeAsync(60_500);
+
+    stream1.end();
+    // Second attempt should fire after the initial 2s delay, not 30s (cap).
+    await vi.advanceTimersByTimeAsync(2_100);
+
+    expect(attempt).toBe(2);
+
+    stream2.end();
+    // Drain remaining retries so main() exits via the MAX branch.
+    await vi.advanceTimersByTimeAsync(200_000);
+    await p;
+  });
 });
 
 describe("exponential backoff", () => {
