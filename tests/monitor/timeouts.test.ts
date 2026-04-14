@@ -33,9 +33,6 @@ describe("fetch timeout", () => {
     // Advance past the 2000ms mode-check timeout
     await vi.advanceTimersByTimeAsync(2500);
     const mode = await modePromise;
-    // Note: Current getCachedMode still fail-open — B3 will change it to fail-closed.
-    // This test just validates that the fetch is actually aborted (not hanging forever).
-    // The mode value here will be whatever the current default is.
     expect(mode).toBe("solo");
   });
 });

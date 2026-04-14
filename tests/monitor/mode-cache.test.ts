@@ -52,6 +52,15 @@ describe("getCachedMode fail-closed", () => {
     expect(second).toBe("tandem"); // retry succeeded
     expect(callCount).toBe(2); // cache was not poisoned
   });
+
+  it("propagates fail-closed to getModeSync (hot path sees 'solo' after startup failure)", async () => {
+    stub.on("/api/mode", () => {
+      throw new Error("refused");
+    });
+    const mod = await import("../../src/monitor/index.js");
+    await mod.getCachedMode();
+    expect(mod.getModeSync()).toBe("solo");
+  });
 });
 
 describe("startup cache warm", () => {
