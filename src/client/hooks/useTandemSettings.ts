@@ -25,8 +25,8 @@ export interface TandemSettings {
 // already opted in at the system level don't see any animations on first run.
 function prefersReducedMotion(): boolean {
   try {
-    if (typeof matchMedia === "undefined") return false;
-    return matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   } catch {
     return false;
   }

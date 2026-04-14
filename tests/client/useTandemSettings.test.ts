@@ -137,7 +137,7 @@ describe("loadSettings — reduceMotion", () => {
     store = installLocalStorageStub();
     // Stub matchMedia to a predictable default so tests that don't set
     // reduceMotion explicitly get a deterministic fallback.
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
   });
 
   afterEach(() => {
@@ -149,7 +149,7 @@ describe("loadSettings — reduceMotion", () => {
   });
 
   it("honors OS preference when no stored value", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
     expect(loadSettings().reduceMotion).toBe(true);
   });
 
@@ -159,13 +159,13 @@ describe("loadSettings — reduceMotion", () => {
   });
 
   it("stored false overrides OS preference true", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: false }));
     expect(loadSettings().reduceMotion).toBe(false);
   });
 
   it("non-boolean stored value falls back to OS preference", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ reduceMotion: "garbage" }));
     expect(loadSettings().reduceMotion).toBe(true);
   });

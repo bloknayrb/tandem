@@ -499,6 +499,7 @@ export default function App() {
         onTabSwitch={setActiveTabId}
         onTabClose={handleTabClose}
         reorder={reorder}
+        reduceMotion={settings.reduceMotion}
       />
       {panelLayout.kind === "three-panel" ? (
         /* ── Three-panel layout: Left | Editor | Right ── */
