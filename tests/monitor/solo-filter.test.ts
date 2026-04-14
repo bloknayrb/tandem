@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectAndStream, getCachedMode } from "../../src/monitor/index.js";
-import { ControllableStream, createFetchStub, sseFrame, sseResponse } from "./fetch-harness.js";
+import {
+  ControllableStream,
+  createFetchStub,
+  installMonitorFakeTimers,
+  sseFrame,
+  sseResponse,
+} from "./fetch-harness.js";
 
 describe("solo-mode event filtering", () => {
   let stub: ReturnType<typeof createFetchStub>;
@@ -8,7 +14,7 @@ describe("solo-mode event filtering", () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
+    installMonitorFakeTimers();
     stub = createFetchStub();
     stub.install();
     stream = new ControllableStream();

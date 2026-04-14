@@ -19,13 +19,12 @@ import {
   DEFAULT_MCP_PORT,
   TANDEM_MODE_DEFAULT,
 } from "../shared/constants.js";
-import type { TandemMode } from "../shared/types.js";
+import { type TandemMode, TandemModeSchema } from "../shared/types.js";
 
-const VALID_MODES = new Set<TandemMode>(["solo", "tandem"]);
+const IS_VITEST = process.env.VITEST === "true";
 
 // Guard the redirect so test imports don't pollute vitest's console routing.
-// Production runs set VITEST !== "true".
-if (process.env.VITEST !== "true") {
+if (!IS_VITEST) {
   console.log = console.error;
   console.warn = console.error;
   console.info = console.error;
@@ -154,9 +153,9 @@ export async function connectAndStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  // Debounced awareness: only send the latest status after a quiet period
-  let awarenessTimer: ReturnType<typeof setTimeout> | null = null;
-  let clearAwarenessTimer: ReturnType<typeof setTimeout> | null = null;
+  // shutdownTimers is the single source of truth for awareness timers so
+  // finalClearAwareness() can flush them on SIGINT. Using locals alongside
+  // would mean two references to the same handle drifting apart.
   let pendingAwareness: TandemEvent | null = null;
 
   function clearAwareness(documentId?: string) {
@@ -199,16 +198,17 @@ export async function connectAndStream(
     });
 
     // Auto-clear after timeout so the indicator doesn't stick
-    if (clearAwarenessTimer) clearTimeout(clearAwarenessTimer);
-    clearAwarenessTimer = setTimeout(() => clearAwareness(event.documentId), AWARENESS_CLEAR_MS);
-    shutdownTimers.clearAwarenessTimer = clearAwarenessTimer;
+    if (shutdownTimers.clearAwarenessTimer) clearTimeout(shutdownTimers.clearAwarenessTimer);
+    shutdownTimers.clearAwarenessTimer = setTimeout(
+      () => clearAwareness(event.documentId),
+      AWARENESS_CLEAR_MS,
+    );
   }
 
   function scheduleAwareness(event: TandemEvent) {
     pendingAwareness = event;
-    if (awarenessTimer) clearTimeout(awarenessTimer);
-    awarenessTimer = setTimeout(flushAwareness, AWARENESS_DEBOUNCE_MS);
-    shutdownTimers.awarenessTimer = awarenessTimer;
+    if (shutdownTimers.awarenessTimer) clearTimeout(shutdownTimers.awarenessTimer);
+    shutdownTimers.awarenessTimer = setTimeout(flushAwareness, AWARENESS_DEBOUNCE_MS);
   }
 
   try {
@@ -285,8 +285,10 @@ export async function connectAndStream(
     clearTimeout(stableTimer);
     // Prevent timers leaking across reconnects — stale awareness POSTs
     // from a dead connection would otherwise collide with a new one.
-    if (awarenessTimer) clearTimeout(awarenessTimer);
-    if (clearAwarenessTimer) clearTimeout(clearAwarenessTimer);
+    if (shutdownTimers.awarenessTimer) clearTimeout(shutdownTimers.awarenessTimer);
+    if (shutdownTimers.clearAwarenessTimer) clearTimeout(shutdownTimers.clearAwarenessTimer);
+    shutdownTimers.awarenessTimer = null;
+    shutdownTimers.clearAwarenessTimer = null;
     pendingAwareness = null;
   }
 }
@@ -344,7 +346,7 @@ function installShutdownHandlers(): void {
   // Never install real signal handlers under vitest — tests drive
   // shutdownForTests() directly. Prevents listener accumulation and
   // stray real-SIGINT mid-test process.exit.
-  if (process.env.VITEST === "true") return;
+  if (IS_VITEST) return;
   const handler = (signal: string) => {
     shutdownForTests(signal).catch((err) => {
       console.error("[Monitor] Shutdown handler failed:", err);
@@ -358,46 +360,44 @@ function installShutdownHandlers(): void {
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
 
+type FetchModeResult = { ok: true; mode: TandemMode } | { ok: false; reason: string };
+
+/** Fetch + validate /api/mode. Callers apply their own failure policy. */
+async function fetchMode(): Promise<FetchModeResult> {
+  try {
+    const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
+    if (!res.ok) return { ok: false, reason: `status ${res.status}` };
+    const body = (await res.json()) as { mode?: unknown };
+    const parsed = TandemModeSchema.safeParse(body.mode);
+    if (!parsed.success) return { ok: false, reason: `invalid mode ${JSON.stringify(body.mode)}` };
+    return { ok: true, mode: parsed.data };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Get the current collaboration mode, with a 2s TTL cache.
  *
- * **Fail-closed to "solo"** on any failure (network, non-2xx, JSON
- * parse, shape mismatch). Solo is a user-driven privacy signal; leaking
- * events when the mode endpoint is broken is strictly worse than
- * temporarily over-suppressing them. The user will notice missed events
- * sooner than they'll notice leaked ones in a supposedly-quiet session.
+ * **Fail-closed to "solo"** on any failure. Solo is a user-driven privacy
+ * signal; leaking events when the mode endpoint is broken is strictly worse
+ * than temporarily over-suppressing them.
  *
- * Cache timestamp is ONLY updated on success. On failure, cachedModeAt
- * is NOT updated — so the next call retries immediately instead of being
- * rate-limited for 2s.
+ * Cache timestamp is ONLY updated on success, so a failure doesn't
+ * rate-limit the retry for MODE_CACHE_TTL_MS.
  */
 export async function getCachedMode(): Promise<TandemMode> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
 
-  try {
-    const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
-    if (!res.ok) {
-      console.error(`[Monitor] Mode check returned ${res.status}, failing closed to 'solo'`);
-      return "solo"; // do NOT update cache
-    }
-    const body = (await res.json()) as { mode?: unknown };
-    if (!VALID_MODES.has(body.mode as TandemMode)) {
-      console.error(
-        `[Monitor] Mode check returned invalid mode ${JSON.stringify(body.mode)}, failing closed to 'solo'`,
-      );
-      return "solo"; // do NOT update cache
-    }
-    cachedMode = body.mode as TandemMode;
-    cachedModeAt = now; // only on success
-    return cachedMode;
-  } catch (err) {
-    console.error(
-      "[Monitor] Mode check failed, failing closed to 'solo':",
-      err instanceof Error ? err.message : err,
-    );
+  const result = await fetchMode();
+  if (!result.ok) {
+    console.error(`[Monitor] Mode check failed (${result.reason}), failing closed to 'solo'`);
     return "solo"; // do NOT update cache
   }
+  cachedMode = result.mode;
+  cachedModeAt = now;
+  return cachedMode;
 }
 
 /** Sync reader — always returns the last known mode. Use this on the hot path. */
@@ -408,9 +408,10 @@ export function getModeSync(): TandemMode {
 /**
  * Background refresh — fire-and-forget, deduplicated.
  *
- * Leaves `cachedMode` UNCHANGED on failure (stale-preferred over
- * mid-session disruption). Distinct from getCachedMode which fails closed
- * on failure — see commit message for the asymmetry rationale.
+ * Leaves `cachedMode` UNCHANGED on failure (stale-preferred). getCachedMode
+ * fails closed at startup because no baseline exists; refreshMode prefers
+ * stale because flipping mid-session would randomly suppress events and
+ * surprise the user.
  */
 function refreshMode(): void {
   if (_modeRefreshInFlight) return;
@@ -419,25 +420,15 @@ function refreshMode(): void {
 
   _modeRefreshInFlight = (async () => {
     try {
-      const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
-      if (res.ok) {
-        const body = (await res.json()) as { mode?: unknown };
-        if (VALID_MODES.has(body.mode as TandemMode)) {
-          cachedMode = body.mode as TandemMode;
-          cachedModeAt = Date.now(); // only on success
-        } else {
-          console.error(
-            `[Monitor] Mode refresh returned invalid mode ${JSON.stringify(body.mode)}`,
-          );
-        }
+      const result = await fetchMode();
+      if (result.ok) {
+        cachedMode = result.mode;
+        cachedModeAt = Date.now();
       } else {
-        console.error(`[Monitor] Mode refresh returned ${res.status}`);
+        console.error(
+          `[Monitor] Background mode refresh failed (${result.reason}), keeping cached`,
+        );
       }
-    } catch (err) {
-      console.error(
-        "[Monitor] Background mode refresh failed (keeping cached):",
-        err instanceof Error ? err.message : err,
-      );
     } finally {
       _modeRefreshInFlight = null;
     }
@@ -471,15 +462,15 @@ export function _resetMonitorStateForTests(): void {
 // (not URL strings) because Windows file:// URLs normalize differently
 // than process.argv[1] backslashes. Case-insensitive on win32 because
 // C:\ vs c:\ drive letters can drift depending on how the CLI was invoked.
-const __thisFile = fileURLToPath(import.meta.url);
 function normalizeForCompare(p: string): string {
   const r = resolvePath(p);
   return process.platform === "win32" ? r.toLowerCase() : r;
 }
+const __thisFileNormalized = normalizeForCompare(fileURLToPath(import.meta.url));
 const isDirectRun =
   typeof process.argv[1] === "string" &&
-  normalizeForCompare(process.argv[1]) === normalizeForCompare(__thisFile);
-if (isDirectRun && process.env.VITEST !== "true") {
+  normalizeForCompare(process.argv[1]) === __thisFileNormalized;
+if (isDirectRun && !IS_VITEST) {
   main().catch((err) => {
     console.error("[Monitor] Fatal error:", err);
     process.exit(1);
