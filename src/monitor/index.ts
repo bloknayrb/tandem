@@ -413,8 +413,9 @@ async function fetchMode(): Promise<FetchModeResult> {
  * signal; leaking events when the mode endpoint is broken is strictly worse
  * than temporarily over-suppressing them.
  *
- * Cache timestamp is ONLY updated on success, so a failure doesn't
- * rate-limit the retry for MODE_CACHE_TTL_MS.
+ * On failure, `cachedMode` is set to "solo" so getModeSync() on the hot path
+ * also reports solo — but `cachedModeAt` is NOT updated, so the next call
+ * retries immediately rather than waiting out MODE_CACHE_TTL_MS.
  */
 export async function getCachedMode(): Promise<TandemMode> {
   const now = Date.now();
@@ -423,7 +424,8 @@ export async function getCachedMode(): Promise<TandemMode> {
   const result = await fetchMode();
   if (!result.ok) {
     console.error(`[Monitor] Mode check failed (${result.reason}), failing closed to 'solo'`);
-    return "solo"; // do NOT update cache
+    cachedMode = "solo"; // propagate to hot path; do NOT update cachedModeAt
+    return "solo";
   }
   cachedMode = result.mode;
   cachedModeAt = now;
