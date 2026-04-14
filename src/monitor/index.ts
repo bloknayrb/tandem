@@ -55,6 +55,18 @@ async function fetchWithTimeout(
   return fetch(url, { ...init, signal });
 }
 
+/**
+ * Format a fetch error for logging. Timeout aborts throw TimeoutError or
+ * AbortError with a generic "The operation was aborted" message; tag them
+ * with the endpoint and threshold so logs say which request was hung.
+ */
+function describeFetchError(err: unknown, endpoint: string, timeoutMs: number): string {
+  if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+    return `${endpoint} timed out after ${timeoutMs}ms`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export async function main(): Promise<void> {
   installShutdownHandlers();
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
@@ -197,7 +209,10 @@ export async function connectAndStream(
       },
       AWARENESS_FETCH_TIMEOUT_MS,
     ).catch((err) => {
-      console.error("[Monitor] Awareness clear failed:", err instanceof Error ? err.message : err);
+      console.error(
+        "[Monitor] Awareness clear failed:",
+        describeFetchError(err, "/api/channel-awareness clear", AWARENESS_FETCH_TIMEOUT_MS),
+      );
     });
     trackAwareness(p);
   }
@@ -220,7 +235,10 @@ export async function connectAndStream(
       },
       AWARENESS_FETCH_TIMEOUT_MS,
     ).catch((err) => {
-      console.error("[Monitor] Awareness update failed:", err instanceof Error ? err.message : err);
+      console.error(
+        "[Monitor] Awareness update failed:",
+        describeFetchError(err, "/api/channel-awareness update", AWARENESS_FETCH_TIMEOUT_MS),
+      );
     });
     trackAwareness(p);
 
@@ -370,7 +388,7 @@ async function finalClearAwareness(): Promise<void> {
   } catch (err) {
     console.error(
       "[Monitor] Shutdown awareness clear failed:",
-      err instanceof Error ? err.message : err,
+      describeFetchError(err, "/api/channel-awareness shutdown", AWARENESS_FETCH_TIMEOUT_MS),
     );
   }
 }
@@ -424,7 +442,7 @@ async function fetchMode(): Promise<FetchModeResult> {
     if (!parsed.success) return { ok: false, reason: `invalid mode ${JSON.stringify(body.mode)}` };
     return { ok: true, mode: parsed.data };
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return { ok: false, reason: describeFetchError(err, "/api/mode", MODE_FETCH_TIMEOUT_MS) };
   }
 }
 
