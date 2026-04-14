@@ -399,6 +399,34 @@ export function SettingsPopover({
         </div>
       </div>
 
+      {/* Text size */}
+      <div>
+        <div id="settings-text-size-label" style={sectionLabelStyle}>
+          Text Size
+        </div>
+        <div
+          role="radiogroup"
+          aria-labelledby="settings-text-size-label"
+          style={{ display: "flex", gap: "8px" }}
+        >
+          {(["s", "m", "l"] as const).map((size) => (
+            <button
+              key={size}
+              data-testid={`text-size-${size}-btn`}
+              role="radio"
+              aria-checked={settings.textSize === size}
+              onClick={() => onUpdate({ textSize: size })}
+              style={cardStyle(settings.textSize === size)}
+            >
+              {size === "s" ? "Small" : size === "m" ? "Medium" : "Large"}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "4px" }}>
+          Reading density only — use browser zoom (Ctrl + =/−) to scale the whole UI.
+        </div>
+      </div>
+
       {/* Reduce motion */}
       <div>
         <label

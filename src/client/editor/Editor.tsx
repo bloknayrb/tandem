@@ -72,7 +72,8 @@ export function Editor({
       editorProps: {
         attributes: {
           class: "tandem-editor",
-          style: "outline: none; min-height: 500px; font-size: 16px; line-height: 1.6;",
+          style:
+            "outline: none; min-height: 500px; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
         },
       },
     },

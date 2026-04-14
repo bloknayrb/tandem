@@ -130,6 +130,42 @@ describe("loadSettings — editorWidthPercent clamping (regression guard)", () =
   });
 });
 
+describe("loadSettings — textSize", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to 'm' when no stored value", () => {
+    expect(loadSettings().textSize).toBe("m");
+  });
+
+  it("accepts 's'", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: "s" }));
+    expect(loadSettings().textSize).toBe("s");
+  });
+
+  it("accepts 'l'", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: "l" }));
+    expect(loadSettings().textSize).toBe("l");
+  });
+
+  it("falls back to 'm' for unknown values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: "xl" }));
+    expect(loadSettings().textSize).toBe("m");
+  });
+
+  it("falls back to 'm' for non-string values", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ textSize: 42 }));
+    expect(loadSettings().textSize).toBe("m");
+  });
+});
+
 describe("loadSettings — reduceMotion", () => {
   let store: Map<string, string>;
 

@@ -10,6 +10,7 @@ import {
 export type LayoutMode = "tabbed" | "three-panel";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
+export type TextSize = "s" | "m" | "l";
 
 export interface TandemSettings {
   layout: LayoutMode;
@@ -19,7 +20,10 @@ export interface TandemSettings {
   selectionDwellMs: number;
   showAuthorship: boolean;
   reduceMotion: boolean;
+  textSize: TextSize;
 }
+
+export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
 
 // OS-level reduced-motion preference — used as the default so users who have
 // already opted in at the system level don't see any animations on first run.
@@ -40,7 +44,12 @@ const DEFAULTS: TandemSettings = {
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   showAuthorship: false,
   reduceMotion: false,
+  textSize: "m",
 };
+
+function toTextSize(raw: unknown): TextSize {
+  return raw === "s" || raw === "m" || raw === "l" ? raw : DEFAULTS.textSize;
+}
 
 /**
  * Read and normalize settings from localStorage.
@@ -80,6 +89,7 @@ export function loadSettings(): TandemSettings {
         showAuthorship: parsed.showAuthorship === true,
         reduceMotion:
           typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
+        textSize: toTextSize(parsed.textSize),
       };
     }
   } catch {

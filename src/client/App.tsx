@@ -30,7 +30,7 @@ import { useSaveShortcut } from "./hooks/useSaveShortcut";
 import { useSettingsShortcut } from "./hooks/useSettingsShortcut";
 import { useTabCycleKeyboard } from "./hooks/useTabCycleKeyboard";
 import { useTabOrder } from "./hooks/useTabOrder";
-import { useTandemSettings } from "./hooks/useTandemSettings";
+import { TEXT_SIZE_PX, useTandemSettings } from "./hooks/useTandemSettings";
 import { useTutorial } from "./hooks/useTutorial";
 import { useWebViewZoom } from "./hooks/useWebViewZoom";
 import { useYjsSync } from "./hooks/useYjsSync";
@@ -285,6 +285,17 @@ export default function App() {
     document.body.classList.toggle("tandem-reduce-motion", settings.reduceMotion);
     return () => document.body.classList.remove("tandem-reduce-motion");
   }, [settings.reduceMotion]);
+
+  // Expose editor font-size as a CSS custom property so the editor style
+  // picks it up without recreating the Tiptap instance. Reading-density
+  // convenience only — browser zoom (Ctrl+=/-) remains the WCAG 1.4.4 path.
+  useEffect(() => {
+    const px = TEXT_SIZE_PX[settings.textSize];
+    document.documentElement.style.setProperty("--tandem-editor-font-size", `${px}px`);
+    return () => {
+      document.documentElement.style.removeProperty("--tandem-editor-font-size");
+    };
+  }, [settings.textSize]);
 
   const [reviewMode, setReviewMode] = useState(false);
   const [showChat, setShowChat] = useState(() => settings.primaryTab === "chat");
