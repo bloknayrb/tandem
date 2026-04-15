@@ -13,12 +13,5 @@
       "type": "http",
       "url": "http://localhost:3479/mcp"
     }
-  },
-  "monitors": [
-    {
-      "name": "tandem-events",
-      "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js",
-      "description": "Streams real-time user events (annotations, chat, document changes) from the Tandem editor"
-    }
-  ]
+  }
 }

@@ -10,8 +10,8 @@
     {
       "name": "tandem",
       "source": {
-        "source": "npm",
-        "package": "tandem-editor"
+        "source": "github",
+        "repo": "bloknayrb/tandem"
       },
       "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor"
     }
