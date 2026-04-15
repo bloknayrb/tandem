@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-04-15
+
+### Fixed
+
+- **Tauri desktop app fails to start** — `src/cli/skill-content.ts` reads `skills/tandem/SKILL.md` at module-init via `readFileSync`, and `src/server/mcp/api-routes.ts` transitively imports it, so the bundled sidecar server crashed on startup with `ENOENT: skills/tandem/SKILL.md`. The `skills/` directory was never declared in `src-tauri/tauri.conf.json` bundle resources (latent since the v0.5.1 refactor to read SKILL.md at runtime). Add `"../skills/": "skills/"` so the sidecar's relative path resolution matches the npm-install layout. npm-published 0.6.0 was unaffected because `skills/` ships in the npm tarball via `package.json` `files`.
+
 ## [0.6.0] - 2026-04-15
 
 ### Added
