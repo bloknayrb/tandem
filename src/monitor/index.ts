@@ -149,10 +149,18 @@ export async function main(): Promise<void> {
       await new Promise((r) => setTimeout(r, delay));
     }
   }
-  // Defensive: if connectAndStream ever returns normally (it always throws today),
-  // the retry loop exits without an explicit exit code. Claude Code would see the
-  // plugin just stop. Fail loudly instead so the invariant is enforced.
-  console.error("[Monitor] Retry loop exited unexpectedly without exhaustion");
+  // Defensive: under normal exhaustion, the catch block above calls
+  // process.exit(1) before control returns to the while-loop condition, so
+  // this branch is unreachable today. It exists as an invariant guard — if a
+  // future refactor removes that exit, makes it non-terminating (e.g. wraps
+  // it in a test shim), or lets retries increment past MAX without entering
+  // the exhaustion branch, the loop would fall through here. Fail loudly so
+  // "monitor exits 1 on exhaustion" survives refactoring. Include the
+  // retries counter because if this ever fires, that number is the single
+  // most useful debugging breadcrumb.
+  console.error(
+    `[Monitor] Retry loop exited unexpectedly (retries=${retries}/${CHANNEL_MAX_RETRIES})`,
+  );
   process.exit(1);
 }
 
