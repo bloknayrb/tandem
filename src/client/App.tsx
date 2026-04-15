@@ -43,6 +43,7 @@ import { pmSelectionToFlat } from "./positions";
 import { StatusBar } from "./status/StatusBar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
 import type { DocListEntry, OpenTab } from "./types";
+import { errorStateColors } from "./utils/colors";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 export type { DocListEntry, OpenTab };
@@ -94,8 +95,8 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
     <div
       style={{
         padding: "8px 16px",
-        background: "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
-        borderBottom: `1px solid color-mix(in srgb, var(--tandem-error) 40%, var(--tandem-border))`,
+        background: errorStateColors.background,
+        borderBottom: `1px solid ${errorStateColors.border}`,
         fontSize: "13px",
         color: "var(--tandem-error)",
         textAlign: "center",

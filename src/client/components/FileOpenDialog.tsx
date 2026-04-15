@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from "react";
+import { errorStateColors } from "../utils/colors";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload";
 import {
   addRecentFile,
@@ -395,9 +396,9 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               padding: "8px 10px",
               fontSize: "12px",
               color: "var(--tandem-error)",
-              background: "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
+              background: errorStateColors.background,
               borderRadius: "4px",
-              border: `1px solid color-mix(in srgb, var(--tandem-error) 40%, var(--tandem-border))`,
+              border: `1px solid ${errorStateColors.border}`,
             }}
             data-testid="file-open-error"
           >

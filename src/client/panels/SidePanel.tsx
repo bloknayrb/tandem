@@ -11,6 +11,7 @@ import type { Annotation, AnnotationReply, AnnotationType, TandemMode } from "..
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 import { annotationToPmRange } from "../positions";
+import { errorStateColors } from "../utils/colors";
 import { AnnotationCard } from "./AnnotationCard";
 import { FilterSelect } from "./FilterSelect";
 
@@ -788,9 +789,9 @@ export function SidePanel({
                     style={{
                       ...SMALL_BTN,
                       background: isAccept
-                        ? "#f0fdf4"
-                        : "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
-                      color: isAccept ? "#166534" : "var(--tandem-error)",
+                        ? "var(--tandem-success-bg)"
+                        : errorStateColors.background,
+                      color: isAccept ? "var(--tandem-success)" : "var(--tandem-error)",
                       fontWeight: 600,
                     }}
                   >
@@ -820,7 +821,7 @@ export function SidePanel({
                 onClick={() => setBulkConfirm("dismiss")}
                 style={{
                   ...SMALL_BTN,
-                  background: "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
+                  background: errorStateColors.background,
                   color: "var(--tandem-error)",
                 }}
               >

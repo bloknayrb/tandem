@@ -154,7 +154,7 @@ function TabItem({
           padding: "0 2px",
           borderRadius: "2px",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--tandem-error)")}
         onMouseLeave={(e) => (e.currentTarget.style.color = "var(--tandem-fg-subtle)")}
         title="Close document"
       >

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { HIGHLIGHT_COLORS } from "../../shared/constants";
 import type { Annotation, AnnotationReply } from "../../shared/types";
+import { errorStateColors } from "../utils/colors";
 import { CommentThread } from "./CommentThread";
 
 export interface AnnotationCardProps {
@@ -354,8 +355,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                     style={{
                       textDecoration: "line-through",
                       color: "var(--tandem-error)",
-                      backgroundColor:
-                        "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
+                      backgroundColor: errorStateColors.background,
                       padding: "0 2px",
                       borderRadius: "2px",
                     }}
@@ -420,7 +420,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
-                background: "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
+                background: errorStateColors.background,
                 color: "var(--tandem-error)",
                 cursor: "pointer",
               }}
