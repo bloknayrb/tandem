@@ -1,6 +1,6 @@
 {
   "name": "tandem",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
   "author": {
     "name": "Tandem"
