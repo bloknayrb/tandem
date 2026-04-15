@@ -143,6 +143,57 @@ describe("SSE buffer overflow", () => {
   });
 });
 
+describe("EPIPE on stdout.write", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let stream: ControllableStream;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    installMonitorFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.useRealTimers();
+    stdoutSpy.mockRestore();
+  });
+
+  it("does NOT call onEventId when stdout.write throws (regression fence for #288)", async () => {
+    // Regression fence: if a future refactor moves `onEventId(eventId)` above
+    // the write or drops the order guarantee, lastEventId would advance past
+    // an event that never reached the plugin host — the server would have no
+    // way to replay it on reconnect.
+    stdoutSpy.mockImplementationOnce(() => {
+      throw new Error("EPIPE");
+    });
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId);
+
+    stream.push(
+      sseFrame(
+        {
+          id: "e1",
+          type: "chat:message",
+          timestamp: 1,
+          payload: { messageId: "m", text: "hi", replyTo: null, anchor: null },
+        },
+        "e1",
+      ),
+    );
+
+    await expect(promise).rejects.toThrow("EPIPE");
+    expect(onEventId).not.toHaveBeenCalledWith("e1");
+  });
+});
+
 describe("SSE resume behavior", () => {
   let stub: ReturnType<typeof createFetchStub>;
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
