@@ -336,7 +336,7 @@ On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
 
 Each incoming event schedules a debounced (500ms) POST to `/api/channel-awareness` (`active: true, status: "processing: <type>"`), followed by an auto-clear POST 3s later (`active: false, status: "idle"`). The browser's `StatusBar` component observes these changes and shows "Claude is active."
 
-On SIGINT/SIGTERM, `finalClearAwareness()` POSTs a final clear with the last known `documentId` before `process.exit(0)`. VITEST guards (`process.env.VITEST !== "true"`) prevent signal-listener accumulation across test files.
+On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs and then sends a final `active: false` clear for the last-known `documentId`. If no awareness was ever scheduled (no event carried a `documentId`), the shutdown POST is skipped — sending `{documentId: null}` is ambiguous and the server may reject it. `shutdownMonitor` exits 0 on a clean clear and 1 if the clear returned non-OK or threw. VITEST guards (`process.env.VITEST !== "true"`) prevent signal-listener accumulation across test files.
 
 ### Fetch Timeouts
 
