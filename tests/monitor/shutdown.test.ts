@@ -133,6 +133,7 @@ describe("graceful shutdown", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`exit:${code ?? 0}`);
     }) as never);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     stub.on("/api/channel-awareness", () => new Response("boom", { status: 500 }));
 
@@ -141,6 +142,12 @@ describe("graceful shutdown", () => {
     mod._setLastDocumentIdForTests("doc-a");
 
     await expect(mod.shutdownMonitor("SIGINT")).rejects.toThrow("exit:1");
+    // A silent exit(1) is nearly as bad as exit(0) for support debugging —
+    // the reason must land on stderr before the process dies.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Shutdown awareness clear returned 500"),
+    );
+    errorSpy.mockRestore();
     exitSpy.mockRestore();
   });
 
