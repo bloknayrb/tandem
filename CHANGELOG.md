@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Plugin bridge to Cowork** — new `tandem mcp-stdio` subcommand is a stdio ↔ HTTP JSON-RPC proxy so Claude Desktop's plugin loader surfaces the full `tandem_*` tool surface into Cowork VM sessions. Verified empirically that plugin-loaded HTTP MCP entries don't bridge to Cowork but plugin-loaded stdio entries do. The plugin's `.claude-plugin/plugin.json` now declares stdio entries for both `tandem` (proxy) and `tandem-channel` (existing shim re-exposed as `tandem channel` subcommand), invoked via `npx -y tandem-editor …` so the plugin cache never needs dev dependencies. Both subcommands share a strict preflight in `src/cli/preflight.ts` that fails fast with a single clear message when the Tandem server isn't running on `localhost:3479`.
+- `tandem channel` CLI subcommand — npm-delivered entry for the plugin's `tandem-channel` MCP server; shares runtime with the standalone `src/channel/index.ts` binary via the new `src/channel/run.ts` extraction.
 - **Settings expansion** — Settings popover grows from layout/dwell/authorship into a fuller preferences surface:
   - Ctrl+, / Cmd+, hotkey (AZERTY/QWERTZ/IME-safe, survives non-QWERTY layouts)
   - Display Name field, synced live with the StatusBar via a shared `useUserName` hook
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Repo's project-level `.mcp.json` renamed to `.mcp.json.example` and gitignored so it no longer ships inside plugin installs. The plugin's own `.claude-plugin/plugin.json` is authoritative for MCP wiring. Developers who clone the repo should copy the example to `.mcp.json` (gitignored) if they want Claude Code to auto-connect locally.
 - Settings heading renamed "Layout Settings" → "Settings"
 - Settings popover hardcoded hex values swapped to CSS tokens (remaining components will migrate in a follow-up)
 - `shutdownForTests` renamed to `shutdownMonitor` (test-only alias kept for backward compatibility)

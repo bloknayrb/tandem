@@ -1,6 +1,6 @@
 {
   "name": "tandem",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
   "author": {
     "name": "Tandem"
@@ -10,8 +10,18 @@
   "keywords": ["editor", "collaborative", "mcp", "claude"],
   "mcpServers": {
     "tandem": {
-      "type": "http",
-      "url": "http://localhost:3479/mcp"
+      "command": "npx",
+      "args": ["-y", "tandem-editor", "mcp-stdio"],
+      "env": {
+        "TANDEM_URL": "http://localhost:3479"
+      }
+    },
+    "tandem-channel": {
+      "command": "npx",
+      "args": ["-y", "tandem-editor", "channel"],
+      "env": {
+        "TANDEM_URL": "http://localhost:3479"
+      }
     }
   }
 }
