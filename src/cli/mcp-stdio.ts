@@ -11,6 +11,12 @@
  * Raw message forwarding: no handler registrations, no per-method logic.
  * Any message the upstream emits (tool results, notifications, future
  * methods we haven't heard of) reaches the stdio client unchanged.
+ *
+ * Intentional: no reconnection logic. If the upstream HTTP server dies
+ * mid-session, `http.onclose` fires and we exit(0). Claude Desktop's plugin
+ * loader will respawn us on the next tool call, and the preflight will
+ * re-run with a fresh, accurate error if the server is still down. A
+ * reconnect loop here would hide server death from the user.
  */
 
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -52,7 +58,10 @@ export async function runMcpStdio(): Promise<void> {
           jsonrpc: "2.0",
           id: requestId,
           error: {
-            code: -32603,
+            // -32000 is the implementation-defined server error range per
+            // JSON-RPC 2.0 §5.1 — the upstream being unreachable is an
+            // application-level condition, not a generic Internal Error.
+            code: -32000,
             message: "Tandem HTTP upstream unreachable",
             data: { detail },
           },
@@ -83,11 +92,21 @@ export async function runMcpStdio(): Promise<void> {
     void shutdown(0);
   };
 
-  await http.start();
+  // Start stdio first so we can report an HTTP start failure back to the
+  // upstream client as a stderr line instead of a silently dead process —
+  // the preflight already proved the server was reachable, but there's a
+  // tiny window between preflight and http.start() where it can die.
   await stdio.start();
+  try {
+    await http.start();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[tandem mcp-stdio] upstream http start failed: ${detail}\n`);
+    await shutdown(1);
+  }
 }
 
-function getRequestId(msg: JSONRPCMessage): string | number | undefined {
+export function getRequestId(msg: JSONRPCMessage): string | number | undefined {
   const m = msg as { id?: unknown; method?: unknown };
   if (typeof m.method !== "string") return undefined;
   if (typeof m.id === "string" || typeof m.id === "number") return m.id;
