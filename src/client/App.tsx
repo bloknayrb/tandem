@@ -68,7 +68,7 @@ function EmptyState({ connected, claudeActive }: { connected: boolean; claudeAct
         alignItems: "center",
         justifyContent: "center",
         height: "100%",
-        color: "#9ca3af",
+        color: "var(--tandem-fg-subtle)",
         gap: "8px",
       }}
     >
@@ -78,7 +78,7 @@ function EmptyState({ connected, claudeActive }: { connected: boolean; claudeAct
         <>
           <span>No document open. Click + in the tab bar or drop a file here.</span>
           {connected && !claudeActive && (
-            <span style={{ fontSize: "0.85em", color: "#b0b8c4" }}>
+            <span style={{ fontSize: "0.85em", color: "var(--tandem-fg-subtle)" }}>
               Tip: open Claude Code in this directory to start collaborating
             </span>
           )}
@@ -94,10 +94,10 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
     <div
       style={{
         padding: "8px 16px",
-        background: "#fef2f2",
-        borderBottom: "1px solid #fca5a5",
+        background: "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
+        borderBottom: `1px solid color-mix(in srgb, var(--tandem-error) 40%, var(--tandem-border))`,
         fontSize: "13px",
-        color: "#991b1b",
+        color: "var(--tandem-error)",
         textAlign: "center",
         display: "flex",
         justifyContent: "center",
@@ -112,7 +112,7 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
           background: "none",
           border: "none",
           cursor: "pointer",
-          color: "#991b1b",
+          color: "var(--tandem-error)",
           fontSize: "16px",
           lineHeight: 1,
           padding: "0 4px",
@@ -531,7 +531,7 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               width: `${panelLayout.left}px`,
-              borderRight: "1px solid #e5e7eb",
+              borderRight: `1px solid var(--tandem-border)`,
             }}
           >
             <div
@@ -539,9 +539,9 @@ export default function App() {
                 padding: "6px 12px",
                 fontSize: "11px",
                 fontWeight: 600,
-                color: "#6b7280",
-                borderBottom: "1px solid #e5e7eb",
-                background: "#f9fafb",
+                color: "var(--tandem-fg-muted)",
+                borderBottom: `1px solid var(--tandem-border)`,
+                background: "var(--tandem-surface-muted)",
                 textTransform: "uppercase",
                 letterSpacing: "0.5px",
               }}
@@ -599,7 +599,7 @@ export default function App() {
               transition: "background 0.15s",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+              (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLDivElement).style.background = "transparent";
@@ -661,7 +661,7 @@ export default function App() {
               transition: "background 0.15s",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+              (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLDivElement).style.background = "transparent";
@@ -673,7 +673,7 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               width: `${panelLayout.right}px`,
-              borderLeft: "1px solid #e5e7eb",
+              borderLeft: `1px solid var(--tandem-border)`,
             }}
           >
             <div
@@ -681,9 +681,9 @@ export default function App() {
                 padding: "6px 12px",
                 fontSize: "11px",
                 fontWeight: 600,
-                color: "#6b7280",
-                borderBottom: "1px solid #e5e7eb",
-                background: "#f9fafb",
+                color: "var(--tandem-fg-muted)",
+                borderBottom: `1px solid var(--tandem-border)`,
+                background: "var(--tandem-surface-muted)",
                 textTransform: "uppercase",
                 letterSpacing: "0.5px",
               }}
@@ -784,7 +784,7 @@ export default function App() {
               transition: "background 0.15s",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "#d1d5db";
+              (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLDivElement).style.background = "transparent";
@@ -795,15 +795,15 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               width: `${panelLayout.right}px`,
-              borderLeft: "1px solid #e5e7eb",
+              borderLeft: `1px solid var(--tandem-border)`,
             }}
           >
             {/* Panel toggle tabs */}
             <div
               style={{
                 display: "flex",
-                borderBottom: "1px solid #e5e7eb",
-                background: "#f9fafb",
+                borderBottom: `1px solid var(--tandem-border)`,
+                background: "var(--tandem-surface-muted)",
               }}
             >
               <button
@@ -815,10 +815,10 @@ export default function App() {
                   fontSize: "12px",
                   fontWeight: showChat ? 400 : 600,
                   border: "none",
-                  borderBottom: showChat ? "none" : "2px solid #6366f1",
+                  borderBottom: showChat ? "none" : `2px solid var(--tandem-accent)`,
                   background: "transparent",
                   cursor: "pointer",
-                  color: showChat ? "#6b7280" : "#6366f1",
+                  color: showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)",
                   position: "relative",
                 }}
               >
@@ -855,10 +855,10 @@ export default function App() {
                   fontSize: "12px",
                   fontWeight: showChat ? 600 : 400,
                   border: "none",
-                  borderBottom: showChat ? "2px solid #6366f1" : "none",
+                  borderBottom: showChat ? `2px solid var(--tandem-accent)` : "none",
                   background: "transparent",
                   cursor: "pointer",
-                  color: showChat ? "#6366f1" : "#6b7280",
+                  color: showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
                   position: "relative",
                 }}
               >

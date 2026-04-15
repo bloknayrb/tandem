@@ -19,12 +19,12 @@ export interface AnnotationCardProps {
 
 function getBorderColor(annotation: Annotation): string {
   if (annotation.color) {
-    return HIGHLIGHT_COLORS[annotation.color] || "#e5e7eb";
+    return HIGHLIGHT_COLORS[annotation.color] || "var(--tandem-border)";
   }
   if (annotation.suggestedText !== undefined) return "#8b5cf6"; // replacement
-  if (annotation.directedAt === "claude") return "#6366f1"; // question for Claude
+  if (annotation.directedAt === "claude") return "var(--tandem-accent)"; // question for Claude
   if (annotation.type === "flag") return "#ef4444";
-  return "#3b82f6"; // plain comment
+  return "var(--tandem-author-user)"; // plain comment
 }
 
 export const AnnotationCard = React.memo(function AnnotationCard({
@@ -112,7 +112,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     width: "100%",
     padding: "4px 6px",
     fontSize: "12px",
-    border: "1px solid #d1d5db",
+    border: "1px solid var(--tandem-border-strong)",
     borderRadius: "3px",
     resize: "vertical",
     fontFamily: "inherit",
@@ -125,7 +125,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     fontSize: "11px",
     border: "none",
     background: "none",
-    color: "#9ca3af",
+    color: "var(--tandem-fg-subtle)",
     cursor: "pointer",
     lineHeight: 1,
   };
@@ -153,12 +153,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         padding: "8px 10px",
         marginBottom: "6px",
         borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget ? "#eef2ff" : "white",
+        background: isReviewTarget ? "var(--tandem-accent-bg)" : "white",
         borderRadius: "0 4px 4px 0",
         fontSize: "13px",
         opacity: isPending ? 1 : 0.6,
         cursor: onClick ? "pointer" : "default",
-        outline: isReviewTarget ? "2px solid #6366f1" : "none",
+        outline: isReviewTarget ? "2px solid var(--tandem-accent)" : "none",
         transition: "background 0.15s, outline 0.15s",
       }}
     >
@@ -178,7 +178,10 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               style={{
                 marginLeft: "6px",
                 fontSize: "10px",
-                color: annotation.status === "accepted" ? "#16a34a" : "#dc2626",
+                color:
+                  annotation.status === "accepted"
+                    ? "var(--tandem-success)"
+                    : "var(--tandem-error)",
                 fontWeight: 600,
               }}
             >
@@ -202,14 +205,16 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         <span
           style={{
             fontSize: "11px",
-            color: "#9ca3af",
+            color: "var(--tandem-fg-subtle)",
             display: "flex",
             alignItems: "center",
             gap: "4px",
           }}
         >
           {annotation.editedAt && (
-            <span style={{ fontStyle: "italic", fontSize: "10px", color: "#b0b0b0" }}>
+            <span
+              style={{ fontStyle: "italic", fontSize: "10px", color: "var(--tandem-fg-subtle)" }}
+            >
               (edited)
             </span>
           )}
@@ -226,11 +231,11 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           style={{
             padding: "4px 8px",
             marginBottom: "6px",
-            borderLeft: "3px solid #d1d5db",
-            color: "#6b7280",
+            borderLeft: "3px solid var(--tandem-border-strong)",
+            color: "var(--tandem-fg-muted)",
             fontSize: "12px",
             fontStyle: "italic",
-            backgroundColor: "#f9fafb",
+            backgroundColor: "var(--tandem-surface-muted)",
             borderRadius: "2px",
           }}
         >
@@ -246,7 +251,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               <label
                 style={{
                   fontSize: "11px",
-                  color: "#6b7280",
+                  color: "var(--tandem-fg-muted)",
                   display: "block",
                   marginBottom: "2px",
                 }}
@@ -264,7 +269,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               <label
                 style={{
                   fontSize: "11px",
-                  color: "#6b7280",
+                  color: "var(--tandem-fg-muted)",
                   display: "block",
                   marginTop: "4px",
                   marginBottom: "2px",
@@ -300,7 +305,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               style={{
                 padding: "2px 8px",
                 fontSize: "11px",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
                 background: "#f0fdf4",
                 color: "#166534",
@@ -318,10 +323,10 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               style={{
                 padding: "2px 8px",
                 fontSize: "11px",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
                 background: "#fff",
-                color: "#6b7280",
+                color: "var(--tandem-fg-muted)",
                 cursor: "pointer",
               }}
             >
@@ -330,7 +335,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           </div>
         </div>
       ) : (
-        <div style={{ margin: 0, color: "#4b5563", lineHeight: "1.4" }}>
+        <div style={{ margin: 0, color: "var(--tandem-fg-muted)", lineHeight: "1.4" }}>
           {hasSuggestedText ? (
             <>
               <div
@@ -338,7 +343,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 style={{
                   padding: "4px 8px",
                   marginBottom: annotation.content ? "4px" : 0,
-                  backgroundColor: "#f9fafb",
+                  backgroundColor: "var(--tandem-surface-muted)",
                   borderRadius: "3px",
                   fontSize: "12px",
                   lineHeight: "1.5",
@@ -348,8 +353,9 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                   <span
                     style={{
                       textDecoration: "line-through",
-                      color: "#dc2626",
-                      backgroundColor: "#fef2f2",
+                      color: "var(--tandem-error)",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
                       padding: "0 2px",
                       borderRadius: "2px",
                     }}
@@ -370,7 +376,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 </span>
               </div>
               {annotation.content && (
-                <p style={{ margin: 0, fontSize: "12px", color: "#6b7280" }}>
+                <p style={{ margin: 0, fontSize: "12px", color: "var(--tandem-fg-muted)" }}>
                   {annotation.content}
                 </p>
               )}
@@ -392,7 +398,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               style={{
                 padding: "2px 8px",
                 fontSize: "11px",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
                 background: "#f0fdf4",
                 color: "#166534",
@@ -412,10 +418,10 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               style={{
                 padding: "2px 8px",
                 fontSize: "11px",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
-                background: "#fef2f2",
-                color: "#991b1b",
+                background: "color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface))",
+                color: "var(--tandem-error)",
                 cursor: "pointer",
               }}
             >
@@ -437,7 +443,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               fontSize: "11px",
               border: "none",
               background: "none",
-              color: "#6366f1",
+              color: "var(--tandem-accent)",
               cursor: "pointer",
               textDecoration: "underline",
             }}
@@ -450,7 +456,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               height: "2px",
               marginTop: "2px",
               borderRadius: "1px",
-              backgroundColor: "#6366f1",
+              backgroundColor: "var(--tandem-accent)",
               animation: "undo-countdown-shrink 10s linear forwards",
             }}
           />
@@ -486,10 +492,14 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                   style={{
                     padding: "2px 8px",
                     fontSize: "11px",
-                    border: "1px solid #d1d5db",
+                    border: "1px solid var(--tandem-border-strong)",
                     borderRadius: "3px",
-                    background: replyText.trim() ? "#eef2ff" : "#f3f4f6",
-                    color: replyText.trim() ? "#4338ca" : "#9ca3af",
+                    background: replyText.trim()
+                      ? "var(--tandem-accent-bg)"
+                      : "var(--tandem-surface-muted)",
+                    color: replyText.trim()
+                      ? "var(--tandem-accent-fg-strong)"
+                      : "var(--tandem-fg-subtle)",
                     cursor: replyText.trim() ? "pointer" : "default",
                   }}
                 >
@@ -504,10 +514,10 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                   style={{
                     padding: "2px 8px",
                     fontSize: "11px",
-                    border: "1px solid #d1d5db",
+                    border: "1px solid var(--tandem-border-strong)",
                     borderRadius: "3px",
                     background: "#fff",
-                    color: "#6b7280",
+                    color: "var(--tandem-fg-muted)",
                     cursor: "pointer",
                   }}
                 >
@@ -524,7 +534,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "none",
                 background: "none",
-                color: "#9ca3af",
+                color: "var(--tandem-fg-subtle)",
                 cursor: "pointer",
               }}
             >
@@ -535,7 +545,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
       )}
       {/* Read-only reply count for resolved annotations */}
       {!isPending && replies.length > 0 && !onReply && (
-        <div style={{ marginTop: "4px", fontSize: "11px", color: "#9ca3af" }}>
+        <div style={{ marginTop: "4px", fontSize: "11px", color: "var(--tandem-fg-subtle)" }}>
           {replies.length} {replies.length === 1 ? "reply" : "replies"}
         </div>
       )}

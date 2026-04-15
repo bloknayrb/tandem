@@ -100,10 +100,10 @@ export function StatusBar({
         justifyContent: "space-between",
         padding: "4px 16px",
         height: "28px",
-        borderTop: "1px solid #e5e7eb",
+        borderTop: "1px solid var(--tandem-border)",
         background: "#fafafa",
         fontSize: "12px",
-        color: "#6b7280",
+        color: "var(--tandem-fg-muted)",
         userSelect: "none",
       }}
     >
@@ -120,12 +120,15 @@ export function StatusBar({
         />
         <span>{connLabel}</span>
         {documentCount > 0 && (
-          <span style={{ color: "#9ca3af" }}>
+          <span style={{ color: "var(--tandem-fg-subtle)" }}>
             {documentCount} doc{documentCount !== 1 ? "s" : ""} open
           </span>
         )}
         {saving && (
-          <span data-testid="save-indicator" style={{ color: "#6366f1", fontStyle: "italic" }}>
+          <span
+            data-testid="save-indicator"
+            style={{ color: "var(--tandem-accent)", fontStyle: "italic" }}
+          >
             Saving...
           </span>
         )}
@@ -137,7 +140,7 @@ export function StatusBar({
           alignItems: "center",
           gap: "4px",
           fontSize: "11px",
-          color: "#9ca3af",
+          color: "var(--tandem-fg-subtle)",
         }}
       >
         <span>You:</span>
@@ -161,8 +164,8 @@ export function StatusBar({
           style={{
             background: "transparent",
             border: "none",
-            borderBottom: "1px solid #e5e7eb",
-            color: "#6b7280",
+            borderBottom: "1px solid var(--tandem-border)",
+            color: "var(--tandem-fg-muted)",
             fontSize: "11px",
             width: "80px",
             outline: "none",
@@ -199,7 +202,10 @@ export function StatusBar({
           }}
         />
         <span
-          style={{ transition: "color 0.3s ease", color: claudeActive ? "#4b5563" : "#9ca3af" }}
+          style={{
+            transition: "color 0.3s ease",
+            color: claudeActive ? "var(--tandem-fg-muted)" : "var(--tandem-fg-subtle)",
+          }}
         >
           {claudeStatus ? `Claude -- ${claudeStatus}` : "Claude -- idle"}
         </span>

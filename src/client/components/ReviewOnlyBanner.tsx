@@ -48,13 +48,13 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
       data-testid="review-only-banner"
       style={{
         padding: "8px 16px",
-        backgroundColor: "#eff6ff",
-        borderBottom: "1px solid #bfdbfe",
+        backgroundColor: "var(--tandem-info-bg)",
+        borderBottom: `1px solid var(--tandem-info-border)`,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         fontSize: "13px",
-        color: "#1e40af",
+        color: "var(--tandem-info)",
         gap: "12px",
       }}
     >
@@ -64,7 +64,9 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
       </span>
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
         {error && (
-          <span style={{ color: "#dc2626", fontSize: "12px", maxWidth: "200px" }}>{error}</span>
+          <span style={{ color: "var(--tandem-error)", fontSize: "12px", maxWidth: "200px" }}>
+            {error}
+          </span>
         )}
         {documentId && (
           <button
@@ -73,9 +75,9 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
             onClick={handleConvert}
             disabled={converting}
             style={{
-              background: "#2563eb",
+              background: "var(--tandem-info)",
               border: "none",
-              color: "white",
+              color: "var(--tandem-info-fg)",
               cursor: converting ? "default" : "pointer",
               fontWeight: 500,
               fontSize: "12px",
@@ -102,7 +104,7 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
           style={{
             background: "none",
             border: "none",
-            color: "#1e40af",
+            color: "var(--tandem-info)",
             cursor: "pointer",
             fontWeight: 500,
             fontSize: "13px",

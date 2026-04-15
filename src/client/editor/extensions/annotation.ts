@@ -70,7 +70,7 @@ function buildDecorations(
           attrs = {
             class: "tandem-question",
             style:
-              "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid #6366f1; padding-bottom: 1px;",
+              "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid var(--tandem-accent); padding-bottom: 1px;",
             "data-annotation-id": ann.id,
             "aria-label": "Question annotation",
           };
@@ -78,7 +78,7 @@ function buildDecorations(
           // Plain comment → dashed blue underline (unchanged)
           attrs = {
             class: "tandem-comment",
-            style: "border-bottom: 2px dashed #3b82f6; padding-bottom: 1px;",
+            style: "border-bottom: 2px dashed var(--tandem-author-user); padding-bottom: 1px;",
             "data-annotation-id": ann.id,
             "aria-label": "Comment annotation",
           };

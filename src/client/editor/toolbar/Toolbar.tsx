@@ -230,22 +230,41 @@ export function Toolbar({
         gap: "8px",
         minHeight: "42px",
         padding: "8px 16px",
-        borderBottom: "1px solid #e5e7eb",
+        borderBottom: "1px solid var(--tandem-border)",
         background: "#fafafa",
         userSelect: "none",
       }}
     >
       <span
-        style={{ fontWeight: 700, fontSize: "15px", color: "#6366f1", letterSpacing: "-0.02em" }}
+        style={{
+          fontWeight: 700,
+          fontSize: "15px",
+          color: "var(--tandem-accent)",
+          letterSpacing: "-0.02em",
+        }}
       >
         Tandem
       </span>
-      <div style={{ width: "1px", height: "20px", background: "#e5e7eb", margin: "0 8px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "20px",
+          background: "var(--tandem-border)",
+          margin: "0 8px",
+        }}
+      />
 
       <FormattingToolbar editor={editor} disabled={inInputMode} />
 
       {/* Divider between formatting and annotation sections */}
-      <div style={{ width: "1px", height: "20px", background: "#e5e7eb", margin: "0 8px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "20px",
+          background: "var(--tandem-border)",
+          margin: "0 8px",
+        }}
+      />
 
       {/* Highlight with color picker */}
       <div style={{ display: "flex", alignItems: "center", gap: "2px", position: "relative" }}>
@@ -263,9 +282,9 @@ export function Toolbar({
           style={{
             padding: "4px 6px",
             fontSize: "13px",
-            border: "1px solid #e5e7eb",
+            border: "1px solid var(--tandem-border)",
             borderRadius: "0 4px 4px 0",
-            background: !canAnnotate || inInputMode ? "#f9fafb" : "#fff",
+            background: !canAnnotate || inInputMode ? "var(--tandem-surface-muted)" : "#fff",
             cursor: !canAnnotate || inInputMode ? "not-allowed" : "pointer",
             display: "flex",
             alignItems: "center",
@@ -291,7 +310,7 @@ export function Toolbar({
               left: 0,
               marginTop: "4px",
               background: "#fff",
-              border: "1px solid #e5e7eb",
+              border: "1px solid var(--tandem-border)",
               borderRadius: "6px",
               padding: "6px",
               display: "flex",
@@ -310,7 +329,9 @@ export function Toolbar({
                   height: "24px",
                   borderRadius: "4px",
                   border:
-                    value === highlightColor ? "2px solid #374151" : "1px solid rgba(0,0,0,0.15)",
+                    value === highlightColor
+                      ? "2px solid var(--tandem-fg)"
+                      : "1px solid rgba(0,0,0,0.15)",
                   background: HIGHLIGHT_COLORS[value],
                   cursor: "pointer",
                   padding: 0,
@@ -326,11 +347,11 @@ export function Toolbar({
                 height: "24px",
                 borderRadius: "4px",
                 border: "1px solid rgba(0,0,0,0.15)",
-                background: "#f3f4f6",
+                background: "var(--tandem-surface-muted)",
                 cursor: "pointer",
                 padding: 0,
                 fontSize: "13px",
-                color: "#6b7280",
+                color: "var(--tandem-fg-muted)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -358,7 +379,13 @@ export function Toolbar({
           onCancel={handleModeCancel}
           placeholder={sendToClaude ? "Ask about this text..." : "Add a comment..."}
           submitLabel={showReplacement ? "Suggest" : sendToClaude ? "Ask" : "Add"}
-          borderColor={showReplacement ? "#8b5cf6" : sendToClaude ? "#6366f1" : "#3b82f6"}
+          borderColor={
+            showReplacement
+              ? "#8b5cf6"
+              : sendToClaude
+                ? "var(--tandem-accent)"
+                : "var(--tandem-author-user)"
+          }
           canSubmit={!!modeText.trim() || (showReplacement && !!replacementText.trim())}
           secondaryInput={
             <>
@@ -372,7 +399,7 @@ export function Toolbar({
                   style={{
                     padding: "3px 8px",
                     fontSize: "13px",
-                    border: "1px solid #d1d5db",
+                    border: "1px solid var(--tandem-border-strong)",
                     borderRadius: "4px",
                     outline: "none",
                     minWidth: "100px",
@@ -384,7 +411,7 @@ export function Toolbar({
                 <label
                   style={{
                     fontSize: "11px",
-                    color: showReplacement ? "#8b5cf6" : "#9ca3af",
+                    color: showReplacement ? "#8b5cf6" : "var(--tandem-fg-subtle)",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -406,7 +433,7 @@ export function Toolbar({
                 <label
                   style={{
                     fontSize: "11px",
-                    color: sendToClaude ? "#6366f1" : "#9ca3af",
+                    color: sendToClaude ? "var(--tandem-accent)" : "var(--tandem-fg-subtle)",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -456,7 +483,7 @@ export function Toolbar({
             aria-label="Claude collaboration mode"
             style={{
               display: "flex",
-              border: "1px solid #d1d5db",
+              border: "1px solid var(--tandem-border-strong)",
               borderRadius: "4px",
               overflow: "hidden",
             }}
@@ -471,10 +498,10 @@ export function Toolbar({
                 fontSize: "12px",
                 border: "none",
                 cursor: "pointer",
-                background: tandemMode === "solo" ? "#6366f1" : "transparent",
-                color: tandemMode === "solo" ? "#fff" : "#6b7280",
+                background: tandemMode === "solo" ? "var(--tandem-accent)" : "transparent",
+                color: tandemMode === "solo" ? "#fff" : "var(--tandem-fg-muted)",
                 fontWeight: tandemMode === "solo" ? 600 : 400,
-                borderRight: "1px solid #d1d5db",
+                borderRight: "1px solid var(--tandem-border-strong)",
                 display: "flex",
                 alignItems: "center",
                 gap: "5px",
@@ -486,7 +513,7 @@ export function Toolbar({
                     width: "6px",
                     height: "6px",
                     borderRadius: "50%",
-                    background: "#9ca3af",
+                    background: "var(--tandem-fg-subtle)",
                     display: "inline-block",
                   }}
                 />
@@ -503,8 +530,8 @@ export function Toolbar({
                 fontSize: "12px",
                 border: "none",
                 cursor: "pointer",
-                background: tandemMode === "tandem" ? "#6366f1" : "transparent",
-                color: tandemMode === "tandem" ? "#fff" : "#6b7280",
+                background: tandemMode === "tandem" ? "var(--tandem-accent)" : "transparent",
+                color: tandemMode === "tandem" ? "#fff" : "var(--tandem-fg-muted)",
                 fontWeight: tandemMode === "tandem" ? 600 : 400,
                 display: "flex",
                 alignItems: "center",
@@ -536,10 +563,10 @@ export function Toolbar({
             aria-keyshortcuts="Control+Comma"
             style={{
               background: "none",
-              border: "1px solid #d1d5db",
+              border: "1px solid var(--tandem-border-strong)",
               borderRadius: "4px",
               cursor: "pointer",
-              color: "#6b7280",
+              color: "var(--tandem-fg-muted)",
               fontSize: "13px",
               padding: "4px 12px",
               minHeight: "24px",
