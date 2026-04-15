@@ -16,10 +16,15 @@ import updateNotifier from "update-notifier";
 declare const __TANDEM_VERSION__: string;
 const version = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : "0.0.0-dev";
 
-// Check for updates in background (non-blocking, throttled to once/day)
-updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
-
 const args = process.argv.slice(2);
+
+// Skip the update notifier for stdio subcommands — the output is machine-consumed
+// by Claude Desktop's plugin loader, and any incidental write risks corrupting
+// the MCP wire or producing log noise no human will ever read.
+const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel";
+if (!isStdioMode) {
+  updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
+}
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`tandem v${version}
@@ -29,6 +34,11 @@ Usage:
   tandem setup                      Register MCP tools with Claude Code / Claude Desktop
   tandem setup --force              Register to default paths regardless of detection
   tandem setup --with-channel-shim  Also register the stdio channel shim (legacy opt-in)
+  tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
+                                    (used by the plugin's Cowork bridge; requires
+                                    tandem server running on the host)
+  tandem channel                    Run the Tandem channel shim (stdio MCP)
+                                    (used by the plugin's tandem-channel entry)
   tandem --version
   tandem --help
 `);
@@ -47,6 +57,12 @@ try {
       force: args.includes("--force"),
       withChannelShim: args.includes("--with-channel-shim"),
     });
+  } else if (args[0] === "mcp-stdio") {
+    const { runMcpStdio } = await import("./mcp-stdio.js");
+    await runMcpStdio();
+  } else if (args[0] === "channel") {
+    const { runChannelCli } = await import("./channel.js");
+    await runChannelCli();
   } else if (!args[0] || args[0] === "start") {
     const { runStart } = await import("./start.js");
     runStart();

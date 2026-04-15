@@ -36,14 +36,14 @@ tandem           # starts server + opens browser
 
 ### Quickstart: Claude Code plugin (recommended)
 
-Install the plugin to get real-time push of editor events (selections, chat messages, document opens) without polling or the `--dangerously-load-development-channels` flag:
+Install the plugin to expose Tandem's tools and real-time event stream into Claude Desktop chats **and** Cowork VM sessions:
 
 ```bash
 claude plugin marketplace add bloknayrb/tandem
 claude plugin install tandem@tandem-editor
 ```
 
-This enables the monitor-based event stream. No other setup needed beyond running the Tandem server (`tandem start` or `npm run dev:server`).
+**Tandem must be running on the host before the plugin can do anything.** The plugin spawns two stdio MCP processes (`tandem mcp-stdio` and `tandem channel`) that proxy to `http://localhost:3479`. If the server isn't up they fail fast and log "Tandem server not reachable at …". Start the Tauri desktop app or run `tandem start` on the host first, then open Claude.
 
 ### Legacy stdio channel shim
 

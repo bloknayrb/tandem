@@ -5,6 +5,12 @@ dist/
 .env
 .env.local
 
+# Project-local Claude Code MCP config. The repo ships .mcp.json.example as a
+# template; the real .mcp.json is developer-local and must NOT be shipped with
+# the plugin install (the plugin's own .claude-plugin/plugin.json is
+# authoritative for what users see).
+.mcp.json
+
 .gemini/
 gha-creds-*.json
 
