@@ -59,12 +59,15 @@ describe("retry counter semantics", () => {
     });
 
     const mainPromise = main().catch(() => {});
-    // Advance through 5 retry cycles (each with 2s+ delay, growing with backoff in B7)
+    // Advance past the full backoff budget (2+4+8+16+30 = 60s) so main()
+    // exhausts CHANNEL_MAX_RETRIES and exits via the MAX branch.
     await vi.advanceTimersByTimeAsync(200_000);
     await mainPromise;
 
-    // With the old bug, this would loop forever. With the fix, max attempts is CHANNEL_MAX_RETRIES.
-    expect(connectAttempts).toBeLessThanOrEqual(CHANNEL_MAX_RETRIES);
+    // process.exit(1) only fires from the MAX branch, so connectAttempts must
+    // be exactly CHANNEL_MAX_RETRIES — an upper bound alone would pass for an
+    // early-exit regression (e.g. inverted loop condition) that still exits 1.
+    expect(connectAttempts).toBe(CHANNEL_MAX_RETRIES);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -101,41 +104,49 @@ describe("retry counter semantics", () => {
   });
 
   it("retry counter resets after STABLE_CONNECTION_MS of continuous uptime", async () => {
+    // Accumulate retries BEFORE the stable-uptime period so the reset has
+    // something to reset. Attempts 1+2 fail (retries climbs to 2), attempt 3
+    // succeeds and stays up past STABLE_CONNECTION_MS (60s) so onStable fires
+    // and main() resets retries to 0. When attempt 3 ends, main's catch runs:
+    //   - With the reset: retries goes 0→1, backoff = 2000ms.
+    //   - Without the reset: retries would go 2→3, backoff = 8000ms.
+    // Asserting that attempt 4 fires within ~2s proves the reset happened.
+    const attemptTimes: number[] = [];
     let attempt = 0;
-    const stream1 = new ControllableStream();
-    const stream2 = new ControllableStream();
+    const stream3 = new ControllableStream();
+    const stream4 = new ControllableStream();
     stub.on("/api/events", () => {
       attempt++;
-      if (attempt === 1) return sseResponse(stream1);
-      if (attempt === 2) return sseResponse(stream2);
+      attemptTimes.push(Date.now());
+      if (attempt <= 2) throw new Error("refused");
+      if (attempt === 3) return sseResponse(stream3);
+      if (attempt === 4) return sseResponse(stream4);
       throw new Error("unexpected attempt");
     });
 
     const p = main().catch(() => {});
 
-    await vi.advanceTimersByTimeAsync(10);
-    stream1.push(
-      sseFrame(
-        {
-          id: "e1",
-          type: "document:opened",
-          timestamp: 1,
-          payload: { fileName: "a.md", format: "md" },
-        },
-        "e1",
-      ),
-    );
+    // Drive past attempts 1+2 (backoffs 2s+4s) so attempt 3 is active.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(attempt).toBe(3);
 
-    // Past STABLE_CONNECTION_MS (60s) — onStable resets retries to 0.
+    // Hold attempt 3 up past STABLE_CONNECTION_MS so onStable fires.
     await vi.advanceTimersByTimeAsync(60_500);
 
-    stream1.end();
-    // Second attempt should fire after the initial 2s delay, not 30s (cap).
+    stream3.end();
+    const t3End = Date.now();
+
+    // Advance slightly past the base backoff (2s). If reset worked, attempt 4
+    // has fired. If reset failed silently, retries would still be 2→3, delay
+    // would be 8s, and attempt 4 would not have fired yet.
     await vi.advanceTimersByTimeAsync(2_100);
 
-    expect(attempt).toBe(2);
+    expect(attempt).toBe(4);
+    const delayToAttempt4 = attemptTimes[3]! - t3End;
+    expect(delayToAttempt4).toBeGreaterThanOrEqual(1900);
+    expect(delayToAttempt4).toBeLessThan(3000);
 
-    stream2.end();
+    stream4.end();
     // Drain remaining retries so main() exits via the MAX branch.
     await vi.advanceTimersByTimeAsync(200_000);
     await p;
