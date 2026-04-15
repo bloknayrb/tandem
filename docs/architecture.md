@@ -323,7 +323,7 @@ Two distinct failure modes require two distinct fallbacks:
 
 **Rationale:** Flipping to "solo" mid-session would randomly suppress events the user has not asked to suppress. Honoring the last known good value on transient failure is better UX without weakening the initial privacy signal — solo is still the default on a cold or erroring server.
 
-**Default asymmetry:** `/api/mode` server-side defaults missing or malformed values to `"tandem"` (user's settings fall back to the global default). The monitor defaults to `"solo"` on a failed/unparseable response. This is intentional — the server has durable user state; the monitor does not, and failing closed preserves the stricter privacy signal under transient error. Tests in `tests/monitor/integration.test.ts` fence the monitor side.
+**Default asymmetry:** `/api/mode` server-side defaults missing or malformed values to `"tandem"` (user's settings fall back to the global default). The monitor defaults to `"solo"` on a failed/unparseable response. This is intentional — the server has durable user state; the monitor does not, and failing closed preserves the stricter privacy signal under transient error. Tests in `tests/monitor/integration.test.ts` fence both sides of the asymmetry; `tests/monitor/mode-cache.test.ts` exhaustively covers the monitor-side fail-closed paths (non-JSON, unrecognized value, missing field, non-string).
 
 ### Retry Semantics
 
