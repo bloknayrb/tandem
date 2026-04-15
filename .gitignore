@@ -16,3 +16,14 @@ gha-creds-*.json
 skills-lock.json
 test-results/
 .pipeline-state/
+
+# Skill symlinks/junctions managed by Claude Code tooling point into .agents/
+# and break git-bash dir walks on Windows (MSYS2 opendir returns ENOSYS for
+# NTFS junctions, triggering "Function not implemented" warnings that then
+# corrupt lint-staged via tinyexec's merged stderr). Ignore the whole dir,
+# then allow-list the real tracked skills. New tracked skills need a new
+# allow-list line here.
+.claude/skills/*
+!.claude/skills/dev-server/
+!.claude/skills/e2e/
+!.claude/skills/screenshots/
