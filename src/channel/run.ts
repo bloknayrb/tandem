@@ -15,6 +15,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { startEventBridge } from "./event-bridge.js";
 
@@ -26,12 +27,9 @@ export interface RunChannelOptions {
 }
 
 export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
-  // stdout is the MCP wire — redirect console.log to stderr.
-  console.log = console.error;
-  console.warn = console.error;
-  console.info = console.error;
+  redirectConsoleToStderr();
 
-  const tandemUrl = process.env.TANDEM_URL || `http://localhost:${DEFAULT_MCP_PORT}`;
+  const tandemUrl = resolveTandemUrl();
 
   const mcp = new Server(
     { name: "tandem-channel", version: "0.1.0" },

@@ -4,10 +4,10 @@
  * Both `tandem mcp-stdio` and `tandem channel` need a live Tandem server on
  * localhost before they can do anything useful. If the server isn't running,
  * fail fast with a single clear error on stderr and exit 1 — otherwise
- * Claude Desktop / Cowork surfaces repeated handshake failures as noise.
+ * repeated handshake failures surface as reconnect-loop noise.
  */
 
-import { DEFAULT_MCP_PORT } from "../shared/constants.js";
+import { resolveTandemUrl } from "../shared/cli-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 2000;
 
@@ -17,15 +17,14 @@ export interface PreflightOptions {
 }
 
 export async function ensureTandemServer(opts: PreflightOptions = {}): Promise<void> {
-  const url = opts.url ?? process.env.TANDEM_URL ?? `http://localhost:${DEFAULT_MCP_PORT}`;
+  const url = resolveTandemUrl(opts.url);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const healthUrl = `${url.replace(/\/$/, "")}/health`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(healthUrl, { signal: controller.signal });
+    const res = await fetch(`${url}/health`, { signal: controller.signal });
     if (!res.ok) {
       fail(url, `health endpoint returned HTTP ${res.status}`);
     }
