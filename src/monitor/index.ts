@@ -78,6 +78,7 @@ function describeFetchError(err: unknown, endpoint: string, timeoutMs: number): 
 
 export async function main(): Promise<void> {
   installShutdownHandlers();
+  installStdoutErrorHandler();
   console.error(`[Monitor] Tandem monitor starting (server: ${TANDEM_URL})`);
 
   // Warm the mode cache before the first event so we don't default-suppress
@@ -348,14 +349,14 @@ export async function connectAndStream(
         // Collapse newlines so multi-line content stays as a single
         // notification (each stdout line is delivered separately).
         const content = formatEventContent(event).replace(/\n/g, " ");
-        try {
-          process.stdout.write(content + "\n");
-        } catch (err) {
-          // EPIPE on a closed plugin-host pipe — re-throw so main's retry loop
-          // can decide to exhaust and exit. Do NOT checkpoint lastEventId
-          // because the event wasn't delivered.
-          throw err;
-        }
+        // False-checkpoint guard: `onEventId(eventId)` MUST stay below the
+        // write. A synchronous EPIPE throw propagates out of the loop and the
+        // retry layer handles it; the ordering ensures lastEventId never
+        // advances past an event that didn't make it to stdout. Asynchronous
+        // EPIPE (plugin host closes mid-stream, write buffered but not
+        // flushed) is caught by the one-shot stdout 'error' listener
+        // installed in main() → process.exit(1).
+        process.stdout.write(content + "\n");
 
         if (eventId) onEventId(eventId);
         scheduleAwareness(event);
@@ -470,6 +471,23 @@ function installShutdownHandlers(): void {
   };
   process.on("SIGINT", () => handler("SIGINT"));
   process.on("SIGTERM", () => handler("SIGTERM"));
+}
+
+/**
+ * `process.stdout.write` does NOT synchronously throw on EPIPE. Node emits
+ * an 'error' event asynchronously when the downstream pipe (plugin host)
+ * closes its read end mid-stream. Without this handler, writes after the
+ * close are silently dropped and the retry loop keeps advancing
+ * lastEventId past events that never arrived — the next reconnect's
+ * Last-Event-ID header then skips the lost range. Exit 1 so the plugin
+ * host can respawn us with a fresh stdout instead.
+ */
+function installStdoutErrorHandler(): void {
+  if (IS_VITEST) return;
+  process.stdout.on("error", (err) => {
+    console.error("[Monitor] stdout error (plugin-host pipe likely closed):", err);
+    process.exit(1);
+  });
 }
 
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;

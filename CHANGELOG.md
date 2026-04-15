@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Monitor exits 1 on shutdown awareness failure** — if the final `clearAwareness` POST fails during SIGINT/SIGTERM, the monitor exits with a non-zero status rather than silently succeeding.
 - **`/api/setup` returns accurate status codes** — 207 on partial failure (some targets configured, some failed) and 500 on total failure, instead of always returning 200.
 - **Checkpoint after stdout write** — `lastEventId` is only advanced after `process.stdout.write` returns, so EPIPE on a closed pipe no longer silently skips an event on reconnect.
+- **Async EPIPE surfaces as exit(1)** — `process.stdout.on('error')` listener now catches asynchronous EPIPE (plugin host closes pipe mid-stream); monitor exits 1 instead of silently advancing `lastEventId` past lost events.
 - **Defensive exit on monitor fallthrough** — the retry loop exits 1 if it ever terminates without hitting the explicit exhaustion path.
 
 ## [0.5.1] - 2026-04-13
