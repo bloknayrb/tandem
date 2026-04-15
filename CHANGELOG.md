@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Settings heading renamed "Layout Settings" → "Settings"
 - Settings popover hardcoded hex values swapped to CSS tokens (remaining components will migrate in a follow-up)
+- `shutdownForTests` renamed to `shutdownMonitor` (test-only alias kept for backward compatibility)
+- `refreshMode` IIFE now wrapped in an outer `.catch` to keep future synchronous throws off the hot path
+
+### Fixed
+
+- **Monitor preserves last-known `documentId`** — doc-less events (e.g. `chat:message`) no longer blank out the tracked document, so the shutdown awareness clear always targets a valid document.
+- **Monitor exits 1 on shutdown awareness failure** — if the final `clearAwareness` POST fails during SIGINT/SIGTERM, the monitor exits with a non-zero status rather than silently succeeding.
+- **`/api/setup` returns accurate status codes** — 207 on partial failure (some targets configured, some failed) and 500 on total failure, instead of always returning 200.
+- **Checkpoint after stdout write** — `lastEventId` is only advanced after `process.stdout.write` returns, so EPIPE on a closed pipe no longer silently skips an event on reconnect.
+- **Defensive exit on monitor fallthrough** — the retry loop exits 1 if it ever terminates without hitting the explicit exhaustion path.
 
 ## [0.5.1] - 2026-04-13
 
