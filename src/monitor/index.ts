@@ -350,12 +350,13 @@ export async function connectAndStream(
         // notification (each stdout line is delivered separately).
         const content = formatEventContent(event).replace(/\n/g, " ");
         // False-checkpoint guard: `onEventId(eventId)` MUST stay below the
-        // write. A synchronous EPIPE throw propagates out of the loop and the
-        // retry layer handles it; the ordering ensures lastEventId never
-        // advances past an event that didn't make it to stdout. Asynchronous
-        // EPIPE (plugin host closes mid-stream, write buffered but not
-        // flushed) is caught by the one-shot stdout 'error' listener
-        // installed in main() → process.exit(1).
+        // write so lastEventId never advances past an event that didn't
+        // make it to stdout. EPIPE on process.stdout is almost always
+        // async — Node emits 'error' after the close; see installStdoutErrorHandler,
+        // which calls process.exit(1) so the plugin host respawns us. A
+        // synchronous throw (rare) would propagate out of the loop and the
+        // retry layer would handle it; either way, the order below is what
+        // closes the silent-advance hole.
         process.stdout.write(content + "\n");
 
         if (eventId) onEventId(eventId);
@@ -474,20 +475,23 @@ function installShutdownHandlers(): void {
 }
 
 /**
- * `process.stdout.write` does NOT synchronously throw on EPIPE. Node emits
- * an 'error' event asynchronously when the downstream pipe (plugin host)
- * closes its read end mid-stream. Without this handler, writes after the
- * close are silently dropped and the retry loop keeps advancing
- * lastEventId past events that never arrived — the next reconnect's
- * Last-Event-ID header then skips the lost range. Exit 1 so the plugin
- * host can respawn us with a fresh stdout instead.
+ * Async EPIPE handler. `process.stdout.write` does NOT synchronously throw
+ * on EPIPE — Node emits an 'error' event asynchronously when the downstream
+ * pipe (plugin host) closes its read end mid-stream. Without this handler,
+ * writes after the close are silently dropped and the retry loop keeps
+ * advancing lastEventId past events that never arrived; the next reconnect's
+ * Last-Event-ID header then skips the lost range. Logging to stderr keeps a
+ * trail for support; exit 1 so the plugin host respawns us with a fresh
+ * stdout instead of wedging on a dead pipe.
  */
+function onStdoutError(err: Error): void {
+  console.error("[Monitor] stdout error (plugin-host pipe likely closed):", err);
+  process.exit(1);
+}
+
 function installStdoutErrorHandler(): void {
   if (IS_VITEST) return;
-  process.stdout.on("error", (err) => {
-    console.error("[Monitor] stdout error (plugin-host pipe likely closed):", err);
-    process.exit(1);
-  });
+  process.stdout.on("error", onStdoutError);
 }
 
 let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
@@ -612,6 +616,15 @@ export function _resetMonitorStateForTests(): void {
   process.removeAllListeners("SIGINT");
   process.removeAllListeners("SIGTERM");
 }
+
+/**
+ * Test-only exports. DO NOT import from production code.
+ * Grouped in a single namespace so production imports never accidentally
+ * pull handler internals.
+ */
+export const _monitorTestExports = {
+  onStdoutError,
+};
 
 // Auto-run when invoked directly (e.g. `node dist/monitor/index.js` or
 // `tsx src/monitor/index.ts`). Skipped under vitest so tests can import

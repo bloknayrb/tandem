@@ -194,6 +194,29 @@ describe("EPIPE on stdout.write", () => {
   });
 });
 
+describe("installStdoutErrorHandler (async EPIPE)", () => {
+  it("logs stderr and exits 1 when stdout emits 'error' (async EPIPE)", async () => {
+    // The PR's headline fix: process.stdout.write does NOT synchronously throw
+    // on EPIPE. Node emits an 'error' event asynchronously when the plugin-host
+    // read end closes mid-stream. Without a listener, writes keep advancing
+    // lastEventId past events that never arrived. This test fences that the
+    // handler (a) logs to stderr so support has a trail, and (b) exits 1 so
+    // the plugin host respawns us with a fresh stdout.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const mod = await import("../../src/monitor/index.js");
+    const err = new Error("EPIPE");
+
+    mod._monitorTestExports.onStdoutError(err);
+
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("stdout error"), err);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    errSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+});
+
 describe("SSE resume behavior", () => {
   let stub: ReturnType<typeof createFetchStub>;
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
