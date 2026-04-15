@@ -531,10 +531,15 @@ function refreshMode(): void {
   // every hot-path event.
   if (now - cachedModeFailedAt < MODE_CACHE_TTL_MS) return;
 
-  // Fire-and-forget. The inner try/finally catches fetch errors, but we
-  // attach an outer .catch as a belt-and-suspenders guard against any future
-  // synchronous throw before the try escaping to the hot-path caller that
-  // cannot handle it.
+  // Fire-and-forget. fetchMode() converts network/parse errors into
+  // { ok: false }, and the inner try/finally clears `_modeRefreshInFlight` on
+  // both success and thrown rejection — so today, the outer .catch is
+  // unreachable. It exists as a belt-and-suspenders guard: a future refactor
+  // that introduces a throw above the try (or a caller-visible rejection path)
+  // would otherwise surface as a process-level `unhandledRejection`, because
+  // the hot-path caller does not await this promise. The outer handler also
+  // mirrors the inner {ok:false} rate-limit so a reachable-throw regression
+  // can't flood stderr on every hot-path event.
   _modeRefreshInFlight = (async () => {
     try {
       const result = await fetchMode();
@@ -553,7 +558,10 @@ function refreshMode(): void {
     }
   })().catch((err) => {
     console.error("[Monitor] refreshMode unexpected error:", err);
-    _modeRefreshInFlight = null;
+    cachedModeFailedAt = Date.now();
+    // Note: not re-setting `_modeRefreshInFlight = null` here — the inner
+    // `finally` already did, and re-nulling from this microtask can race
+    // with a new refreshMode() call that reclaimed the slot in between.
   });
 }
 
