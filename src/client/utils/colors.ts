@@ -5,12 +5,21 @@
  */
 
 /**
- * Error state colors. Reference the CSS tokens defined in index.html rather than
- * recomputing the same color-mix formula in JavaScript.
+ * Error state colors. Reference the CSS tokens defined in index.html.
  */
 export const errorStateColors = {
   background: "var(--tandem-error-bg)",
   border: "var(--tandem-error-border)",
+  color: "var(--tandem-error-fg-strong)",
+} as const;
+
+/**
+ * Success state colors.
+ */
+export const successStateColors = {
+  background: "var(--tandem-success-bg)",
+  border: "var(--tandem-success-border)",
+  color: "var(--tandem-success-fg-strong)",
 } as const;
 
 /**
@@ -19,5 +28,5 @@ export const errorStateColors = {
 export const warningStateColors = {
   background: "var(--tandem-warning-bg)",
   border: "var(--tandem-warning-border)",
-  color: "var(--tandem-warning)",
+  color: "var(--tandem-warning-fg-strong)",
 } as const;

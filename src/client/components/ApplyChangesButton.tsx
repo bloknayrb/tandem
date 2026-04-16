@@ -90,7 +90,7 @@ export function ApplyChangesButton({
         padding: "6px 12px",
         fontSize: "12px",
         fontWeight: 500,
-        border: "1px solid var(--tandem-info-border)",
+        border: `1px solid ${disabled ? "var(--tandem-border)" : "var(--tandem-info-border)"}`,
         borderRadius: "4px",
         background: disabled ? "var(--tandem-surface-muted)" : "var(--tandem-info)",
         color: disabled ? "var(--tandem-fg-subtle)" : "var(--tandem-info-fg)",

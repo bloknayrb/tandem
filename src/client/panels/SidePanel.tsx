@@ -11,7 +11,6 @@ import type { Annotation, AnnotationReply, AnnotationType, TandemMode } from "..
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 import { annotationToPmRange } from "../positions";
-import { errorStateColors } from "../utils/colors";
 import { AnnotationCard } from "./AnnotationCard";
 import { FilterSelect } from "./FilterSelect";
 
@@ -567,7 +566,7 @@ export function SidePanel({
             background: "var(--tandem-warning-bg)",
             borderBottom: "1px solid var(--tandem-warning-border)",
             fontSize: "12px",
-            color: "var(--tandem-warning)",
+            color: "var(--tandem-warning-fg-strong)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -584,7 +583,7 @@ export function SidePanel({
               border: "1px solid var(--tandem-warning-border)",
               borderRadius: "4px",
               background: "var(--tandem-surface)",
-              color: "var(--tandem-warning)",
+              color: "var(--tandem-warning-fg-strong)",
               cursor: "pointer",
               fontWeight: 500,
             }}
@@ -605,7 +604,7 @@ export function SidePanel({
                   padding: "1px 6px",
                   fontSize: "11px",
                   background: "var(--tandem-accent)",
-                  color: "white",
+                  color: "var(--tandem-accent-fg)",
                   borderRadius: "10px",
                 }}
               >
@@ -788,10 +787,10 @@ export function SidePanel({
                     onClick={isAccept ? handleBulkAccept : handleBulkDismiss}
                     style={{
                       ...SMALL_BTN,
-                      background: isAccept
-                        ? "var(--tandem-success-bg)"
-                        : errorStateColors.background,
-                      color: isAccept ? "var(--tandem-success)" : "var(--tandem-error)",
+                      background: isAccept ? "var(--tandem-success-bg)" : "var(--tandem-error-bg)",
+                      color: isAccept
+                        ? "var(--tandem-success-fg-strong)"
+                        : "var(--tandem-error-fg-strong)",
                       fontWeight: 600,
                     }}
                   >
@@ -819,7 +818,7 @@ export function SidePanel({
                 style={{
                   ...SMALL_BTN,
                   background: "var(--tandem-success-bg)",
-                  color: "var(--tandem-success)",
+                  color: "var(--tandem-success-fg-strong)",
                 }}
               >
                 Accept All ({pending.length})
@@ -829,8 +828,8 @@ export function SidePanel({
                 onClick={() => setBulkConfirm("dismiss")}
                 style={{
                   ...SMALL_BTN,
-                  background: errorStateColors.background,
-                  color: "var(--tandem-error)",
+                  background: "var(--tandem-error-bg)",
+                  color: "var(--tandem-error-fg-strong)",
                 }}
               >
                 Reject All
@@ -895,7 +894,7 @@ export function SidePanel({
       </div>
       <style>{`
         @keyframes tandem-annotation-flash {
-          0% { background-color: rgba(99, 102, 241, 0.2); }
+          0% { background-color: var(--tandem-accent-bg); }
           100% { background-color: transparent; }
         }
         .tandem-annotation-flash {

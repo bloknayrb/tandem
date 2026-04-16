@@ -121,11 +121,11 @@ export function Toolbar({
     capturedRangeRef.current = null;
   }
 
-  function captureSelectionRange() {
+  const captureSelectionRange = useCallback(() => {
     if (!editor) return;
     const { from, to } = editor.state.selection;
     capturedRangeRef.current = { from, to };
-  }
+  }, [editor]);
 
   function resetAndFocusEditor() {
     capturedRangeRef.current = null;
@@ -165,7 +165,7 @@ export function Toolbar({
         setSendToClaude(false);
       };
     },
-    [editor],
+    [captureSelectionRange],
   );
 
   const startComment = useMemo(() => handleModeStart("comment"), [handleModeStart]);
@@ -347,7 +347,7 @@ export function Toolbar({
                 width: "24px",
                 height: "24px",
                 borderRadius: "4px",
-                border: "1px solid rgba(0,0,0,0.15)",
+                border: "1px solid var(--tandem-border)",
                 background: "var(--tandem-surface-muted)",
                 cursor: "pointer",
                 padding: 0,
@@ -382,7 +382,7 @@ export function Toolbar({
           submitLabel={showReplacement ? "Suggest" : sendToClaude ? "Ask" : "Add"}
           borderColor={
             showReplacement
-              ? "#8b5cf6"
+              ? "var(--tandem-author-user)"
               : sendToClaude
                 ? "var(--tandem-accent)"
                 : "var(--tandem-author-user)"
@@ -405,6 +405,8 @@ export function Toolbar({
                     outline: "none",
                     minWidth: "100px",
                     flex: "1 1 140px",
+                    background: "var(--tandem-surface)",
+                    color: "var(--tandem-fg)",
                   }}
                 />
               )}
@@ -412,7 +414,7 @@ export function Toolbar({
                 <label
                   style={{
                     fontSize: "11px",
-                    color: showReplacement ? "#8b5cf6" : "var(--tandem-fg-subtle)",
+                    color: showReplacement ? "var(--tandem-accent)" : "var(--tandem-fg-subtle)",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -468,7 +470,7 @@ export function Toolbar({
               padding: "1px 6px",
               fontSize: "10px",
               fontWeight: 600,
-              color: "var(--tandem-warning)",
+              color: "var(--tandem-warning-fg-strong)",
               background: "var(--tandem-warning-bg)",
               borderRadius: "9999px",
             }}

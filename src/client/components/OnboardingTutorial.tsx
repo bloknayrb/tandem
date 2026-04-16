@@ -42,7 +42,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
         zIndex: 900,
         maxWidth: 340,
         background: "var(--tandem-surface)",
-        borderLeft: `4px solid var(--tandem-accent)`,
+        borderLeft: "4px solid var(--tandem-accent)",
         borderRadius: 8,
         boxShadow: "0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08)",
         padding: "16px 20px",
@@ -121,10 +121,10 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
               style={{
                 padding: "4px 12px",
                 fontSize: 12,
-                border: `1px solid var(--tandem-border-strong)`,
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: 4,
                 background: "var(--tandem-surface)",
-                color: "var(--tandem-fg)",
+                color: "var(--tandem-fg-muted)",
                 cursor: "pointer",
                 fontWeight: 500,
               }}

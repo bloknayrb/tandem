@@ -34,7 +34,7 @@ export function ToolbarButton({
   } else if (active) {
     border = "1px solid var(--tandem-accent)";
     background = "var(--tandem-accent-bg)";
-    color = "var(--tandem-accent-fg-strong)";
+    color = "var(--tandem-accent)";
   }
 
   const ariaLabelValue = ariaLabel ?? (typeof label === "string" ? label : undefined);

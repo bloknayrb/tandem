@@ -46,6 +46,8 @@ export function InputGroup({
           outline: "none",
           minWidth: "120px",
           flex: "1 1 200px",
+          background: "var(--tandem-surface)",
+          color: "var(--tandem-fg)",
         }}
       />
       {secondaryInput}

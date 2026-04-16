@@ -89,7 +89,7 @@ function TabItem({
       {isDirty && (
         <span
           data-testid={`unsaved-indicator-${tab.id}`}
-          style={{ color: "#f59e0b", fontSize: "10px" }}
+          style={{ color: "var(--tandem-warning)", fontSize: "10px" }}
         >
           ●
         </span>
@@ -122,7 +122,7 @@ function TabItem({
         <span
           style={{
             fontSize: "9px",
-            color: "var(--tandem-warning)",
+            color: "var(--tandem-warning-fg-strong)",
             background: "var(--tandem-warning-bg)",
             padding: "0 3px",
             borderRadius: "2px",
@@ -378,7 +378,11 @@ export function DocumentTabs({
         <button
           data-testid="tab-scroll-left"
           onClick={scrollLeft}
-          style={ARROW_BTN_STYLE}
+          style={{
+            ...ARROW_BTN_STYLE,
+            background: `linear-gradient(to right, var(--tandem-surface-muted) 70%, transparent)`,
+            color: "var(--tandem-fg-muted)",
+          }}
           title="Scroll tabs left"
         >
           ◀
@@ -420,7 +424,11 @@ export function DocumentTabs({
         <button
           data-testid="tab-scroll-right"
           onClick={scrollRight}
-          style={ARROW_BTN_RIGHT_STYLE}
+          style={{
+            ...ARROW_BTN_RIGHT_STYLE,
+            background: `linear-gradient(to left, var(--tandem-surface-muted) 70%, transparent)`,
+            color: "var(--tandem-fg-muted)",
+          }}
           title="Scroll tabs right"
         >
           ▶

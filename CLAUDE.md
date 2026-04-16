@@ -64,6 +64,13 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
 
+## Themes & Styling
+- **CSS Variables Only.** All UI colors must use CSS custom properties (`var(--tandem-*)`) defined in `index.html`. Never use hardcoded hex/rgb values in React components.
+- **Semantic Tokens.** Prefer semantic tokens (e.g., `--tandem-surface-muted`, `--tandem-accent`) over primitive colors.
+- **Accessibility (Contrast).** For text on semantic backgrounds (Success, Warning, Error), use the `*-fg-strong` variant (e.g., `var(--tandem-warning-fg-strong)`) to ensure WCAG AA (4.5:1) contrast.
+- **Automatic Theming.** Light/dark mode is handled via `[data-theme="dark"]` on the `<html>` element. Components should not need to know the current theme.
+- **Type-safe Colors.** Use `src/client/utils/colors.ts` for semantic color references in JS (e.g., `errorStateColors.background`).
+
 ## Tauri Desktop
 - `cargo tauri dev` -- Tauri dev mode (Vite hot-reload + Rust rebuild)
 - `cargo tauri build` -- Production build (installer output)

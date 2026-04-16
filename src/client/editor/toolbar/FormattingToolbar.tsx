@@ -364,8 +364,7 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
                   border: "none",
                   borderRadius: "4px",
                   background: activeHeading === level ? "var(--tandem-accent-bg)" : "transparent",
-                  color:
-                    activeHeading === level ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg)",
+                  color: activeHeading === level ? "var(--tandem-accent)" : "var(--tandem-fg)",
                   cursor: "pointer",
                   textAlign: "left",
                   fontWeight: HEADING_FONT_WEIGHTS[level],

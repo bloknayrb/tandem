@@ -43,7 +43,6 @@ import { pmSelectionToFlat } from "./positions";
 import { StatusBar } from "./status/StatusBar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
 import type { DocListEntry, OpenTab } from "./types";
-import { errorStateColors } from "./utils/colors";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 export type { DocListEntry, OpenTab };
@@ -95,10 +94,10 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
     <div
       style={{
         padding: "8px 16px",
-        background: errorStateColors.background,
-        borderBottom: `1px solid ${errorStateColors.border}`,
+        background: "var(--tandem-error-bg)",
+        borderBottom: "1px solid var(--tandem-error-border)",
         fontSize: "13px",
-        color: "var(--tandem-error)",
+        color: "var(--tandem-error-fg-strong)",
         textAlign: "center",
         display: "flex",
         justifyContent: "center",
@@ -113,7 +112,7 @@ function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
           background: "none",
           border: "none",
           cursor: "pointer",
-          color: "var(--tandem-error)",
+          color: "var(--tandem-error-fg-strong)",
           fontSize: "16px",
           lineHeight: 1,
           padding: "0 4px",
@@ -496,7 +495,7 @@ export default function App() {
             background: "var(--tandem-warning-bg)",
             borderBottom: "1px solid var(--tandem-warning-border)",
             fontSize: "13px",
-            color: "var(--tandem-warning)",
+            color: "var(--tandem-warning-fg-strong)",
             textAlign: "center",
           }}
         >
@@ -532,7 +531,7 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               width: `${panelLayout.left}px`,
-              borderRight: `1px solid var(--tandem-border)`,
+              borderRight: "1px solid var(--tandem-border)",
             }}
           >
             <div
@@ -541,7 +540,7 @@ export default function App() {
                 fontSize: "11px",
                 fontWeight: 600,
                 color: "var(--tandem-fg-muted)",
-                borderBottom: `1px solid var(--tandem-border)`,
+                borderBottom: "1px solid var(--tandem-border)",
                 background: "var(--tandem-surface-muted)",
                 textTransform: "uppercase",
                 letterSpacing: "0.5px",
@@ -674,7 +673,7 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               width: `${panelLayout.right}px`,
-              borderLeft: `1px solid var(--tandem-border)`,
+              borderLeft: "1px solid var(--tandem-border)",
             }}
           >
             <div
@@ -683,7 +682,7 @@ export default function App() {
                 fontSize: "11px",
                 fontWeight: 600,
                 color: "var(--tandem-fg-muted)",
-                borderBottom: `1px solid var(--tandem-border)`,
+                borderBottom: "1px solid var(--tandem-border)",
                 background: "var(--tandem-surface-muted)",
                 textTransform: "uppercase",
                 letterSpacing: "0.5px",
@@ -796,14 +795,14 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               width: `${panelLayout.right}px`,
-              borderLeft: `1px solid var(--tandem-border)`,
+              borderLeft: "1px solid var(--tandem-border)",
             }}
           >
             {/* Panel toggle tabs */}
             <div
               style={{
                 display: "flex",
-                borderBottom: `1px solid var(--tandem-border)`,
+                borderBottom: "1px solid var(--tandem-border)",
                 background: "var(--tandem-surface-muted)",
               }}
             >
@@ -816,7 +815,7 @@ export default function App() {
                   fontSize: "12px",
                   fontWeight: showChat ? 400 : 600,
                   border: "none",
-                  borderBottom: showChat ? "none" : `2px solid var(--tandem-accent)`,
+                  borderBottom: showChat ? "none" : "2px solid var(--tandem-accent)",
                   background: "transparent",
                   cursor: "pointer",
                   color: showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)",
@@ -856,7 +855,7 @@ export default function App() {
                   fontSize: "12px",
                   fontWeight: showChat ? 600 : 400,
                   border: "none",
-                  borderBottom: showChat ? `2px solid var(--tandem-accent)` : "none",
+                  borderBottom: showChat ? "2px solid var(--tandem-accent)" : "none",
                   background: "transparent",
                   cursor: "pointer",
                   color: showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",

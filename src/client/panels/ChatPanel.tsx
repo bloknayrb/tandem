@@ -2,18 +2,11 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import * as Y from "yjs";
-import { CLAUDE_PRESENCE_COLOR, DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
+import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { flatOffsetToPmPos } from "../positions";
-
-const TYPING_DOT_STYLE: React.CSSProperties = {
-  width: "5px",
-  height: "5px",
-  borderRadius: "50%",
-  background: CLAUDE_PRESENCE_COLOR,
-};
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
@@ -187,7 +180,7 @@ export function ChatPanel({
             <span
               style={{
                 background: "var(--tandem-accent)",
-                color: "white",
+                color: "var(--tandem-accent-fg)",
                 borderRadius: "10px",
                 padding: "2px 8px",
                 fontSize: "11px",
@@ -242,6 +235,7 @@ export function ChatPanel({
                 msg.author === "user" ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
               border: `1px solid ${msg.author === "user" ? "var(--tandem-accent-border)" : "var(--tandem-border)"}`,
               fontSize: "13px",
+              color: "var(--tandem-fg)",
             }}
           >
             {/* Author + doc badge */}
@@ -250,7 +244,8 @@ export function ChatPanel({
                 style={{
                   fontWeight: 600,
                   fontSize: "11px",
-                  color: msg.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg)",
+                  color:
+                    msg.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
                   textTransform: "uppercase",
                 }}
               >
@@ -325,7 +320,7 @@ export function ChatPanel({
               padding: "8px 12px",
               marginBottom: "8px",
               fontSize: "12px",
-              color: CLAUDE_PRESENCE_COLOR,
+              color: "var(--tandem-author-claude)",
               display: "flex",
               alignItems: "center",
               gap: "8px",
@@ -336,7 +331,10 @@ export function ChatPanel({
                 <span
                   key={delay}
                   style={{
-                    ...TYPING_DOT_STYLE,
+                    width: "5px",
+                    height: "5px",
+                    borderRadius: "50%",
+                    background: "var(--tandem-author-claude)",
                     animation: `tandem-typing-bounce 1.2s ease-in-out ${delay}s infinite`,
                   }}
                 />
@@ -406,6 +404,8 @@ export function ChatPanel({
             resize: "none",
             outline: "none",
             fontFamily: "inherit",
+            background: "var(--tandem-surface)",
+            color: "var(--tandem-fg)",
           }}
         />
         <button
@@ -414,7 +414,7 @@ export function ChatPanel({
           style={{
             padding: "8px 12px",
             background: inputText.trim() ? "var(--tandem-accent)" : "var(--tandem-border-strong)",
-            color: "white",
+            color: inputText.trim() ? "var(--tandem-accent-fg)" : "var(--tandem-fg-subtle)",
             border: "none",
             borderRadius: "6px",
             cursor: inputText.trim() ? "pointer" : "default",

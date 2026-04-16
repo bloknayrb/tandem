@@ -1,9 +1,21 @@
 import type { Toast } from "../hooks/useNotifications";
 
-const SEVERITY_COLORS: Record<Toast["severity"], string> = {
-  error: "#ef4444",
-  warning: "#f59e0b",
-  info: "#6366f1",
+const SEVERITY_TOKENS: Record<Toast["severity"], string> = {
+  error: "var(--tandem-error)",
+  warning: "var(--tandem-warning)",
+  info: "var(--tandem-accent)",
+};
+
+const SEVERITY_BG_TOKENS: Record<Toast["severity"], string> = {
+  error: "var(--tandem-error-bg)",
+  warning: "var(--tandem-warning-bg)",
+  info: "var(--tandem-accent-bg)",
+};
+
+const SEVERITY_TEXT_TOKENS: Record<Toast["severity"], string> = {
+  error: "var(--tandem-error-fg-strong)",
+  warning: "var(--tandem-warning-fg-strong)",
+  info: "var(--tandem-accent-fg-strong)",
 };
 
 interface ToastContainerProps {
@@ -51,7 +63,9 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
 }
 
 function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string) => void }) {
-  const borderColor = SEVERITY_COLORS[toast.severity];
+  const borderColor = SEVERITY_TOKENS[toast.severity];
+  const bgColor = SEVERITY_BG_TOKENS[toast.severity];
+  const textColor = SEVERITY_TEXT_TOKENS[toast.severity];
   const ariaRole = toast.severity === "info" ? "status" : "alert";
 
   return (
@@ -80,8 +94,8 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
             marginLeft: 6,
             fontSize: 11,
             fontWeight: 600,
-            color: borderColor,
-            background: `${borderColor}18`,
+            color: textColor,
+            background: bgColor,
             padding: "1px 5px",
             borderRadius: 8,
           }}

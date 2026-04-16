@@ -49,7 +49,7 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
       style={{
         padding: "8px 16px",
         backgroundColor: "var(--tandem-info-bg)",
-        borderBottom: `1px solid var(--tandem-info-border)`,
+        borderBottom: "1px solid var(--tandem-info-border)",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
@@ -64,7 +64,9 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
       </span>
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
         {error && (
-          <span style={{ color: "var(--tandem-error)", fontSize: "12px", maxWidth: "200px" }}>
+          <span
+            style={{ color: "var(--tandem-error-fg-strong)", fontSize: "12px", maxWidth: "200px" }}
+          >
             {error}
           </span>
         )}

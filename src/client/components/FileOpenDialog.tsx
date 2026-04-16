@@ -1,5 +1,4 @@
 import React, { useCallback, useRef, useState } from "react";
-import { errorStateColors } from "../utils/colors";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload";
 import {
   addRecentFile,
@@ -223,7 +222,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                 width: "100%",
                 padding: "8px 10px",
                 fontSize: "13px",
-                border: `1px solid var(--tandem-border-strong)`,
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "4px",
                 boxSizing: "border-box",
                 background: "var(--tandem-surface)",
@@ -244,7 +243,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                 borderRadius: "4px",
                 cursor: loading ? "wait" : "pointer",
                 background: loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)",
-                color: loading ? "var(--tandem-bg)" : "var(--tandem-accent-fg)",
+                color: "var(--tandem-accent-fg)",
                 opacity: !filePath.trim() ? 0.5 : 1,
               }}
               data-testid="file-open-submit"
@@ -395,10 +394,10 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               marginTop: "10px",
               padding: "8px 10px",
               fontSize: "12px",
-              color: "var(--tandem-error)",
-              background: errorStateColors.background,
+              color: "var(--tandem-error-fg-strong)",
+              background: "var(--tandem-error-bg)",
               borderRadius: "4px",
-              border: `1px solid ${errorStateColors.border}`,
+              border: "1px solid var(--tandem-error-border)",
             }}
             data-testid="file-open-error"
           >

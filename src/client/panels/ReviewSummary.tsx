@@ -83,7 +83,7 @@ export function ReviewSummary({ accepted, dismissed, total, onDismiss }: ReviewS
             border: "none",
             borderRadius: "6px",
             background: "var(--tandem-accent)",
-            color: "white",
+            color: "var(--tandem-accent-fg)",
             cursor: "pointer",
           }}
         >

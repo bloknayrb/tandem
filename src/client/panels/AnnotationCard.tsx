@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { HIGHLIGHT_COLORS } from "../../shared/constants";
 import type { Annotation, AnnotationReply } from "../../shared/types";
-import { errorStateColors } from "../utils/colors";
 import { CommentThread } from "./CommentThread";
 
 export interface AnnotationCardProps {
@@ -22,9 +21,9 @@ function getBorderColor(annotation: Annotation): string {
   if (annotation.color) {
     return HIGHLIGHT_COLORS[annotation.color] || "var(--tandem-border)";
   }
-  if (annotation.suggestedText !== undefined) return "#8b5cf6"; // replacement
+  if (annotation.suggestedText !== undefined) return "var(--tandem-accent)"; // replacement
   if (annotation.directedAt === "claude") return "var(--tandem-accent)"; // question for Claude
-  if (annotation.type === "flag") return "#ef4444";
+  if (annotation.type === "flag") return "var(--tandem-error)";
   return "var(--tandem-author-user)"; // plain comment
 }
 
@@ -119,6 +118,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     fontFamily: "inherit",
     minHeight: "40px",
     boxSizing: "border-box",
+    background: "var(--tandem-surface)",
+    color: "var(--tandem-fg)",
   };
 
   const editBtnStyle: React.CSSProperties = {
@@ -309,7 +310,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
                 background: "var(--tandem-success-bg)",
-                color: "var(--tandem-success)",
+                color: "var(--tandem-success-fg-strong)",
                 cursor: "pointer",
               }}
             >
@@ -336,7 +337,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           </div>
         </div>
       ) : (
-        <div style={{ margin: 0, color: "var(--tandem-fg-muted)", lineHeight: "1.4" }}>
+        <div style={{ margin: 0, color: "var(--tandem-fg)", lineHeight: "1.4" }}>
           {hasSuggestedText ? (
             <>
               <div
@@ -355,7 +356,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                     style={{
                       textDecoration: "line-through",
                       color: "var(--tandem-error)",
-                      backgroundColor: errorStateColors.background,
+                      backgroundColor: "var(--tandem-error-bg)",
                       padding: "0 2px",
                       borderRadius: "2px",
                     }}
@@ -366,7 +367,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 {annotation.textSnapshot && " → "}
                 <span
                   style={{
-                    color: "var(--tandem-success)",
+                    color: "var(--tandem-success-fg-strong)",
                     backgroundColor: "var(--tandem-success-bg)",
                     padding: "0 2px",
                     borderRadius: "2px",
@@ -401,7 +402,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
                 background: "var(--tandem-success-bg)",
-                color: "var(--tandem-success)",
+                color: "var(--tandem-success-fg-strong)",
                 cursor: "pointer",
               }}
             >
@@ -420,8 +421,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
-                background: errorStateColors.background,
-                color: "var(--tandem-error)",
+                background: "var(--tandem-error-bg)",
+                color: "var(--tandem-error-fg-strong)",
                 cursor: "pointer",
               }}
             >

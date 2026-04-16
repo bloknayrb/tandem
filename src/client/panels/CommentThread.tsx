@@ -50,7 +50,8 @@ export function CommentThread({ replies }: CommentThreadProps) {
               style={{
                 fontWeight: 600,
                 fontSize: "11px",
-                color: reply.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg)",
+                color:
+                  reply.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
               }}
             >
               {reply.author === "claude" ? "Claude" : "You"}
@@ -62,7 +63,7 @@ export function CommentThread({ replies }: CommentThreadProps) {
               {formatTime(reply.timestamp)}
             </span>
           </div>
-          <p style={{ margin: 0, color: "var(--tandem-fg-muted)" }}>{reply.text}</p>
+          <p style={{ margin: 0, color: "var(--tandem-fg)" }}>{reply.text}</p>
         </div>
       ))}
     </div>

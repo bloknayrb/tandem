@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR, USER_NAME_MAX_LEN } from "../../shared/constants";
+import { USER_NAME_MAX_LEN } from "../../shared/constants";
 import { useUserName } from "../hooks/useUserName";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
@@ -183,7 +183,7 @@ export function StatusBar({
             padding: "1px 8px",
             fontSize: "11px",
             fontWeight: 600,
-            color: "var(--tandem-warning)",
+            color: "var(--tandem-warning-fg-strong)",
             background: "var(--tandem-warning-bg)",
             borderRadius: "9999px",
             border: "1px solid var(--tandem-warning-border)",
@@ -198,7 +198,7 @@ export function StatusBar({
             width: "8px",
             height: "8px",
             borderRadius: "50%",
-            background: CLAUDE_PRESENCE_COLOR,
+            background: "var(--tandem-author-claude)",
             opacity: claudeActive ? 1 : 0.4,
             display: "inline-block",
             transition: "opacity 0.3s ease",
@@ -208,7 +208,7 @@ export function StatusBar({
         <span
           style={{
             transition: "color 0.3s ease",
-            color: claudeActive ? "var(--tandem-fg-muted)" : "var(--tandem-fg-subtle)",
+            color: claudeActive ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)",
           }}
         >
           {claudeStatus ? `Claude -- ${claudeStatus}` : "Claude -- idle"}

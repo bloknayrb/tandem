@@ -144,7 +144,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                 fontWeight: 600,
                 textTransform: "uppercase",
                 letterSpacing: "0.08em",
-                color: "var(--tandem-fg-muted)",
+                color: "var(--tandem-fg-subtle)",
                 marginBottom: "6px",
               }}
             >
@@ -173,7 +173,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                                 fontSize: "12px",
                                 fontFamily: "ui-monospace, SFMono-Regular, monospace",
                                 background: "var(--tandem-surface-muted)",
-                                border: "1px solid var(--tandem-border)",
+                                border: "1px solid var(--tandem-border-strong)",
                                 borderBottom: "2px solid var(--tandem-border-strong)",
                                 borderRadius: "4px",
                                 color: "var(--tandem-fg)",
@@ -201,7 +201,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                       style={{
                         paddingBottom: "5px",
                         fontSize: "13px",
-                        color: "var(--tandem-fg)",
+                        color: "var(--tandem-fg-muted)",
                         verticalAlign: "middle",
                       }}
                     >
@@ -232,6 +232,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
               background: "var(--tandem-surface-muted)",
               border: "1px solid var(--tandem-border)",
               borderRadius: "3px",
+              color: "var(--tandem-fg-subtle)",
             }}
           >
             ?
@@ -244,6 +245,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
               background: "var(--tandem-surface-muted)",
               border: "1px solid var(--tandem-border)",
               borderRadius: "3px",
+              color: "var(--tandem-fg-subtle)",
             }}
           >
             Esc

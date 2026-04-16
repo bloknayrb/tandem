@@ -61,7 +61,7 @@ function buildDecorations(
           attrs = {
             class: "tandem-suggestion",
             style:
-              "background: rgba(139, 92, 246, 0.15); text-decoration: underline wavy #8b5cf6; text-underline-offset: 3px;",
+              "background: var(--tandem-accent-bg); text-decoration: underline wavy var(--tandem-accent); text-underline-offset: 3px;",
             "data-annotation-id": ann.id,
             "aria-label": "Replacement annotation",
           };
@@ -70,7 +70,7 @@ function buildDecorations(
           attrs = {
             class: "tandem-question",
             style:
-              "background: rgba(99, 102, 241, 0.12); border-bottom: 2px solid var(--tandem-accent); padding-bottom: 1px;",
+              "background: var(--tandem-accent-bg); border-bottom: 2px solid var(--tandem-accent); padding-bottom: 1px;",
             "data-annotation-id": ann.id,
             "aria-label": "Question annotation",
           };
@@ -88,7 +88,7 @@ function buildDecorations(
         attrs = {
           class: "tandem-flag",
           style:
-            "background: rgba(239, 68, 68, 0.12); border-bottom: 2px solid #ef4444; padding-bottom: 1px;",
+            "background: var(--tandem-error-bg); border-bottom: 2px solid var(--tandem-error); padding-bottom: 1px;",
           "data-annotation-id": ann.id,
           "aria-label": "Flag annotation",
         };
