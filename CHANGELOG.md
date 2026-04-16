@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-04-16
+
+### Fixed
+
+- **Plugin stdio entries crash-loop on Windows** — `tandem-editor@0.6.1`'s published `package.json` shipped `"workspaces": ["packages/*"]`, a dev-only field for the vestigial `packages/tandem-doc/` alias stub. On Windows with Node 24 + npm 11, the presence of `workspaces` in an installed consumer package caused `npx -y tandem-editor …` to fail with `ERR_UNSUPPORTED_ESM_URL_SCHEME` (the bin path was handed to the ESM loader as a raw `c:\…` string instead of a `file://` URL). Claude Desktop's plugin loader spawns the stdio entries via `npx -y`, so both `tandem` and `tandem-channel` crash-exited before any user code ran, manifesting in Cowork sessions as entries that flapped "connecting → gone" and never surfaced `tandem_*` tools. Removed the unused `packages/tandem-doc/` directory and the `workspaces` field; direct `node dist/cli/index.js` invocation was never affected, so the Tauri desktop app's bundled sidecar was fine and only the npm-tarball/`npx` path needed the fix.
+
 ## [0.6.1] - 2026-04-15
 
 ### Fixed
