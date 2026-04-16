@@ -1,6 +1,6 @@
 {
   "name": "tandem-editor",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
   "repository": {
     "type": "git",
@@ -31,9 +31,6 @@
     ".": "./dist/cli/index.js",
     "./dist/cli/index.js": "./dist/cli/index.js"
   },
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
     "dev": "vite",
     "dev:standalone": "concurrently \"vite\" \"tsx watch src/server/index.ts\"",
