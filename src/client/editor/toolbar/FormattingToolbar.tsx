@@ -341,7 +341,7 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
               top: "100%",
               left: 0,
               marginTop: "4px",
-              background: "#fff",
+              background: "var(--tandem-surface)",
               border: "1px solid var(--tandem-border)",
               borderRadius: "6px",
               padding: "4px",

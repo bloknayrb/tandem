@@ -71,10 +71,10 @@ function TabItem({
         padding: "4px 12px",
         fontSize: "13px",
         cursor: "pointer",
-        background: isActive ? "#fff" : "transparent",
+        background: isActive ? "var(--tandem-surface)" : "transparent",
         color: isActive ? "var(--tandem-fg)" : "var(--tandem-fg-muted)",
         borderTop: isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent",
-        borderBottom: isActive ? "1px solid #fff" : "1px solid transparent",
+        borderBottom: isActive ? "1px solid var(--tandem-surface)" : "1px solid transparent",
         borderLeft:
           dropIndicator === "left" ? "2px solid var(--tandem-accent)" : "2px solid transparent",
         borderRight:
@@ -122,8 +122,8 @@ function TabItem({
         <span
           style={{
             fontSize: "9px",
-            color: "#92400e",
-            background: "#fef3c7",
+            color: "var(--tandem-warning)",
+            background: "var(--tandem-warning-bg)",
             padding: "0 3px",
             borderRadius: "2px",
           }}

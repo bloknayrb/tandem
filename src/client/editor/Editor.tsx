@@ -142,13 +142,13 @@ export function Editor({
         .tandem-editor p { margin: 0.5em 0; }
         .tandem-editor ul, .tandem-editor ol { padding-left: 1.5em; }
         .tandem-editor table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-        .tandem-editor td, .tandem-editor th { border: 1px solid #ddd; padding: 8px; }
-        .tandem-editor th { background: #f5f5f5; font-weight: 600; }
+        .tandem-editor td, .tandem-editor th { border: 1px solid var(--tandem-border); padding: 8px; }
+        .tandem-editor th { background: var(--tandem-surface-muted); font-weight: 600; }
         .tandem-editor blockquote {
-          border-left: 3px solid #e5e7eb;
+          border-left: 3px solid var(--tandem-border-strong);
           margin: 0.5em 0;
           padding-left: 1em;
-          color: #6b7280;
+          color: var(--tandem-fg-muted);
         }
         .collaboration-cursor__caret {
           position: relative;
@@ -169,7 +169,7 @@ export function Editor({
         .ProseMirror-focused { outline: none; }
         .ProseMirror p.is-empty::before {
           content: attr(data-placeholder);
-          color: #adb5bd;
+          color: var(--tandem-fg-subtle);
           pointer-events: none;
           float: left;
           height: 0;
@@ -184,16 +184,16 @@ export function Editor({
 
         /* Review mode dimming — grays out text, keeps annotated spans readable */
         .tandem-review-dimmed .ProseMirror {
-          color: #9ca3af;
+          color: var(--tandem-fg-subtle);
           transition: color 0.2s;
         }
         .tandem-review-dimmed .tandem-highlight,
         .tandem-review-dimmed .tandem-comment,
         .tandem-review-dimmed .tandem-suggestion {
-          color: #1f2937;
+          color: var(--tandem-fg);
         }
         .tandem-review-dimmed .tandem-annotation-active {
-          outline: 2px solid #6366f1;
+          outline: 2px solid var(--tandem-accent);
           outline-offset: 1px;
           border-radius: 2px;
         }

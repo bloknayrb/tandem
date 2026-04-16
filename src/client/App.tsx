@@ -479,7 +479,7 @@ export default function App() {
           alignItems: "center",
           justifyContent: "center",
           height: "100vh",
-          color: "#9ca3af",
+          color: "var(--tandem-fg-subtle)",
         }}
       >
         Connecting...
@@ -493,10 +493,10 @@ export default function App() {
         <div
           style={{
             padding: "8px 16px",
-            background: "#fef3c7",
-            borderBottom: "1px solid #fbbf24",
+            background: "var(--tandem-warning-bg)",
+            borderBottom: "1px solid var(--tandem-warning-border)",
             fontSize: "13px",
-            color: "#92400e",
+            color: "var(--tandem-warning)",
             textAlign: "center",
           }}
         >
@@ -612,8 +612,8 @@ export default function App() {
               flex: 1,
               overflow: "auto",
               padding: "24px 48px",
-              border: fileDragOver ? "2px dashed #6366f1" : "2px solid transparent",
-              background: fileDragOver ? "#eef2ff" : undefined,
+              border: fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent",
+              background: fileDragOver ? "var(--tandem-accent-bg)" : undefined,
               transition: "border-color 0.15s, background 0.15s",
             }}
             onDragOver={handleEditorDragOver}
@@ -735,8 +735,8 @@ export default function App() {
               flex: 1,
               overflow: "auto",
               padding: "24px 48px",
-              border: fileDragOver ? "2px dashed #6366f1" : "2px solid transparent",
-              background: fileDragOver ? "#eef2ff" : undefined,
+              border: fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent",
+              background: fileDragOver ? "var(--tandem-accent-bg)" : undefined,
               transition: "border-color 0.15s, background 0.15s",
             }}
             onDragOver={handleEditorDragOver}
@@ -830,8 +830,8 @@ export default function App() {
                       position: "absolute",
                       top: "2px",
                       right: "6px",
-                      background: "#ef4444",
-                      color: "#fff",
+                      background: "var(--tandem-error)",
+                      color: "var(--tandem-error-fg)",
                       fontSize: "9px",
                       width: "16px",
                       height: "16px",

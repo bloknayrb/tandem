@@ -231,7 +231,7 @@ export function Toolbar({
         minHeight: "42px",
         padding: "8px 16px",
         borderBottom: "1px solid var(--tandem-border)",
-        background: "#fafafa",
+        background: "var(--tandem-surface-muted)",
         userSelect: "none",
       }}
     >
@@ -284,7 +284,8 @@ export function Toolbar({
             fontSize: "13px",
             border: "1px solid var(--tandem-border)",
             borderRadius: "0 4px 4px 0",
-            background: !canAnnotate || inInputMode ? "var(--tandem-surface-muted)" : "#fff",
+            background:
+              !canAnnotate || inInputMode ? "var(--tandem-surface-muted)" : "var(--tandem-surface)",
             cursor: !canAnnotate || inInputMode ? "not-allowed" : "pointer",
             display: "flex",
             alignItems: "center",
@@ -309,7 +310,7 @@ export function Toolbar({
               top: "100%",
               left: 0,
               marginTop: "4px",
-              background: "#fff",
+              background: "var(--tandem-surface)",
               border: "1px solid var(--tandem-border)",
               borderRadius: "6px",
               padding: "6px",
@@ -467,8 +468,8 @@ export function Toolbar({
               padding: "1px 6px",
               fontSize: "10px",
               fontWeight: 600,
-              color: "#92400e",
-              background: "#fef3c7",
+              color: "var(--tandem-warning)",
+              background: "var(--tandem-warning-bg)",
               borderRadius: "9999px",
             }}
           >
@@ -499,7 +500,7 @@ export function Toolbar({
                 border: "none",
                 cursor: "pointer",
                 background: tandemMode === "solo" ? "var(--tandem-accent)" : "transparent",
-                color: tandemMode === "solo" ? "#fff" : "var(--tandem-fg-muted)",
+                color: tandemMode === "solo" ? "var(--tandem-accent-fg)" : "var(--tandem-fg-muted)",
                 fontWeight: tandemMode === "solo" ? 600 : 400,
                 borderRight: "1px solid var(--tandem-border-strong)",
                 display: "flex",
@@ -531,7 +532,8 @@ export function Toolbar({
                 border: "none",
                 cursor: "pointer",
                 background: tandemMode === "tandem" ? "var(--tandem-accent)" : "transparent",
-                color: tandemMode === "tandem" ? "#fff" : "var(--tandem-fg-muted)",
+                color:
+                  tandemMode === "tandem" ? "var(--tandem-accent-fg)" : "var(--tandem-fg-muted)",
                 fontWeight: tandemMode === "tandem" ? 600 : 400,
                 display: "flex",
                 alignItems: "center",
@@ -544,7 +546,7 @@ export function Toolbar({
                     width: "6px",
                     height: "6px",
                     borderRadius: "50%",
-                    background: "#22c55e",
+                    background: "var(--tandem-success)",
                     display: "inline-block",
                   }}
                 />

@@ -164,7 +164,7 @@ export function ChatPanel({
         width: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#fafafa",
+        background: "var(--tandem-surface-muted)",
         flex: 1,
         minHeight: 0,
       }}
@@ -240,7 +240,7 @@ export function ChatPanel({
               borderRadius: "8px",
               background:
                 msg.author === "user" ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
-              border: "1px solid " + (msg.author === "user" ? "#c7d2fe" : "var(--tandem-border)"),
+              border: `1px solid ${msg.author === "user" ? "var(--tandem-accent-border)" : "var(--tandem-border)"}`,
               fontSize: "13px",
             }}
           >
@@ -287,8 +287,8 @@ export function ChatPanel({
                 style={{
                   padding: "4px 8px",
                   marginBottom: "6px",
-                  borderLeft: "3px solid #c7d2fe",
-                  background: "#f5f3ff",
+                  borderLeft: "3px solid var(--tandem-accent-border)",
+                  background: "var(--tandem-accent-bg)",
                   fontSize: "12px",
                   color: "var(--tandem-accent-fg-strong)",
                   cursor: "pointer",
@@ -354,7 +354,7 @@ export function ChatPanel({
           style={{
             padding: "4px 12px",
             background: "var(--tandem-accent-bg)",
-            borderTop: "1px solid #c7d2fe",
+            borderTop: "1px solid var(--tandem-accent-border)",
             fontSize: "11px",
             color: "var(--tandem-accent-fg-strong)",
             display: "flex",

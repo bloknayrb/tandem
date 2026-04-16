@@ -108,7 +108,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
                 border: "none",
                 cursor: "pointer",
                 fontSize: 12,
-                color: "#9ca3af",
+                color: "var(--tandem-fg-subtle)",
                 padding: 0,
                 textDecoration: "underline",
               }}

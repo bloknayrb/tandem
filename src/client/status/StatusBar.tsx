@@ -72,7 +72,11 @@ export function StatusBar({
   }, [disconnectedSince]);
 
   const isReconnecting = connectionStatus === "connecting";
-  const dotColor = connected ? "#22c55e" : isReconnecting ? "#eab308" : "#ef4444";
+  const dotColor = connected
+    ? "var(--tandem-success)"
+    : isReconnecting
+      ? "var(--tandem-warning)"
+      : "var(--tandem-error)";
 
   let connLabel: string;
   if (showReconnectedFlash) {
@@ -101,7 +105,7 @@ export function StatusBar({
         padding: "4px 16px",
         height: "28px",
         borderTop: "1px solid var(--tandem-border)",
-        background: "#fafafa",
+        background: "var(--tandem-surface-muted)",
         fontSize: "12px",
         color: "var(--tandem-fg-muted)",
         userSelect: "none",
@@ -179,10 +183,10 @@ export function StatusBar({
             padding: "1px 8px",
             fontSize: "11px",
             fontWeight: 600,
-            color: "#92400e",
-            background: "#fef3c7",
+            color: "var(--tandem-warning)",
+            background: "var(--tandem-warning-bg)",
             borderRadius: "9999px",
-            border: "1px solid #fde68a",
+            border: "1px solid var(--tandem-warning-border)",
           }}
         >
           Review Only

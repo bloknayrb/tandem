@@ -553,7 +553,7 @@ export function SidePanel({
       data-testid="annotation-list-scroll-container"
       style={{
         width: "100%",
-        background: "#fafafa",
+        background: "var(--tandem-surface-muted)",
         display: "flex",
         flexDirection: "column",
         overflowY: "auto",
@@ -564,10 +564,10 @@ export function SidePanel({
         <div
           style={{
             padding: "6px 16px",
-            background: "#fef3c7",
-            borderBottom: "1px solid #fde68a",
+            background: "var(--tandem-warning-bg)",
+            borderBottom: "1px solid var(--tandem-warning-border)",
             fontSize: "12px",
-            color: "#92400e",
+            color: "var(--tandem-warning)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -581,10 +581,10 @@ export function SidePanel({
             style={{
               fontSize: "11px",
               padding: "1px 8px",
-              border: "1px solid #fbbf24",
+              border: "1px solid var(--tandem-warning-border)",
               borderRadius: "4px",
-              background: "#fff",
-              color: "#92400e",
+              background: "var(--tandem-surface)",
+              color: "var(--tandem-warning)",
               cursor: "pointer",
               fontWeight: 500,
             }}
@@ -637,7 +637,7 @@ export function SidePanel({
                   fontSize: "11px",
                   border: `1px solid ${reviewMode ? "var(--tandem-accent)" : "var(--tandem-border-strong)"}`,
                   borderRadius: "3px",
-                  background: reviewMode ? "var(--tandem-accent-bg)" : "#fff",
+                  background: reviewMode ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
                   color: reviewMode ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
                   cursor: "pointer",
                   fontWeight: reviewMode ? 600 : 400,
@@ -800,7 +800,11 @@ export function SidePanel({
                   <button
                     data-testid="bulk-cancel-btn"
                     onClick={() => setBulkConfirm(null)}
-                    style={{ ...SMALL_BTN, background: "#fff", color: "var(--tandem-fg-muted)" }}
+                    style={{
+                      ...SMALL_BTN,
+                      background: "var(--tandem-surface)",
+                      color: "var(--tandem-fg-muted)",
+                    }}
                   >
                     Cancel
                   </button>
@@ -812,7 +816,11 @@ export function SidePanel({
               <button
                 data-testid="bulk-accept-btn"
                 onClick={() => setBulkConfirm("accept")}
-                style={{ ...SMALL_BTN, background: "#f0fdf4", color: "#166534" }}
+                style={{
+                  ...SMALL_BTN,
+                  background: "var(--tandem-success-bg)",
+                  color: "var(--tandem-success)",
+                }}
               >
                 Accept All ({pending.length})
               </button>

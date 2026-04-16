@@ -60,7 +60,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
       data-testid={`toast-${toast.id}`}
       style={{
         pointerEvents: "auto",
-        background: "white",
+        background: "var(--tandem-surface)",
         borderRadius: 6,
         borderLeft: `4px solid ${borderColor}`,
         boxShadow: "0 2px 8px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)",
@@ -69,7 +69,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
         animation: "tandem-toast-slide-in 0.2s ease-out",
         fontSize: 13,
         lineHeight: 1.4,
-        color: "#1f2937",
+        color: "var(--tandem-fg)",
       }}
     >
       <span>{toast.message}</span>
@@ -101,7 +101,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
           background: "transparent",
           cursor: "pointer",
           fontSize: 14,
-          color: "#9ca3af",
+          color: "var(--tandem-fg-subtle)",
           lineHeight: 1,
           padding: "2px 4px",
         }}

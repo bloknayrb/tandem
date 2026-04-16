@@ -85,8 +85,8 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     >
       <div
         style={{
-          backgroundColor: "#fff",
-          border: "1px solid #e0e0e0",
+          backgroundColor: "var(--tandem-surface)",
+          border: "1px solid var(--tandem-border)",
           borderRadius: "8px",
           boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           padding: "24px 28px 20px",
@@ -111,7 +111,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
               margin: 0,
               fontSize: "16px",
               fontWeight: 600,
-              color: "#1a1a1a",
+              color: "var(--tandem-fg)",
             }}
           >
             Keyboard Shortcuts
@@ -126,7 +126,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
               border: "none",
               cursor: "pointer",
               fontSize: "18px",
-              color: "#666",
+              color: "var(--tandem-fg-muted)",
               lineHeight: 1,
               padding: "2px 6px",
               borderRadius: "4px",
@@ -144,7 +144,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                 fontWeight: 600,
                 textTransform: "uppercase",
                 letterSpacing: "0.08em",
-                color: "#888",
+                color: "var(--tandem-fg-muted)",
                 marginBottom: "6px",
               }}
             >
@@ -172,18 +172,24 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                                 padding: "1px 6px",
                                 fontSize: "12px",
                                 fontFamily: "ui-monospace, SFMono-Regular, monospace",
-                                background: "#f5f5f5",
-                                border: "1px solid #d4d4d4",
-                                borderBottom: "2px solid #bbb",
+                                background: "var(--tandem-surface-muted)",
+                                border: "1px solid var(--tandem-border)",
+                                borderBottom: "2px solid var(--tandem-border-strong)",
                                 borderRadius: "4px",
-                                color: "#333",
+                                color: "var(--tandem-fg)",
                                 lineHeight: "1.5",
                               }}
                             >
                               {key}
                             </kbd>
                             {i < row.keys.length - 1 && (
-                              <span style={{ color: "#aaa", fontSize: "11px", margin: "0 2px" }}>
+                              <span
+                                style={{
+                                  color: "var(--tandem-fg-subtle)",
+                                  fontSize: "11px",
+                                  margin: "0 2px",
+                                }}
+                              >
                                 +
                               </span>
                             )}
@@ -195,7 +201,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                       style={{
                         paddingBottom: "5px",
                         fontSize: "13px",
-                        color: "#444",
+                        color: "var(--tandem-fg)",
                         verticalAlign: "middle",
                       }}
                     >
@@ -212,9 +218,9 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
           style={{
             marginTop: "12px",
             paddingTop: "10px",
-            borderTop: "1px solid #f0f0f0",
+            borderTop: "1px solid var(--tandem-border)",
             fontSize: "11px",
-            color: "#aaa",
+            color: "var(--tandem-fg-subtle)",
             textAlign: "center",
           }}
         >
@@ -223,8 +229,8 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
             style={{
               fontSize: "11px",
               padding: "1px 4px",
-              background: "#f5f5f5",
-              border: "1px solid #ddd",
+              background: "var(--tandem-surface-muted)",
+              border: "1px solid var(--tandem-border)",
               borderRadius: "3px",
             }}
           >
@@ -235,8 +241,8 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
             style={{
               fontSize: "11px",
               padding: "1px 4px",
-              background: "#f5f5f5",
-              border: "1px solid #ddd",
+              background: "var(--tandem-surface-muted)",
+              border: "1px solid var(--tandem-border)",
               borderRadius: "3px",
             }}
           >

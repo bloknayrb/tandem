@@ -154,7 +154,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         padding: "8px 10px",
         marginBottom: "6px",
         borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget ? "var(--tandem-accent-bg)" : "white",
+        background: isReviewTarget ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
         borderRadius: "0 4px 4px 0",
         fontSize: "13px",
         opacity: isPending ? 1 : 0.6,
@@ -308,8 +308,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
-                background: "#f0fdf4",
-                color: "#166534",
+                background: "var(--tandem-success-bg)",
+                color: "var(--tandem-success)",
                 cursor: "pointer",
               }}
             >
@@ -326,7 +326,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
-                background: "#fff",
+                background: "var(--tandem-surface)",
                 color: "var(--tandem-fg-muted)",
                 cursor: "pointer",
               }}
@@ -366,8 +366,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 {annotation.textSnapshot && " → "}
                 <span
                   style={{
-                    color: "#166534",
-                    backgroundColor: "#f0fdf4",
+                    color: "var(--tandem-success)",
+                    backgroundColor: "var(--tandem-success-bg)",
                     padding: "0 2px",
                     borderRadius: "2px",
                   }}
@@ -400,8 +400,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 fontSize: "11px",
                 border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "3px",
-                background: "#f0fdf4",
-                color: "#166534",
+                background: "var(--tandem-success-bg)",
+                color: "var(--tandem-success)",
                 cursor: "pointer",
               }}
             >
@@ -516,7 +516,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                     fontSize: "11px",
                     border: "1px solid var(--tandem-border-strong)",
                     borderRadius: "3px",
-                    background: "#fff",
+                    background: "var(--tandem-surface)",
                     color: "var(--tandem-fg-muted)",
                     cursor: "pointer",
                   }}

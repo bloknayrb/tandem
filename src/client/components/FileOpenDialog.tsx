@@ -197,11 +197,11 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               flex: 1,
               padding: "6px",
               fontSize: "13px",
-              border: "1px solid #e5e7eb",
+              border: `1px solid var(--tandem-border)`,
               borderRadius: "4px",
               cursor: "pointer",
-              background: mode === "upload" ? "#6366f1" : "#fff",
-              color: mode === "upload" ? "#fff" : "#374151",
+              background: mode === "upload" ? "var(--tandem-accent)" : "var(--tandem-surface)",
+              color: mode === "upload" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)",
             }}
           >
             Upload

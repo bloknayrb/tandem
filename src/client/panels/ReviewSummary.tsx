@@ -25,7 +25,7 @@ export function ReviewSummary({ accepted, dismissed, total, onDismiss }: ReviewS
     >
       <div
         style={{
-          background: "white",
+          background: "var(--tandem-surface)",
           borderRadius: "12px",
           padding: "32px 40px",
           maxWidth: "400px",
