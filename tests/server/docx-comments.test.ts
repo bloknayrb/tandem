@@ -4,6 +4,7 @@ import {
   calculateCommentRanges,
   type DocxComment,
   extractDocxComments,
+  importAnnotationId,
   injectCommentsAsAnnotations,
   parseCommentMetadata,
 } from "../../src/server/file-io/docx-comments.js";
@@ -399,7 +400,7 @@ describe("injectCommentsAsAnnotations", () => {
     const [key, value] = entries[0];
     const ann = value as Record<string, unknown>;
 
-    expect(key).toMatch(/^import-1-/);
+    expect(key).toMatch(/^import-[0-9a-f]{12}$/);
     expect(ann.author).toBe("import");
     expect(ann.type).toBe("comment");
     expect(ann.status).toBe("pending");
@@ -484,5 +485,65 @@ describe("injectCommentsAsAnnotations", () => {
 
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     expect(map.size).toBe(2);
+  });
+
+  it("re-importing the same comments is idempotent (content-hashed id + dedup)", () => {
+    const comments: DocxComment[] = [
+      { commentId: "1", authorName: "Alice", bodyText: "Good", from: 0, to: 5 },
+      { commentId: "2", authorName: "Bob", bodyText: "Nice", from: 6, to: 11 },
+    ];
+
+    const first = injectCommentsAsAnnotations(doc, comments);
+    expect(first).toBe(2);
+    const idsAfterFirst = Array.from(doc.getMap(Y_MAP_ANNOTATIONS).keys()).sort();
+
+    const second = injectCommentsAsAnnotations(doc, comments);
+    expect(second).toBe(0); // dedup guard skips existing ids
+
+    const idsAfterSecond = Array.from(doc.getMap(Y_MAP_ANNOTATIONS).keys()).sort();
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(2);
+    expect(idsAfterSecond).toEqual(idsAfterFirst);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// importAnnotationId — content-hashed, deterministic, collision-resistant
+// ---------------------------------------------------------------------------
+
+describe("importAnnotationId", () => {
+  it("returns the same id for identical inputs (determinism)", () => {
+    const a = importAnnotationId("1", 0, 5, "body");
+    const b = importAnnotationId("1", 0, 5, "body");
+    expect(a).toBe(b);
+    expect(a).toMatch(/^import-[0-9a-f]{12}$/);
+  });
+
+  it("returns different ids for different commentIds", () => {
+    const a = importAnnotationId("1", 0, 5, "body");
+    const b = importAnnotationId("2", 0, 5, "body");
+    expect(a).not.toBe(b);
+  });
+
+  it("returns different ids for different ranges", () => {
+    const a = importAnnotationId("1", 0, 5, "body");
+    const b = importAnnotationId("1", 1, 5, "body");
+    const c = importAnnotationId("1", 0, 6, "body");
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
+    expect(b).not.toBe(c);
+  });
+
+  it("returns different ids for different body text", () => {
+    const a = importAnnotationId("1", 0, 5, "hello");
+    const b = importAnnotationId("1", 0, 5, "world");
+    expect(a).not.toBe(b);
+  });
+
+  it("delimiter avoids trivial collisions across field boundaries", () => {
+    // "1" + "0" + "5" + "body" naively concatenated matches "10" + "" + "5" + "body"
+    // The NUL delimiter prevents this class of collision.
+    const a = importAnnotationId("1", 0, 5, "body");
+    const b = importAnnotationId("10", 5, 0, "body");
+    expect(a).not.toBe(b);
   });
 });

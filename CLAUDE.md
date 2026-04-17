@@ -29,7 +29,7 @@
 These WILL break things if violated:
 
 1. **Y.Map key strings from constants only.** Use `Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, etc. from `shared/constants.ts` -- never raw string literals for Y.Map keys.
-2. **Origin-tag MCP writes.** All server-side Y.Map writes must use `doc.transact(() => { ... }, 'mcp')` to prevent the event queue from emitting echo events.
+2. **Origin-tag server writes.** All server-side Y.Map writes must tag the transaction with an origin constant exported from `src/server/events/queue.ts`. Use `MCP_ORIGIN` (`"mcp"`) for user-intent writes from MCP tools — `doc.transact(() => { ... }, MCP_ORIGIN)`. Use `FILE_SYNC_ORIGIN` (`"file-sync"`) for echoes from the durable-annotation file-writer / file-watcher reload path. The durable-annotation sync observer skips `FILE_SYNC_ORIGIN` transactions (prevents re-persisting state just loaded from disk), and the channel event queue skips BOTH origins — `MCP_ORIGIN` because external consumers already saw the MCP call, `FILE_SYNC_ORIGIN` because file reloads are not user events.
 3. **stdout is reserved.** `console.log/warn/info` all redirect to stderr in `index.ts` (defense-in-depth for stdio fallback). If you add a dependency that logs to stdout, it will corrupt the MCP wire in stdio mode.
 4. **Ranges use `validateRange()` + `anchoredRange()`**, not raw offsets. `anchoredRange()` creates both flat + Yjs RelativePosition in one call.
 5. **`tandem_getTextContent` uses `extractText()`, never `extractMarkdown()`.** Even for .md files. `extractMarkdown()` shifts character offsets relative to the annotation coordinate system. If you need actual markdown, use `tandem_save` and read the file.
