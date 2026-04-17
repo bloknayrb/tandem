@@ -3,18 +3,26 @@
  * server startup to prune durable annotation envelopes older than
  * `SESSION_MAX_AGE` (30 days).
  *
- * Issue #334 made this function a blocking step on the boot path, so we lock
- * down the envelope-filter regex and mtime cutoff. The race-safety guarantee
- * itself is enforced structurally by the `await` in `src/server/index.ts`
- * and isn't observable in isolation.
+ * The race-safety guarantee is enforced at the call site (see #334) and is
+ * covered by `tests/server/boot-order.test.ts`. This file locks down the
+ * envelope-filter regex, mtime cutoff, and the `Promise.all` catch branches.
  */
 
-import fs from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupOrphanedAnnotationFiles } from "../../../src/server/session/manager.js";
 import { SESSION_MAX_AGE } from "../../../src/shared/constants.js";
+
+// Hoist the mock so Vitest can intercept the module before any import resolves.
+// The factory spreads the real implementation so non-spy tests use real fs.
+// The `default` key must also be present for modules using the default import form.
+vi.mock("node:fs/promises", async (importActual) => {
+  const actual = await importActual<typeof fs>();
+  const mod = { ...actual };
+  return { ...mod, default: mod };
+});
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -48,7 +56,7 @@ describe("cleanupOrphanedAnnotationFiles", () => {
   it("removes doc-hash envelopes older than SESSION_MAX_AGE", async () => {
     await writeWithMtime(`${HASH_A}.json`, SESSION_MAX_AGE + 60_000);
 
-    const cleaned = await cleanupOrphanedAnnotationFiles();
+    const { cleaned } = await cleanupOrphanedAnnotationFiles();
 
     expect(cleaned).toBe(1);
     await expect(fs.access(path.join(annotationsDir, `${HASH_A}.json`))).rejects.toThrow();
@@ -57,7 +65,7 @@ describe("cleanupOrphanedAnnotationFiles", () => {
   it("preserves fresh envelopes", async () => {
     await writeWithMtime(`${HASH_A}.json`, 60_000);
 
-    const cleaned = await cleanupOrphanedAnnotationFiles();
+    const { cleaned } = await cleanupOrphanedAnnotationFiles();
 
     expect(cleaned).toBe(0);
     await expect(fs.access(path.join(annotationsDir, `${HASH_A}.json`))).resolves.toBeUndefined();
@@ -66,7 +74,7 @@ describe("cleanupOrphanedAnnotationFiles", () => {
   it("removes upload_ envelopes older than SESSION_MAX_AGE", async () => {
     await writeWithMtime("upload_abc123.json", SESSION_MAX_AGE + 60_000);
 
-    const cleaned = await cleanupOrphanedAnnotationFiles();
+    const { cleaned } = await cleanupOrphanedAnnotationFiles();
 
     expect(cleaned).toBe(1);
   });
@@ -78,7 +86,7 @@ describe("cleanupOrphanedAnnotationFiles", () => {
     await writeWithMtime("store.lock", old);
     await writeWithMtime("README.md", old);
 
-    const cleaned = await cleanupOrphanedAnnotationFiles();
+    const { cleaned } = await cleanupOrphanedAnnotationFiles();
 
     expect(cleaned).toBe(0);
     await expect(
@@ -94,27 +102,72 @@ describe("cleanupOrphanedAnnotationFiles", () => {
   it("returns 0 when the annotations directory does not exist", async () => {
     await fs.rm(annotationsDir, { recursive: true, force: true });
 
-    const cleaned = await cleanupOrphanedAnnotationFiles();
+    const { cleaned } = await cleanupOrphanedAnnotationFiles();
 
     expect(cleaned).toBe(0);
   });
 
-  it("counts surviving successes when one envelope disappears mid-run", async () => {
-    // Regression guard for the Promise.all fan-out: concurrent ENOENT on one
-    // envelope must not prevent others from being cleaned.
-    const HASH_C = "c".repeat(64);
+  it("swallows ENOENT when a file disappears between stat and unlink", async () => {
     const old = SESSION_MAX_AGE + 60_000;
     await writeWithMtime(`${HASH_A}.json`, old);
     await writeWithMtime(`${HASH_B}.json`, old);
-    await writeWithMtime(`${HASH_C}.json`, old);
-    // Race the GC by pre-deleting one file before cleanup runs — the ENOENT
-    // path in the catch should swallow silently.
-    await fs.unlink(path.join(annotationsDir, `${HASH_B}.json`));
 
-    const cleaned = await cleanupOrphanedAnnotationFiles();
+    // The production code uses `import fs from "node:fs/promises"` (default
+    // import). With vi.mock the default export is a separate object from the
+    // namespace, so we spy on `(fs as any).default` — the same object the SUT
+    // holds — while calling through to the real implementation for HASH_A.
+    const fsMod = (fs as unknown as { default: typeof fs }).default;
+    const realUnlink = fsMod.unlink.bind(fsMod);
+    const spy = vi.spyOn(fsMod, "unlink").mockImplementation(async (p) => {
+      if (typeof p === "string" && p.includes(HASH_B)) {
+        const e = new Error("ENOENT") as NodeJS.ErrnoException;
+        e.code = "ENOENT";
+        throw e;
+      }
+      return realUnlink(p as string);
+    });
 
-    expect(cleaned).toBe(2);
-    await expect(fs.access(path.join(annotationsDir, `${HASH_A}.json`))).rejects.toThrow();
-    await expect(fs.access(path.join(annotationsDir, `${HASH_C}.json`))).rejects.toThrow();
+    try {
+      const { cleaned, raced, failed } = await cleanupOrphanedAnnotationFiles();
+      expect(cleaned).toBe(1); // HASH_A actually deleted
+      expect(raced).toBe(1); // HASH_B ENOENT → peer-cleaned
+      expect(failed).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("logs non-ENOENT errors with the error code but does not throw", async () => {
+    const old = SESSION_MAX_AGE + 60_000;
+    await writeWithMtime(`${HASH_A}.json`, old);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Same default-export spy pattern as above.
+    const fsMod = (fs as unknown as { default: typeof fs }).default;
+    const spy = vi.spyOn(fsMod, "unlink").mockImplementation(async () => {
+      const e = new Error("permission denied") as NodeJS.ErrnoException;
+      e.code = "EPERM";
+      throw e;
+    });
+
+    try {
+      const { cleaned, failed } = await cleanupOrphanedAnnotationFiles();
+      expect(cleaned).toBe(0);
+      expect(failed).toBe(1);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("(EPERM)"), expect.any(Error));
+    } finally {
+      spy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  it("rejects hash-shaped filenames with wrong length or wrong case", async () => {
+    const old = SESSION_MAX_AGE + 60_000;
+    await writeWithMtime(`${"a".repeat(63)}.json`, old);
+    await writeWithMtime(`${"a".repeat(65)}.json`, old);
+    await writeWithMtime(`${"A".repeat(64)}.json`, old);
+
+    const { cleaned } = await cleanupOrphanedAnnotationFiles();
+
+    expect(cleaned).toBe(0);
   });
 });

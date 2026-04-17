@@ -185,8 +185,13 @@ async function main() {
   // and wireAnnotationStore reads them. A fire-and-forget chain raced the
   // read and silently emptied annotations (#334). #318 tracks the full policy.
   try {
-    const n = await cleanupOrphanedAnnotationFiles();
-    if (n > 0) console.error(`[Tandem] Cleaned up ${n} orphaned annotation file(s)`);
+    const { cleaned, raced, failed } = await cleanupOrphanedAnnotationFiles();
+    if (cleaned > 0) console.error(`[Tandem] Cleaned up ${cleaned} orphaned annotation file(s)`);
+    if (raced > 0) console.error(`[Tandem] ${raced} orphaned annotation file(s) cleaned by peer`);
+    if (failed > 0)
+      console.error(
+        `[Tandem] Failed to clean up ${failed} orphaned annotation file(s) — see above`,
+      );
   } catch (err) {
     console.error("[Tandem] Failed to clean up orphaned annotation files:", err);
   }
