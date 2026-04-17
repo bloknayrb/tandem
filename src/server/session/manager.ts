@@ -4,35 +4,11 @@ import * as Y from "yjs";
 import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { SessionData } from "../../shared/types.js";
 import { MCP_ORIGIN } from "../events/queue.js";
+import { atomicWrite } from "../file-io/index.js";
 import { SESSION_DIR } from "../platform.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
-const RENAME_MAX_RETRIES = 3;
-const RENAME_RETRY_BASE_MS = 50;
 let sessionDirReady = false;
-
-/**
- * Write data to a file atomically: write to .tmp, then rename.
- * Retries the rename on EPERM/EACCES (Windows file-handle contention).
- */
-async function atomicWrite(sessionPath: string, content: string): Promise<void> {
-  const tmpPath = `${sessionPath}.tmp`;
-  await fs.writeFile(tmpPath, content, "utf-8");
-  for (let attempt = 0; attempt < RENAME_MAX_RETRIES; attempt++) {
-    try {
-      await fs.rename(tmpPath, sessionPath);
-      return;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if ((code === "EPERM" || code === "EACCES") && attempt < RENAME_MAX_RETRIES - 1) {
-        await new Promise((r) => setTimeout(r, RENAME_RETRY_BASE_MS * 2 ** attempt));
-        continue;
-      }
-      await fs.unlink(tmpPath).catch(() => {});
-      throw err;
-    }
-  }
-}
 
 /** Generate a session key from a file path */
 export function sessionKey(filePath: string): string {
