@@ -4,8 +4,6 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRequestId, getResponseId } from "../../src/cli/mcp-stdio.js";
 
-/** Read one newline-delimited line from the child's stdout with a timeout,
- *  capturing stderr for diagnostic context on failure. */
 async function readOneLine(
   child: ChildProcessWithoutNullStreams,
   timeoutMs = 10_000,
@@ -179,6 +177,84 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
     child?.kill();
     child = undefined;
   });
+
+  it("forwards a buffered request once upstream becomes ready", async () => {
+    // Regression guard for the drain path: a request arriving BEFORE
+    // http.start() completes must still be forwarded (not dropped, not
+    // synthesized) once httpReady flips. The fake server artificially
+    // delays /health so preflight takes ~400ms — long enough that a
+    // stdin write immediately after spawn lands in preReadyBuffer.
+    const receivedPosts: Array<{ method?: string; id?: unknown }> = [];
+    const server = createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        setTimeout(() => {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end("ok");
+        }, 400);
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          receivedPosts.push(body);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: body.id,
+              result: { protocolVersion: "2024-11-05", capabilities: { tools: {} } },
+            }),
+          );
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    const port = addr.port;
+
+    try {
+      const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+      child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+        env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      // Write IMMEDIATELY — no 500ms grace. The request must land in
+      // preReadyBuffer and survive the drain once httpReady flips.
+      const initialize = {
+        jsonrpc: "2.0",
+        id: 55,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          clientInfo: { name: "test-harness", version: "0.0.0" },
+          capabilities: {},
+        },
+      };
+      child.stdin.write(`${JSON.stringify(initialize)}\n`);
+
+      const line = await readOneLine(child);
+      const parsed = JSON.parse(line) as {
+        id: number;
+        result?: { capabilities?: Record<string, unknown> };
+        error?: { code: number };
+      };
+      expect(parsed.id).toBe(55);
+      // Must be a successful forward, NOT a synthesized -32000.
+      expect(parsed.error).toBeUndefined();
+      expect(parsed.result?.capabilities).toBeDefined();
+      expect(receivedPosts).toHaveLength(1);
+      expect(receivedPosts[0]?.method).toBe("initialize");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 30_000);
 
   it("synthesizes -32000 for an initialize request when the upstream server is not running", async () => {
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");

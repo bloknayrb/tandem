@@ -32,22 +32,17 @@ import { probeTandemServer } from "./preflight.js";
 
 redirectConsoleToStderr();
 
-// Grace window after preflight or http.start() failure before the process
-// exits. Covers the case where the plugin loader has already written its
-// `initialize` to our stdin before we've had a chance to run preflight —
-// stdio.onmessage buffers the message and synthesizes a -32000 reply, then
-// we tear down. Derived from `probeTandemServer`'s DEFAULT_TIMEOUT_MS
-// (2000ms) so that lowering the preflight timeout doesn't strand buffered
-// requests; a stdin read lag of ~500ms suffices on top.
+// After preflight or http.start() fails we wait ~1.5s for any already-in-
+// flight `initialize` from the plugin loader to land on stdin and receive
+// a -32000 reply before tear-down. Sizing covers stdin-read lag between
+// preflight resolution and the first message arrival; unrelated to
+// preflight's own 2s fetch timeout.
 const PREFLIGHT_GRACE_MS = 1500;
 
-// Last-gasp handlers for a crash anywhere in the bridge: even if we can't
-// reach the message-level catch, write one diagnostic to stderr before
-// process death. Installed at module load so a repeat invocation never
-// stacks duplicates. No in-flight request synthesis here — the handlers
-// run outside runMcpStdio()'s closure and don't know about pendingIds.
-// (In practice, runMcpStdio()'s own error paths cover every expected
-// failure mode; these guard against truly unexpected crashes.)
+// Last-gasp handlers for truly unexpected crashes: write one diagnostic to
+// stderr before exit. Installed at module load; process.once bounds each
+// handler to a single fire. No -32000 synthesis here because pendingIds
+// lives inside runMcpStdio()'s closure.
 process.once("uncaughtException", (err: Error) => {
   process.stderr.write(
     `[tandem mcp-stdio] uncaughtException: ${err.message}\n${err.stack ?? ""}\n`,
@@ -95,8 +90,15 @@ export async function runMcpStdio(): Promise<void> {
     };
     try {
       await stdio.send(errorResponse);
-    } catch {
-      // stdio already torn down; nothing more we can do.
+    } catch (err) {
+      // stdio already torn down; log so synth failures during shutdown
+      // (e.g., http.onclose racing stdio.onclose) aren't silently dropped —
+      // a silent drop here would recreate exactly the failure mode this
+      // module exists to prevent.
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[tandem mcp-stdio] failed to send synthesized error for id ${id}: ${detail}\n`,
+      );
     }
   }
 
@@ -164,10 +166,13 @@ export async function runMcpStdio(): Promise<void> {
   };
 
   stdio.onerror = (err) => {
-    process.stderr.write(`[tandem mcp-stdio] stdio error: ${err.message}\n`);
+    process.stderr.write(`[tandem mcp-stdio] stdio error: ${err.message}\n${err.stack ?? ""}\n`);
   };
   http.onerror = (err) => {
-    process.stderr.write(`[tandem mcp-stdio] http error: ${err.message}\n`);
+    const cause = (err as { cause?: unknown }).cause;
+    process.stderr.write(
+      `[tandem mcp-stdio] http error: ${err.message}\n${err.stack ?? ""}${cause !== undefined ? `\ncause: ${cause}` : ""}\n`,
+    );
   };
 
   stdio.onclose = () => {
