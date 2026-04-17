@@ -296,7 +296,7 @@ export async function closeDocumentById(
     try {
       await closeStore(dropped.docHash);
     } catch (err) {
-      console.error(`[Tandem] closeDocumentById: closeStore failed for ${id}:`, err);
+      console.error("[Tandem] closeDocumentById: closeStore failed for %s:", id, err);
     }
   }
 

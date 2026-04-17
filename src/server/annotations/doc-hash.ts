@@ -73,12 +73,15 @@ export function isUploadPath(filePath: string): boolean {
 function normalizeRealPath(filePath: string): string {
   let normalized = path.resolve(filePath).replace(/\\/g, "/");
 
-  // Strip a trailing slash unless the path IS the root.
+  // Strip trailing slashes unless the path IS the root.
   // Windows root (e.g., "C:/") keeps its slash; POSIX root "/" does too.
+  // Loop-based trim avoids a polynomial-backtracking regex on many-slash input.
   if (normalized.length > 1 && normalized.endsWith("/")) {
     const isWinRoot = /^[A-Za-z]:\/$/.test(normalized);
     if (!isWinRoot) {
-      normalized = normalized.replace(/\/+$/, "");
+      while (normalized.length > 1 && normalized.endsWith("/")) {
+        normalized = normalized.slice(0, -1);
+      }
     }
   }
 

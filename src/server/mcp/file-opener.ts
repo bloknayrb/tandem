@@ -305,7 +305,7 @@ async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Pr
     // annotations aren't loading and new ones won't persist. Surface via
     // the notification bus (deduped per-file so a per-route retry storm
     // doesn't flood the UI).
-    console.error(`[Tandem] wireAnnotationStore failed for ${id} (${filePath}):`, err);
+    console.error("[Tandem] wireAnnotationStore failed for %s (%s):", id, filePath, err);
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
@@ -343,7 +343,7 @@ async function clearAndReload(
     try {
       await dropped.store.clear();
     } catch (err) {
-      console.error(`[Tandem] clearAndReload: store.clear failed for ${id}:`, err);
+      console.error("[Tandem] clearAndReload: store.clear failed for %s:", id, err);
     }
   }
 

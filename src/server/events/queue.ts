@@ -369,7 +369,7 @@ function safeCleanup(docName: string, phase: string, cleanup: () => void): void 
   try {
     cleanup();
   } catch (err) {
-    console.warn(`[EventQueue] file-sync cleanup threw during ${phase} for ${docName}:`, err);
+    console.warn("[EventQueue] file-sync cleanup threw during %s for %s:", phase, docName, err);
   }
 }
 
