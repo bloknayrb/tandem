@@ -3,6 +3,7 @@ import path from "path";
 import * as Y from "yjs";
 import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { SessionData } from "../../shared/types.js";
+import { getAnnotationsDir } from "../annotations/store.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { atomicWrite } from "../file-io/index.js";
 import { SESSION_DIR } from "../platform.js";
@@ -203,6 +204,51 @@ export async function listSessionFilePaths(): Promise<
     console.error("[Tandem] Failed to read session directory:", err);
     return [];
   }
+}
+
+/**
+ * Delete orphaned per-document annotation files older than `SESSION_MAX_AGE`.
+ *
+ * Phase 1 of the durable-annotations plan ships this as a best-effort startup
+ * hint — issue #318 tracks the full policy (e.g., cross-referencing against
+ * active session files, retention tiers). For now we only GC files whose
+ * names match `<64-hex>.json` or `upload_<id>.json`, leaving `.corrupt.*`,
+ * `.future`, and the `store.lock` file alone.
+ *
+ * Matches the 30-day cutoff used by `cleanupSessions` (same constant).
+ */
+export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
+  const dir = getAnnotationsDir();
+  let files: string[];
+  try {
+    files = await fs.readdir(dir);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    console.error("[Tandem] Failed to read annotations directory:", err);
+    return 0;
+  }
+
+  // Only consider files that match the known per-doc envelope filename shape.
+  // Quarantined (`.corrupt.<ts>`), parked (`.future`), and the lockfile are
+  // skipped — they carry their own lifecycles.
+  const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
+
+  const now = Date.now();
+  let cleaned = 0;
+  for (const file of files) {
+    if (!envelopeRe.test(file)) continue;
+    try {
+      const filePath = path.join(dir, file);
+      const stat = await fs.stat(filePath);
+      if (now - stat.mtimeMs > SESSION_MAX_AGE) {
+        await fs.unlink(filePath);
+        cleaned++;
+      }
+    } catch (err) {
+      console.error(`[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file}:`, err);
+    }
+  }
+  return cleaned;
 }
 
 /** Delete sessions older than 30 days */

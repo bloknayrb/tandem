@@ -178,6 +178,58 @@ describe("suppressNextChange", () => {
     // Should not throw
     suppressNextChange("/tmp/nonexistent.md");
   });
+
+  it("swallows multiple events when suppress is called multiple times", async () => {
+    // An atomic save on Windows can produce 2 change events (rename + write).
+    // A second suppressNextChange() before any event arrives should bump the
+    // counter so BOTH synthetic events are swallowed and the next real change
+    // fires normally.
+    const watcher = createMockWatcher();
+    mockWatch.mockImplementation((_path: string, cb: (eventType: string) => void) => {
+      watcher.changeHandler = cb;
+      return watcher;
+    });
+
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    watchFile("/tmp/test.md", onChanged);
+
+    suppressNextChange("/tmp/test.md");
+    suppressNextChange("/tmp/test.md");
+
+    watcher.changeHandler!("change");
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(onChanged).not.toHaveBeenCalled();
+
+    // Third event is an external edit — must fire.
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires suppression after the TTL so unmatched suppress calls can't swallow real events", async () => {
+    // A suppressNextChange() with no matching event arrival would otherwise
+    // leave a stale boolean flag that swallows the next external change. The
+    // counter-with-TTL design clears the state after 2s.
+    const watcher = createMockWatcher();
+    mockWatch.mockImplementation((_path: string, cb: (eventType: string) => void) => {
+      watcher.changeHandler = cb;
+      return watcher;
+    });
+
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    watchFile("/tmp/test.md", onChanged);
+
+    suppressNextChange("/tmp/test.md");
+    // Advance past the TTL (2000ms) without any change event firing.
+    await vi.advanceTimersByTimeAsync(2500);
+
+    // This event is a genuine external change — must fire, not be swallowed
+    // by the expired suppression.
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("unwatchFile", () => {

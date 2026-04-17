@@ -2,6 +2,7 @@ import type { Server } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import { CTRL_ROOM, DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
+import { acquireStoreLock, releaseStoreLock } from "./annotations/store.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
   attachCtrlObservers,
@@ -27,7 +28,11 @@ import {
 } from "./mcp/server.js";
 import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
 import { freePort, LAST_SEEN_VERSION_FILE, waitForPort } from "./platform.js";
-import { cleanupSessions, stopAutoSave } from "./session/manager.js";
+import {
+  cleanupOrphanedAnnotationFiles,
+  cleanupSessions,
+  stopAutoSave,
+} from "./session/manager.js";
 import { checkVersionChange } from "./version-check.js";
 import { getOrCreateDocument, setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
 
@@ -110,6 +115,14 @@ async function shutdown(signal: string) {
   } catch (err) {
     console.error("[Tandem] MCP session close on shutdown failed:", err);
   }
+  // Release the durable-annotation store lockfile last so a crash between
+  // session save and lock release still leaves the lockfile reclaimable on
+  // next boot (the reclaim path checks liveness via PID).
+  try {
+    await releaseStoreLock();
+  } catch (err) {
+    console.error("[Tandem] releaseStoreLock on shutdown failed:", err);
+  }
   if (httpServer) {
     httpServer.close();
   }
@@ -121,6 +134,23 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
 
+  // Take the durable-annotation store lock before anything else touches
+  // app-data. The port 3479 bind is the primary concurrent-writer guard;
+  // this is a belt-and-braces fallback for port-bind races and edge cases.
+  // `readonly` is tolerable — load() still works; queueWrite becomes a no-op.
+  try {
+    const lock = await acquireStoreLock();
+    if (lock === "readonly") {
+      console.error(
+        "[Tandem] Annotation store is read-only (another process holds the lock); writes disabled for this session.",
+      );
+    }
+  } catch (err) {
+    // acquireStoreLock already degrades to read-only internally; defensive
+    // catch in case a future change makes it throw.
+    console.error("[Tandem] acquireStoreLock threw:", err);
+  }
+
   // Clean up sessions older than 30 days
   cleanupSessions()
     .then((n) => {
@@ -128,6 +158,16 @@ async function main() {
     })
     .catch((err) => {
       console.error("[Tandem] Failed to clean up stale sessions:", err);
+    });
+
+  // Best-effort orphan GC for durable annotation files (issue #318 tracks the
+  // full policy). Fire-and-forget — never block startup on cleanup.
+  cleanupOrphanedAnnotationFiles()
+    .then((n) => {
+      if (n > 0) console.error(`[Tandem] Cleaned up ${n} orphaned annotation file(s)`);
+    })
+    .catch((err) => {
+      console.error("[Tandem] Failed to clean up orphaned annotation files:", err);
     });
 
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
