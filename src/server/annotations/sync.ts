@@ -40,6 +40,12 @@
  *
  * ## API shape decisions
  *
+ *   - Both public functions (`loadAndMerge`, `registerAnnotationObserver`)
+ *     take a single `SyncContext` object, not positional args. Five
+ *     parameters would be too many to memorize, and the object keeps call
+ *     sites self-documenting. `docName` is retained in the context (even
+ *     though the observer currently ignores it) so T6 diagnostics can key
+ *     off a human-readable name without changing the signature.
  *   - `loadAndMerge` registers the observer internally AFTER merge completes.
  *     Merge mutations use `FILE_SYNC_ORIGIN` so the observer would skip them
  *     anyway, but registering after merge avoids a speculative observer fire
@@ -75,6 +81,21 @@ import type { DocStore } from "./store.js";
 
 export interface SyncMeta {
   filePath: string;
+}
+
+/**
+ * Bundle of everything the sync layer needs to bind a document's Y.Maps to
+ * its durable store. Shared by `loadAndMerge` and `registerAnnotationObserver`
+ * so callers build one object and pass it through.
+ */
+export interface SyncContext {
+  /** Human-readable room name (e.g. from the hash-to-name map). Diagnostics only. */
+  docName: string;
+  ydoc: Y.Doc;
+  store: DocStore;
+  /** Output of `docHash(filePath)`. */
+  docHash: string;
+  meta: SyncMeta;
 }
 
 /** Per-docHash live state, populated by `registerAnnotationObserver`. */
@@ -167,14 +188,12 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
  * ledger.
  *
  * Callers (the file-opener) invoke cleanup on doc close or Y.Doc swap.
+ *
+ * `ctx.docName` is currently unused by the observer body but kept on the
+ * context for diagnostics/logging and shape symmetry with `loadAndMerge`.
  */
-export function registerAnnotationObserver(
-  _docName: string,
-  ydoc: Y.Doc,
-  store: DocStore,
-  docHash: string,
-  meta: SyncMeta,
-): () => void {
+export function registerAnnotationObserver(ctx: SyncContext): () => void {
+  const { ydoc, store, docHash, meta } = ctx;
   docContexts.set(docHash, { ydoc, store, meta });
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -325,13 +344,8 @@ function pickWinner(
  *   5. Register the observer AFTER merge completes. Returns the observer
  *      cleanup so the caller can unregister on doc close.
  */
-export async function loadAndMerge(
-  docName: string,
-  ydoc: Y.Doc,
-  store: DocStore,
-  docHash: string,
-  meta: SyncMeta,
-): Promise<() => void> {
+export async function loadAndMerge(ctx: SyncContext): Promise<() => void> {
+  const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -349,12 +363,12 @@ export async function loadAndMerge(
     // First-upgrade path. Write one atomic snapshot capturing whatever the
     // Y.Maps currently hold. No merge work needed.
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
-    return registerAnnotationObserver(docName, ydoc, store, docHash, meta);
+    return registerAnnotationObserver(ctx);
   }
 
   if (fileEmpty && !ymapHasState) {
     // Both sides empty — nothing to merge, nothing to write.
-    return registerAnnotationObserver(docName, ydoc, store, docHash, meta);
+    return registerAnnotationObserver(ctx);
   }
 
   // Full merge. `needsWrite` tracks whether the final Y.Map state has
@@ -445,7 +459,7 @@ export async function loadAndMerge(
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
   }
 
-  return registerAnnotationObserver(docName, ydoc, store, docHash, meta);
+  return registerAnnotationObserver(ctx);
 }
 
 // ---------------------------------------------------------------------------

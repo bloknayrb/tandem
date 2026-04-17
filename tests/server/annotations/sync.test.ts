@@ -114,8 +114,12 @@ describe("registerAnnotationObserver", () => {
   it("#1 writes on MCP_ORIGIN mutation", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -135,8 +139,12 @@ describe("registerAnnotationObserver", () => {
   it("#2 writes on browser-origin (null origin) mutation", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -155,8 +163,12 @@ describe("registerAnnotationObserver", () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const queueSpy = vi.spyOn(store, "queueWrite");
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -175,8 +187,12 @@ describe("registerAnnotationObserver", () => {
   it("#4 does NOT bump rev (preserves the caller-set rev)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -193,8 +209,12 @@ describe("registerAnnotationObserver", () => {
   it("#5 serializes a missing rev as rev:0 (pre-plan migration)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -220,8 +240,12 @@ describe("registerAnnotationObserver", () => {
     // serialization regardless of N.
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const queueSpy = vi.spyOn(store, "queueWrite");
@@ -264,8 +288,12 @@ describe("registerAnnotationObserver", () => {
   it("cleanup unobserves both Y.Maps (further mutations don't write)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
     cleanup();
 
@@ -288,7 +316,13 @@ describe("loadAndMerge", () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
     const queueSpy = vi.spyOn(store, "queueWrite");
 
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     // No annotations in either side → nothing to write.
     expect(queueSpy).not.toHaveBeenCalled();
@@ -312,7 +346,13 @@ describe("loadAndMerge", () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
     const queueSpy = vi.spyOn(store, "queueWrite");
 
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     // Exactly one queued write for the first-upgrade snapshot.
     expect(queueSpy).toHaveBeenCalledTimes(1);
@@ -338,7 +378,13 @@ describe("loadAndMerge", () => {
 
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const loaded = annMap.get("ann_disk") as AnnotationRecordV1 | undefined;
@@ -364,7 +410,13 @@ describe("loadAndMerge", () => {
     annMap.set("ann_1", annRecord({ id: "ann_1", rev: 2, content: "from-ymap" }));
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.rev).toBe(5);
@@ -389,7 +441,13 @@ describe("loadAndMerge", () => {
     annMap.set("ann_1", annRecord({ id: "ann_1", rev: 4, content: "from-ymap" }));
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.rev).toBe(4);
@@ -414,7 +472,13 @@ describe("loadAndMerge", () => {
     annMap.set("ann_1", ymapAnn);
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.content).toBe("from-disk");
@@ -437,7 +501,13 @@ describe("loadAndMerge", () => {
     annMap.set("ann_1", annRecord({ id: "ann_1", rev: 2, content: "from-ymap", editedAt: 200 }));
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.content).toBe("from-ymap");
@@ -461,7 +531,13 @@ describe("loadAndMerge", () => {
     annMap.set("ann_1", annRecord({ id: "ann_1", rev: 3 }));
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     expect(annMap.get("ann_1")).toBeUndefined();
 
@@ -486,7 +562,13 @@ describe("loadAndMerge", () => {
     annMap.set("ann_1", annRecord({ id: "ann_1", rev: 7, content: "reborn" }));
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const survivor = annMap.get("ann_1") as AnnotationRecordV1 | undefined;
     expect(survivor).toBeDefined();
@@ -508,7 +590,13 @@ describe("loadAndMerge", () => {
 
     const store = createStore(HASH_A, { filePath: FILE_A });
     const queueSpy = vi.spyOn(store, "queueWrite");
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     // Preserved in Y.Map.
     expect(annMap.get("ann_new")).toBeDefined();
@@ -534,8 +622,12 @@ describe("recordTombstone + getTombstones", () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const queueSpy = vi.spyOn(store, "queueWrite");
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const before = Date.now();
@@ -559,8 +651,12 @@ describe("recordTombstone + getTombstones", () => {
   it("#16b recordTombstone + paired Y.Map.delete produces a durable write including the tombstone", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     // Seed the Y.Map with an entry the caller is about to delete.
@@ -618,7 +714,13 @@ describe("replies merge", () => {
     repMap.set("rep_1", replyRecord({ id: "rep_1", rev: 2, text: "ymap" }));
 
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = await loadAndMerge("doc-a", ydoc, store, HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
 
     const winner = repMap.get("rep_1") as AnnotationReplyRecordV1;
     expect(winner.rev).toBe(5);
@@ -629,8 +731,12 @@ describe("replies merge", () => {
   it("replies also survive via observer on browser-origin mutation", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
-      filePath: FILE_A,
+    const cleanup = registerAnnotationObserver({
+      docName: "doc-a",
+      ydoc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
     });
 
     const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
