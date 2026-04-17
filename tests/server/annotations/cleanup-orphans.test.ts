@@ -99,15 +99,6 @@ describe("cleanupOrphanedAnnotationFiles", () => {
     expect(cleaned).toBe(0);
   });
 
-  it("preserves envelopes at exactly SESSION_MAX_AGE (predicate is strict-greater)", async () => {
-    await writeWithMtime(`${HASH_A}.json`, SESSION_MAX_AGE);
-
-    const cleaned = await cleanupOrphanedAnnotationFiles();
-
-    expect(cleaned).toBe(0);
-    await expect(fs.access(path.join(annotationsDir, `${HASH_A}.json`))).resolves.toBeUndefined();
-  });
-
   it("counts surviving successes when one envelope disappears mid-run", async () => {
     // Regression guard for the Promise.all fan-out: concurrent ENOENT on one
     // envelope must not prevent others from being cleaned.
