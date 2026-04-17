@@ -373,7 +373,18 @@ function scheduleWrite(docHash: string, filePath: string, snapshotFn: () => Anno
     const entry = pending.get(docHash);
     pending.delete(docHash);
     if (!entry) return;
-    const doc = entry.snapshotFn();
+    // Isolate thunk failures to the per-doc failure path. Without this, a
+    // throw from `snapshot()` (e.g. a destroyed Y.Doc after a close race)
+    // escapes the timer and hits `process.on("uncaughtException", ...)` in
+    // index.ts, which exits the whole server — a per-doc save failure must
+    // never take the process down.
+    let doc: AnnotationDocV1;
+    try {
+      doc = entry.snapshotFn();
+    } catch (err) {
+      recordFailure(docHash, filePath, err);
+      return;
+    }
     performWrite(docHash, doc).catch((err) => {
       recordFailure(docHash, filePath, err);
     });
@@ -391,13 +402,19 @@ async function flushOne(docHash: string): Promise<void> {
   if (!entry) return;
   clearTimeout(entry.timer);
   pending.delete(docHash);
-  // Invoke the thunk at flush time (mirrors the debounce-fire path). The
-  // meta.filePath on the materialized doc is what we use for error toasts,
-  // since the flush path has no other handle on it.
-  const doc = entry.snapshotFn();
-  // `performWrite` re-throws so `flush()` surfaces failures to tests/shutdown.
-  // It clears the failure counter on success but doesn't bump it on failure —
-  // that's `recordFailure`'s job, mirroring the scheduleWrite path.
+  // Invoke the thunk at flush time (mirrors the debounce-fire path). Same
+  // isolation rule: a throwing thunk must not crash the process. We report
+  // the failure and re-throw so `flush()` callers (tests, shutdown) see it,
+  // but the stack-trace origin is `recordFailure`, not `uncaughtException`.
+  let doc: AnnotationDocV1;
+  try {
+    doc = entry.snapshotFn();
+  } catch (err) {
+    // Unknown filePath — the unmaterialized doc can't tell us. Use an empty
+    // string; `notifyFailure` falls back to docHash for the UI label.
+    recordFailure(docHash, "", err);
+    throw err;
+  }
   try {
     await performWrite(docHash, doc);
   } catch (err) {

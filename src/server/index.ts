@@ -27,6 +27,7 @@ import {
   startMcpServerStdio,
 } from "./mcp/server.js";
 import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
+import { pushNotification } from "./notifications.js";
 import { freePort, LAST_SEEN_VERSION_FILE, waitForPort } from "./platform.js";
 import {
   cleanupOrphanedAnnotationFiles,
@@ -137,18 +138,38 @@ async function main() {
   // Take the durable-annotation store lock before anything else touches
   // app-data. The port 3479 bind is the primary concurrent-writer guard;
   // this is a belt-and-braces fallback for port-bind races and edge cases.
-  // `readonly` is tolerable — load() still works; queueWrite becomes a no-op.
+  // `readonly` is tolerable — load() still works; queueWrite becomes a no-op,
+  // but without a user-visible warning a second instance silently drops every
+  // annotation for a whole session. Push a toast so the user sees it.
   try {
     const lock = await acquireStoreLock();
     if (lock === "readonly") {
       console.error(
         "[Tandem] Annotation store is read-only (another process holds the lock); writes disabled for this session.",
       );
+      pushNotification({
+        id: `store-readonly-${Date.now()}`,
+        type: "save-error",
+        severity: "warning",
+        message:
+          "Another Tandem process is running — annotations won't be saved this session. Close the other instance and restart.",
+        dedupKey: "annotation-store:readonly",
+        timestamp: Date.now(),
+      });
     }
   } catch (err) {
-    // acquireStoreLock already degrades to read-only internally; defensive
-    // catch in case a future change makes it throw.
+    // acquireStoreLock is designed to degrade internally, but defend against
+    // future refactors. A hard throw here would lose the same "nothing is
+    // saving" signal, so we still notify.
     console.error("[Tandem] acquireStoreLock threw:", err);
+    pushNotification({
+      id: `store-lock-error-${Date.now()}`,
+      type: "save-error",
+      severity: "error",
+      message: `Annotation store failed to initialize: ${(err as Error)?.message ?? "unknown error"}. Annotations won't be saved this session.`,
+      dedupKey: "annotation-store:lock-error",
+      timestamp: Date.now(),
+    });
   }
 
   // Clean up sessions older than 30 days

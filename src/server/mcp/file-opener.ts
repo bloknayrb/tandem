@@ -300,7 +300,20 @@ async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Pr
     });
     setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
   } catch (err) {
+    // Annotations are additive durability — never block a doc open. But a
+    // silent console.error means the user never knows their pre-existing
+    // annotations aren't loading and new ones won't persist. Surface via
+    // the notification bus (deduped per-file so a per-route retry storm
+    // doesn't flood the UI).
     console.error(`[Tandem] wireAnnotationStore failed for ${id} (${filePath}):`, err);
+    pushNotification({
+      id: generateNotificationId(),
+      type: "save-error",
+      severity: "warning",
+      message: `Annotations for ${path.basename(filePath) || id} are not being saved this session. See server log.`,
+      dedupKey: `annotation-wire:${id}`,
+      timestamp: Date.now(),
+    });
   }
 }
 

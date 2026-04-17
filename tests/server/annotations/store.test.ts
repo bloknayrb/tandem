@@ -440,3 +440,49 @@ describe("closeStore", () => {
     writeSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Thunk-throw isolation: a snapshot function that throws MUST NOT escape the
+// timer or flush boundary. If it did, it would hit uncaughtException in
+// index.ts and kill the whole server — a per-doc save bug must not take the
+// process down.
+// ---------------------------------------------------------------------------
+
+describe("queueWrite thunk that throws", () => {
+  it("debounce path: routes to recordFailure; no process crash; no file written", async () => {
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const boom = () => {
+      throw new Error("simulated snapshot failure");
+    };
+    const uncaught = vi.fn();
+    process.on("uncaughtException", uncaught);
+    try {
+      store.queueWrite(boom);
+      // Wait past the debounce window so the timer fires.
+      await new Promise((r) => setTimeout(r, 150));
+    } finally {
+      process.off("uncaughtException", uncaught);
+    }
+
+    // The timer must have absorbed the throw.
+    expect(uncaught).not.toHaveBeenCalled();
+    // Failure routed through pushNotification (one transient call).
+    expect(pushNotification).toHaveBeenCalled();
+    // And no file should have landed on disk.
+    await expect(
+      fs.access(path.join(tmpRoot, "annotations", `${HASH_A}.json`)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("flush path: rethrows to caller but still routes through recordFailure", async () => {
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const boom = () => {
+      throw new Error("simulated flush-time failure");
+    };
+
+    store.queueWrite(boom);
+    await expect(store.flush()).rejects.toThrow("simulated flush-time failure");
+    // recordFailure was hit, so pushNotification fired once.
+    expect(pushNotification).toHaveBeenCalled();
+  });
+});
