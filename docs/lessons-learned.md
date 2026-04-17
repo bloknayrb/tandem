@@ -444,3 +444,11 @@ async function finalClearAwareness(): Promise<void> {
 The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `.catch()` is needed.
 
 **Key insight:** Fire-and-forget is only safe inside a process that will keep running. The moment you introduce a shutdown path, fire-and-forget becomes fire-and-lose. Any side effect whose ordering matters relative to exit needs a drain set. Corollary: the `AWARENESS_FETCH_TIMEOUT_MS` bound on each individual POST is what keeps the drain itself bounded — shutdown can't hang forever on a stuck server.
+
+## 44. Shared Observer Cleanups Need a Phase Parameter, Not a Single Lambda
+
+**Problem:** `registerAnnotationObserver` returned a `() => void` cleanup that was invoked on BOTH a live Hocuspocus Y.Doc swap (`reattachObservers`) and a true document close (`clearFileSyncContext`). The cleanup dropped the per-doc tombstone ledger from memory. On a swap, a debounced snapshot write could still be queued against the old Y.Doc — by the time the 100ms debounce fired, the ledger had been wiped and the thunk serialized `tombstones: []` to disk. Silent deletion data loss on every browser reconnect, invisible until a user opened the file again and saw their deleted annotations resurrect (see #333).
+
+**Fix:** Change the cleanup signature to `(phase?: "swap" | "close") => void`. The swap phase unobserves maps and drops the live context registry entry but LEAVES the tombstone ledger in place for any in-flight debounced write to snapshot. The close phase does the full teardown including the ledger. Callers that don't care about the distinction (file-opener, document-service) keep passing the raw cleanup through the queue-registry indirection; only `reattachObservers` needs to explicitly thread the `"swap"` phase.
+
+**Key insight:** When a teardown function is shared across distinct lifecycle phases (live-swap vs unload), a single nullary cleanup hides the phase distinction from future readers and invites silent data loss. A typed phase parameter makes the "what survives what" question explicit at every call site and at the cleanup definition. Default the parameter to the more conservative phase (close/full-teardown) so legacy callers stay safe.

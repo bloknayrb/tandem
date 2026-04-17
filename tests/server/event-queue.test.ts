@@ -762,6 +762,82 @@ describe("reattachObservers — file-sync context rebind", () => {
     expect(() => reattachObservers("never-wired-doc", doc)).not.toThrow();
     doc.destroy();
   });
+
+  // #333: A pending debounced write can still be queued against the store when
+  // a Y.Doc swap happens. If the observer cleanup deletes the per-doc
+  // tombstone ledger on swap, the pending snapshot thunk — invoked at flush
+  // time — would persist `tombstones: []` and silently drop a real deletion.
+  // The cleanup must skip tombstone wipe on `"swap"` and only drop the ledger
+  // on `"close"`.
+  it("preserves tombstones across a Y.Doc swap (#333)", async () => {
+    const { setFileSyncContext, clearFileSyncContext } = await import(
+      "../../src/server/events/queue.js"
+    );
+    const { recordTombstone, registerAnnotationObserver, getTombstones } = await import(
+      "../../src/server/annotations/sync.js"
+    );
+
+    const docName = "tombstone-swap-doc";
+    const docHash = "tombstone-hash";
+    const filePath = "/virtual/tombstone.md";
+    const doc1 = new Y.Doc();
+    const doc2 = new Y.Doc();
+
+    // Capture the snapshot thunk so we can invoke it at "flush" time, mirroring
+    // what the real debounced store does at debounce-fire.
+    let pendingThunk: (() => unknown) | null = null;
+    const store = {
+      load: async () => ({
+        schemaVersion: 1 as const,
+        docHash,
+        meta: { filePath, lastUpdated: 0 },
+        annotations: [],
+        tombstones: [],
+        replies: [],
+      }),
+      queueWrite: (thunk: () => unknown) => {
+        pendingThunk = thunk;
+      },
+      flush: async () => {},
+      clear: async () => {},
+      isReadOnly: () => false,
+      isDisabled: () => false,
+    };
+
+    const cleanup = registerAnnotationObserver({
+      ydoc: doc1,
+      store,
+      docHash,
+      meta: { filePath },
+    });
+    setFileSyncContext(docName, { ydoc: doc1, store, docHash, meta: { filePath } }, cleanup);
+
+    // Record a tombstone, then trigger a user-intent mutation so the observer
+    // queues a snapshot thunk against the store.
+    recordTombstone(docHash, "ann_deleted", 0);
+    doc1.transact(() => {
+      doc1.getMap(Y_MAP_ANNOTATIONS).set("ann_trigger", { id: "ann_trigger", rev: 1 });
+    }, MCP_ORIGIN);
+
+    expect(pendingThunk).not.toBeNull();
+
+    // Simulate the Hocuspocus onLoadDocument swap. The prior cleanup runs with
+    // phase=swap; the pending thunk is still sitting in the store.
+    reattachObservers(docName, doc2);
+
+    // Flush: invoke the still-pending snapshot thunk that was queued against
+    // the OLD doc. It must see the tombstone — both on the serialized
+    // snapshot (what lands on disk) AND in the in-memory ledger.
+    const snapshot = pendingThunk as unknown as () => { tombstones: Array<{ id: string }> };
+    const persisted = snapshot();
+
+    expect(persisted.tombstones.map((t) => t.id)).toEqual(["ann_deleted"]);
+    expect(getTombstones(docHash).map((t) => t.id)).toEqual(["ann_deleted"]);
+
+    clearFileSyncContext(docName);
+    doc1.destroy();
+    doc2.destroy();
+  });
 });
 
 // --- attachCtrlObservers (CTRL_ROOM chat observer) ---

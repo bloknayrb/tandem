@@ -87,6 +87,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **CRDT fallback logging.** `buildDecorations()` emits `console.warn` when an annotation falls back to flat offsets. Check the browser console -- these indicate CRDT degradation.
 - **Dead CRDT RelativePositions must be stripped, not preserved.** After `reloadFromDisk` replaces Y.Doc content, old `relRange` RelativePositions reference deleted items. `refreshRange` strips dead `relRange` and re-anchors from flat offsets. A stale `relRange` that resolves to null blocks the lazy re-attachment recovery path -- deletion is better than preservation.
 - **Hocuspocus replaces Y.Doc in `onLoadDocument`.** The `onDocSwapped` callback in `provider.ts` reattaches server event queue observers to the new instance. A runtime warning fires if the callback is missing. See #178 audit.
+- **Annotation-sync cleanups distinguish swap vs close.** `registerAnnotationObserver` returns `(phase?: "swap" | "close") => void`. A Y.Doc swap keeps the per-doc tombstone ledger alive so in-flight debounced writes still serialize tombstones; only `"close"` drops the ledger. `reattachObservers` passes `"swap"`; `clearFileSyncContext` / `setFileSyncContext`'s replace path pass `"close"`. See #333.
 - **Y.js "Invalid access" warnings** during session restore are harmless stderr noise.
 
 ### MCP / Server
