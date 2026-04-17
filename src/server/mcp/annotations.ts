@@ -24,6 +24,9 @@ import {
   generateNotificationId,
   generateReplyId,
 } from "../../shared/utils.js";
+import { docHash } from "../annotations/doc-hash.js";
+import { nextRev } from "../annotations/schema.js";
+import { recordTombstone } from "../annotations/sync.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { pushNotification } from "../notifications.js";
@@ -33,11 +36,13 @@ import { extractText, getCurrentDoc } from "./document.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
-function getDocAndAnnotations(documentId?: string): { ydoc: Y.Doc; map: Y.Map<unknown> } | null {
+function getDocAndAnnotations(
+  documentId?: string,
+): { ydoc: Y.Doc; map: Y.Map<unknown>; filePath: string } | null {
   const doc = getCurrentDoc(documentId);
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
-  return { ydoc, map: ydoc.getMap(Y_MAP_ANNOTATIONS) };
+  return { ydoc, map: ydoc.getMap(Y_MAP_ANNOTATIONS), filePath: doc.filePath };
 }
 
 /** Get the annotation replies Y.Map for a document. */
@@ -93,6 +98,7 @@ export function addReplyToAnnotation(
     author,
     text,
     timestamp: Date.now(),
+    rev: nextRev(),
   };
 
   const repliesMap = getRepliesMap(ydoc);
@@ -181,6 +187,7 @@ export function createAnnotation(
     content,
     status: "pending" as const,
     timestamp: Date.now(),
+    rev: nextRev(),
     ...extras,
   } as Annotation;
   ydoc.transact(() => map.set(id, annotation), MCP_ORIGIN);
@@ -473,6 +480,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const updated = {
         ...ann,
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
+        rev: nextRev(ann),
       };
       da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
       return mcpSuccess({ id, status: updated.status });
@@ -492,7 +500,14 @@ export function registerAnnotationTools(server: McpServer): void {
     withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
-      if (!da.map.has(id)) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+      const existing = da.map.get(id) as Annotation | undefined;
+      if (!existing) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+
+      // Record the tombstone BEFORE the Y.Map delete so the sync observer's
+      // lazy snapshot (fired from the delete transaction) already carries the
+      // tombstone entry. Order is load-bearing — see sync.ts `recordTombstone`.
+      recordTombstone(docHash(da.filePath), id, existing.rev ?? 0);
+
       da.ydoc.transact(() => {
         da.map.delete(id);
         // Clean up orphaned replies for the deleted annotation
@@ -557,6 +572,7 @@ export function registerAnnotationTools(server: McpServer): void {
           ...(reason !== undefined && content === undefined ? { content: reason } : {}),
           ...(newText !== undefined ? { suggestedText: newText } : {}),
           editedAt: Date.now(),
+          rev: nextRev(ann),
         } as Annotation;
 
         da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);

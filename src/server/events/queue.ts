@@ -22,6 +22,8 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
+import type { DocStore } from "../annotations/store.js";
+import { registerAnnotationObserver, type SyncContext } from "../annotations/sync.js";
 import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { validateRange } from "../positions.js";
@@ -31,6 +33,14 @@ import { generateEventId } from "./types.js";
 
 /** Origin tag for all MCP-initiated Y.Map writes. Import and use this — never use raw "mcp" strings. */
 export const MCP_ORIGIN = "mcp";
+
+/**
+ * Origin tag for Y.Map writes that originated from the annotation file-writer
+ * (app-data JSON → Y.Map sync). Observers that emit channel events to external
+ * consumers MUST skip transactions with this origin so a file-reload doesn't
+ * fire spurious `annotation:*` SSE events.
+ */
+export const FILE_SYNC_ORIGIN = "file-sync";
 
 /**
  * Read the user's configured selection dwell time from CTRL_ROOM.
@@ -166,7 +176,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   // 1. Annotations observer
   const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
   const annotationsObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
 
     for (const [key, change] of event.changes.keys) {
       const raw = annotationsMap.get(key) as Annotation | undefined;
@@ -228,7 +238,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   // 2. Annotation replies observer
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
   const repliesObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
 
     for (const [key, change] of event.changes.keys) {
       if (change.action !== "add") continue;
@@ -318,6 +328,82 @@ export function detachObservers(docName: string): void {
 /** Reattach observers after Hocuspocus replaces a Y.Doc instance. */
 export function reattachObservers(docName: string, newDoc: Y.Doc): void {
   attachObservers(docName, newDoc);
+
+  // Annotation file-writer observer: if this doc has an active file-sync
+  // context (registered by the file-opener after loadAndMerge), re-register
+  // it against the NEW Y.Doc so disk persistence keeps flowing after the
+  // Hocuspocus doc swap. The previous observer was attached to the old
+  // Y.Doc and is no longer reachable (Hocuspocus destroyed the old doc
+  // in onLoadDocument); the cleanup we stashed would be a no-op anyway.
+  const oldCtx = fileSyncContexts.get(docName);
+  if (oldCtx) {
+    safeCleanup(docName, "reattach", oldCtx.cleanup);
+    const newCtx: SyncContext = {
+      ydoc: newDoc,
+      store: oldCtx.ctx.store,
+      docHash: oldCtx.ctx.docHash,
+      meta: oldCtx.ctx.meta,
+    };
+    const cleanup = registerAnnotationObserver(newCtx);
+    fileSyncContexts.set(docName, { ctx: newCtx, cleanup });
+  }
+}
+
+// --- File-sync observer registry (durable annotations) ---
+
+/**
+ * Track per-doc SyncContext so `reattachObservers` can re-register the
+ * annotation file-writer observer against the new Y.Doc after a Hocuspocus
+ * doc swap. Stored alongside the cleanup handle from the prior
+ * `registerAnnotationObserver` call so we can dispose it deterministically.
+ */
+const fileSyncContexts = new Map<string, { ctx: SyncContext; cleanup: () => void }>();
+
+/**
+ * Run a file-sync observer cleanup in a try/catch with a uniform log line.
+ * Cleanups can throw if the underlying Y.Doc was already destroyed (e.g. a
+ * Hocuspocus reload beat us to it) — that's harmless, but we want the logs
+ * to be consistent enough to grep.
+ */
+function safeCleanup(docName: string, phase: string, cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch (err) {
+    console.warn("[EventQueue] file-sync cleanup threw during %s for %s:", phase, docName, err);
+  }
+}
+
+/**
+ * Register the durable-annotation sync context for a document. Called by the
+ * file-opener after `loadAndMerge` returns its observer cleanup. The cleanup
+ * passed here is what gets invoked on `clearFileSyncContext` or the next
+ * `reattachObservers` call.
+ */
+export function setFileSyncContext(docName: string, ctx: SyncContext, cleanup: () => void): void {
+  // Dispose any prior entry first so we never leak observers on duplicate
+  // registration (e.g., forceReload paths that re-run loadAndMerge).
+  const existing = fileSyncContexts.get(docName);
+  if (existing) {
+    safeCleanup(docName, "replace", existing.cleanup);
+  }
+  fileSyncContexts.set(docName, { ctx, cleanup });
+}
+
+/**
+ * Drop the file-sync context for a document (on close or force-reload prep).
+ * Returns the dropped `{ store, docHash }` so callers can flush/clear the
+ * durable store without recomputing the hash or minting a transient handle.
+ * Returns `undefined` if no context was registered (e.g. feature flag off,
+ * or `wireAnnotationStore` failed during open).
+ */
+export function clearFileSyncContext(
+  docName: string,
+): { store: DocStore; docHash: string } | undefined {
+  const entry = fileSyncContexts.get(docName);
+  if (!entry) return undefined;
+  safeCleanup(docName, "clear", entry.cleanup);
+  fileSyncContexts.delete(docName);
+  return { store: entry.ctx.store, docHash: entry.ctx.docHash };
 }
 
 // --- CTRL_ROOM observers (chat + document meta) ---
@@ -483,4 +569,12 @@ export function resetForTesting(): void {
   docObservers.clear();
   for (const cleanup of ctrlCleanups) cleanup();
   ctrlCleanups = [];
+  for (const entry of fileSyncContexts.values()) {
+    try {
+      entry.cleanup();
+    } catch {
+      /* ignore — test cleanup should not throw on pre-torn-down docs */
+    }
+  }
+  fileSyncContexts.clear();
 }

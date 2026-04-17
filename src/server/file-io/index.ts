@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
@@ -80,26 +81,61 @@ export function getAdapter(format: string): FormatAdapter {
 // -- Shared helpers --
 
 /**
+ * Atomic rename retry constants. Windows can throw EPERM/EACCES when another
+ * process (AV scanner, file indexer, or a stale handle) is briefly holding the
+ * destination file. A handful of short retries with exponential backoff clears
+ * virtually all such contention in practice. See session manager history for
+ * the original rationale (formerly duplicated there).
+ */
+const RENAME_MAX_RETRIES = 3;
+const RENAME_RETRY_BASE_MS = 50;
+
+async function renameWithRetry(tempPath: string, filePath: string): Promise<void> {
+  for (let attempt = 0; attempt < RENAME_MAX_RETRIES; attempt++) {
+    try {
+      await fs.rename(tempPath, filePath);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if ((code === "EPERM" || code === "EACCES") && attempt < RENAME_MAX_RETRIES - 1) {
+        await new Promise((r) => setTimeout(r, RENAME_RETRY_BASE_MS * 2 ** attempt));
+        continue;
+      }
+      await fs.unlink(tempPath).catch(() => {});
+      throw err;
+    }
+  }
+}
+
+/**
+ * Produce a unique temp filename in the same directory as `filePath`. Uses a
+ * random suffix so concurrent writers to the same directory cannot collide on
+ * a shared `Date.now()` millisecond (the annotation store writes multiple
+ * files in the same directory in parallel).
+ */
+function tempSiblingPath(filePath: string): string {
+  const rand = crypto.randomBytes(6).toString("hex");
+  return path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}-${rand}`);
+}
+
+/**
  * Atomic file write: write to a temp file, then rename.
- * Prevents partial writes on crash.
+ * Prevents partial writes on crash. Retries the rename up to 3 times on
+ * EPERM/EACCES (Windows file-handle contention) with exponential backoff.
  */
 export async function atomicWrite(filePath: string, content: string): Promise<void> {
-  const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
+  const tempPath = tempSiblingPath(filePath);
   await fs.writeFile(tempPath, content, "utf-8");
-  await fs.rename(tempPath, filePath);
+  await renameWithRetry(tempPath, filePath);
 }
 
 /**
  * Atomic binary file write: write Buffer to a temp file, then rename.
  * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
+ * Shares the same EPERM/EACCES retry behaviour as `atomicWrite`.
  */
 export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
+  const tempPath = tempSiblingPath(filePath);
   await fs.writeFile(tempPath, content);
-  try {
-    await fs.rename(tempPath, filePath);
-  } catch (err) {
-    await fs.unlink(tempPath).catch(() => {});
-    throw err;
-  }
+  await renameWithRetry(tempPath, filePath);
 }

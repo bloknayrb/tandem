@@ -4,7 +4,8 @@ import path from "path";
 import * as Y from "yjs";
 import { CTRL_ROOM, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { MCP_ORIGIN } from "../events/queue.js";
+import { closeStore } from "../annotations/store.js";
+import { clearFileSyncContext, MCP_ORIGIN } from "../events/queue.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
@@ -284,6 +285,20 @@ export async function closeDocumentById(
 
   // Stop watching for external changes before removing the document
   unwatchFile(docState.filePath);
+
+  // Flush the durable annotation store + drop the per-doc file-sync observer
+  // before removing the doc, so a pending debounced write doesn't race with
+  // the doc being evicted from Hocuspocus (and the Y.Doc being destroyed).
+  // The registry hands back the docHash we stashed at open time so we don't
+  // need to recompute it from the file path.
+  const dropped = clearFileSyncContext(id);
+  if (dropped) {
+    try {
+      await closeStore(dropped.docHash);
+    } catch (err) {
+      console.error("[Tandem] closeDocumentById: closeStore failed for %s:", id, err);
+    }
+  }
 
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
   savingDocs.delete(id);

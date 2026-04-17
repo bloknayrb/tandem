@@ -3,36 +3,13 @@ import path from "path";
 import * as Y from "yjs";
 import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { SessionData } from "../../shared/types.js";
+import { getAnnotationsDir } from "../annotations/store.js";
 import { MCP_ORIGIN } from "../events/queue.js";
+import { atomicWrite } from "../file-io/index.js";
 import { SESSION_DIR } from "../platform.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
-const RENAME_MAX_RETRIES = 3;
-const RENAME_RETRY_BASE_MS = 50;
 let sessionDirReady = false;
-
-/**
- * Write data to a file atomically: write to .tmp, then rename.
- * Retries the rename on EPERM/EACCES (Windows file-handle contention).
- */
-async function atomicWrite(sessionPath: string, content: string): Promise<void> {
-  const tmpPath = `${sessionPath}.tmp`;
-  await fs.writeFile(tmpPath, content, "utf-8");
-  for (let attempt = 0; attempt < RENAME_MAX_RETRIES; attempt++) {
-    try {
-      await fs.rename(tmpPath, sessionPath);
-      return;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if ((code === "EPERM" || code === "EACCES") && attempt < RENAME_MAX_RETRIES - 1) {
-        await new Promise((r) => setTimeout(r, RENAME_RETRY_BASE_MS * 2 ** attempt));
-        continue;
-      }
-      await fs.unlink(tmpPath).catch(() => {});
-      throw err;
-    }
-  }
-}
 
 /** Generate a session key from a file path */
 export function sessionKey(filePath: string): string {
@@ -227,6 +204,51 @@ export async function listSessionFilePaths(): Promise<
     console.error("[Tandem] Failed to read session directory:", err);
     return [];
   }
+}
+
+/**
+ * Delete orphaned per-document annotation files older than `SESSION_MAX_AGE`.
+ *
+ * Phase 1 of the durable-annotations plan ships this as a best-effort startup
+ * hint — issue #318 tracks the full policy (e.g., cross-referencing against
+ * active session files, retention tiers). For now we only GC files whose
+ * names match `<64-hex>.json` or `upload_<id>.json`, leaving `.corrupt.*`,
+ * `.future`, and the `store.lock` file alone.
+ *
+ * Matches the 30-day cutoff used by `cleanupSessions` (same constant).
+ */
+export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
+  const dir = getAnnotationsDir();
+  let files: string[];
+  try {
+    files = await fs.readdir(dir);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    console.error("[Tandem] Failed to read annotations directory:", err);
+    return 0;
+  }
+
+  // Only consider files that match the known per-doc envelope filename shape.
+  // Quarantined (`.corrupt.<ts>`), parked (`.future`), and the lockfile are
+  // skipped — they carry their own lifecycles.
+  const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
+
+  const now = Date.now();
+  let cleaned = 0;
+  for (const file of files) {
+    if (!envelopeRe.test(file)) continue;
+    try {
+      const filePath = path.join(dir, file);
+      const stat = await fs.stat(filePath);
+      if (now - stat.mtimeMs > SESSION_MAX_AGE) {
+        await fs.unlink(filePath);
+        cleaned++;
+      }
+    } catch (err) {
+      console.error(`[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file}:`, err);
+    }
+  }
+  return cleaned;
 }
 
 /** Delete sessions older than 30 days */

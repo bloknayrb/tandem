@@ -4,6 +4,7 @@ import {
   attachCtrlObservers,
   attachObservers,
   detachObservers,
+  FILE_SYNC_ORIGIN,
   getBufferedSelection,
   MCP_ORIGIN,
   reattachObservers,
@@ -17,6 +18,7 @@ import type { TandemEvent } from "../../src/server/events/types.js";
 import {
   CHANNEL_EVENT_BUFFER_SIZE,
   SELECTION_DWELL_DEFAULT_MS,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
@@ -66,6 +68,75 @@ describe("origin filtering", () => {
         range: { from: 0, to: 5 },
       });
     }, MCP_ORIGIN);
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
+
+  it("FILE_SYNC_ORIGIN-tagged annotation writes do not emit events", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Simulates the annotation file-writer replaying persisted JSON into the Y.Map.
+    // These writes MUST NOT fan out as channel events, otherwise every disk reload
+    // would spam annotation:created/accepted/dismissed SSE events to subscribers.
+    doc.transact(() => {
+      map.set("ann_file_sync_new", {
+        id: "ann_file_sync_new",
+        type: "comment",
+        author: "user",
+        content: "reloaded from disk",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      });
+    }, FILE_SYNC_ORIGIN);
+
+    // Also simulate a status-change replay (claude annotation being updated)
+    doc.transact(() => {
+      map.set("ann_file_sync_accept", {
+        id: "ann_file_sync_accept",
+        type: "comment",
+        author: "claude",
+        content: "prior suggestion",
+        status: "accepted",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      });
+    }, FILE_SYNC_ORIGIN);
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
+
+  it("FILE_SYNC_ORIGIN-tagged reply writes do not emit events", () => {
+    const { events, cleanup } = collectEvents();
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+    const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+
+    // Seed a parent annotation via MCP so its write is not observable as an event
+    doc.transact(() => {
+      annMap.set("ann_parent", {
+        id: "ann_parent",
+        type: "comment",
+        author: "claude",
+        content: "parent",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      });
+    }, MCP_ORIGIN);
+
+    // File-sync replay of a user reply — must NOT emit annotation:reply
+    doc.transact(() => {
+      repliesMap.set("reply_file_sync", {
+        id: "reply_file_sync",
+        annotationId: "ann_parent",
+        author: "user",
+        text: "reloaded reply",
+        timestamp: Date.now(),
+      });
+    }, FILE_SYNC_ORIGIN);
 
     expect(events).toHaveLength(0);
     cleanup();
@@ -608,6 +679,88 @@ describe("reattachObservers", () => {
 describe("detachObservers edge cases", () => {
   it("detachObservers on a never-attached doc does not throw", () => {
     expect(() => detachObservers("never-attached-doc")).not.toThrow();
+  });
+});
+
+// --- File-sync context registry (durable annotations) ---
+//
+// reattachObservers re-registers the annotation file-writer observer against
+// the new Y.Doc after a Hocuspocus doc swap. If this branch regresses,
+// disk persistence silently stops on every first-browser-connect — the
+// plan's #1 silent-failure mode. Guard it with a test that proves a
+// post-swap Y.Map write reaches the store via the re-registered observer.
+
+describe("reattachObservers — file-sync context rebind", () => {
+  it("rebinds the annotation observer to the new Y.Doc on swap", async () => {
+    const { setFileSyncContext, clearFileSyncContext } = await import(
+      "../../src/server/events/queue.js"
+    );
+    const { MCP_ORIGIN: mcpOrigin } = await import("../../src/server/events/queue.js");
+
+    const docName = "reattach-filesync-doc";
+    const doc1 = new Y.Doc();
+    const doc2 = new Y.Doc();
+
+    // Minimal DocStore stub — we only care about queueWrite being called.
+    const queueWriteSpy = vi.fn();
+    const store = {
+      load: async () => ({
+        schemaVersion: 1 as const,
+        docHash: "stub",
+        meta: { filePath: "/virtual/doc.md", lastUpdated: 0 },
+        annotations: [],
+        tombstones: [],
+        replies: [],
+      }),
+      queueWrite: queueWriteSpy,
+      flush: async () => {},
+      clear: async () => {},
+      isReadOnly: () => false,
+      isDisabled: () => false,
+    };
+
+    // Imitate what file-opener.ts:wireAnnotationStore does — register a
+    // real observer via the sync module and stash the context.
+    const { registerAnnotationObserver } = await import("../../src/server/annotations/sync.js");
+    const cleanup = registerAnnotationObserver({
+      ydoc: doc1,
+      store,
+      docHash: "stub",
+      meta: { filePath: "/virtual/doc.md" },
+    });
+    setFileSyncContext(
+      docName,
+      { ydoc: doc1, store, docHash: "stub", meta: { filePath: "/virtual/doc.md" } },
+      cleanup,
+    );
+
+    // Simulate a Hocuspocus onLoadDocument swap.
+    reattachObservers(docName, doc2);
+
+    // Writing to the NEW doc must fire the re-registered observer → store.queueWrite.
+    doc2.transact(() => {
+      doc2.getMap(Y_MAP_ANNOTATIONS).set("ann_1", { id: "ann_1", rev: 1 });
+    }, mcpOrigin);
+
+    expect(queueWriteSpy).toHaveBeenCalledTimes(1);
+
+    // And the OLD doc must no longer trigger writes — the old observer
+    // should have been disposed before the rebind.
+    queueWriteSpy.mockClear();
+    doc1.transact(() => {
+      doc1.getMap(Y_MAP_ANNOTATIONS).set("ann_ghost", { id: "ann_ghost", rev: 1 });
+    }, mcpOrigin);
+    expect(queueWriteSpy).not.toHaveBeenCalled();
+
+    clearFileSyncContext(docName);
+    doc1.destroy();
+    doc2.destroy();
+  });
+
+  it("reattachObservers on a doc with no file-sync context is a no-op", () => {
+    const doc = new Y.Doc();
+    expect(() => reattachObservers("never-wired-doc", doc)).not.toThrow();
+    doc.destroy();
   });
 });
 

@@ -52,6 +52,15 @@ export interface AnnotationReply {
   text: string;
   timestamp: number;
   editedAt?: number;
+  /**
+   * Durable-annotation last-writer-wins counter. Server-internal field
+   * mirrored from the on-disk envelope schema (see
+   * `src/server/annotations/schema.ts` `AnnotationReplyRecordV1`). Optional
+   * here so client code and legacy in-memory state that predates the durable
+   * store don't trip TS. Every server-side write bumps this; legacy entries
+   * lacking `rev` are treated as `rev: 0` on merge.
+   */
+  rev?: number;
 }
 
 // --- Annotation types ---
@@ -69,6 +78,16 @@ interface AnnotationBase {
   textSnapshot?: string;
   /** Timestamp of last edit to the annotation content. */
   editedAt?: number;
+  /**
+   * Durable-annotation last-writer-wins counter. Server-internal field
+   * mirrored from the on-disk envelope schema (see
+   * `src/server/annotations/schema.ts` `AnnotationRecordV1`). Optional here
+   * so legacy session-restored state (pre-durable-store) and client code
+   * that doesn't care about durability still type-check. Every server-side
+   * user-intent write bumps this; entries lacking `rev` are treated as
+   * `rev: 0` by the merge/sync code.
+   */
+  rev?: number;
 }
 
 /**

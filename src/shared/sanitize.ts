@@ -8,6 +8,13 @@ export type RawAnnotation = Omit<Annotation, "type"> & { type: string };
  * - `suggestion` → `comment` with `suggestedText` + `content` (parsed from JSON)
  * - `question` → `comment` with `directedAt: "claude"`
  * - Strips stray `color` from non-highlight entries (#245)
+ * - Preserves `rev` (the durable-annotation last-writer-wins counter — added
+ *   by the on-disk schema, see `src/server/annotations/schema.ts`). `rev` is
+ *   a server-internal durability concept, not a client-facing annotation
+ *   field, so it doesn't appear on the `Annotation` union type. Passthrough
+ *   here is load-bearing: without it every sanitize-then-write cycle in the
+ *   MCP tools would reset `rev` to undefined and the sync observer would
+ *   serialize `rev: 0` forever.
  */
 export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotation {
   const ann = input as RawAnnotation;
@@ -23,6 +30,7 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
     ...(ann.relRange !== undefined ? { relRange: ann.relRange } : {}),
     ...(ann.textSnapshot !== undefined ? { textSnapshot: ann.textSnapshot } : {}),
     ...(ann.editedAt !== undefined ? { editedAt: ann.editedAt } : {}),
+    ...(typeof ann.rev === "number" ? { rev: ann.rev } : {}),
   };
 
   if (ann.type === "suggestion") {

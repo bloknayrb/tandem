@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { TUTORIAL_ANNOTATION_PREFIX, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
+import { nextRev } from "../annotations/schema.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
 import { extractText } from "./document-model.js";
@@ -83,6 +84,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         status: "pending" as const,
         timestamp: Date.now(),
         textSnapshot: def.targetText,
+        rev: nextRev(),
         ...(def.color !== undefined ? { color: def.color } : {}),
         ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
       } as Annotation;
