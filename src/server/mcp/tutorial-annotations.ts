@@ -83,6 +83,8 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         status: "pending" as const,
         timestamp: Date.now(),
         textSnapshot: def.targetText,
+        // `rev` is the durable-annotation LWW counter; server-internal field.
+        rev: 1,
         ...(def.color !== undefined ? { color: def.color } : {}),
         ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
       } as Annotation;

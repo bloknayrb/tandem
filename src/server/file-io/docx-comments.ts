@@ -182,6 +182,8 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
         content,
         status: "pending" as const,
         timestamp: comment.date ? new Date(comment.date).getTime() : Date.now(),
+        // `rev`: durable-annotation LWW counter — first revision on import.
+        rev: 1,
         ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
       };
 
