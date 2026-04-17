@@ -217,15 +217,20 @@ export async function listSessionFilePaths(): Promise<
  *
  * Matches the 30-day cutoff used by `cleanupSessions` (same constant).
  */
-export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
+export async function cleanupOrphanedAnnotationFiles(): Promise<{
+  cleaned: number;
+  raced: number;
+  failed: number;
+}> {
   const dir = getAnnotationsDir();
   let files: string[];
   try {
     files = await fs.readdir(dir);
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT")
+      return { cleaned: 0, raced: 0, failed: 0 };
     console.error("[Tandem] Failed to read annotations directory:", err);
-    return 0;
+    return { cleaned: 0, raced: 0, failed: 0 };
   }
 
   // Only consider files that match the known per-doc envelope filename shape.
@@ -233,22 +238,38 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
   // skipped — they carry their own lifecycles.
   const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
 
+  // Fan out stat + unlink so this isn't O(N) serial syscalls on startup.
   const now = Date.now();
-  let cleaned = 0;
-  for (const file of files) {
-    if (!envelopeRe.test(file)) continue;
-    try {
-      const filePath = path.join(dir, file);
-      const stat = await fs.stat(filePath);
-      if (now - stat.mtimeMs > SESSION_MAX_AGE) {
-        await fs.unlink(filePath);
-        cleaned++;
-      }
-    } catch (err) {
-      console.error(`[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file}:`, err);
-    }
-  }
-  return cleaned;
+  type Result = "cleaned" | "raced" | "skipped" | "failed";
+  const results = await Promise.all(
+    files
+      .filter((file) => envelopeRe.test(file))
+      .map(async (file): Promise<Result> => {
+        const filePath = path.join(dir, file);
+        try {
+          const stat = await fs.stat(filePath);
+          if (now - stat.mtimeMs <= SESSION_MAX_AGE) return "skipped";
+          await fs.unlink(filePath);
+          return "cleaned";
+        } catch (err) {
+          // ENOENT is benign — another tandem instance racing the same GC got
+          // there first. Anything else (permissions, locks, I/O) points at a
+          // real problem the operator needs to see with a code to triage on.
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if (code === "ENOENT") return "raced"; // peer cleaned it first
+          console.error(
+            `[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file} (${code ?? "unknown"}):`,
+            err,
+          );
+          return "failed";
+        }
+      }),
+  );
+  return {
+    cleaned: results.filter((r) => r === "cleaned").length,
+    raced: results.filter((r) => r === "raced").length,
+    failed: results.filter((r) => r === "failed").length,
+  };
 }
 
 /** Delete sessions older than 30 days */
