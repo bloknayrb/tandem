@@ -341,7 +341,7 @@ export function reattachObservers(docName: string, newDoc: Y.Doc): void {
   // in onLoadDocument); the cleanup we stashed would be a no-op anyway.
   const oldCtx = fileSyncContexts.get(docName);
   if (oldCtx) {
-    safeCleanup(docName, "reattach", oldCtx.cleanup, "swap");
+    safeCleanup(docName, oldCtx.cleanup, "swap", "reattach");
     const newCtx: SyncContext = {
       ydoc: newDoc,
       store: oldCtx.ctx.store,
@@ -374,9 +374,9 @@ const fileSyncContexts = new Map<
  */
 function safeCleanup(
   docName: string,
-  logTag: string,
   cleanup: (phase?: ObserverCleanupPhase) => void,
   phase: ObserverCleanupPhase,
+  logTag: string,
 ): void {
   try {
     cleanup(phase);
@@ -391,11 +391,8 @@ function safeCleanup(
  * passed here is what gets invoked on `clearFileSyncContext` or the next
  * `reattachObservers` call.
  *
- * The cleanup accepts a phase hint — `"swap"` for live Y.Doc replacement,
- * `"close"` for true document close. Callers that don't want to think about
- * the distinction (file-opener, document-service) can keep calling this with
- * the raw cleanup they got from `registerAnnotationObserver`; the queue
- * picks the phase at teardown time.
+ * Callers don't need to think about the swap-vs-close distinction: the queue
+ * picks the phase at teardown time based on which entrypoint ran.
  */
 export function setFileSyncContext(
   docName: string,
@@ -406,7 +403,7 @@ export function setFileSyncContext(
   // registration (e.g., forceReload paths that re-run loadAndMerge).
   const existing = fileSyncContexts.get(docName);
   if (existing) {
-    safeCleanup(docName, "replace", existing.cleanup, "close");
+    safeCleanup(docName, existing.cleanup, "close", "replace");
   }
   fileSyncContexts.set(docName, { ctx, cleanup });
 }
@@ -423,7 +420,7 @@ export function clearFileSyncContext(
 ): { store: DocStore; docHash: string } | undefined {
   const entry = fileSyncContexts.get(docName);
   if (!entry) return undefined;
-  safeCleanup(docName, "clear", entry.cleanup, "close");
+  safeCleanup(docName, entry.cleanup, "close", "clear");
   fileSyncContexts.delete(docName);
   return { store: entry.ctx.store, docHash: entry.ctx.docHash };
 }

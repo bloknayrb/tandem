@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
 import {
   attachCtrlObservers,
   attachObservers,
@@ -785,7 +786,7 @@ describe("reattachObservers — file-sync context rebind", () => {
 
     // Capture the snapshot thunk so we can invoke it at "flush" time, mirroring
     // what the real debounced store does at debounce-fire.
-    let pendingThunk: (() => unknown) | null = null;
+    let pendingThunk: (() => AnnotationDocV1) | null = null;
     const store = {
       load: async () => ({
         schemaVersion: 1 as const,
@@ -795,7 +796,7 @@ describe("reattachObservers — file-sync context rebind", () => {
         tombstones: [],
         replies: [],
       }),
-      queueWrite: (thunk: () => unknown) => {
+      queueWrite: (thunk: () => AnnotationDocV1) => {
         pendingThunk = thunk;
       },
       flush: async () => {},
@@ -828,8 +829,7 @@ describe("reattachObservers — file-sync context rebind", () => {
     // Flush: invoke the still-pending snapshot thunk that was queued against
     // the OLD doc. It must see the tombstone — both on the serialized
     // snapshot (what lands on disk) AND in the in-memory ledger.
-    const snapshot = pendingThunk as unknown as () => { tombstones: Array<{ id: string }> };
-    const persisted = snapshot();
+    const persisted = pendingThunk!();
 
     expect(persisted.tombstones.map((t) => t.id)).toEqual(["ann_deleted"]);
     expect(getTombstones(docHash).map((t) => t.id)).toEqual(["ann_deleted"]);
