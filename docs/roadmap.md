@@ -338,6 +338,47 @@ Future hardening (not blocking release):
 
 ---
 
+## Durable Annotations + Cowork Auto-Setup — IN PROGRESS
+
+Plan doc: [`docs/superpowers/plans/2026-04-16-durable-annotations-cowork.md`](superpowers/plans/2026-04-16-durable-annotations-cowork.md). Roadmap issues #313–#322.
+
+### Phase 1 — Durable Annotations in App Data (T1–T8)
+
+Moves annotation storage from in-memory Y.Doc + session snapshots to explicit per-document durable JSON under `env-paths` app data. Survives browser/tab loss, tandem-editor reinstalls, OS restarts.
+
+- **T1–T6 (PR #323, merged):** Per-doc on-disk store, migration from session snapshots, load/save wiring, in-memory cache, tests.
+- **T7 + T8 (PR #337):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
+
+### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f)
+
+End-user goal: install the Tauri desktop app → Cowork / Claude Desktop / Claude Code CLI all just work. Auth token stored in OS keychain, server opt-in bind-mode for LAN exposure, per-workspace Cowork installer.
+
+- **PR a** — Token storage (`keyring` crate + `env-paths` fallback). Keychain on Windows/macOS/Linux.
+- **PR b** — Auth middleware + OAuth metadata advertising. Loopback-exempt, `crypto.timingSafeEqual`, rate-limit (5/min).
+- **PR c** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`, Cowork mode binds `0.0.0.0`. Hocuspocus stays loopback-only.
+- **PR d** — `tandem rotate-token` CLI subcommand; re-runs setup across known configs.
+- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup.
+- **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status.
+
+PRs e and f can run in parallel (separate worktrees) once PR c lands. Estimate: 4.5–5 weeks calendar.
+
+**Prerequisite spikes (Task 5 in execution plan, ~1 day total):**
+- Verify Anthropic's `plugin.json` `http` type supports a `headers` field (fall back to session-exchange endpoint if not).
+- Verify OAuth-protected-resource metadata advertising (`bearer_methods_supported`) actually causes Claude Code's MCP client to send `Authorization` headers.
+
+### Exit criteria (Phase 2)
+
+- Fresh Windows profile: install Tauri → Claude Desktop Cowork workspace → ask Claude to list tools → `tandem_*` tools surface, no terminal used.
+- Claude Code CLI users (no Tauri) continue to work unchanged via loopback-exempt auth.
+- Uninstaller strips all integration entries without touching third-party MCP configs.
+- `npm run doctor` reports Cowork integration status.
+
+### Cowork plugin bridge (shipped)
+
+Separate from Phase 2, the Cowork plugin-bridge itself is already shipped (tandem-editor@0.6.2). Plugin MCP entries use `npx -y tandem-editor mcp-stdio` (and `... channel`) because Claude Desktop's Cowork VM does NOT forward loopback HTTP servers. See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail, Phase 0 probe results, and the `workspaces`-in-tarball bug that blocked 0.6.1.
+
+---
+
 ## v1.0 Release Plan
 
 Five-phase plan to ship Tandem v1.0. Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop). Remaining work focuses on UI polish and API cleanup.

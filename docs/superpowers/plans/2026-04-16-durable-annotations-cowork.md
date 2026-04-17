@@ -3,7 +3,7 @@
 > **Status (2026-04-16):** Approved. Ready to implement Phase 1.
 > **Roadmap issues filed:** [#313](https://github.com/bloknayrb/tandem/issues/313), [#314](https://github.com/bloknayrb/tandem/issues/314), [#315](https://github.com/bloknayrb/tandem/issues/315), [#316](https://github.com/bloknayrb/tandem/issues/316), [#317](https://github.com/bloknayrb/tandem/issues/317), [#318](https://github.com/bloknayrb/tandem/issues/318), [#319](https://github.com/bloknayrb/tandem/issues/319), [#320](https://github.com/bloknayrb/tandem/issues/320), [#321](https://github.com/bloknayrb/tandem/issues/321), [#322](https://github.com/bloknayrb/tandem/issues/322)
 > **Review rounds:** 8 parallel agents across 2 rounds before approval; key findings incorporated (see "Evidence backing" table and "Critical Architectural Decisions" section).
-> **Supersedes:** the 2026-04-14 Cowork MCP bridge plan (refuted by [GitHub anthropics/claude-code#26259](https://github.com/anthropics/claude-code/issues/26259) — bundled-stdio-binary-as-MCP approach is blocked by Cowork VM's plugin-config filter).
+> **Supersedes:** the 2026-04-14 Cowork MCP bridge plan ([archived here](archived/2026-04-14-cowork-mcp-bridge-SUPERSEDED.md)). At planning time the `#26259` thread was read as evidence that stdio-in-plugin was blocked; subsequent Phase 0 probes (2026-04-15, [logged here](../archived/2026-04-15-cowork-sync.md)) showed plugin-stdio via `npx -y <published>` **does** bridge to Cowork — the actual 0.6.1 blocker was a `workspaces`-in-tarball packaging bug. Plugin-stdio bridge shipped separately as tandem-editor@0.6.2 (PRs #301, #304) — see [ADR-023](../../decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304). This plan's Phase 2 remains the canonical path for **Tauri desktop** users (LAN-bind + auth token) because it auto-configures all three surfaces from a single installer; stdio bridge is the canonical path for **plugin-marketplace install without Tauri**. Both can coexist.
 
 ## Context
 
@@ -21,7 +21,7 @@
 
 | Claim | Evidence |
 |---|---|
-| Cowork VM strips non-HTTPS MCP entries from plugin.json | [GitHub anthropics/claude-code#26259](https://github.com/anthropics/claude-code/issues/26259) |
+| Cowork VM filters plugin MCP entries by transport type (historical claim from [#26259](https://github.com/anthropics/claude-code/issues/26259); Phase 0 probes 2026-04-15 later showed plugin-stdio via npx DOES bridge — see [ADR-023](../../decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304). The HTTP path from this plan's Phase 2 is a separate strategy for Tauri installs.) | [#26259](https://github.com/anthropics/claude-code/issues/26259), [`cowork-sync.md` archive](../archived/2026-04-15-cowork-sync.md) |
 | Cowork VM egress is open on personal accounts | Session config `egressAllowedDomains: ["*"]` at `%LOCALAPPDATA%\...\local-agent-mode-sessions\<ws>\<vm>\local_*.json` |
 | Workspace bind-mounts into VM at `/sessions/<name>/mnt/<workspace-dir>` | `cowork_vm_node.log` line 2440 (verified by Cowork research agent) |
 | VM reaches host LAN IP but NOT `127.0.0.1` | `host.docker.internal` resolves to `192.168.1.201` in VM, times out only because Tandem binds `127.0.0.1` |
