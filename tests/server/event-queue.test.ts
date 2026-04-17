@@ -822,8 +822,7 @@ describe("reattachObservers — file-sync context rebind", () => {
 
     expect(pendingThunk).not.toBeNull();
 
-    // Simulate the Hocuspocus onLoadDocument swap. The prior cleanup runs with
-    // phase=swap; the pending thunk is still sitting in the store.
+    // Simulate the Hocuspocus onLoadDocument swap.
     reattachObservers(docName, doc2);
 
     // Flush: invoke the still-pending snapshot thunk that was queued against
@@ -837,6 +836,45 @@ describe("reattachObservers — file-sync context rebind", () => {
     clearFileSyncContext(docName);
     doc1.destroy();
     doc2.destroy();
+  });
+
+  // Inverse contract: the close phase MUST drop the ledger. Without this
+  // guard, a refactor that flipped the conditional (or changed the default
+  // to "swap") would pass every other test in the suite — the wipe only
+  // shows up as per-process memory growth across many opens, which no unit
+  // test otherwise exercises.
+  it("close-phase cleanup drops the tombstone ledger (#333)", async () => {
+    const { recordTombstone, registerAnnotationObserver, getTombstones } = await import(
+      "../../src/server/annotations/sync.js"
+    );
+
+    const docHash = "close-phase-hash";
+    const filePath = "/virtual/close-phase.md";
+    const ydoc = new Y.Doc();
+    const store = {
+      load: async () => ({
+        schemaVersion: 1 as const,
+        docHash,
+        meta: { filePath, lastUpdated: 0 },
+        annotations: [],
+        tombstones: [],
+        replies: [],
+      }),
+      queueWrite: vi.fn(),
+      flush: async () => {},
+      clear: async () => {},
+      isReadOnly: () => false,
+      isDisabled: () => false,
+    };
+
+    const cleanup = registerAnnotationObserver({ ydoc, store, docHash, meta: { filePath } });
+    recordTombstone(docHash, "ann_close", 0);
+    expect(getTombstones(docHash).map((t) => t.id)).toEqual(["ann_close"]);
+
+    cleanup("close");
+
+    expect(getTombstones(docHash)).toEqual([]);
+    ydoc.destroy();
   });
 });
 

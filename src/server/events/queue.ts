@@ -400,7 +400,10 @@ export function setFileSyncContext(
   cleanup: (phase?: ObserverCleanupPhase) => void,
 ): void {
   // Dispose any prior entry first so we never leak observers on duplicate
-  // registration (e.g., forceReload paths that re-run loadAndMerge).
+  // registration (e.g., forceReload paths that re-run loadAndMerge). Normal
+  // flow pre-clears via `clearFileSyncContext`, so this branch is defensive;
+  // `"close"` is correct because we're replacing — not rebinding — the
+  // context, so the prior docHash's tombstones belong to a superseded state.
   const existing = fileSyncContexts.get(docName);
   if (existing) {
     safeCleanup(docName, existing.cleanup, "close", "replace");

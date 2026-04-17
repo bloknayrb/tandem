@@ -218,9 +218,6 @@ export function registerAnnotationObserver(
     annMap.unobserve(onMutation);
     repMap.unobserve(onMutation);
     docContexts.delete(docHash);
-    // Only drop the tombstone ledger on a true close. On a swap, a pending
-    // debounced snapshot may still run against the old Y.Doc and must see
-    // the tombstones so they persist (see #333).
     if (phase === "close") {
       tombstonesByDoc.delete(docHash);
     }
