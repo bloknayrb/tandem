@@ -7,9 +7,10 @@
  * Pure Node.js built-ins only (no external dependencies).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
+import { homedir, platform } from "node:os";
 import { join } from "node:path";
 
 // Keep in sync with src/shared/constants.ts (can't import TS from standalone .mjs)
@@ -295,6 +296,134 @@ function checkSseEndpoint() {
   });
 }
 
+// ── Check: annotation store health ──────────────────────────────────
+
+/** Mirror of `env-paths("tandem").data` for the current OS. */
+function resolveAppDataDir() {
+  const override = process.env.TANDEM_APP_DATA_DIR;
+  if (override && override.length > 0) return override;
+
+  const home = homedir();
+  switch (platform()) {
+    case "win32":
+      return join(process.env.LOCALAPPDATA || join(home, "AppData", "Local"), "tandem", "Data");
+    case "darwin":
+      return join(home, "Library", "Application Support", "tandem");
+    default:
+      return join(process.env.XDG_DATA_HOME || join(home, ".local", "share"), "tandem");
+  }
+}
+
+/** Cross-platform test that a PID currently points at a live process. */
+function isPidLive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function checkAnnotationStore() {
+  const dir = join(resolveAppDataDir(), "annotations");
+  if (!existsSync(dir)) {
+    pass(`Annotation store dir not yet created (${dir}) — first open will create it`);
+    return;
+  }
+
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch (err) {
+    fail(`Annotation store dir unreadable: ${err.message}`, `Check permissions on ${dir}`);
+    return;
+  }
+
+  const jsonFiles = entries.filter((f) => f.endsWith(".json") && !f.endsWith(".corrupt.json"));
+  const corruptFiles = entries.filter((f) => f.includes(".corrupt."));
+
+  let totalBytes = 0;
+  let newest = { name: null, mtime: 0 };
+  let sampleSchemaVersion = null;
+
+  for (const f of jsonFiles) {
+    try {
+      const s = statSync(join(dir, f));
+      totalBytes += s.size;
+      if (s.mtimeMs > newest.mtime) {
+        newest = { name: f, mtime: s.mtimeMs };
+      }
+      if (sampleSchemaVersion === null) {
+        try {
+          const parsed = JSON.parse(readFileSync(join(dir, f), "utf-8"));
+          if (typeof parsed?.schemaVersion === "number") {
+            sampleSchemaVersion = parsed.schemaVersion;
+          }
+        } catch {
+          // malformed individual file — counted under corruptFiles check below
+        }
+      }
+    } catch {
+      // file vanished between readdir and stat — ignore
+    }
+  }
+
+  pass(`Annotation store: ${jsonFiles.length} doc(s), ${formatBytes(totalBytes)} total`);
+
+  if (newest.name) {
+    const ageMs = Date.now() - newest.mtime;
+    const ageStr =
+      ageMs < 60_000 ? `${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 60_000)}m`;
+    pass(`Most recent annotation write: ${newest.name} (${ageStr} ago)`);
+  }
+
+  if (sampleSchemaVersion !== null) {
+    pass(`Annotation schema version: ${sampleSchemaVersion}`);
+  }
+
+  if (corruptFiles.length > 0) {
+    warn(
+      `${corruptFiles.length} quarantined annotation file(s) in ${dir}`,
+      "Safe to delete after inspection; kept 7d by design.",
+    );
+  }
+
+  // Lock status
+  const lockPath = join(dir, "store.lock");
+  if (!existsSync(lockPath)) {
+    pass("Annotation store lock: not held (no running writer)");
+    return;
+  }
+
+  try {
+    const raw = readFileSync(lockPath, "utf-8").trim();
+    const pid = Number.parseInt(raw, 10);
+    if (!Number.isFinite(pid)) {
+      warn(
+        `Annotation store lock at ${lockPath} has unparseable content: "${raw}"`,
+        "Restart Tandem or delete the lock file if no server is running.",
+      );
+      return;
+    }
+    if (isPidLive(pid)) {
+      pass(`Annotation store lock held by live PID ${pid}`);
+    } else {
+      warn(
+        `Annotation store lock at ${lockPath} points to dead PID ${pid}`,
+        "The next server start will reclaim the stale lock automatically.",
+      );
+    }
+  } catch (err) {
+    warn(`Could not read annotation store lock: ${err.message}`);
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -307,6 +436,9 @@ async function main() {
   checkNodeModules();
   checkMcpJson();
   checkUserMcpConfig();
+
+  console.log();
+  checkAnnotationStore();
 
   console.log();
   const { mcp } = await checkPorts();

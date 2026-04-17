@@ -5,6 +5,7 @@
 // alongside character offsets. Heading prefix offsets are accounted for so
 // flat-text positions match Tandem's coordinate system after mammoth → htmlToYDoc.
 
+import * as crypto from "node:crypto";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import * as Y from "yjs";
@@ -15,6 +16,28 @@ import { nextRev } from "../annotations/schema.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
 import { findAllByName, getAttr, getTextContent, walkDocumentBody } from "./docx-walker.js";
+
+/**
+ * Deterministic annotation id for an imported Word comment.
+ *
+ * Inputs (commentId + range + comment body) are stable across repeated imports
+ * of the same .docx, so re-opening or force-reloading the file produces the
+ * same id — which lets the injection loop dedupe against the existing map
+ * instead of accumulating duplicates in the durable annotation store.
+ */
+export function importAnnotationId(
+  commentId: string,
+  from: number,
+  to: number,
+  bodyText: string,
+): string {
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${commentId}\u0000${from}\u0000${to}\u0000${bodyText}`)
+    .digest("hex")
+    .slice(0, 12);
+  return `import-${hash}`;
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -169,7 +192,11 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
         continue;
       }
 
-      const id = `import-${comment.commentId}-${Date.now()}`;
+      const id = importAnnotationId(comment.commentId, comment.from, comment.to, comment.bodyText);
+
+      // Dedup: idempotent re-import. Same .docx → same id → skip the write.
+      if (map.has(id)) continue;
+
       const content =
         comment.authorName !== "Unknown"
           ? `[${comment.authorName}] ${comment.bodyText}`
