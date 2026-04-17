@@ -12,6 +12,9 @@
  *   - Writes are debounced per docHash (100ms) — bursty rapid writes for the
  *     same doc coalesce, but parallel writes to different docs do NOT share a
  *     debounce timer.
+ *   - `queueWrite` takes a THUNK, not a pre-computed doc. The snapshot runs at
+ *     debounce-fire time, not at mutation time, so a 50-mutation burst only
+ *     pays for one serialization.
  *   - Corrupt files are quarantined to `<hash>.json.corrupt.<epoch-ms>`.
  *   - Files from a newer schema are parked at `<hash>.json.future` (no ts so
  *     future migration tooling has a predictable name).
@@ -30,7 +33,7 @@ import path from "node:path";
 import envPaths from "env-paths";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
-import { type AnnotationDocV1, migrateToV1, parseAnnotationDoc } from "./schema.js";
+import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -38,7 +41,12 @@ import { type AnnotationDocV1, migrateToV1, parseAnnotationDoc } from "./schema.
 
 export interface DocStore {
   load(): Promise<AnnotationDocV1>;
-  queueWrite(doc: AnnotationDocV1): void;
+  /**
+   * Enqueue a debounced write. The `snapshot` thunk is invoked at
+   * debounce-fire time, NOT at call time, so callers can pass the freshest
+   * possible state without paying for N serializations in a burst.
+   */
+  queueWrite(snapshot: () => AnnotationDocV1): void;
   flush(): Promise<void>;
   clear(): Promise<void>;
   isReadOnly(): boolean;
@@ -83,20 +91,40 @@ let annotationsDirReady = false;
 /** Read-only mode engaged when another live PID owns the lockfile. */
 let readOnly = false;
 
-/** Per-doc debounce queue. Guarded from concurrency by Node's single thread. */
-const pending = new Map<string, { timer: NodeJS.Timeout; doc: AnnotationDocV1 }>();
+/**
+ * Per-doc debounce queue. Guarded from concurrency by Node's single thread.
+ * The stored `snapshotFn` is invoked when the timer fires (or `flush` runs).
+ */
+const pending = new Map<string, { timer: NodeJS.Timeout; snapshotFn: () => AnnotationDocV1 }>();
 
-/** Per-doc consecutive-failure counter. Cleared on a successful write. */
-const failureCounts = new Map<string, number>();
+/**
+ * Per-doc failure bookkeeping. Consolidated into a single map so the
+ * "transient toast / throttle / disable after N failures / persistent
+ * one-shot notice" state machine is legible in one place.
+ *
+ * Lifecycle asymmetry (see `closeStore`): `count` and `lastNotifiedAt` are
+ * transient — safe to clear on doc close so reopening gets a clean slate.
+ * `disabled` and `persistentNotified` MUST survive doc close: they encode
+ * "writes are off for this install until restart" UX, and clearing them on
+ * close would let a disabled doc re-arm its first-failure toast on every
+ * reopen.
+ */
+interface DocFailureState {
+  count: number;
+  lastNotifiedAt: number;
+  disabled: boolean;
+  persistentNotified: boolean;
+}
+const failureState = new Map<string, DocFailureState>();
 
-/** Per-doc epoch-ms of the last notification (for the 60s throttle). */
-const lastNotifiedAt = new Map<string, number>();
-
-/** Set of docHashes whose writes are disabled for the life of the process. */
-const disabledDocs = new Set<string>();
-
-/** Track which docs have already emitted the persistent "disabled" toast. */
-const persistentNotified = new Set<string>();
+function getOrInitFailureState(docHash: string): DocFailureState {
+  let state = failureState.get(docHash);
+  if (!state) {
+    state = { count: 0, lastNotifiedAt: 0, disabled: false, persistentNotified: false };
+    failureState.set(docHash, state);
+  }
+  return state;
+}
 
 async function ensureDirReady(): Promise<void> {
   if (annotationsDirReady) return;
@@ -242,11 +270,11 @@ function notifyFailure(
   kind: "transient" | "persistent",
 ): void {
   const now = Date.now();
-  const prev = lastNotifiedAt.get(docHash) ?? 0;
-  if (kind === "transient" && now - prev < NOTIFY_THROTTLE_MS) {
+  const state = getOrInitFailureState(docHash);
+  if (kind === "transient" && now - state.lastNotifiedAt < NOTIFY_THROTTLE_MS) {
     return; // Throttled
   }
-  lastNotifiedAt.set(docHash, now);
+  state.lastNotifiedAt = now;
 
   const fileName = path.basename(filePath) || docHash;
   const message =
@@ -274,20 +302,20 @@ function notifyFailure(
 
 /**
  * Bump the per-doc failure counter and emit the appropriate notification.
- * After `DISABLE_AFTER_FAILURES` consecutive failures, the doc is added to
- * `disabledDocs` and a one-shot persistent notice fires (throttle bypassed);
+ * After `DISABLE_AFTER_FAILURES` consecutive failures, the doc is flagged
+ * `disabled` and a one-shot persistent notice fires (throttle bypassed);
  * otherwise a throttled transient notice fires. Called from both the debounce
  * timer in `scheduleWrite` and the synchronous flush path in `flushOne`.
  */
 function recordFailure(docHash: string, filePath: string, err: unknown): void {
-  const count = (failureCounts.get(docHash) ?? 0) + 1;
-  failureCounts.set(docHash, count);
-  if (count >= DISABLE_AFTER_FAILURES) {
-    disabledDocs.add(docHash);
-    if (!persistentNotified.has(docHash)) {
-      persistentNotified.add(docHash);
+  const state = getOrInitFailureState(docHash);
+  state.count += 1;
+  if (state.count >= DISABLE_AFTER_FAILURES) {
+    state.disabled = true;
+    if (!state.persistentNotified) {
+      state.persistentNotified = true;
       // Bypass throttle — persistent notice is a one-shot.
-      lastNotifiedAt.delete(docHash);
+      state.lastNotifiedAt = 0;
       notifyFailure(docHash, filePath, err, "persistent");
     }
   } else {
@@ -299,38 +327,44 @@ function recordFailure(docHash: string, filePath: string, err: unknown): void {
 // Core per-doc store implementation
 // ---------------------------------------------------------------------------
 
+/**
+ * Zero-alloc empty-doc factory. Avoids routing through `migrateToV1({})`
+ * (which runs Zod validation over two empty arrays for no benefit).
+ */
 function emptyDoc(docHash: string, filePath: string): AnnotationDocV1 {
-  const base = migrateToV1({});
-  base.docHash = docHash;
-  base.meta = { filePath, lastUpdated: 0 };
-  return base;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    docHash,
+    meta: { filePath, lastUpdated: 0 },
+    annotations: [],
+    tombstones: [],
+    replies: [],
+  };
 }
 
 function filePathFor(docHash: string): string {
   return path.join(getAnnotationsDir(), `${docHash}.json`);
 }
 
-async function performWrite(
-  docHash: string,
-  metaPath: string,
-  doc: AnnotationDocV1,
-): Promise<void> {
+async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {
   await ensureDirReady();
   const target = filePathFor(docHash);
   await atomicWrite(target, JSON.stringify(doc));
-  // Success — clear transient failure state.
-  failureCounts.delete(docHash);
-  // Leave `lastNotifiedAt` in place so a brief recovery + re-failure within
-  // 60s doesn't re-spam the user.
+  // Success — clear transient failure state but LEAVE `lastNotifiedAt` in
+  // place so a brief recovery + re-failure within 60s doesn't re-spam the
+  // user. Also leave `disabled`/`persistentNotified` alone: those only clear
+  // on process restart (matching the "restart Tandem to retry" UX).
+  const state = failureState.get(docHash);
+  if (state) state.count = 0;
 }
 
-function scheduleWrite(docHash: string, filePath: string, doc: AnnotationDocV1): void {
+function scheduleWrite(docHash: string, filePath: string, snapshotFn: () => AnnotationDocV1): void {
   if (isFeatureDisabled()) return;
   if (readOnly) {
     console.warn(`[ANNOTATION-STORE] Read-only mode; dropping write for ${docHash}`);
     return;
   }
-  if (disabledDocs.has(docHash)) return;
+  if (failureState.get(docHash)?.disabled) return;
 
   const existing = pending.get(docHash);
   if (existing) clearTimeout(existing.timer);
@@ -339,7 +373,8 @@ function scheduleWrite(docHash: string, filePath: string, doc: AnnotationDocV1):
     const entry = pending.get(docHash);
     pending.delete(docHash);
     if (!entry) return;
-    performWrite(docHash, filePath, entry.doc).catch((err) => {
+    const doc = entry.snapshotFn();
+    performWrite(docHash, doc).catch((err) => {
       recordFailure(docHash, filePath, err);
     });
   }, DEBOUNCE_MS);
@@ -348,7 +383,7 @@ function scheduleWrite(docHash: string, filePath: string, doc: AnnotationDocV1):
   // flushing should call `flush()` explicitly.
   if (typeof timer.unref === "function") timer.unref();
 
-  pending.set(docHash, { timer, doc });
+  pending.set(docHash, { timer, snapshotFn });
 }
 
 async function flushOne(docHash: string): Promise<void> {
@@ -356,13 +391,17 @@ async function flushOne(docHash: string): Promise<void> {
   if (!entry) return;
   clearTimeout(entry.timer);
   pending.delete(docHash);
+  // Invoke the thunk at flush time (mirrors the debounce-fire path). The
+  // meta.filePath on the materialized doc is what we use for error toasts,
+  // since the flush path has no other handle on it.
+  const doc = entry.snapshotFn();
   // `performWrite` re-throws so `flush()` surfaces failures to tests/shutdown.
   // It clears the failure counter on success but doesn't bump it on failure —
   // that's `recordFailure`'s job, mirroring the scheduleWrite path.
   try {
-    await performWrite(docHash, entry.doc.meta.filePath, entry.doc);
+    await performWrite(docHash, doc);
   } catch (err) {
-    recordFailure(docHash, entry.doc.meta.filePath, err);
+    recordFailure(docHash, doc.meta.filePath, err);
     throw err;
   }
 }
@@ -483,12 +522,52 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
 
   return {
     load: () => loadOne(docHash, meta.filePath),
-    queueWrite: (doc) => scheduleWrite(docHash, meta.filePath, doc),
+    queueWrite: (snapshotFn) => scheduleWrite(docHash, meta.filePath, snapshotFn),
     flush: () => flushOne(docHash),
     clear: () => clearOne(docHash),
     isReadOnly: () => readOnly,
-    isDisabled: (h) => disabledDocs.has(h),
+    isDisabled: (h) => failureState.get(h)?.disabled === true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Per-doc lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * Flush any pending write for this doc and clear its TRANSIENT bookkeeping.
+ * Wired into the file-opener's close path so long-running servers opening
+ * many docs don't accumulate stale entries in the module-level maps.
+ *
+ * Asymmetric cleanup (intentional):
+ *   - Cleared: `pending` timer/thunk, `failureState.count`, `failureState.lastNotifiedAt`.
+ *   - Preserved: `failureState.disabled`, `failureState.persistentNotified`.
+ *
+ * The preserved flags encode "writes disabled until process restart" UX. If
+ * we cleared them on close, a user who hit 3 failures, closed the doc, then
+ * reopened would get the "first failure" toast again instead of the terminal
+ * "disabled; restart Tandem to retry" state they're already in.
+ */
+export async function closeStore(docHash: string): Promise<void> {
+  if (isFeatureDisabled()) return;
+  try {
+    await flushOne(docHash);
+  } catch {
+    // Swallow — a failing flush already notified via recordFailure; we still
+    // want to clean up transient state. Persistent failure flags are
+    // preserved by the selective reset below.
+  }
+
+  const state = failureState.get(docHash);
+  if (state) {
+    if (state.disabled || state.persistentNotified) {
+      // Preserve the terminal flags; zero out transient bookkeeping.
+      state.count = 0;
+      state.lastNotifiedAt = 0;
+    } else {
+      failureState.delete(docHash);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,10 +578,7 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
 export function resetForTesting(): void {
   for (const entry of pending.values()) clearTimeout(entry.timer);
   pending.clear();
-  failureCounts.clear();
-  lastNotifiedAt.clear();
-  disabledDocs.clear();
-  persistentNotified.clear();
+  failureState.clear();
   annotationsDirReady = false;
   readOnly = false;
 }

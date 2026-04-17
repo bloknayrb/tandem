@@ -29,6 +29,7 @@ import {
 } from "../../../src/server/annotations/schema.js";
 import {
   acquireStoreLock,
+  closeStore,
   createStore,
   getAnnotationsDir,
   releaseStoreLock,
@@ -114,7 +115,7 @@ describe("queueWrite + flush round-trip", () => {
       ],
     });
 
-    store.queueWrite(doc);
+    store.queueWrite(() => doc);
     await store.flush();
 
     const onDisk = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
@@ -139,8 +140,8 @@ describe("debounce coalescing", () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
     const writeSpy = vi.spyOn(fs, "writeFile");
 
-    store.queueWrite(makeDoc(HASH_A, FILE_A, { annotations: [] }));
-    store.queueWrite(
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A, { annotations: [] }));
+    store.queueWrite(() =>
       makeDoc(HASH_A, FILE_A, {
         annotations: [
           {
@@ -156,7 +157,7 @@ describe("debounce coalescing", () => {
         ],
       }),
     );
-    store.queueWrite(
+    store.queueWrite(() =>
       makeDoc(HASH_A, FILE_A, {
         annotations: [
           {
@@ -196,8 +197,8 @@ describe("per-doc debounce", () => {
     const storeA = createStore(HASH_A, { filePath: FILE_A });
     const storeB = createStore(HASH_B, { filePath: FILE_B });
 
-    storeA.queueWrite(makeDoc(HASH_A, FILE_A));
-    storeB.queueWrite(makeDoc(HASH_B, FILE_B));
+    storeA.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    storeB.queueWrite(() => makeDoc(HASH_B, FILE_B));
 
     await Promise.all([storeA.flush(), storeB.flush()]);
 
@@ -270,7 +271,7 @@ describe("lock held by live PID", () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
     expect(store.isReadOnly()).toBe(true);
 
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await store.flush();
 
     // File should not have been created.
@@ -317,19 +318,19 @@ describe("write failure → throttled notify → disable after 3", () => {
     const notify = vi.mocked(pushNotification);
 
     // Attempt 1 — transient failure, 1 notification.
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await expect(store.flush()).rejects.toThrow();
     expect(store.isDisabled(HASH_A)).toBe(false);
     expect(notify).toHaveBeenCalledTimes(1);
 
     // Attempt 2 — within the 60s window, throttled (no new notification).
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await expect(store.flush()).rejects.toThrow();
     expect(store.isDisabled(HASH_A)).toBe(false);
     expect(notify).toHaveBeenCalledTimes(1); // throttled
 
     // Attempt 3 — third consecutive failure flips to "persistent" and disables.
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await expect(store.flush()).rejects.toThrow();
     expect(store.isDisabled(HASH_A)).toBe(true);
     // Persistent notification bypasses the throttle.
@@ -337,7 +338,7 @@ describe("write failure → throttled notify → disable after 3", () => {
 
     // Attempt 4 — disabled: queueWrite is a no-op; writeFile not called again.
     const prevWriteCount = writeSpy.mock.calls.length;
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await store.flush();
     expect(writeSpy.mock.calls.length).toBe(prevWriteCount);
     // Still exactly 2 notifications total (no extras once disabled).
@@ -361,7 +362,7 @@ describe("TANDEM_ANNOTATION_STORE=off", () => {
     expect(loaded.annotations).toEqual([]);
     expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
 
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await store.flush();
     await store.clear();
 
@@ -378,7 +379,7 @@ describe("TANDEM_ANNOTATION_STORE=off", () => {
 describe("clear()", () => {
   it("deletes the file and is idempotent", async () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
-    store.queueWrite(makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
     await store.flush();
 
     const target = path.join(tmpRoot, "annotations", `${HASH_A}.json`);
@@ -401,5 +402,41 @@ describe("getAnnotationsDir override", () => {
     const custom = path.join(os.tmpdir(), `tandem-store-override-${crypto.randomUUID()}`);
     process.env.TANDEM_APP_DATA_DIR = custom;
     expect(getAnnotationsDir()).toBe(path.join(custom, "annotations"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #13 closeStore: per-doc lifecycle cleanup
+// ---------------------------------------------------------------------------
+
+describe("closeStore", () => {
+  it("flushes pending writes, clears transient state, preserves disabled/persistent flags", async () => {
+    // First: a healthy doc that had a pending write. closeStore should flush it
+    // and evict the (absent) failure state entry entirely.
+    const storeA = createStore(HASH_A, { filePath: FILE_A });
+    storeA.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    await closeStore(HASH_A);
+    // The pending write flushed as part of close.
+    const aFiles = await fs.readdir(path.join(tmpRoot, "annotations"));
+    expect(aFiles).toContain(`${HASH_A}.json`);
+
+    // Second: drive storeB into the disabled state via 3 consecutive failures,
+    // then closeStore(B) and verify the disabled flag survives (i.e. the doc
+    // stays disabled, matching the "restart to retry" UX).
+    const writeSpy = vi
+      .spyOn(fs, "writeFile")
+      .mockRejectedValue(Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }));
+    const storeB = createStore(HASH_B, { filePath: FILE_B });
+    for (let i = 0; i < 3; i++) {
+      storeB.queueWrite(() => makeDoc(HASH_B, FILE_B));
+      await expect(storeB.flush()).rejects.toThrow();
+    }
+    expect(storeB.isDisabled(HASH_B)).toBe(true);
+
+    await closeStore(HASH_B);
+    // Disabled flag MUST survive close.
+    expect(storeB.isDisabled(HASH_B)).toBe(true);
+
+    writeSpy.mockRestore();
   });
 });

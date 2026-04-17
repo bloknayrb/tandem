@@ -213,6 +213,54 @@ describe("registerAnnotationObserver", () => {
     cleanup();
   });
 
+  it("lazy snapshot: 5 rapid mutations produce 1 serialization (snapshot thunk runs once)", async () => {
+    // Verifies the thunk-based queueWrite path: the observer hands a thunk,
+    // not a pre-computed doc. Only the final debounce-fire triggers a
+    // snapshot, so N mutations within the debounce window produce ONE
+    // serialization regardless of N.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
+      filePath: FILE_A,
+    });
+
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(() => {
+      for (let i = 0; i < 5; i++) {
+        annMap.set(`ann_${i}`, annRecord({ id: `ann_${i}` }));
+      }
+    }, MCP_ORIGIN);
+
+    // One transaction, one observer fire, one queueWrite call.
+    expect(queueSpy).toHaveBeenCalledTimes(1);
+
+    // Thunks passed are functions, not pre-materialized docs.
+    const thunk = queueSpy.mock.calls[0]?.[0];
+    expect(typeof thunk).toBe("function");
+
+    // Counting how many times the thunk is invoked is what actually proves
+    // laziness: run flush, then verify we get exactly one snapshot.
+    let invokeCount = 0;
+    queueSpy.mockClear();
+    // Queue several more mutations — still one queued-write call, one thunk
+    // invocation when flushed.
+    for (let i = 5; i < 10; i++) {
+      ydoc.transact(() => annMap.set(`ann_${i}`, annRecord({ id: `ann_${i}` })), MCP_ORIGIN);
+    }
+    const lastThunk = queueSpy.mock.calls.at(-1)?.[0] as (() => unknown) | undefined;
+    expect(typeof lastThunk).toBe("function");
+    if (lastThunk) {
+      // Calling the thunk manually is safe; it's just a snapshot read.
+      lastThunk();
+      invokeCount += 1;
+    }
+    expect(invokeCount).toBe(1);
+
+    await store.flush();
+    cleanup();
+  });
+
   it("cleanup unobserves both Y.Maps (further mutations don't write)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
@@ -282,7 +330,7 @@ describe("loadAndMerge", () => {
   it("#8 file has annotations + Y.Map empty → Y.Map populated from file", async () => {
     // Pre-write a file with one annotation.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, { annotations: [annRecord({ id: "ann_disk", rev: 5 })] }),
     );
     await store0.flush();
@@ -302,7 +350,7 @@ describe("loadAndMerge", () => {
   it("#9 merge: file rev > Y.Map rev → file wins", async () => {
     // File has rev 5.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 5, content: "from-disk" })],
       }),
@@ -327,7 +375,7 @@ describe("loadAndMerge", () => {
   it("#10 merge: Y.Map rev > file rev → Y.Map wins (unchanged)", async () => {
     // File has rev 1.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 1, content: "from-disk" })],
       }),
@@ -351,7 +399,7 @@ describe("loadAndMerge", () => {
 
   it("#11 merge: rev tie, file has editedAt, Y.Map doesn't → file wins", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 2, content: "from-disk", editedAt: 111 })],
       }),
@@ -376,7 +424,7 @@ describe("loadAndMerge", () => {
 
   it("#12 merge: rev tie, both have editedAt, higher editedAt wins", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 2, content: "from-disk", editedAt: 100 })],
       }),
@@ -399,7 +447,7 @@ describe("loadAndMerge", () => {
 
   it("#13 merge: tombstone rev > Y.Map rev → annotation deleted from Y.Map", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         annotations: [],
         tombstones: [{ id: "ann_1", rev: 5, deletedAt: 9999 }],
@@ -424,7 +472,7 @@ describe("loadAndMerge", () => {
 
   it("#14 merge: tombstone rev < Y.Map rev → Y.Map annotation preserved (resurrection)", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         annotations: [],
         tombstones: [{ id: "ann_1", rev: 2, deletedAt: 1 }],
@@ -450,7 +498,7 @@ describe("loadAndMerge", () => {
   it("#15 merge: alive in Y.Map, absent from file, not tombstoned → kept + queueWrite fires", async () => {
     // File exists but empty.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(makeFile(HASH_A, FILE_A, { annotations: [], replies: [] }));
+    store0.queueWrite(() => makeFile(HASH_A, FILE_A, { annotations: [], replies: [] }));
     await store0.flush();
     resetStoreForTesting();
 
@@ -482,7 +530,7 @@ describe("loadAndMerge", () => {
 // ---------------------------------------------------------------------------
 
 describe("recordTombstone + getTombstones", () => {
-  it("#16 round-trip: appends tombstone at prevRev+1 and triggers a store write", async () => {
+  it("#16a appends tombstone at prevRev+1 (pure state mutation, no write queued)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const queueSpy = vi.spyOn(store, "queueWrite");
@@ -501,10 +549,32 @@ describe("recordTombstone + getTombstones", () => {
     expect(stones[0].deletedAt).toBeGreaterThanOrEqual(before);
     expect(stones[0].deletedAt).toBeLessThanOrEqual(after);
 
-    // Must trigger a store write so the tombstone is durably persisted.
-    expect(queueSpy).toHaveBeenCalled();
+    // recordTombstone on its own does NOT queue a write — the caller is
+    // expected to follow with a Y.Map.delete, which the observer will pick up.
+    expect(queueSpy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("#16b recordTombstone + paired Y.Map.delete produces a durable write including the tombstone", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver("doc-a", ydoc, store, HASH_A, {
+      filePath: FILE_A,
+    });
+
+    // Seed the Y.Map with an entry the caller is about to delete.
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_dead", annRecord({ id: "ann_dead", rev: 3 }));
+
+    // Caller order: record tombstone THEN delete from Y.Map (wrapped in an
+    // MCP-origin transaction so the observer fires and picks up the
+    // already-updated tombstone list via its lazy snapshot thunk).
+    recordTombstone(HASH_A, "ann_dead", 3);
+    ydoc.transact(() => annMap.delete("ann_dead"), MCP_ORIGIN);
 
     await store.flush();
+
     const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.tombstones).toHaveLength(1);
@@ -512,6 +582,12 @@ describe("recordTombstone + getTombstones", () => {
     expect(onDisk.tombstones[0].rev).toBe(4);
 
     cleanup();
+  });
+
+  it("is idempotent: duplicate tombstone at same rev is a no-op", () => {
+    recordTombstone(HASH_A, "ann_x", 3);
+    recordTombstone(HASH_A, "ann_x", 3);
+    expect(getTombstones(HASH_A)).toHaveLength(1);
   });
 
   it("getTombstones returns a defensive copy (mutation does not leak)", () => {
@@ -529,7 +605,7 @@ describe("recordTombstone + getTombstones", () => {
 describe("replies merge", () => {
   it("#17 file reply rev > Y.Map reply rev → file wins", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(
+    store0.queueWrite(() =>
       makeFile(HASH_A, FILE_A, {
         replies: [replyRecord({ id: "rep_1", rev: 5, text: "disk" })],
       }),

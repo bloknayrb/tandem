@@ -19,16 +19,24 @@
  * ## Observer origin semantics
  *
  *   - `FILE_SYNC_ORIGIN` → skip (would loop into the file we just read from).
- *   - `MCP_ORIGIN`       → serialize + queueWrite (user intent via Claude).
- *   - `null`/`undefined` → serialize + queueWrite (browser-origin user intent).
+ *   - `MCP_ORIGIN`       → queueWrite (user intent via Claude).
+ *   - `null`/`undefined` → queueWrite (browser-origin user intent).
+ *
+ * ## Lazy snapshotting
+ *
+ * The observer hands `store.queueWrite` a THUNK (`() => snapshot(...)`), not
+ * a pre-computed doc. The store invokes the thunk at debounce-fire time, so
+ * a 50-mutation burst pays for one serialization instead of 50. The
+ * last-queued thunk wins, which is exactly the semantic we want for
+ * last-writer-wins coalescing.
  *
  * ## Why `rev:0` for missing `rev`?
  *
  * Session blobs written by prior Tandem versions (pre-plan) don't carry a
  * `rev` field. The observer must serialize them as `rev: 0` so Zod validation
  * in `parseAnnotationDoc` (which requires `rev`) doesn't reject our own file.
- * The observer never bumps `rev` — that's T6's job on each user-intent
- * mutation.
+ * The observer never bumps `rev` — that's the callers' job on each
+ * user-intent mutation.
  *
  * ## API shape decisions
  *
@@ -36,13 +44,17 @@
  *     Merge mutations use `FILE_SYNC_ORIGIN` so the observer would skip them
  *     anyway, but registering after merge avoids a speculative observer fire
  *     and keeps the ordering obvious in stack traces.
- *   - `recordTombstone(docHash, id, prevRev)` does the full work — appends
- *     the tombstone, reads the current Y.Map state, serializes, and queues
- *     the store write. T6's delete MCP tool just calls this; no other
- *     bookkeeping needed at the call site.
- *   - A per-docHash context registry (`docContexts`) lets `recordTombstone`
- *     locate the Y.Doc and store without the caller threading them through.
- *     Registering the observer populates this; cleanup removes it.
+ *   - `recordTombstone(docHash, id, prevRev)` is PURE STATE MUTATION. It
+ *     appends to the tombstone ledger and returns. It does NOT queue a
+ *     store write on its own — the delete MCP tool always follows
+ *     `recordTombstone` with a Y.Map.delete inside an MCP-origin
+ *     transaction, and the observer fires on that delete, snapshotting the
+ *     (already-updated) tombstone list via its lazy thunk. If the caller
+ *     needs a standalone write without a Y.Map.delete, they call
+ *     `store.flush()` explicitly.
+ *   - A per-docHash context registry (`docContexts`) is populated by
+ *     observer registration and cleaned up on unregister. It's retained
+ *     primarily for future diagnostic/admin paths.
  */
 
 import * as Y from "yjs";
@@ -79,7 +91,7 @@ interface DocContext {
 /** Tombstones live in memory, keyed by docHash. Seeded from disk on load. */
 const tombstonesByDoc = new Map<string, TombstoneRecordV1[]>();
 
-/** Live ydoc+store handles so `recordTombstone` can serialize + queue writes. */
+/** Live ydoc+store handles so diagnostic paths can locate them by docHash. */
 const docContexts = new Map<string, DocContext>();
 
 // ---------------------------------------------------------------------------
@@ -91,26 +103,30 @@ const docContexts = new Map<string, DocContext>();
  * `rev: 0` for legacy session-blob entries that lack the field. All other
  * fields pass through unchanged — the Zod schema validates on parse, not
  * here (this is called on the write path, where we trust the Y.Map state).
+ *
+ * Fast path: records that already carry a numeric `rev` are returned as-is
+ * (cast only). The vast majority of post-migration traffic hits this path,
+ * so we skip the object-spread allocation.
  */
 function normalizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown> & Partial<AnnotationRecordV1>;
-  const rev = typeof obj.rev === "number" ? obj.rev : 0;
-  return { ...(obj as AnnotationRecordV1), rev };
+  if (typeof obj.rev === "number") return obj as AnnotationRecordV1;
+  return { ...(obj as AnnotationRecordV1), rev: 0 };
 }
 
 function normalizeReply(raw: unknown): AnnotationReplyRecordV1 | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown> & Partial<AnnotationReplyRecordV1>;
-  const rev = typeof obj.rev === "number" ? obj.rev : 0;
-  return { ...(obj as AnnotationReplyRecordV1), rev };
+  if (typeof obj.rev === "number") return obj as AnnotationReplyRecordV1;
+  return { ...(obj as AnnotationReplyRecordV1), rev: 0 };
 }
 
 /**
  * Build a fresh `AnnotationDocV1` snapshot from the current Y.Map state + the
- * module-level tombstones for this doc. Called on every observer fire and at
- * the end of `loadAndMerge` when there are Y-only annotations to durably
- * persist.
+ * module-level tombstones for this doc. Invoked LAZILY by the store at
+ * debounce-fire time (not at observer-fire time) so bursty mutation traffic
+ * only pays for one serialization.
  */
 function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1 {
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -147,9 +163,10 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
 /**
  * Attach Y.Map observers for annotations and replies that mirror user-intent
  * mutations to the store. Returns a cleanup function that unobserves both
- * maps and drops the per-doc context entry.
+ * maps, drops the per-doc context entry, and clears the per-doc tombstone
+ * ledger.
  *
- * Callers (T6 file-opener wiring) invoke cleanup on doc close or Y.Doc swap.
+ * Callers (the file-opener) invoke cleanup on doc close or Y.Doc swap.
  */
 export function registerAnnotationObserver(
   _docName: string,
@@ -170,8 +187,9 @@ export function registerAnnotationObserver(
 
     // Everything else is user intent: MCP_ORIGIN (Claude via an MCP tool),
     // null/undefined (browser), or any future origin tag we haven't named
-    // yet. Serialize and queue. See module header for rationale.
-    store.queueWrite(snapshot(ydoc, docHash, meta));
+    // yet. Queue a LAZY snapshot — the thunk only runs when the debounce
+    // timer fires, so a burst of N mutations produces one serialization.
+    store.queueWrite(() => snapshot(ydoc, docHash, meta));
   };
 
   annMap.observe(onMutation);
@@ -181,6 +199,10 @@ export function registerAnnotationObserver(
     annMap.unobserve(onMutation);
     repMap.unobserve(onMutation);
     docContexts.delete(docHash);
+    // Drop the per-doc tombstone ledger too. Long-running servers opening
+    // many docs would otherwise accumulate stale arrays for the life of the
+    // process.
+    tombstonesByDoc.delete(docHash);
   };
 }
 
@@ -190,31 +212,32 @@ export function registerAnnotationObserver(
 
 /**
  * Record a deletion. Appends a tombstone at `prevRev + 1` (so the tombstone
- * wins any subsequent stale-peer merge that carries the pre-deletion copy)
- * and queues a store write so the tombstone is durably persisted.
+ * wins any subsequent stale-peer merge that carries the pre-deletion copy).
  *
- * T6's delete MCP tool is the sole caller. The actual `Y.Map.delete(id)`
- * call is T6's responsibility (wrapped in an `MCP_ORIGIN` transaction); this
- * function only owns the tombstone ledger + the store write that captures
- * the updated tombstones array.
+ * PURE STATE MUTATION — no store write is queued here. The delete MCP tool
+ * is expected to follow `recordTombstone` with a `Y.Map.delete(id)` inside
+ * an `MCP_ORIGIN` transaction; the observer fires on that delete, and its
+ * lazy snapshot thunk picks up the already-updated tombstone list. If a
+ * caller records a tombstone without a paired Y.Map delete (rare — not the
+ * normal flow), they should `flush()` explicitly or rely on the next
+ * observer-triggered snapshot to carry the tombstone forward.
+ *
+ * Idempotent: a duplicate call with the same `(id, rev)` (or an older rev
+ * for the same id) is a no-op. Guards against unbounded array growth if a
+ * caller double-fires.
  */
 export function recordTombstone(docHash: string, annotationId: string, prevRev: number): void {
   const list = tombstonesByDoc.get(docHash) ?? [];
+  const newRev = prevRev + 1;
+  // Dedupe: if we already have a tombstone at `newRev` or higher for this id,
+  // the call is redundant. Cheap linear scan — tombstone arrays are small.
+  if (list.some((t) => t.id === annotationId && t.rev >= newRev)) return;
   list.push({
     id: annotationId,
-    rev: prevRev + 1,
+    rev: newRev,
     deletedAt: Date.now(),
   });
   tombstonesByDoc.set(docHash, list);
-
-  // Trigger a write. If no context is registered (doc was never opened via
-  // loadAndMerge, or was already closed), skip silently — the caller likely
-  // misordered operations, but the tombstone is still in-memory and will be
-  // written on the next observer fire.
-  const ctx = docContexts.get(docHash);
-  if (ctx) {
-    ctx.store.queueWrite(snapshot(ctx.ydoc, docHash, ctx.meta));
-  }
 }
 
 /**
@@ -268,8 +291,8 @@ function pickWinner(
 
 /**
  * Load the on-disk annotation envelope for this doc and merge it with the
- * current Y.Doc state. Called by T6's file-opener wiring AFTER session
- * restore populates the Y.Doc but BEFORE Hocuspocus starts accepting browser
+ * current Y.Doc state. Called by the file-opener AFTER session restore
+ * populates the Y.Doc but BEFORE Hocuspocus starts accepting browser
  * connections for this doc.
  *
  * Algorithm (see the Phase 1 plan §"Merge rules" for background):
@@ -325,7 +348,7 @@ export async function loadAndMerge(
   if (fileEmpty && ymapHasState) {
     // First-upgrade path. Write one atomic snapshot capturing whatever the
     // Y.Maps currently hold. No merge work needed.
-    store.queueWrite(snapshot(ydoc, docHash, meta));
+    store.queueWrite(() => snapshot(ydoc, docHash, meta));
     return registerAnnotationObserver(docName, ydoc, store, docHash, meta);
   }
 
@@ -419,7 +442,7 @@ export async function loadAndMerge(
   }, FILE_SYNC_ORIGIN);
 
   if (needsWrite) {
-    store.queueWrite(snapshot(ydoc, docHash, meta));
+    store.queueWrite(() => snapshot(ydoc, docHash, meta));
   }
 
   return registerAnnotationObserver(docName, ydoc, store, docHash, meta);
