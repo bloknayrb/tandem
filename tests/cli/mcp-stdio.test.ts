@@ -33,6 +33,42 @@ async function readOneLine(
   });
 }
 
+/**
+ * Read up to `n` newline-delimited JSON-RPC lines from child stdout.
+ * Returns as soon as n lines arrive or timeoutMs elapses (in which case
+ * it resolves with whatever arrived — callers assert on the count).
+ */
+async function readLines(
+  child: ChildProcessWithoutNullStreams,
+  n: number,
+  timeoutMs = 10_000,
+): Promise<string[]> {
+  const stdoutChunks: string[] = [];
+  child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
+  return new Promise<string[]>((resolveResp) => {
+    const lines: string[] = [];
+    let remainder = "";
+    const checker = setInterval(() => {
+      const joined = remainder + stdoutChunks.join("");
+      stdoutChunks.length = 0;
+      const parts = joined.split("\n");
+      remainder = parts.pop() ?? "";
+      for (const part of parts) {
+        if (part.trim()) lines.push(part);
+      }
+      if (lines.length >= n) {
+        clearTimeout(timer);
+        clearInterval(checker);
+        resolveResp(lines);
+      }
+    }, 50);
+    const timer = setTimeout(() => {
+      clearInterval(checker);
+      resolveResp(lines);
+    }, timeoutMs);
+  });
+}
+
 describe("getRequestId", () => {
   it("returns the id for JSON-RPC requests (has method + id)", () => {
     expect(getRequestId({ jsonrpc: "2.0", id: 1, method: "tools/list" } as never)).toBe(1);
@@ -166,11 +202,6 @@ describe("mcp-stdio proxy integration", () => {
 });
 
 describe("mcp-stdio error synthesis on upstream unavailability", () => {
-  // Covers issue #336: the stdio bridge must reply with a JSON-RPC -32000
-  // error for any in-flight request when the upstream is unavailable, rather
-  // than closing stdio silently (which surfaces as "tools never appear" with
-  // no diagnostic in the plugin host).
-
   let child: ChildProcessWithoutNullStreams | undefined;
 
   afterEach(() => {
@@ -325,9 +356,9 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
-      // Let the bridge finish its preflight + http.start() handshake.
-      await new Promise((r) => setTimeout(r, 600));
-
+      // Send immediately and let the preReadyBuffer→drain path deliver the
+      // request once preflight completes. No fixed sleep needed — we poll
+      // `held` below and proceed only once the server has the POST in hand.
       const initialize = {
         jsonrpc: "2.0",
         id: 77,
@@ -346,8 +377,8 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
         if (held) break;
         await new Promise((r) => setTimeout(r, 50));
       }
-      // Destroy the held response — the mcp-stdio bridge sees this as
-      // upstream-closed-unexpectedly. Server close happens in finally.
+      // Destroy the held response — exercises forwardToUpstream.catch (not
+      // http.onclose, which the current SDK only fires from its own close()).
       held?.destroy();
 
       const line = await readOneLine(child);
@@ -357,7 +388,209 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
       };
       expect(parsed.id).toBe(77);
       expect(parsed.error?.code).toBe(-32000);
-      expect(parsed.error?.message).toMatch(/closed|unreachable/i);
+      // forwardToUpstream.catch fires with "Tandem HTTP upstream unreachable"
+      expect(parsed.error?.message).toMatch(/unreachable/i);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 30_000);
+
+  it("does not synthesize for notifications (no id) on preflight failure", async () => {
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    // Point at a dead port so preflight fails immediately.
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: { ...process.env, TANDEM_URL: "http://127.0.0.1:1" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Write a notification (no id) — must never produce a -32000 reply.
+    const notification = { jsonrpc: "2.0", method: "notifications/initialized" };
+    child.stdin.write(`${JSON.stringify(notification)}\n`);
+
+    // Wait for child to exit (it exits 1 after PREFLIGHT_GRACE_MS).
+    await new Promise<void>((r) => child!.once("exit", () => r()));
+
+    // Collect any stdout lines that arrived.
+    const stdoutChunks: string[] = [];
+    child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
+    const allOutput = stdoutChunks.join("");
+    const lines = allOutput.split("\n").filter((l) => l.trim());
+
+    // No line should be a -32000 error reply.
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line) as { error?: { code?: number } };
+        expect(parsed.error?.code).not.toBe(-32000);
+      } catch {
+        // Non-JSON line — fine, ignore.
+      }
+    }
+  }, 15_000);
+
+  it("synthesizes -32000 for multiple concurrent pending requests on mid-session upstream death", async () => {
+    // Fake server: /health → 200, /mcp → holds all POSTs without replying.
+    const heldResponses: ServerResponse[] = [];
+    const server = createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          heldResponses.push(res);
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    const port = addr.port;
+
+    try {
+      const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+      child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+        env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      // Send three concurrent requests with distinct ids.
+      const makeRequest = (id: number) => ({
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          clientInfo: { name: "test-harness", version: "0.0.0" },
+          capabilities: {},
+        },
+      });
+      child.stdin.write(`${JSON.stringify(makeRequest(100))}\n`);
+      child.stdin.write(`${JSON.stringify(makeRequest(101))}\n`);
+      child.stdin.write(`${JSON.stringify(makeRequest(102))}\n`);
+
+      // Poll until all three POSTs reach the server (preflight + drain must complete first).
+      for (let i = 0; i < 100; i++) {
+        if (heldResponses.length >= 3) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(heldResponses.length).toBeGreaterThanOrEqual(3);
+
+      // Destroy all held responses to trigger forwardToUpstream.catch for each.
+      for (const r of heldResponses) r.destroy();
+
+      // Collect three -32000 lines.
+      const lines = await readLines(child, 3, 10_000);
+      expect(lines).toHaveLength(3);
+
+      const receivedIds = new Set<number>();
+      for (const line of lines) {
+        const parsed = JSON.parse(line) as {
+          id: number;
+          error?: { code: number };
+        };
+        expect(parsed.error?.code).toBe(-32000);
+        receivedIds.add(parsed.id);
+      }
+      expect(receivedIds).toEqual(new Set([100, 101, 102]));
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 30_000);
+
+  it("clears pendingIds after a successful response", async () => {
+    // Fake server: first POST (id=1) → success reply; second POST (id=2) → held.
+    let postCount = 0;
+    let held: ServerResponse | undefined;
+    const server = createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            id?: number | string;
+          };
+          postCount++;
+          if (postCount === 1) {
+            // Reply immediately for id=1.
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: body.id,
+                result: { protocolVersion: "2024-11-05", capabilities: {} },
+              }),
+            );
+          } else {
+            // Hold id=2 — will be destroyed to trigger forwardToUpstream.catch.
+            held = res;
+          }
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    const port = addr.port;
+
+    try {
+      const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+      child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+        env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      const makeRequest = (id: number) => ({
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          clientInfo: { name: "test-harness", version: "0.0.0" },
+          capabilities: {},
+        },
+      });
+
+      // Send id=1, read success response — proves delete-after-send path.
+      child.stdin.write(`${JSON.stringify(makeRequest(1))}\n`);
+      const line1 = await readOneLine(child, 10_000);
+      const parsed1 = JSON.parse(line1) as { id: number; error?: { code: number } };
+      expect(parsed1.id).toBe(1);
+      expect(parsed1.error).toBeUndefined();
+
+      // Send id=2 and wait until the server holds it.
+      child.stdin.write(`${JSON.stringify(makeRequest(2))}\n`);
+      for (let i = 0; i < 100; i++) {
+        if (held) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(held).toBeDefined();
+
+      // Destroy the held response → forwardToUpstream.catch fires for id=2 only.
+      held!.destroy();
+
+      const line2 = await readOneLine(child, 10_000);
+      const parsed2 = JSON.parse(line2) as { id: number; error?: { code: number } };
+      expect(parsed2.id).toBe(2);
+      expect(parsed2.error?.code).toBe(-32000);
+
+      // Verify no additional line arrives — id=1 must have been removed from
+      // pendingIds on success and must NOT be re-synthesized.
+      const extra = await readLines(child, 1, 500);
+      expect(extra).toHaveLength(0);
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }

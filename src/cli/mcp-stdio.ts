@@ -35,8 +35,8 @@ redirectConsoleToStderr();
 // After preflight or http.start() fails we wait ~1.5s for any already-in-
 // flight `initialize` from the plugin loader to land on stdin and receive
 // a -32000 reply before tear-down. Sizing covers stdin-read lag between
-// preflight resolution and the first message arrival; unrelated to
-// preflight's own 2s fetch timeout.
+// preflight resolution and first message arrival — independent of
+// preflight's own fetch timeout.
 const PREFLIGHT_GRACE_MS = 1500;
 
 // Last-gasp handlers for truly unexpected crashes: write one diagnostic to
@@ -61,12 +61,11 @@ export async function runMcpStdio(): Promise<void> {
   const http = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
   const stdio = new StdioServerTransport();
 
-  // Requests forwarded to upstream but not yet responded to. On upstream
-  // failure we synthesize -32000 for every entry before exit.
+  // On upstream failure we synthesize -32000 for every entry before exit.
   const pendingIds = new Set<string | number>();
-  // Messages received from stdin before `httpReady` flips. On success they
-  // are drained and forwarded; on preflight/http-start failure each request
-  // in the buffer gets a -32000 reply.
+  // Messages arriving before httpReady flips; either drained and forwarded
+  // on success, or each request answered with -32000 on preflight/http-start
+  // failure.
   const preReadyBuffer: JSONRPCMessage[] = [];
   let shuttingDown = false;
   let httpReady = false;
@@ -108,8 +107,10 @@ export async function runMcpStdio(): Promise<void> {
     http.send(msg).catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[tandem mcp-stdio] upstream send failed: ${detail}\n`);
-      if (requestId !== undefined) {
-        pendingIds.delete(requestId);
+      // `delete` returns true iff the id was still pending — prevents double-
+      // synth if a future change ever allows synthesizePending to fire while
+      // http.send is still in flight. (Not a current bug; belt-and-suspenders.)
+      if (requestId !== undefined && pendingIds.delete(requestId)) {
         void sendErrorResponse(requestId, "Tandem HTTP upstream unreachable", detail);
       }
     });
@@ -142,11 +143,26 @@ export async function runMcpStdio(): Promise<void> {
         await synthesizeBuffered(synth.message, synth.detail);
         await synthesizePending(synth.message, synth.detail);
       }
-      await http.close().catch(() => {});
-      await stdio.close().catch(() => {});
+      await http.close().catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[tandem mcp-stdio] http.close failed: ${detail}\n`);
+      });
+      await stdio.close().catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[tandem mcp-stdio] stdio.close failed: ${detail}\n`);
+      });
     }
     process.exit(code);
   };
+
+  // Plugin hosts typically send `initialize` immediately after spawn (MCP
+  // lifecycle §initialization). Deferring shutdown by PREFLIGHT_GRACE_MS
+  // lets that request land during the preflight/start window and receive
+  // a -32000 reply rather than a silent stdio close. stdio.onclose
+  // short-circuits this if the loader closes stdin first.
+  function deferredShutdown(synth: { message: string; detail?: string }): void {
+    setTimeout(() => void shutdown(1, synth), PREFLIGHT_GRACE_MS);
+  }
 
   stdio.onmessage = (msg: JSONRPCMessage) => {
     if (!httpReady) {
@@ -158,11 +174,25 @@ export async function runMcpStdio(): Promise<void> {
 
   http.onmessage = (msg: JSONRPCMessage) => {
     const responseId = getResponseId(msg);
-    if (responseId !== undefined) pendingIds.delete(responseId);
-    stdio.send(msg).catch((err: unknown) => {
-      const detail = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[tandem mcp-stdio] stdio write failed: ${detail}\n`);
-    });
+    stdio.send(msg).then(
+      () => {
+        if (responseId !== undefined) pendingIds.delete(responseId);
+      },
+      (err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[tandem mcp-stdio] stdio write failed for id ${responseId ?? "<notification>"}: ${detail}\n`,
+        );
+        // Leave responseId in pendingIds — shutdown's synthesizePending will
+        // retry via sendErrorResponse. If stdio is truly gone, that send also
+        // fails and we log twice. Safe delete-after-send narrows the pending
+        // window; it never widens for well-ordered responses.
+        void shutdown(1, {
+          message: "Tandem stdio write failed",
+          detail,
+        });
+      },
+    );
   };
 
   stdio.onerror = (err) => {
@@ -179,6 +209,12 @@ export async function runMcpStdio(): Promise<void> {
     void shutdown(0);
   };
   http.onclose = () => {
+    // We've observed the current @modelcontextprotocol/sdk (0.20.x) only
+    // firing onclose from inside its own close() method — i.e., as a
+    // consequence of *our* shutdown. The synth branch below is defensive
+    // for future SDK versions that may propagate socket-death as onclose.
+    // The `shuttingDown` guard prevents double-synth when shutdown() calls
+    // http.close() itself.
     if (shuttingDown) return;
     void shutdown(1, {
       message: "Tandem HTTP upstream closed unexpectedly",
@@ -193,41 +229,40 @@ export async function runMcpStdio(): Promise<void> {
 
   const probe = await probeTandemServer({ url: baseUrl });
   if (!probe.ok) {
+    const guidance =
+      probe.kind === "unreachable"
+        ? "Start the Tauri app or run `tandem start` on the host, then retry."
+        : "The Tandem server is running but unhealthy — check the host logs.";
     process.stderr.write(
-      `[tandem mcp-stdio] Tandem server not reachable at ${probe.url} (${probe.reason}).\n` +
-        `[tandem mcp-stdio] Start the Tauri app or run \`tandem start\` on the host, then retry.\n`,
+      `[tandem mcp-stdio] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
+        `[tandem mcp-stdio] ${guidance}\n`,
     );
-    // Stay listen-only briefly so any already-buffered request (the plugin
-    // loader typically writes `initialize` the moment after spawn) gets a
-    // -32000 reply before we tear down. stdio.onclose short-circuits if
-    // the loader closes stdin first.
-    setTimeout(() => {
-      void shutdown(1, {
-        message: "Tandem server not running. Start the Tauri app or run `tandem start`.",
-        detail: probe.reason,
-      });
-    }, PREFLIGHT_GRACE_MS);
+    const synthMessage =
+      probe.kind === "unreachable"
+        ? "Tandem server not running. Start the Tauri app or run `tandem start`."
+        : "Tandem server unhealthy (check host logs).";
+    deferredShutdown({ message: synthMessage, detail: probe.reason });
     return;
   }
 
+  // The current @modelcontextprotocol/sdk's StreamableHTTPClientTransport.start()
+  // only creates an AbortController and returns synchronously — this catch is
+  // defensive for future SDK versions that may perform real I/O during start().
   try {
     await http.start();
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[tandem mcp-stdio] upstream http start failed: ${detail}\n`);
-    setTimeout(() => {
-      void shutdown(1, {
-        message: "Tandem HTTP upstream failed to start",
-        detail,
-      });
-    }, PREFLIGHT_GRACE_MS);
+    deferredShutdown({ message: "Tandem HTTP upstream failed to start", detail });
     return;
   }
   httpReady = true;
 
-  // Drain any requests that arrived while preflight + http.start() were
-  // running. They were held to preserve forwarding semantics — now that
-  // upstream is ready, push them through the normal path.
+  // Held to preserve forwarding semantics — push through the normal path
+  // now that upstream is ready. Note: forwardToUpstream does not await the
+  // http.send, so buffered requests POST in parallel. Plugin hosts wait
+  // for `initialize` to resolve before sending follow-ups per MCP spec, so
+  // the buffer is usually ≤1 entry; we don't enforce serial ordering here.
   const buffered = preReadyBuffer.splice(0);
   for (const msg of buffered) forwardToUpstream(msg);
 }

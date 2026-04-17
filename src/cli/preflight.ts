@@ -22,7 +22,12 @@ export interface PreflightOptions {
   timeoutMs?: number;
 }
 
-export type PreflightProbe = { ok: true } | { ok: false; url: string; reason: string };
+// Note: "unreachable" is a catch-all for any non-HTTP-status failure —
+// DNS, TLS, timeout, ECONNREFUSED, RST all land here. "unhealthy" is
+// strictly non-2xx responses from /health.
+export type PreflightProbe =
+  | { ok: true }
+  | { ok: false; url: string; reason: string; kind: "unreachable" | "unhealthy" };
 
 export async function probeTandemServer(opts: PreflightOptions = {}): Promise<PreflightProbe> {
   const url = resolveTandemUrl(opts.url);
@@ -34,11 +39,21 @@ export async function probeTandemServer(opts: PreflightOptions = {}): Promise<Pr
   try {
     const res = await fetch(`${url}/health`, { signal: controller.signal });
     if (!res.ok) {
-      return { ok: false, url, reason: `health endpoint returned HTTP ${res.status}` };
+      return {
+        ok: false,
+        url,
+        reason: `health endpoint returned HTTP ${res.status}`,
+        kind: "unhealthy",
+      };
     }
     return { ok: true };
   } catch (err) {
-    return { ok: false, url, reason: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      url,
+      reason: err instanceof Error ? err.message : String(err),
+      kind: "unreachable",
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -47,9 +62,13 @@ export async function probeTandemServer(opts: PreflightOptions = {}): Promise<Pr
 export async function ensureTandemServer(opts: PreflightOptions = {}): Promise<void> {
   const probe = await probeTandemServer(opts);
   if (!probe.ok) {
+    const guidance =
+      probe.kind === "unreachable"
+        ? "Start the Tauri app or run `tandem start` on the host, then retry."
+        : "The Tandem server is running but unhealthy — check the host logs.";
     process.stderr.write(
-      `[tandem] Tandem server not reachable at ${probe.url} (${probe.reason}).\n` +
-        `[tandem] Start the Tauri app or run \`tandem start\` on the host, then retry.\n`,
+      `[tandem] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
+        `[tandem] ${guidance}\n`,
     );
     process.exit(1);
   }
