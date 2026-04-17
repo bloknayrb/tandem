@@ -378,7 +378,8 @@ function checkAnnotationStore() {
 
   if (newest.name) {
     const ageMs = Date.now() - newest.mtime;
-    const ageStr = ageMs < 60_000 ? `${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 60_000)}m`;
+    const ageStr =
+      ageMs < 60_000 ? `${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 60_000)}m`;
     pass(`Most recent annotation write: ${newest.name} (${ageStr} ago)`);
   }
 

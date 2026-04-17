@@ -192,12 +192,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
         continue;
       }
 
-      const id = importAnnotationId(
-        comment.commentId,
-        comment.from,
-        comment.to,
-        comment.bodyText,
-      );
+      const id = importAnnotationId(comment.commentId, comment.from, comment.to, comment.bodyText);
 
       // Dedup: idempotent re-import. Same .docx → same id → skip the write.
       if (map.has(id)) continue;
