@@ -20,8 +20,8 @@
  * error and trip the `.json.future` fallback path unnecessarily.
  *
  * Forward version jumps (`schemaVersion > 1`) are still handled explicitly via
- * `parseAnnotationDoc` returning `{ error: "future" }` — passthrough only covers
- * *additive* changes inside the v1 shape.
+ * `parseAnnotationDoc` returning `{ ok: false, error: "future" }` — passthrough
+ * only covers *additive* changes inside the v1 shape.
  *
  * ## Why this schema doesn't fully mirror the Annotation TS discriminated union
  *
@@ -179,20 +179,27 @@ export type TombstoneRecordV1 = z.infer<typeof TombstoneRecordSchemaV1>;
 // Parse + migrate
 // ---------------------------------------------------------------------------
 
-/** Discriminated result of `parseAnnotationDoc`. Callers should branch on `error`. */
+/**
+ * Discriminated result of `parseAnnotationDoc`. The `ok` flag is the
+ * discriminant; we intentionally avoid keying on `error` because the v1 schema
+ * uses `.passthrough()` (see module header) and any alive doc could, in
+ * principle, carry a passthrough field named `error`. `ok` is our own
+ * invariant, outside the schema's namespace, so narrowing is unambiguous.
+ */
 export type ParseAnnotationDocResult =
-  | AnnotationDocV1
-  | { error: "corrupt" }
-  | { error: "future"; schemaVersion: number };
+  | { ok: true; doc: AnnotationDocV1 }
+  | { ok: false; error: "corrupt" }
+  | { ok: false; error: "future"; schemaVersion: number };
 
 /**
  * Validate an on-disk annotation doc.
  *
  * Accepts either a parsed object *or* a raw JSON string (for readability at
- * call sites). On any parse/validation failure returns `{ error: "corrupt" }`.
- * If the payload looks well-formed but carries `schemaVersion > 1`, returns
- * `{ error: "future", schemaVersion }` so the caller can rename the file to
- * `<hash>.json.future` and fall back to in-memory state.
+ * call sites). On any parse/validation failure returns
+ * `{ ok: false, error: "corrupt" }`. If the payload looks well-formed but
+ * carries `schemaVersion > 1`, returns
+ * `{ ok: false, error: "future", schemaVersion }` so the caller can rename the
+ * file to `<hash>.json.future` and fall back to in-memory state.
  */
 export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
   // Optional JSON-string convenience: callers that read the file as text can
@@ -202,12 +209,12 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     try {
       candidate = JSON.parse(candidate);
     } catch {
-      return { error: "corrupt" };
+      return { ok: false, error: "corrupt" };
     }
   }
 
   if (candidate === null || typeof candidate !== "object") {
-    return { error: "corrupt" };
+    return { ok: false, error: "corrupt" };
   }
 
   // Check schemaVersion *before* full validation so we can return `future`
@@ -218,14 +225,14 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     Number.isInteger(schemaVersion) &&
     schemaVersion > SCHEMA_VERSION
   ) {
-    return { error: "future", schemaVersion };
+    return { ok: false, error: "future", schemaVersion };
   }
 
   const result = AnnotationDocSchemaV1.safeParse(candidate);
   if (!result.success) {
-    return { error: "corrupt" };
+    return { ok: false, error: "corrupt" };
   }
-  return result.data;
+  return { ok: true, doc: result.data };
 }
 
 /**

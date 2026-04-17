@@ -424,14 +424,9 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   }
 
   const result = parseAnnotationDoc(raw);
-  if (!("error" in result)) return result;
+  if (result.ok) return result.doc;
 
-  // TS can't narrow Zod's `objectOutputType` out of the union via `"error" in`
-  // alone (the passthrough index signature defeats the exclusion), so coerce
-  // to the error union explicitly now that we've confirmed `error` exists.
-  const errResult = result as { error: "corrupt" } | { error: "future"; schemaVersion: number };
-
-  if (errResult.error === "corrupt") {
+  if (result.error === "corrupt") {
     const quarantinePath = `${target}.corrupt.${Date.now()}`;
     try {
       await fs.rename(target, quarantinePath);
@@ -445,8 +440,8 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
     return emptyDoc(docHash, filePath);
   }
 
-  // errResult.error === "future"
-  const schemaVersion = errResult.schemaVersion;
+  // result.error === "future"
+  const schemaVersion = result.schemaVersion;
   const futurePath = `${target}.future`;
   try {
     // rename is not idempotent; unlink any existing `.future` from a prior

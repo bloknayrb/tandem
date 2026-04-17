@@ -42,21 +42,20 @@ const validDoc: AnnotationDocV1 = {
 describe("parseAnnotationDoc — happy path", () => {
   it("accepts a well-formed v1 doc and returns the parsed shape", () => {
     const result = parseAnnotationDoc(validDoc);
-    // Type narrow: success branch has no `error` key.
-    if ("error" in result) throw new Error("expected success");
-    expect(result.schemaVersion).toBe(1);
-    expect(result.annotations).toHaveLength(1);
-    expect(result.annotations[0]?.id).toBe("ann_1_abc");
-    expect(result.tombstones[0]?.id).toBe("ann_gone");
-    expect(result.replies[0]?.author).toBe("user");
+    if (!result.ok) throw new Error("expected success");
+    expect(result.doc.schemaVersion).toBe(1);
+    expect(result.doc.annotations).toHaveLength(1);
+    expect(result.doc.annotations[0]?.id).toBe("ann_1_abc");
+    expect(result.doc.tombstones[0]?.id).toBe("ann_gone");
+    expect(result.doc.replies[0]?.author).toBe("user");
   });
 
   it("round-trips through JSON", () => {
     const serialized = JSON.stringify(validDoc);
     const parsed = parseAnnotationDoc(serialized);
-    if ("error" in parsed) throw new Error("expected success");
+    if (!parsed.ok) throw new Error("expected success");
     // Structural equality — passthrough should preserve every field.
-    expect(parsed).toEqual(validDoc);
+    expect(parsed.doc).toEqual(validDoc);
   });
 
   it("preserves unknown additive fields (passthrough policy)", () => {
@@ -66,56 +65,66 @@ describe("parseAnnotationDoc — happy path", () => {
       newTopLevel: 42,
     };
     const parsed = parseAnnotationDoc(withExtras);
-    if ("error" in parsed) throw new Error("expected success");
+    if (!parsed.ok) throw new Error("expected success");
     // Passthrough preserves unknown fields — this is the documented policy.
-    expect((parsed as Record<string, unknown>).newTopLevel).toBe(42);
-    expect((parsed.annotations[0] as Record<string, unknown>).futureField).toBe("hello");
+    expect((parsed.doc as Record<string, unknown>).newTopLevel).toBe(42);
+    expect((parsed.doc.annotations[0] as Record<string, unknown>).futureField).toBe("hello");
+  });
+
+  it("does not collide with a passthrough field literally named 'error'", () => {
+    // Tagged-union rationale check: the discriminant is `ok`, not `error`, so
+    // a passthrough field called `error` on an alive v1 doc must NOT be
+    // classified as an error result.
+    const withBogusField = { ...validDoc, error: "this is just data" };
+    const parsed = parseAnnotationDoc(withBogusField);
+    if (!parsed.ok) throw new Error("expected success despite 'error' passthrough field");
+    expect((parsed.doc as Record<string, unknown>).error).toBe("this is just data");
   });
 });
 
 describe("parseAnnotationDoc — error paths", () => {
-  it("returns { error: 'corrupt' } when schemaVersion is missing", () => {
+  it("returns { ok: false, error: 'corrupt' } when schemaVersion is missing", () => {
     const { schemaVersion: _omit, ...noVersion } = validDoc;
     const result = parseAnnotationDoc(noVersion);
-    expect(result).toEqual({ error: "corrupt" });
+    expect(result).toEqual({ ok: false, error: "corrupt" });
   });
 
-  it("returns { error: 'future', schemaVersion: 2 } for a newer schema", () => {
+  it("returns { ok: false, error: 'future', schemaVersion: 2 } for a newer schema", () => {
     const future = { ...validDoc, schemaVersion: 2 };
     const result = parseAnnotationDoc(future);
-    expect(result).toEqual({ error: "future", schemaVersion: 2 });
+    expect(result).toEqual({ ok: false, error: "future", schemaVersion: 2 });
   });
 
-  it("returns { error: 'future' } even when higher-version shape is otherwise unparseable", () => {
+  it("returns { ok: false, error: 'future' } even when higher-version shape is otherwise unparseable", () => {
     // A v2 file may have fields that fail v1 validation — we must not
     // report that as 'corrupt'. The version gate runs first.
     const result = parseAnnotationDoc({ schemaVersion: 99, somethingNew: true });
-    expect(result).toEqual({ error: "future", schemaVersion: 99 });
+    expect(result).toEqual({ ok: false, error: "future", schemaVersion: 99 });
   });
 
-  it("returns { error: 'corrupt' } for malformed JSON string", () => {
+  it("returns { ok: false, error: 'corrupt' } for malformed JSON string", () => {
     const result = parseAnnotationDoc("{ not valid json");
-    expect(result).toEqual({ error: "corrupt" });
+    expect(result).toEqual({ ok: false, error: "corrupt" });
   });
 
-  it("returns { error: 'corrupt' } for a non-object primitive", () => {
-    expect(parseAnnotationDoc(42)).toEqual({ error: "corrupt" });
-    expect(parseAnnotationDoc(null)).toEqual({ error: "corrupt" });
-    expect(parseAnnotationDoc(undefined)).toEqual({ error: "corrupt" });
+  it("returns { ok: false, error: 'corrupt' } for a non-object primitive", () => {
+    expect(parseAnnotationDoc(42)).toEqual({ ok: false, error: "corrupt" });
+    expect(parseAnnotationDoc(null)).toEqual({ ok: false, error: "corrupt" });
+    expect(parseAnnotationDoc(undefined)).toEqual({ ok: false, error: "corrupt" });
   });
 
-  it("returns { error: 'corrupt' } when a required field is the wrong type", () => {
+  it("returns { ok: false, error: 'corrupt' } when a required field is the wrong type", () => {
     const bad = { ...validDoc, annotations: "not an array" };
     const result = parseAnnotationDoc(bad);
-    expect(result).toEqual({ error: "corrupt" });
+    expect(result).toEqual({ ok: false, error: "corrupt" });
   });
 
-  it("returns { error: 'corrupt' } when an annotation is missing rev", () => {
+  it("returns { ok: false, error: 'corrupt' } when an annotation is missing rev", () => {
     const noRev = { ...baseAnnotation } as Record<string, unknown>;
     delete noRev.rev;
     const bad = { ...validDoc, annotations: [noRev] };
     const result = parseAnnotationDoc(bad);
-    expect(result).toEqual({ error: "corrupt" });
+    expect(result).toEqual({ ok: false, error: "corrupt" });
   });
 });
 
