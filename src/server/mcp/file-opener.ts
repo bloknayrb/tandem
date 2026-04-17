@@ -18,7 +18,15 @@ import {
 } from "../../shared/constants.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { attachObservers, MCP_ORIGIN } from "../events/queue.js";
+import { docHash } from "../annotations/doc-hash.js";
+import { createStore } from "../annotations/store.js";
+import { loadAndMerge } from "../annotations/sync.js";
+import {
+  attachObservers,
+  clearFileSyncContext,
+  MCP_ORIGIN,
+  setFileSyncContext,
+} from "../events/queue.js";
 import { loadDocx } from "../file-io/docx.js";
 import { extractDocxComments, injectCommentsAsAnnotations } from "../file-io/docx-comments.js";
 import { htmlToYDoc } from "../file-io/docx-html.js";
@@ -144,6 +152,7 @@ export async function openFileByPath(
 
     addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
     setActiveDocId(id);
+    await wireAnnotationStore(id, doc, resolved);
     broadcastOpenDocs();
     ensureAutoSave();
 
@@ -191,6 +200,7 @@ export async function openFileByPath(
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
   await initSavedBaseline(doc, resolved);
+  await wireAnnotationStore(id, doc, resolved);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -250,6 +260,7 @@ export async function openFileFromContent(
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
   await initSavedBaseline(doc);
+  await wireAnnotationStore(id, doc, syntheticPath);
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -267,6 +278,33 @@ export async function openFileFromContent(
 // --- Private helpers ---
 
 /**
+ * Wire a document's annotations to the durable per-doc store.
+ *
+ * Runs `loadAndMerge` so on-disk state merges with whatever the Y.Doc already
+ * holds (session restore, force-reload content, or a freshly-loaded file),
+ * then registers the resulting observer cleanup against the event queue's
+ * per-doc registry so reattach-on-doc-swap keeps persistence alive.
+ *
+ * Errors here MUST NOT fail the open — annotations are additive durability,
+ * not required for rendering. We log and continue.
+ */
+async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Promise<void> {
+  try {
+    const hash = docHash(filePath);
+    const store = createStore(hash, { filePath });
+    const cleanup = await loadAndMerge({
+      ydoc: doc,
+      store,
+      docHash: hash,
+      meta: { filePath },
+    });
+    setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
+  } catch (err) {
+    console.error(`[Tandem] wireAnnotationStore failed for ${id} (${filePath}):`, err);
+  }
+}
+
+/**
  * Clear all document state in-place and repopulate from disk.
  * Unlike the old forceCloseDocument, this preserves the Y.Doc instance, Hocuspocus
  * room, and client WebSocket connections. All state (content, annotations, awareness)
@@ -280,6 +318,20 @@ async function clearAndReload(
   existing: OpenDoc,
 ): Promise<void> {
   console.error(`[Tandem] clearAndReload: reloading ${id} from disk`);
+
+  // 0. Detach durable-annotation sync for this doc before clearing Y.Maps so
+  //    the observer doesn't queue a write snapshotting the mid-clear state,
+  //    and wipe the on-disk annotation file so loadAndMerge (run by the
+  //    caller after repopulation) doesn't resurrect the pre-reload set.
+  //    Failures here must not abort the reload — annotations are additive
+  //    durability and we still want the content reload to land.
+  clearFileSyncContext(id);
+  try {
+    const hash = docHash(filePath);
+    await createStore(hash, { filePath }).clear();
+  } catch (err) {
+    console.error(`[Tandem] clearAndReload: store.clear failed for ${id}:`, err);
+  }
 
   // 1. Prepare content outside the transaction (async I/O must happen before transact)
   const isDocx = format === "docx";
