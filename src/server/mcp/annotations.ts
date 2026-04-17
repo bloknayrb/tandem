@@ -25,6 +25,7 @@ import {
   generateReplyId,
 } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { nextRev } from "../annotations/schema.js";
 import { recordTombstone } from "../annotations/sync.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { exportAnnotations } from "../file-io/docx.js";
@@ -97,8 +98,7 @@ export function addReplyToAnnotation(
     author,
     text,
     timestamp: Date.now(),
-    // Durable-annotation LWW counter — first revision of a new reply.
-    rev: 1,
+    rev: nextRev(),
   };
 
   const repliesMap = getRepliesMap(ydoc);
@@ -187,9 +187,7 @@ export function createAnnotation(
     content,
     status: "pending" as const,
     timestamp: Date.now(),
-    // `rev` is the durable-annotation last-writer-wins counter (see
-    // src/server/annotations/schema.ts). First revision of a new record.
-    rev: 1,
+    rev: nextRev(),
     ...extras,
   } as Annotation;
   ydoc.transact(() => map.set(id, annotation), MCP_ORIGIN);
@@ -482,7 +480,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const updated = {
         ...ann,
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
-        rev: (ann.rev ?? 0) + 1,
+        rev: nextRev(ann),
       };
       da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
       return mcpSuccess({ id, status: updated.status });
@@ -574,7 +572,7 @@ export function registerAnnotationTools(server: McpServer): void {
           ...(reason !== undefined && content === undefined ? { content: reason } : {}),
           ...(newText !== undefined ? { suggestedText: newText } : {}),
           editedAt: Date.now(),
-          rev: (ann.rev ?? 0) + 1,
+          rev: nextRev(ann),
         } as Annotation;
 
         da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);

@@ -325,12 +325,13 @@ async function clearAndReload(
   //    caller after repopulation) doesn't resurrect the pre-reload set.
   //    Failures here must not abort the reload — annotations are additive
   //    durability and we still want the content reload to land.
-  clearFileSyncContext(id);
-  try {
-    const hash = docHash(filePath);
-    await createStore(hash, { filePath }).clear();
-  } catch (err) {
-    console.error(`[Tandem] clearAndReload: store.clear failed for ${id}:`, err);
+  const dropped = clearFileSyncContext(id);
+  if (dropped) {
+    try {
+      await dropped.store.clear();
+    } catch (err) {
+      console.error(`[Tandem] clearAndReload: store.clear failed for ${id}:`, err);
+    }
   }
 
   // 1. Prepare content outside the transaction (async I/O must happen before transact)

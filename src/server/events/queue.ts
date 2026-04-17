@@ -22,6 +22,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
+import type { DocStore } from "../annotations/store.js";
 import { registerAnnotationObserver, type SyncContext } from "../annotations/sync.js";
 import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
@@ -336,13 +337,7 @@ export function reattachObservers(docName: string, newDoc: Y.Doc): void {
   // in onLoadDocument); the cleanup we stashed would be a no-op anyway.
   const oldCtx = fileSyncContexts.get(docName);
   if (oldCtx) {
-    // Dispose previous cleanup defensively — harmless if the old doc is
-    // already destroyed (unobserve on a destroyed map is a no-op).
-    try {
-      oldCtx.cleanup();
-    } catch (err) {
-      console.warn(`[EventQueue] file-sync cleanup threw during reattach for ${docName}:`, err);
-    }
+    safeCleanup(docName, "reattach", oldCtx.cleanup);
     const newCtx: SyncContext = {
       ydoc: newDoc,
       store: oldCtx.ctx.store,
@@ -365,6 +360,20 @@ export function reattachObservers(docName: string, newDoc: Y.Doc): void {
 const fileSyncContexts = new Map<string, { ctx: SyncContext; cleanup: () => void }>();
 
 /**
+ * Run a file-sync observer cleanup in a try/catch with a uniform log line.
+ * Cleanups can throw if the underlying Y.Doc was already destroyed (e.g. a
+ * Hocuspocus reload beat us to it) — that's harmless, but we want the logs
+ * to be consistent enough to grep.
+ */
+function safeCleanup(docName: string, phase: string, cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch (err) {
+    console.warn(`[EventQueue] file-sync cleanup threw during ${phase} for ${docName}:`, err);
+  }
+}
+
+/**
  * Register the durable-annotation sync context for a document. Called by the
  * file-opener after `loadAndMerge` returns its observer cleanup. The cleanup
  * passed here is what gets invoked on `clearFileSyncContext` or the next
@@ -375,25 +384,26 @@ export function setFileSyncContext(docName: string, ctx: SyncContext, cleanup: (
   // registration (e.g., forceReload paths that re-run loadAndMerge).
   const existing = fileSyncContexts.get(docName);
   if (existing) {
-    try {
-      existing.cleanup();
-    } catch (err) {
-      console.warn(`[EventQueue] file-sync cleanup threw during replace for ${docName}:`, err);
-    }
+    safeCleanup(docName, "replace", existing.cleanup);
   }
   fileSyncContexts.set(docName, { ctx, cleanup });
 }
 
-/** Drop the file-sync context for a document (on close or force-reload prep). */
-export function clearFileSyncContext(docName: string): void {
+/**
+ * Drop the file-sync context for a document (on close or force-reload prep).
+ * Returns the dropped `{ store, docHash }` so callers can flush/clear the
+ * durable store without recomputing the hash or minting a transient handle.
+ * Returns `undefined` if no context was registered (e.g. feature flag off,
+ * or `wireAnnotationStore` failed during open).
+ */
+export function clearFileSyncContext(
+  docName: string,
+): { store: DocStore; docHash: string } | undefined {
   const entry = fileSyncContexts.get(docName);
-  if (!entry) return;
-  try {
-    entry.cleanup();
-  } catch (err) {
-    console.warn(`[EventQueue] file-sync cleanup threw during clear for ${docName}:`, err);
-  }
+  if (!entry) return undefined;
+  safeCleanup(docName, "clear", entry.cleanup);
   fileSyncContexts.delete(docName);
+  return { store: entry.ctx.store, docHash: entry.ctx.docHash };
 }
 
 // --- CTRL_ROOM observers (chat + document meta) ---

@@ -11,6 +11,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { Annotation, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
+import { nextRev } from "../annotations/schema.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
 import { findAllByName, getAttr, getTextContent, walkDocumentBody } from "./docx-walker.js";
@@ -182,8 +183,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
         content,
         status: "pending" as const,
         timestamp: comment.date ? new Date(comment.date).getTime() : Date.now(),
-        // `rev`: durable-annotation LWW counter — first revision on import.
-        rev: 1,
+        rev: nextRev(),
         ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
       };
 

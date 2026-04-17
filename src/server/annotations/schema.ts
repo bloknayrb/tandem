@@ -50,6 +50,20 @@ import {
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
 export const SCHEMA_VERSION = 1 as const;
 
+/**
+ * Compute the next revision for a user-intent write. Returns `1` for a brand
+ * new record (no `prev`), otherwise `prev.rev + 1`. Pre-T6 records that lack
+ * `rev` are treated as `rev: 0` so the first write after migration lands at
+ * `rev: 1`.
+ *
+ * Used at every server-side creation and mutation site so the `?? 0` fallback
+ * and increment live in exactly one place — the invariant is part of the
+ * schema module's domain, not the call sites'.
+ */
+export function nextRev(prev?: { rev?: number }): number {
+  return (prev?.rev ?? 0) + 1;
+}
+
 // ---------------------------------------------------------------------------
 // Primitive sub-schemas
 // ---------------------------------------------------------------------------
