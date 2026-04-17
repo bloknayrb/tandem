@@ -33,6 +33,14 @@ import { generateEventId } from "./types.js";
 export const MCP_ORIGIN = "mcp";
 
 /**
+ * Origin tag for Y.Map writes that originated from the annotation file-writer
+ * (app-data JSON → Y.Map sync). Observers that emit channel events to external
+ * consumers MUST skip transactions with this origin so a file-reload doesn't
+ * fire spurious `annotation:*` SSE events.
+ */
+export const FILE_SYNC_ORIGIN = "file-sync";
+
+/**
  * Read the user's configured selection dwell time from CTRL_ROOM.
  *
  * Called at timer-schedule time (not fire time), so mid-dwell slider changes
@@ -166,7 +174,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   // 1. Annotations observer
   const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
   const annotationsObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
 
     for (const [key, change] of event.changes.keys) {
       const raw = annotationsMap.get(key) as Annotation | undefined;
@@ -228,7 +236,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   // 2. Annotation replies observer
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
   const repliesObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
 
     for (const [key, change] of event.changes.keys) {
       if (change.action !== "add") continue;
