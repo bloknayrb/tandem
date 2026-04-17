@@ -42,7 +42,7 @@ describe("ensureTandemServer", () => {
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
     const writes = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(writes).toContain("Tandem server not reachable at http://localhost:55999");
+    expect(writes).toContain("Tandem server preflight failed at http://localhost:55999");
     expect(writes).toContain("ECONNREFUSED");
     expect(writes).toContain("tandem start");
   });
