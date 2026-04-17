@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
@@ -107,12 +108,23 @@ async function renameWithRetry(tempPath: string, filePath: string): Promise<void
 }
 
 /**
+ * Produce a unique temp filename in the same directory as `filePath`. Uses a
+ * random suffix so concurrent writers to the same directory cannot collide on
+ * a shared `Date.now()` millisecond (the annotation store writes multiple
+ * files in the same directory in parallel).
+ */
+function tempSiblingPath(filePath: string): string {
+  const rand = crypto.randomBytes(6).toString("hex");
+  return path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}-${rand}`);
+}
+
+/**
  * Atomic file write: write to a temp file, then rename.
  * Prevents partial writes on crash. Retries the rename up to 3 times on
  * EPERM/EACCES (Windows file-handle contention) with exponential backoff.
  */
 export async function atomicWrite(filePath: string, content: string): Promise<void> {
-  const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
+  const tempPath = tempSiblingPath(filePath);
   await fs.writeFile(tempPath, content, "utf-8");
   await renameWithRetry(tempPath, filePath);
 }
@@ -123,7 +135,7 @@ export async function atomicWrite(filePath: string, content: string): Promise<vo
  * Shares the same EPERM/EACCES retry behaviour as `atomicWrite`.
  */
 export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  const tempPath = path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}`);
+  const tempPath = tempSiblingPath(filePath);
   await fs.writeFile(tempPath, content);
   await renameWithRetry(tempPath, filePath);
 }
