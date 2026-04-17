@@ -272,6 +272,29 @@ function notifyFailure(
   console.error(`[ANNOTATION-STORE] ${message}`);
 }
 
+/**
+ * Bump the per-doc failure counter and emit the appropriate notification.
+ * After `DISABLE_AFTER_FAILURES` consecutive failures, the doc is added to
+ * `disabledDocs` and a one-shot persistent notice fires (throttle bypassed);
+ * otherwise a throttled transient notice fires. Called from both the debounce
+ * timer in `scheduleWrite` and the synchronous flush path in `flushOne`.
+ */
+function recordFailure(docHash: string, filePath: string, err: unknown): void {
+  const count = (failureCounts.get(docHash) ?? 0) + 1;
+  failureCounts.set(docHash, count);
+  if (count >= DISABLE_AFTER_FAILURES) {
+    disabledDocs.add(docHash);
+    if (!persistentNotified.has(docHash)) {
+      persistentNotified.add(docHash);
+      // Bypass throttle — persistent notice is a one-shot.
+      lastNotifiedAt.delete(docHash);
+      notifyFailure(docHash, filePath, err, "persistent");
+    }
+  } else {
+    notifyFailure(docHash, filePath, err, "transient");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Core per-doc store implementation
 // ---------------------------------------------------------------------------
@@ -317,19 +340,7 @@ function scheduleWrite(docHash: string, filePath: string, doc: AnnotationDocV1):
     pending.delete(docHash);
     if (!entry) return;
     performWrite(docHash, filePath, entry.doc).catch((err) => {
-      const count = (failureCounts.get(docHash) ?? 0) + 1;
-      failureCounts.set(docHash, count);
-      if (count >= DISABLE_AFTER_FAILURES) {
-        disabledDocs.add(docHash);
-        if (!persistentNotified.has(docHash)) {
-          persistentNotified.add(docHash);
-          // Bypass throttle — persistent notice is a one-shot.
-          lastNotifiedAt.delete(docHash);
-          notifyFailure(docHash, filePath, err, "persistent");
-        }
-      } else {
-        notifyFailure(docHash, filePath, err, "transient");
-      }
+      recordFailure(docHash, filePath, err);
     });
   }, DEBOUNCE_MS);
 
@@ -346,24 +357,12 @@ async function flushOne(docHash: string): Promise<void> {
   clearTimeout(entry.timer);
   pending.delete(docHash);
   // `performWrite` re-throws so `flush()` surfaces failures to tests/shutdown.
-  // It still trips the failure counter inside performWrite? Actually no —
-  // performWrite clears-on-success but doesn't bump on failure (scheduleWrite
-  // does that). Mirror the same bookkeeping here.
+  // It clears the failure counter on success but doesn't bump it on failure —
+  // that's `recordFailure`'s job, mirroring the scheduleWrite path.
   try {
     await performWrite(docHash, entry.doc.meta.filePath, entry.doc);
   } catch (err) {
-    const count = (failureCounts.get(docHash) ?? 0) + 1;
-    failureCounts.set(docHash, count);
-    if (count >= DISABLE_AFTER_FAILURES) {
-      disabledDocs.add(docHash);
-      if (!persistentNotified.has(docHash)) {
-        persistentNotified.add(docHash);
-        lastNotifiedAt.delete(docHash);
-        notifyFailure(docHash, entry.doc.meta.filePath, err, "persistent");
-      }
-    } else {
-      notifyFailure(docHash, entry.doc.meta.filePath, err, "transient");
-    }
+    recordFailure(docHash, entry.doc.meta.filePath, err);
     throw err;
   }
 }
