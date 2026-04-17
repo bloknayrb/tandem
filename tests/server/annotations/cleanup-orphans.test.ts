@@ -98,4 +98,32 @@ describe("cleanupOrphanedAnnotationFiles", () => {
 
     expect(cleaned).toBe(0);
   });
+
+  it("preserves envelopes at exactly SESSION_MAX_AGE (predicate is strict-greater)", async () => {
+    await writeWithMtime(`${HASH_A}.json`, SESSION_MAX_AGE);
+
+    const cleaned = await cleanupOrphanedAnnotationFiles();
+
+    expect(cleaned).toBe(0);
+    await expect(fs.access(path.join(annotationsDir, `${HASH_A}.json`))).resolves.toBeUndefined();
+  });
+
+  it("counts surviving successes when one envelope disappears mid-run", async () => {
+    // Regression guard for the Promise.all fan-out: concurrent ENOENT on one
+    // envelope must not prevent others from being cleaned.
+    const HASH_C = "c".repeat(64);
+    const old = SESSION_MAX_AGE + 60_000;
+    await writeWithMtime(`${HASH_A}.json`, old);
+    await writeWithMtime(`${HASH_B}.json`, old);
+    await writeWithMtime(`${HASH_C}.json`, old);
+    // Race the GC by pre-deleting one file before cleanup runs — the ENOENT
+    // path in the catch should swallow silently.
+    await fs.unlink(path.join(annotationsDir, `${HASH_B}.json`));
+
+    const cleaned = await cleanupOrphanedAnnotationFiles();
+
+    expect(cleaned).toBe(2);
+    await expect(fs.access(path.join(annotationsDir, `${HASH_A}.json`))).rejects.toThrow();
+    await expect(fs.access(path.join(annotationsDir, `${HASH_C}.json`))).rejects.toThrow();
+  });
 });

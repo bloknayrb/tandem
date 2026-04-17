@@ -233,8 +233,7 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
   // skipped — they carry their own lifecycles.
   const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
 
-  // Fan out stat + unlink so startup isn't O(N) serial syscalls — this runs
-  // on the awaited boot path (issue #334).
+  // Fan out stat + unlink so this isn't O(N) serial syscalls on startup.
   const now = Date.now();
   const results = await Promise.all(
     files
@@ -247,7 +246,17 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
           await fs.unlink(filePath);
           return 1;
         } catch (err) {
-          console.error(`[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file}:`, err);
+          // ENOENT is benign — a concurrent delete (another tandem instance
+          // racing the same GC, or file-watcher cleanup) got there first.
+          // Everything else (EPERM/EACCES/EBUSY/ENOSPC) points at a real
+          // problem the operator needs to see with a code to triage on.
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if (code !== "ENOENT") {
+            console.error(
+              `[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file} (${code ?? "unknown"}):`,
+              err,
+            );
+          }
           return 0;
         }
       }),

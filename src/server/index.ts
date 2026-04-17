@@ -181,12 +181,9 @@ async function main() {
       console.error("[Tandem] Failed to clean up stale sessions:", err);
     });
 
-  // Orphan GC for durable annotation files (issue #318 tracks the full policy).
-  // Must complete before restoreOpenDocuments: the GC unlinks envelopes older
-  // than SESSION_MAX_AGE, and a session-restored doc opened on upgrade paths
-  // (e.g. welcome.md, CHANGELOG.md) reads the same envelope via
-  // wireAnnotationStore. A fire-and-forget chain here raced the read and
-  // silently emptied annotations for stale docs (issue #334).
+  // Must await before restoreOpenDocuments: the GC unlinks stale envelopes,
+  // and wireAnnotationStore reads them. A fire-and-forget chain raced the
+  // read and silently emptied annotations (#334). #318 tracks the full policy.
   try {
     const n = await cleanupOrphanedAnnotationFiles();
     if (n > 0) console.error(`[Tandem] Cleaned up ${n} orphaned annotation file(s)`);
