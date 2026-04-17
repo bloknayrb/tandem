@@ -2,7 +2,38 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getRequestId } from "../../src/cli/mcp-stdio.js";
+import { getRequestId, getResponseId } from "../../src/cli/mcp-stdio.js";
+
+/** Read one newline-delimited line from the child's stdout with a timeout,
+ *  capturing stderr for diagnostic context on failure. */
+async function readOneLine(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs = 10_000,
+): Promise<string> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
+  child.stderr.on("data", (c: Buffer) => stderrChunks.push(c.toString("utf8")));
+  return new Promise<string>((resolveResp, rejectResp) => {
+    const checker = setInterval(() => {
+      const joined = stdoutChunks.join("");
+      const nl = joined.indexOf("\n");
+      if (nl >= 0) {
+        clearTimeout(timer);
+        clearInterval(checker);
+        resolveResp(joined.slice(0, nl));
+      }
+    }, 50);
+    const timer = setTimeout(() => {
+      clearInterval(checker);
+      rejectResp(
+        new Error(
+          `no stdout within ${timeoutMs}ms. stderr=${stderrChunks.join("")} stdout=${stdoutChunks.join("")}`,
+        ),
+      );
+    }, timeoutMs);
+  });
+}
 
 describe("getRequestId", () => {
   it("returns the id for JSON-RPC requests (has method + id)", () => {
@@ -19,6 +50,23 @@ describe("getRequestId", () => {
     expect(
       getRequestId({ jsonrpc: "2.0", id: 1, error: { code: 0, message: "" } } as never),
     ).toBeUndefined();
+  });
+});
+
+describe("getResponseId", () => {
+  it("returns the id for JSON-RPC responses (id, no method)", () => {
+    expect(getResponseId({ jsonrpc: "2.0", id: 1, result: {} } as never)).toBe(1);
+    expect(
+      getResponseId({ jsonrpc: "2.0", id: "abc", error: { code: 0, message: "" } } as never),
+    ).toBe("abc");
+  });
+
+  it("returns undefined for JSON-RPC requests (has method)", () => {
+    expect(getResponseId({ jsonrpc: "2.0", id: 1, method: "tools/list" } as never)).toBeUndefined();
+  });
+
+  it("returns undefined for JSON-RPC notifications (has method, no id)", () => {
+    expect(getResponseId({ jsonrpc: "2.0", method: "notifications/foo" } as never)).toBeUndefined();
   });
 });
 
@@ -93,11 +141,6 @@ describe("mcp-stdio proxy integration", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const stdoutChunks: string[] = [];
-    child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
-    const stderrChunks: string[] = [];
-    child.stderr.on("data", (c: Buffer) => stderrChunks.push(c.toString("utf8")));
-
     const initialize = {
       jsonrpc: "2.0",
       id: 42,
@@ -112,26 +155,7 @@ describe("mcp-stdio proxy integration", () => {
     await new Promise((r) => setTimeout(r, 500));
     child.stdin.write(`${JSON.stringify(initialize)}\n`);
 
-    // Wait for a response on stdout (or fail the test).
-    const response = await new Promise<string>((resolveResp, rejectResp) => {
-      const timer = setTimeout(() => {
-        rejectResp(
-          new Error(
-            `no stdout within 10s. stderr=${stderrChunks.join("")} stdout=${stdoutChunks.join("")}`,
-          ),
-        );
-      }, 10_000);
-      const checker = setInterval(() => {
-        const joined = stdoutChunks.join("");
-        const nl = joined.indexOf("\n");
-        if (nl >= 0) {
-          clearTimeout(timer);
-          clearInterval(checker);
-          resolveResp(joined.slice(0, nl));
-        }
-      }, 50);
-    });
-
+    const response = await readOneLine(child);
     const parsed = JSON.parse(response) as {
       id: number;
       result?: { serverInfo?: { name?: string } };
@@ -140,5 +164,126 @@ describe("mcp-stdio proxy integration", () => {
     expect(parsed.result?.serverInfo?.name).toBe("fake-tandem");
     expect(receivedPosts).toHaveLength(1);
     expect((receivedPosts[0]?.body as { method?: string })?.method).toBe("initialize");
+  }, 30_000);
+});
+
+describe("mcp-stdio error synthesis on upstream unavailability", () => {
+  // Covers issue #336: the stdio bridge must reply with a JSON-RPC -32000
+  // error for any in-flight request when the upstream is unavailable, rather
+  // than closing stdio silently (which surfaces as "tools never appear" with
+  // no diagnostic in the plugin host).
+
+  let child: ChildProcessWithoutNullStreams | undefined;
+
+  afterEach(() => {
+    child?.kill();
+    child = undefined;
+  });
+
+  it("synthesizes -32000 for an initialize request when the upstream server is not running", async () => {
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    // Point at a port nothing's listening on. Preflight probe fails, the
+    // already-started stdio transport replies -32000 to any incoming request.
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: { ...process.env, TANDEM_URL: "http://127.0.0.1:1" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const initialize = {
+      jsonrpc: "2.0",
+      id: 99,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        clientInfo: { name: "test-harness", version: "0.0.0" },
+        capabilities: {},
+      },
+    };
+    // Send the request immediately; the child will either buffer it (not
+    // ready yet) or receive it after preflight fails but before exit. Either
+    // way, the reply must be a -32000.
+    child.stdin.write(`${JSON.stringify(initialize)}\n`);
+
+    const line = await readOneLine(child);
+    const parsed = JSON.parse(line) as {
+      id: number;
+      error?: { code: number; message: string };
+    };
+    expect(parsed.id).toBe(99);
+    expect(parsed.error?.code).toBe(-32000);
+    expect(parsed.error?.message).toMatch(/not (running|ready)/i);
+  }, 30_000);
+
+  it("synthesizes -32000 for pending requests when the upstream dies mid-session", async () => {
+    // Fake server that accepts the initialize POST but never responds —
+    // then close the socket mid-request to simulate an upstream crash.
+    let held: ServerResponse | undefined;
+    const server = createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          // Hold the response — we'll close the server under the client
+          // instead of replying.
+          held = res;
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    const port = addr.port;
+
+    try {
+      const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+      child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+        env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      // Let the bridge finish its preflight + http.start() handshake.
+      await new Promise((r) => setTimeout(r, 600));
+
+      const initialize = {
+        jsonrpc: "2.0",
+        id: 77,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          clientInfo: { name: "test-harness", version: "0.0.0" },
+          capabilities: {},
+        },
+      };
+      child.stdin.write(`${JSON.stringify(initialize)}\n`);
+
+      // Wait until the fake upstream has received the POST, then slam the
+      // socket shut so the client's connection closes mid-session.
+      for (let i = 0; i < 50; i++) {
+        if (held) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      // Destroy the held response — the mcp-stdio bridge sees this as
+      // upstream-closed-unexpectedly. Server close happens in finally.
+      held?.destroy();
+
+      const line = await readOneLine(child);
+      const parsed = JSON.parse(line) as {
+        id: number;
+        error?: { code: number; message: string };
+      };
+      expect(parsed.id).toBe(77);
+      expect(parsed.error?.code).toBe(-32000);
+      expect(parsed.error?.message).toMatch(/closed|unreachable/i);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   }, 30_000);
 });
