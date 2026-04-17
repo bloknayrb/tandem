@@ -440,7 +440,6 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
     return emptyDoc(docHash, filePath);
   }
 
-  // result.error === "future"
   const schemaVersion = result.schemaVersion;
   const futurePath = `${target}.future`;
   try {
