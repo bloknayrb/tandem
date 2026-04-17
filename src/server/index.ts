@@ -181,15 +181,18 @@ async function main() {
       console.error("[Tandem] Failed to clean up stale sessions:", err);
     });
 
-  // Best-effort orphan GC for durable annotation files (issue #318 tracks the
-  // full policy). Fire-and-forget — never block startup on cleanup.
-  cleanupOrphanedAnnotationFiles()
-    .then((n) => {
-      if (n > 0) console.error(`[Tandem] Cleaned up ${n} orphaned annotation file(s)`);
-    })
-    .catch((err) => {
-      console.error("[Tandem] Failed to clean up orphaned annotation files:", err);
-    });
+  // Orphan GC for durable annotation files (issue #318 tracks the full policy).
+  // Must complete before restoreOpenDocuments: the GC unlinks envelopes older
+  // than SESSION_MAX_AGE, and a session-restored doc opened on upgrade paths
+  // (e.g. welcome.md, CHANGELOG.md) reads the same envelope via
+  // wireAnnotationStore. A fire-and-forget chain here raced the read and
+  // silently emptied annotations for stale docs (issue #334).
+  try {
+    const n = await cleanupOrphanedAnnotationFiles();
+    if (n > 0) console.error(`[Tandem] Cleaned up ${n} orphaned annotation file(s)`);
+  } catch (err) {
+    console.error("[Tandem] Failed to clean up orphaned annotation files:", err);
+  }
 
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
   const previousActiveDocId = await restoreCtrlSession().catch((err) => {

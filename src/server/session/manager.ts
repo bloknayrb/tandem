@@ -233,22 +233,26 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<number> {
   // skipped — they carry their own lifecycles.
   const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
 
+  // Fan out stat + unlink so startup isn't O(N) serial syscalls — this runs
+  // on the awaited boot path (issue #334).
   const now = Date.now();
-  let cleaned = 0;
-  for (const file of files) {
-    if (!envelopeRe.test(file)) continue;
-    try {
-      const filePath = path.join(dir, file);
-      const stat = await fs.stat(filePath);
-      if (now - stat.mtimeMs > SESSION_MAX_AGE) {
-        await fs.unlink(filePath);
-        cleaned++;
-      }
-    } catch (err) {
-      console.error(`[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file}:`, err);
-    }
-  }
-  return cleaned;
+  const results = await Promise.all(
+    files
+      .filter((file) => envelopeRe.test(file))
+      .map(async (file) => {
+        const filePath = path.join(dir, file);
+        try {
+          const stat = await fs.stat(filePath);
+          if (now - stat.mtimeMs <= SESSION_MAX_AGE) return 0;
+          await fs.unlink(filePath);
+          return 1;
+        } catch (err) {
+          console.error(`[Tandem] cleanupOrphanedAnnotationFiles: failed to process ${file}:`, err);
+          return 0;
+        }
+      }),
+  );
+  return results.reduce<number>((sum, n) => sum + n, 0);
 }
 
 /** Delete sessions older than 30 days */
