@@ -23,7 +23,11 @@ import {
 } from "../../shared/constants.js";
 import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
 import type { DocStore } from "../annotations/store.js";
-import { registerAnnotationObserver, type SyncContext } from "../annotations/sync.js";
+import {
+  type ObserverCleanupPhase,
+  registerAnnotationObserver,
+  type SyncContext,
+} from "../annotations/sync.js";
 import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { validateRange } from "../positions.js";
@@ -337,7 +341,7 @@ export function reattachObservers(docName: string, newDoc: Y.Doc): void {
   // in onLoadDocument); the cleanup we stashed would be a no-op anyway.
   const oldCtx = fileSyncContexts.get(docName);
   if (oldCtx) {
-    safeCleanup(docName, "reattach", oldCtx.cleanup);
+    safeCleanup(docName, oldCtx.cleanup, "swap", "reattach");
     const newCtx: SyncContext = {
       ydoc: newDoc,
       store: oldCtx.ctx.store,
@@ -357,7 +361,10 @@ export function reattachObservers(docName: string, newDoc: Y.Doc): void {
  * doc swap. Stored alongside the cleanup handle from the prior
  * `registerAnnotationObserver` call so we can dispose it deterministically.
  */
-const fileSyncContexts = new Map<string, { ctx: SyncContext; cleanup: () => void }>();
+const fileSyncContexts = new Map<
+  string,
+  { ctx: SyncContext; cleanup: (phase?: ObserverCleanupPhase) => void }
+>();
 
 /**
  * Run a file-sync observer cleanup in a try/catch with a uniform log line.
@@ -365,11 +372,16 @@ const fileSyncContexts = new Map<string, { ctx: SyncContext; cleanup: () => void
  * Hocuspocus reload beat us to it) — that's harmless, but we want the logs
  * to be consistent enough to grep.
  */
-function safeCleanup(docName: string, phase: string, cleanup: () => void): void {
+function safeCleanup(
+  docName: string,
+  cleanup: (phase?: ObserverCleanupPhase) => void,
+  phase: ObserverCleanupPhase,
+  logTag: string,
+): void {
   try {
-    cleanup();
+    cleanup(phase);
   } catch (err) {
-    console.warn("[EventQueue] file-sync cleanup threw during %s for %s:", phase, docName, err);
+    console.warn("[EventQueue] file-sync cleanup threw during %s for %s:", logTag, docName, err);
   }
 }
 
@@ -378,13 +390,23 @@ function safeCleanup(docName: string, phase: string, cleanup: () => void): void 
  * file-opener after `loadAndMerge` returns its observer cleanup. The cleanup
  * passed here is what gets invoked on `clearFileSyncContext` or the next
  * `reattachObservers` call.
+ *
+ * Callers don't need to think about the swap-vs-close distinction: the queue
+ * picks the phase at teardown time based on which entrypoint ran.
  */
-export function setFileSyncContext(docName: string, ctx: SyncContext, cleanup: () => void): void {
+export function setFileSyncContext(
+  docName: string,
+  ctx: SyncContext,
+  cleanup: (phase?: ObserverCleanupPhase) => void,
+): void {
   // Dispose any prior entry first so we never leak observers on duplicate
-  // registration (e.g., forceReload paths that re-run loadAndMerge).
+  // registration (e.g., forceReload paths that re-run loadAndMerge). Normal
+  // flow pre-clears via `clearFileSyncContext`, so this branch is defensive;
+  // `"close"` is correct because we're replacing — not rebinding — the
+  // context, so the prior docHash's tombstones belong to a superseded state.
   const existing = fileSyncContexts.get(docName);
   if (existing) {
-    safeCleanup(docName, "replace", existing.cleanup);
+    safeCleanup(docName, existing.cleanup, "close", "replace");
   }
   fileSyncContexts.set(docName, { ctx, cleanup });
 }
@@ -401,7 +423,7 @@ export function clearFileSyncContext(
 ): { store: DocStore; docHash: string } | undefined {
   const entry = fileSyncContexts.get(docName);
   if (!entry) return undefined;
-  safeCleanup(docName, "clear", entry.cleanup);
+  safeCleanup(docName, entry.cleanup, "close", "clear");
   fileSyncContexts.delete(docName);
   return { store: entry.ctx.store, docHash: entry.ctx.docHash };
 }
@@ -571,7 +593,7 @@ export function resetForTesting(): void {
   ctrlCleanups = [];
   for (const entry of fileSyncContexts.values()) {
     try {
-      entry.cleanup();
+      entry.cleanup("close");
     } catch {
       /* ignore — test cleanup should not throw on pre-torn-down docs */
     }

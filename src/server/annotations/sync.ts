@@ -170,14 +170,29 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
 // ---------------------------------------------------------------------------
 
 /**
+ * Phase hint for the observer cleanup. `"swap"` runs on a Hocuspocus Y.Doc
+ * swap (live — the document stays open, only the underlying CRDT instance is
+ * replaced); `"close"` runs on true doc close. The distinction matters for
+ * the per-doc tombstone ledger: a debounced write queued against the OLD
+ * Y.Doc can still fire after the swap, and it must see the tombstones so
+ * they land on disk. See #333.
+ */
+export type ObserverCleanupPhase = "swap" | "close";
+
+/**
  * Attach Y.Map observers for annotations and replies that mirror user-intent
  * mutations to the store. Returns a cleanup function that unobserves both
- * maps, drops the per-doc context entry, and clears the per-doc tombstone
- * ledger.
+ * maps and drops the per-doc context entry. The per-doc tombstone ledger is
+ * cleared only on `"close"` — on `"swap"` it must persist so an in-flight
+ * debounced write doesn't serialize `tombstones: []` after the old observer
+ * has been torn down.
  *
- * Callers (the file-opener) invoke cleanup on doc close or Y.Doc swap.
+ * Callers (the file-opener, via the queue indirection) invoke cleanup with
+ * the appropriate phase on doc close or Y.Doc swap.
  */
-export function registerAnnotationObserver(ctx: SyncContext): () => void {
+export function registerAnnotationObserver(
+  ctx: SyncContext,
+): (phase?: ObserverCleanupPhase) => void {
   const { ydoc, store, docHash, meta } = ctx;
   docContexts.set(docHash, { ydoc, store, meta });
 
@@ -199,14 +214,13 @@ export function registerAnnotationObserver(ctx: SyncContext): () => void {
   annMap.observe(onMutation);
   repMap.observe(onMutation);
 
-  return () => {
+  return (phase: ObserverCleanupPhase = "close") => {
     annMap.unobserve(onMutation);
     repMap.unobserve(onMutation);
     docContexts.delete(docHash);
-    // Drop the per-doc tombstone ledger too. Long-running servers opening
-    // many docs would otherwise accumulate stale arrays for the life of the
-    // process.
-    tombstonesByDoc.delete(docHash);
+    if (phase === "close") {
+      tombstonesByDoc.delete(docHash);
+    }
   };
 }
 
@@ -329,7 +343,9 @@ function pickWinner(
  *   5. Register the observer AFTER merge completes. Returns the observer
  *      cleanup so the caller can unregister on doc close.
  */
-export async function loadAndMerge(ctx: SyncContext): Promise<() => void> {
+export async function loadAndMerge(
+  ctx: SyncContext,
+): Promise<(phase?: ObserverCleanupPhase) => void> {
   const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
 
