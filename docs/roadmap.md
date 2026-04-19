@@ -342,12 +342,13 @@ Future hardening (not blocking release):
 
 Plan doc: [`docs/superpowers/plans/2026-04-16-durable-annotations-cowork.md`](superpowers/plans/2026-04-16-durable-annotations-cowork.md). Roadmap issues #313–#322.
 
-### Phase 1 — Durable Annotations in App Data (T1–T8)
+### Phase 1 — Durable Annotations in App Data (T1–T8) — DONE
 
 Moves annotation storage from in-memory Y.Doc + session snapshots to explicit per-document durable JSON under `env-paths` app data. Survives browser/tab loss, tandem-editor reinstalls, OS restarts.
 
 - **T1–T6 (PR #323, merged):** Per-doc on-disk store, migration from session snapshots, load/save wiring, in-memory cache, tests.
-- **T7 + T8 (PR #337):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
+- **T7 + T8 (PR #337, merged):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
+- **Retrospective follow-ups (v0.6.3, merged):** GC race fix (#334), annotation module internals (#324, #327, #328, #332), legacy-type sanitization (#329), drop-counter (#330), test coverage (#331, #335), CI gate (#310), settings popover (#306), dark-mode tokens (#307), a11y sweep (#309, #311), stdio bridge silent-failure paths (#336 partial).
 
 ### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f)
 

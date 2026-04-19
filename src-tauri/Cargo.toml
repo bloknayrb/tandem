@@ -1,6 +1,6 @@
 [package]
 name = "tandem-desktop"
-version = "0.6.2"
+version = "0.6.3"
 description = "Collaborative AI-human document editor"
 authors = ["Bryan Kolb"]
 license = "MIT"
