@@ -860,7 +860,7 @@ describe("parseTimeoutMs", () => {
     expect(parseTimeoutMs("not-a-number")).toBe(30_000);
   });
 
-  it("returns 30000 for scientific notation (parseInt parses '3e4' as 3, which is valid, but '1e10' overflows)", () => {
+  it("accepts scientific-notation-like input as the leading integer (parseInt stops at 'e')", () => {
     // parseInt("3e4", 10) === 3 — a small positive integer, accepted as valid.
     expect(parseTimeoutMs("3e4")).toBe(3);
     // parseInt("1e10", 10) === 1 — also a small positive integer.
