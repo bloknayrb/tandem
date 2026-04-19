@@ -109,6 +109,16 @@ describe("docHash", () => {
     expect(h).toBe(expected);
   });
 
+  it("upload:///<name> (empty id, slash at index 0) falls back to SHA-256", () => {
+    // `slashIdx > 0` rejects slash-at-index-0 (empty id). The literal
+    // string is SHA-256'd so results are deterministic and collision-safe.
+    const h = docHash("upload:///foo.md");
+    expect(h).not.toMatch(/^upload_/);
+    expect(h).toMatch(HEX_64_RE);
+    const expected = crypto.createHash("sha256").update("upload:///foo.md").digest("hex");
+    expect(h).toBe(expected);
+  });
+
   it("falls back to SHA-256 for malformed upload paths (no id/name split)", () => {
     // `upload://` has no id — not `upload_<something>`. Should hash the
     // literal string instead so the result is still a deterministic 64-hex

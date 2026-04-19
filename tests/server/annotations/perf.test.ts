@@ -1,15 +1,19 @@
 /**
  * Baseline perf measurements for `loadAndMerge` at 500 / 1000 / 5000
- * annotations. These tests DO NOT enforce a tight upper bound — they exist
- * so CI logs record a timing number and assert only a ridiculous ceiling
- * (the test still passes through 10× slowdown). See issue #335.
+ * annotations. See issue #335.
  *
- * Why not `bench()`? We want the baseline visible in every CI run, not
- * isolated behind `vitest bench`. The pattern is `it()` + `performance.now()`.
+ * What's measured: end-to-end `loadAndMerge` wall clock — file read, Zod
+ * parse, and the merge transaction. The Y.Doc and on-disk envelope are
+ * constructed BEFORE the `performance.now()` window so fixture setup isn't
+ * part of the number, but the store's load + parse ARE.
  *
- * What's measured: `loadAndMerge` with a pre-written on-disk envelope.
- * Fixture construction (building the Y.Doc, writing the file) happens
- * BEFORE the `performance.now()` window so only the merge cost is timed.
+ * Scope: records a number, not a gate. Each test asserts only a hang
+ * detector (< 10s) and logs the measurement so CI output carries the
+ * baseline. Vitest timeout is 60s to catch catastrophic hangs without
+ * failing a slow runner.
+ *
+ * Why not `bench()`? We want the number visible in every CI run, not
+ * gated behind `vitest bench`.
  */
 
 import fs from "node:fs/promises";
@@ -31,6 +35,7 @@ import {
   loadAndMerge,
   resetForTesting as resetSyncForTesting,
 } from "../../../src/server/annotations/sync.js";
+import { Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
 
 const HASH = "b".repeat(64);
 const FILE_PATH = "/virtual/perf-doc.md";
@@ -62,7 +67,7 @@ function makeEnvelope(count: number): AnnotationDocV1 {
   };
 }
 
-let tmpRoot: string;
+let tmpRoot = "";
 let prevAppDataDir: string | undefined;
 
 beforeEach(async () => {
@@ -78,7 +83,8 @@ afterEach(async () => {
   resetSyncForTesting();
   if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
   else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
-  await fs.rm(tmpRoot, { recursive: true, force: true });
+  if (tmpRoot) await fs.rm(tmpRoot, { recursive: true, force: true });
+  tmpRoot = "";
 });
 
 async function writeEnvelope(envelope: AnnotationDocV1): Promise<void> {
@@ -112,9 +118,31 @@ async function measureLoadAndMerge(count: number): Promise<number> {
   return elapsedMs;
 }
 
+async function measureLoadAndMergeWithConflicts(count: number): Promise<number> {
+  const envelope = makeEnvelope(count);
+  await writeEnvelope(envelope);
+
+  const ydoc = new Y.Doc();
+  const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  // Pre-populate half the ids at rev 0 — file's rev 1 wins, forcing
+  // pickWinner + ymap.set for every conflicting annotation.
+  ydoc.transact(() => {
+    for (let i = 0; i < Math.floor(count / 2); i++) {
+      annMap.set(`ann_${i}`, { ...makeAnnotation(i), rev: 0 });
+    }
+  });
+  const store = createStore(HASH, { filePath: FILE_PATH });
+
+  const start = performance.now();
+  const cleanup = await loadAndMerge({ ydoc, store, docHash: HASH, meta: { filePath: FILE_PATH } });
+  const elapsedMs = performance.now() - start;
+  cleanup();
+  return elapsedMs;
+}
+
 describe("loadAndMerge perf baseline (#335)", () => {
-  // 60s is a ridiculous ceiling even for a Windows CI runner. The goal is
-  // a recorded number, not a gate; see issue #335.
+  // 60s is a hang detector; < 10s is the ridiculous-ceiling assertion.
+  // The goal is a recorded number in CI output, not an enforced budget.
   it("500 annotations completes under 10s", { timeout: 60_000 }, async () => {
     const elapsedMs = await measureLoadAndMerge(500);
     console.log(`[perf] loadAndMerge(500) = ${elapsedMs.toFixed(1)}ms`);
@@ -130,6 +158,14 @@ describe("loadAndMerge perf baseline (#335)", () => {
   it("5000 annotations completes under 10s", { timeout: 60_000 }, async () => {
     const elapsedMs = await measureLoadAndMerge(5000);
     console.log(`[perf] loadAndMerge(5000) = ${elapsedMs.toFixed(1)}ms`);
+    expect(elapsedMs).toBeLessThan(10_000);
+  });
+
+  it("1000 annotations w/ 500 conflicting ids completes under 10s", {
+    timeout: 60_000,
+  }, async () => {
+    const elapsedMs = await measureLoadAndMergeWithConflicts(1000);
+    console.log(`[perf] loadAndMerge(1000, 500 conflicts) = ${elapsedMs.toFixed(1)}ms`);
     expect(elapsedMs).toBeLessThan(10_000);
   });
 });
