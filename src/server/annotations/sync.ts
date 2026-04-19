@@ -123,6 +123,8 @@ function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1
 
   if (!isCanonical && docHash && !loggedLegacyDocs.has(docHash)) {
     loggedLegacyDocs.add(docHash);
+    // TODO(#330): surface this lossy upgrade as a toast / doctor field once
+    // migrateToV1 has a production caller.
     console.error(
       `[ANNOTATION-STORE] upgrading legacy annotation type in ${docHash} to "comment" on write`,
     );
