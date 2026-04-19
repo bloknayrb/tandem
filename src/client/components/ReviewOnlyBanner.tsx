@@ -54,7 +54,7 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
         alignItems: "center",
         justifyContent: "space-between",
         fontSize: "13px",
-        color: "var(--tandem-info)",
+        color: "var(--tandem-info-fg-strong)",
         gap: "12px",
       }}
     >
@@ -106,7 +106,7 @@ export function ReviewOnlyBanner({ visible, documentId }: ReviewOnlyBannerProps)
           style={{
             background: "none",
             border: "none",
-            color: "var(--tandem-info)",
+            color: "var(--tandem-info-fg-strong)",
             cursor: "pointer",
             fontWeight: 500,
             fontSize: "13px",

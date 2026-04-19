@@ -1,5 +1,6 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { warningStateColors } from "../utils/colors";
 import * as Y from "yjs";
 import {
   DEFAULT_MCP_PORT,
@@ -563,10 +564,10 @@ export function SidePanel({
         <div
           style={{
             padding: "6px 16px",
-            background: "var(--tandem-warning-bg)",
-            borderBottom: "1px solid var(--tandem-warning-border)",
+            background: warningStateColors.background,
+            borderBottom: `1px solid ${warningStateColors.border}`,
             fontSize: "12px",
-            color: "var(--tandem-warning-fg-strong)",
+            color: warningStateColors.color,
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
