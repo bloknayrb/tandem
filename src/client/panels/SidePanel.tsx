@@ -34,7 +34,7 @@ interface SidePanelProps {
 const SMALL_BTN: React.CSSProperties = {
   padding: "2px 8px",
   fontSize: "11px",
-  border: "1px solid #d1d5db",
+  border: "1px solid var(--tandem-border-strong)",
   borderRadius: "3px",
   cursor: "pointer",
 };
@@ -552,7 +552,7 @@ export function SidePanel({
       data-testid="annotation-list-scroll-container"
       style={{
         width: "100%",
-        background: "#fafafa",
+        background: "var(--tandem-surface-muted)",
         display: "flex",
         flexDirection: "column",
         overflowY: "auto",
@@ -563,10 +563,10 @@ export function SidePanel({
         <div
           style={{
             padding: "6px 16px",
-            background: "#fef3c7",
-            borderBottom: "1px solid #fde68a",
+            background: "var(--tandem-warning-bg)",
+            borderBottom: "1px solid var(--tandem-warning-border)",
             fontSize: "12px",
-            color: "#92400e",
+            color: "var(--tandem-warning-fg-strong)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -580,10 +580,10 @@ export function SidePanel({
             style={{
               fontSize: "11px",
               padding: "1px 8px",
-              border: "1px solid #fbbf24",
+              border: "1px solid var(--tandem-warning-border)",
               borderRadius: "4px",
-              background: "#fff",
-              color: "#92400e",
+              background: "var(--tandem-surface)",
+              color: "var(--tandem-warning-fg-strong)",
               cursor: "pointer",
               fontWeight: 500,
             }}
@@ -593,7 +593,7 @@ export function SidePanel({
         </div>
       )}
       {/* Header */}
-      <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--tandem-border)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>
             Annotations
@@ -603,8 +603,8 @@ export function SidePanel({
                   marginLeft: "8px",
                   padding: "1px 6px",
                   fontSize: "11px",
-                  background: "#6366f1",
-                  color: "white",
+                  background: "var(--tandem-accent)",
+                  color: "var(--tandem-accent-fg)",
                   borderRadius: "10px",
                 }}
               >
@@ -634,10 +634,10 @@ export function SidePanel({
                 style={{
                   padding: "2px 8px",
                   fontSize: "11px",
-                  border: `1px solid ${reviewMode ? "#6366f1" : "#d1d5db"}`,
+                  border: `1px solid ${reviewMode ? "var(--tandem-accent)" : "var(--tandem-border-strong)"}`,
                   borderRadius: "3px",
-                  background: reviewMode ? "#eef2ff" : "#fff",
-                  color: reviewMode ? "#6366f1" : "#6b7280",
+                  background: reviewMode ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
+                  color: reviewMode ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
                   cursor: "pointer",
                   fontWeight: reviewMode ? 600 : 400,
                 }}
@@ -648,7 +648,7 @@ export function SidePanel({
                 data-testid="review-shortcut-hints"
                 style={{
                   fontSize: "10px",
-                  color: "#9ca3af",
+                  color: "var(--tandem-fg-subtle)",
                   marginTop: "2px",
                 }}
               >
@@ -664,16 +664,16 @@ export function SidePanel({
         <div
           style={{
             padding: "8px 16px",
-            background: "#eef2ff",
-            borderBottom: "1px solid #e5e7eb",
+            background: "var(--tandem-accent-bg)",
+            borderBottom: "1px solid var(--tandem-border)",
             fontSize: "12px",
-            color: "#4338ca",
+            color: "var(--tandem-accent-fg-strong)",
           }}
         >
           <div aria-live="polite" style={{ fontWeight: 600, marginBottom: "2px" }}>
             Reviewing {reviewIndex + 1} / {reviewTargets.length}
           </div>
-          <div style={{ color: "#6366f1" }}>
+          <div style={{ color: "var(--tandem-accent)" }}>
             Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · Z: undo · E: examine · Esc: exit
           </div>
         </div>
@@ -683,7 +683,7 @@ export function SidePanel({
       <div
         style={{
           padding: "8px 16px",
-          borderBottom: "1px solid #e5e7eb",
+          borderBottom: "1px solid var(--tandem-border)",
           display: "flex",
           gap: "4px",
           flexWrap: "wrap",
@@ -739,7 +739,7 @@ export function SidePanel({
             style={{
               background: "none",
               border: "none",
-              color: "#6366f1",
+              color: "var(--tandem-accent)",
               fontSize: "11px",
               cursor: "pointer",
               padding: "2px 4px",
@@ -764,7 +764,7 @@ export function SidePanel({
         <div
           style={{
             padding: "6px 16px",
-            borderBottom: "1px solid #e5e7eb",
+            borderBottom: "1px solid var(--tandem-border)",
             display: "flex",
             gap: "6px",
             alignItems: "center",
@@ -775,7 +775,7 @@ export function SidePanel({
               const isAccept = bulkConfirm === "accept";
               return (
                 <>
-                  <span style={{ fontSize: "11px", color: "#374151" }}>
+                  <span style={{ fontSize: "11px", color: "var(--tandem-fg)" }}>
                     {isAccept ? "Accept" : "Reject"}{" "}
                     {pending.length === allPending.length
                       ? `${pending.length} annotations?`
@@ -787,8 +787,8 @@ export function SidePanel({
                     onClick={isAccept ? handleBulkAccept : handleBulkDismiss}
                     style={{
                       ...SMALL_BTN,
-                      background: isAccept ? "#f0fdf4" : "#fef2f2",
-                      color: isAccept ? "#166534" : "#991b1b",
+                      background: isAccept ? "var(--tandem-success-bg)" : "var(--tandem-error-bg)",
+                      color: isAccept ? "var(--tandem-success-fg-strong)" : "var(--tandem-error-fg-strong)",
                       fontWeight: 600,
                     }}
                   >
@@ -797,7 +797,11 @@ export function SidePanel({
                   <button
                     data-testid="bulk-cancel-btn"
                     onClick={() => setBulkConfirm(null)}
-                    style={{ ...SMALL_BTN, background: "#fff", color: "#6b7280" }}
+                    style={{
+                      ...SMALL_BTN,
+                      background: "var(--tandem-surface)",
+                      color: "var(--tandem-fg-muted)",
+                    }}
                   >
                     Cancel
                   </button>
@@ -809,14 +813,22 @@ export function SidePanel({
               <button
                 data-testid="bulk-accept-btn"
                 onClick={() => setBulkConfirm("accept")}
-                style={{ ...SMALL_BTN, background: "#f0fdf4", color: "#166534" }}
+                style={{
+                  ...SMALL_BTN,
+                  background: "var(--tandem-success-bg)",
+                  color: "var(--tandem-success-fg-strong)",
+                }}
               >
                 Accept All ({pending.length})
               </button>
               <button
                 data-testid="bulk-dismiss-btn"
                 onClick={() => setBulkConfirm("dismiss")}
-                style={{ ...SMALL_BTN, background: "#fef2f2", color: "#991b1b" }}
+                style={{
+                  ...SMALL_BTN,
+                  background: "var(--tandem-error-bg)",
+                  color: "var(--tandem-error-fg-strong)",
+                }}
               >
                 Reject All
               </button>
@@ -828,7 +840,7 @@ export function SidePanel({
       {/* Annotation list */}
       <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
         {filtered.length === 0 ? (
-          <p role="status" style={{ fontSize: "13px", color: "#9ca3af", marginTop: "8px" }}>
+          <p role="status" style={{ fontSize: "13px", color: "var(--tandem-fg-subtle)", marginTop: "8px" }}>
             {hasFilters
               ? "No annotations match filters."
               : "No annotations yet. Open a document to get started."}
@@ -853,7 +865,7 @@ export function SidePanel({
             })}
             {resolved.length > 0 && (
               <details style={{ marginTop: "12px" }}>
-                <summary style={{ fontSize: "12px", color: "#9ca3af", cursor: "pointer" }}>
+                <summary style={{ fontSize: "12px", color: "var(--tandem-fg-subtle)", cursor: "pointer" }}>
                   {resolved.length} resolved
                 </summary>
                 <div role="list" aria-label="Resolved annotations">
@@ -875,7 +887,7 @@ export function SidePanel({
       </div>
       <style>{`
         @keyframes tandem-annotation-flash {
-          0% { background-color: rgba(99, 102, 241, 0.2); }
+          0% { background-color: var(--tandem-accent-bg); }
           100% { background-color: transparent; }
         }
         .tandem-annotation-flash {

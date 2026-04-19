@@ -164,7 +164,7 @@ export function ChatPanel({
         width: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#fafafa",
+        background: "var(--tandem-surface-muted)",
         flex: 1,
         minHeight: 0,
       }}
@@ -173,7 +173,7 @@ export function ChatPanel({
       <div
         style={{
           padding: "12px 16px",
-          borderBottom: "1px solid #e5e7eb",
+          borderBottom: "1px solid var(--tandem-border)",
           fontWeight: 600,
           fontSize: "14px",
           display: "flex",
@@ -186,8 +186,8 @@ export function ChatPanel({
           {unreadCount > 0 && (
             <span
               style={{
-                background: "#6366f1",
-                color: "white",
+                background: "var(--tandem-accent)",
+                color: "var(--tandem-accent-fg)",
                 borderRadius: "10px",
                 padding: "2px 8px",
                 fontSize: "11px",
@@ -205,7 +205,7 @@ export function ChatPanel({
                 background: "none",
                 border: "none",
                 cursor: "pointer",
-                color: "#9ca3af",
+                color: "var(--tandem-fg-subtle)",
                 fontSize: "13px",
                 padding: "2px 4px",
                 lineHeight: 1,
@@ -221,7 +221,12 @@ export function ChatPanel({
       <div style={{ flex: 1, overflow: "auto", padding: "12px", minHeight: 0 }}>
         {messages.length === 0 && (
           <div
-            style={{ color: "#9ca3af", fontSize: "13px", textAlign: "center", marginTop: "24px" }}
+            style={{
+              color: "var(--tandem-fg-subtle)",
+              fontSize: "13px",
+              textAlign: "center",
+              marginTop: "24px",
+            }}
           >
             No messages yet. Select text and send a message to Claude.
           </div>
@@ -233,9 +238,11 @@ export function ChatPanel({
               marginBottom: "12px",
               padding: "8px 12px",
               borderRadius: "8px",
-              background: msg.author === "user" ? "#eef2ff" : "#ffffff",
-              border: "1px solid " + (msg.author === "user" ? "#c7d2fe" : "#e5e7eb"),
+              background:
+                msg.author === "user" ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
+              border: `1px solid ${msg.author === "user" ? "var(--tandem-accent-border)" : "var(--tandem-border)"}`,
               fontSize: "13px",
+              color: "var(--tandem-fg)",
             }}
           >
             {/* Author + doc badge */}
@@ -244,7 +251,8 @@ export function ChatPanel({
                 style={{
                   fontWeight: 600,
                   fontSize: "11px",
-                  color: msg.author === "claude" ? "#6366f1" : "#374151",
+                  color:
+                    msg.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
                   textTransform: "uppercase",
                 }}
               >
@@ -254,8 +262,8 @@ export function ChatPanel({
                 <span
                   style={{
                     fontSize: "10px",
-                    color: "#6b7280",
-                    background: "#f3f4f6",
+                    color: "var(--tandem-fg-muted)",
+                    background: "var(--tandem-surface-muted)",
                     padding: "1px 6px",
                     borderRadius: "4px",
                   }}
@@ -263,7 +271,7 @@ export function ChatPanel({
                   {getDocFileName(msg.documentId) ?? msg.documentId}
                 </span>
               )}
-              <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "auto" }}>
+              <span style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginLeft: "auto" }}>
                 {new Date(msg.timestamp).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
@@ -279,10 +287,10 @@ export function ChatPanel({
                 style={{
                   padding: "4px 8px",
                   marginBottom: "6px",
-                  borderLeft: "3px solid #c7d2fe",
-                  background: "#f5f3ff",
+                  borderLeft: "3px solid var(--tandem-accent-border)",
+                  background: "var(--tandem-accent-bg)",
                   fontSize: "12px",
-                  color: "#4338ca",
+                  color: "var(--tandem-accent-fg-strong)",
                   cursor: "pointer",
                   borderRadius: "0 4px 4px 0",
                   maxHeight: "60px",
@@ -317,7 +325,7 @@ export function ChatPanel({
               padding: "8px 12px",
               marginBottom: "8px",
               fontSize: "12px",
-              color: CLAUDE_PRESENCE_COLOR,
+              color: "var(--tandem-author-claude)",
               display: "flex",
               alignItems: "center",
               gap: "8px",
@@ -328,7 +336,10 @@ export function ChatPanel({
                 <span
                   key={delay}
                   style={{
-                    ...TYPING_DOT_STYLE,
+                    width: "5px",
+                    height: "5px",
+                    borderRadius: "50%",
+                    background: "var(--tandem-author-claude)",
                     animation: `tandem-typing-bounce 1.2s ease-in-out ${delay}s infinite`,
                   }}
                 />
@@ -345,10 +356,10 @@ export function ChatPanel({
         <div
           style={{
             padding: "4px 12px",
-            background: "#eef2ff",
-            borderTop: "1px solid #c7d2fe",
+            background: "var(--tandem-accent-bg)",
+            borderTop: "1px solid var(--tandem-accent-border)",
             fontSize: "11px",
-            color: "#4338ca",
+            color: "var(--tandem-accent-fg-strong)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -364,7 +375,7 @@ export function ChatPanel({
               background: "none",
               border: "none",
               cursor: "pointer",
-              color: "#6b7280",
+              color: "var(--tandem-fg-muted)",
               fontSize: "14px",
             }}
           >
@@ -377,7 +388,7 @@ export function ChatPanel({
       <div
         style={{
           padding: "8px 12px",
-          borderTop: "1px solid #e5e7eb",
+          borderTop: "1px solid var(--tandem-border)",
           display: "flex",
           gap: "8px",
         }}
@@ -392,12 +403,14 @@ export function ChatPanel({
           style={{
             flex: 1,
             padding: "8px",
-            border: "1px solid #d1d5db",
+            border: "1px solid var(--tandem-border-strong)",
             borderRadius: "6px",
             fontSize: "13px",
             resize: "none",
             outline: "none",
             fontFamily: "inherit",
+            background: "var(--tandem-surface)",
+            color: "var(--tandem-fg)",
           }}
         />
         <button
@@ -405,8 +418,8 @@ export function ChatPanel({
           disabled={!inputText.trim()}
           style={{
             padding: "8px 12px",
-            background: inputText.trim() ? "#6366f1" : "#d1d5db",
-            color: "white",
+            background: inputText.trim() ? "var(--tandem-accent)" : "var(--tandem-border-strong)",
+            color: inputText.trim() ? "var(--tandem-accent-fg)" : "var(--tandem-fg-subtle)",
             border: "none",
             borderRadius: "6px",
             cursor: inputText.trim() ? "pointer" : "default",

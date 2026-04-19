@@ -14,11 +14,12 @@ export function FilterSelect({ value, onChange, options, testId }: FilterSelectP
       style={{
         padding: "2px 4px",
         fontSize: "11px",
-        border: "1px solid #e5e7eb",
+        border: "1px solid var(--tandem-border-strong)",
         borderRadius: "3px",
-        background: "#fff",
-        color: "#374151",
+        background: "var(--tandem-surface)",
+        color: "var(--tandem-fg)",
         cursor: "pointer",
+        outline: "none",
       }}
     >
       {options.map((o) => (

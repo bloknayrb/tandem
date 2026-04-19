@@ -72,7 +72,11 @@ export function StatusBar({
   }, [disconnectedSince]);
 
   const isReconnecting = connectionStatus === "connecting";
-  const dotColor = connected ? "#22c55e" : isReconnecting ? "#eab308" : "#ef4444";
+  const dotColor = connected
+    ? "var(--tandem-success)"
+    : isReconnecting
+      ? "var(--tandem-warning)"
+      : "var(--tandem-error)";
 
   let connLabel: string;
   if (showReconnectedFlash) {
@@ -100,10 +104,10 @@ export function StatusBar({
         justifyContent: "space-between",
         padding: "4px 16px",
         height: "28px",
-        borderTop: "1px solid #e5e7eb",
-        background: "#fafafa",
+        borderTop: "1px solid var(--tandem-border)",
+        background: "var(--tandem-surface-muted)",
         fontSize: "12px",
-        color: "#6b7280",
+        color: "var(--tandem-fg-muted)",
         userSelect: "none",
       }}
     >
@@ -120,12 +124,15 @@ export function StatusBar({
         />
         <span>{connLabel}</span>
         {documentCount > 0 && (
-          <span style={{ color: "#9ca3af" }}>
+          <span style={{ color: "var(--tandem-fg-subtle)" }}>
             {documentCount} doc{documentCount !== 1 ? "s" : ""} open
           </span>
         )}
         {saving && (
-          <span data-testid="save-indicator" style={{ color: "#6366f1", fontStyle: "italic" }}>
+          <span
+            data-testid="save-indicator"
+            style={{ color: "var(--tandem-accent)", fontStyle: "italic" }}
+          >
             Saving...
           </span>
         )}
@@ -137,7 +144,7 @@ export function StatusBar({
           alignItems: "center",
           gap: "4px",
           fontSize: "11px",
-          color: "#9ca3af",
+          color: "var(--tandem-fg-subtle)",
         }}
       >
         <span>You:</span>
@@ -161,8 +168,8 @@ export function StatusBar({
           style={{
             background: "transparent",
             border: "none",
-            borderBottom: "1px solid #e5e7eb",
-            color: "#6b7280",
+            borderBottom: "1px solid var(--tandem-border)",
+            color: "var(--tandem-fg-muted)",
             fontSize: "11px",
             width: "80px",
             outline: "none",
@@ -176,10 +183,10 @@ export function StatusBar({
             padding: "1px 8px",
             fontSize: "11px",
             fontWeight: 600,
-            color: "#92400e",
-            background: "#fef3c7",
+            color: "var(--tandem-warning-fg-strong)",
+            background: "var(--tandem-warning-bg)",
             borderRadius: "9999px",
-            border: "1px solid #fde68a",
+            border: "1px solid var(--tandem-warning-border)",
           }}
         >
           Review Only
@@ -191,7 +198,7 @@ export function StatusBar({
             width: "8px",
             height: "8px",
             borderRadius: "50%",
-            background: CLAUDE_PRESENCE_COLOR,
+            background: "var(--tandem-author-claude)",
             opacity: claudeActive ? 1 : 0.4,
             display: "inline-block",
             transition: "opacity 0.3s ease",
@@ -199,7 +206,10 @@ export function StatusBar({
           }}
         />
         <span
-          style={{ transition: "color 0.3s ease", color: claudeActive ? "#4b5563" : "#9ca3af" }}
+          style={{
+            transition: "color 0.3s ease",
+            color: claudeActive ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)",
+          }}
         >
           {claudeStatus ? `Claude -- ${claudeStatus}` : "Claude -- idle"}
         </span>

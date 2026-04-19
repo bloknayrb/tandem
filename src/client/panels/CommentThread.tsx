@@ -26,7 +26,7 @@ export function CommentThread({ replies }: CommentThreadProps) {
       style={{
         marginTop: "6px",
         paddingLeft: "8px",
-        borderLeft: "2px solid #e5e7eb",
+        borderLeft: "2px solid var(--tandem-border)",
       }}
     >
       {replies.map((reply) => (
@@ -50,19 +50,19 @@ export function CommentThread({ replies }: CommentThreadProps) {
               style={{
                 fontWeight: 600,
                 fontSize: "11px",
-                color: reply.author === "claude" ? "#6366f1" : "#374151",
+                color: reply.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
               }}
             >
               {reply.author === "claude" ? "Claude" : "You"}
             </span>
-            <span style={{ fontSize: "10px", color: "#9ca3af" }}>
+            <span style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)" }}>
               {reply.editedAt && (
                 <span style={{ fontStyle: "italic", marginRight: "4px" }}>(edited)</span>
               )}
               {formatTime(reply.timestamp)}
             </span>
           </div>
-          <p style={{ margin: 0, color: "#4b5563" }}>{reply.text}</p>
+          <p style={{ margin: 0, color: "var(--tandem-fg)" }}>{reply.text}</p>
         </div>
       ))}
     </div>

@@ -147,7 +147,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
     >
       <div
         style={{
-          background: "#fff",
+          background: "var(--tandem-surface)",
           borderRadius: "8px",
           boxShadow: "0 8px 30px rgba(0,0,0,0.15)",
           width: "440px",
@@ -156,7 +156,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
         data-testid="file-open-dialog"
       >
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "16px" }}>
-          <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600, color: "#111827" }}>
+          <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600, color: "var(--tandem-fg)" }}>
             Open File
           </h3>
           <button
@@ -166,7 +166,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               border: "none",
               cursor: "pointer",
               fontSize: "16px",
-              color: "#9ca3af",
+              color: "var(--tandem-fg-subtle)",
             }}
           >
             ×
@@ -181,11 +181,11 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               flex: 1,
               padding: "6px",
               fontSize: "13px",
-              border: "1px solid #e5e7eb",
+              border: `1px solid var(--tandem-border)`,
               borderRadius: "4px",
               cursor: "pointer",
-              background: mode === "path" ? "#6366f1" : "#fff",
-              color: mode === "path" ? "#fff" : "#374151",
+              background: mode === "path" ? "var(--tandem-accent)" : "var(--tandem-surface)",
+              color: mode === "path" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)",
             }}
           >
             File Path
@@ -196,11 +196,11 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               flex: 1,
               padding: "6px",
               fontSize: "13px",
-              border: "1px solid #e5e7eb",
+              border: `1px solid var(--tandem-border)`,
               borderRadius: "4px",
               cursor: "pointer",
-              background: mode === "upload" ? "#6366f1" : "#fff",
-              color: mode === "upload" ? "#fff" : "#374151",
+              background: mode === "upload" ? "var(--tandem-accent)" : "var(--tandem-surface)",
+              color: mode === "upload" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)",
             }}
           >
             Upload
@@ -222,9 +222,11 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                 width: "100%",
                 padding: "8px 10px",
                 fontSize: "13px",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: "4px",
                 boxSizing: "border-box",
+                background: "var(--tandem-surface)",
+                color: "var(--tandem-fg)",
               }}
               data-testid="file-path-input"
             />
@@ -240,8 +242,8 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                 border: "none",
                 borderRadius: "4px",
                 cursor: loading ? "wait" : "pointer",
-                background: loading ? "#9ca3af" : "#6366f1",
-                color: "#fff",
+                background: loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)",
+                color: "var(--tandem-accent-fg)",
                 opacity: !filePath.trim() ? 0.5 : 1,
               }}
               data-testid="file-open-submit"
@@ -263,7 +265,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                   <span
                     style={{
                       fontSize: "11px",
-                      color: "#9ca3af",
+                      color: "var(--tandem-fg-subtle)",
                       textTransform: "uppercase",
                       letterSpacing: "0.05em",
                     }}
@@ -277,7 +279,7 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                     style={{
                       background: "none",
                       border: "none",
-                      color: "#9ca3af",
+                      color: "var(--tandem-fg-subtle)",
                       fontSize: "11px",
                       cursor: "pointer",
                       padding: 0,
@@ -321,17 +323,18 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                           gap: "1px",
                         }}
                         onMouseEnter={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6";
+                          (e.currentTarget as HTMLButtonElement).style.background =
+                            "var(--tandem-surface-muted)";
                         }}
                         onMouseLeave={(e) => {
                           (e.currentTarget as HTMLButtonElement).style.background = "transparent";
                         }}
                       >
-                        <span style={{ fontSize: "13px", color: "#111827" }}>{filename}</span>
+                        <span style={{ fontSize: "13px", color: "var(--tandem-fg)" }}>{filename}</span>
                         <span
                           style={{
                             fontSize: "11px",
-                            color: "#9ca3af",
+                            color: "var(--tandem-fg-subtle)",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                             whiteSpace: "nowrap",
@@ -357,12 +360,12 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
             onDrop={handleFileDrop}
             onClick={() => fileInputRef.current?.click()}
             style={{
-              border: `2px dashed ${dragOver ? "#6366f1" : "#d1d5db"}`,
+              border: `2px dashed ${dragOver ? "var(--tandem-accent)" : "var(--tandem-border-strong)"}`,
               borderRadius: "6px",
               padding: "32px 16px",
               textAlign: "center",
               cursor: loading ? "wait" : "pointer",
-              background: dragOver ? "#eef2ff" : "#f9fafb",
+              background: dragOver ? "var(--tandem-accent-bg)" : "var(--tandem-surface-muted)",
               transition: "border-color 0.15s, background 0.15s",
             }}
             data-testid="file-upload-zone"
@@ -374,10 +377,10 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               onChange={handleFileSelect}
               style={{ display: "none" }}
             />
-            <div style={{ fontSize: "13px", color: "#6b7280" }}>
+            <div style={{ fontSize: "13px", color: "var(--tandem-fg-muted)" }}>
               {loading ? "Uploading..." : "Drop a file here or click to browse"}
             </div>
-            <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "6px" }}>
+            <div style={{ fontSize: "11px", color: "var(--tandem-fg-subtle)", marginTop: "6px" }}>
               .md, .txt, .html, .docx
             </div>
           </div>
@@ -389,10 +392,10 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
               marginTop: "10px",
               padding: "8px 10px",
               fontSize: "12px",
-              color: "#991b1b",
-              background: "#fef2f2",
+              color: "var(--tandem-error-fg-strong)",
+              background: "var(--tandem-error-bg)",
               borderRadius: "4px",
-              border: "1px solid #fecaca",
+              border: "1px solid var(--tandem-error-border)",
             }}
             data-testid="file-open-error"
           >

@@ -41,8 +41,8 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
         left: 24,
         zIndex: 900,
         maxWidth: 340,
-        background: "white",
-        borderLeft: "4px solid #6366f1",
+        background: "var(--tandem-surface)",
+        borderLeft: "4px solid var(--tandem-accent)",
         borderRadius: 8,
         boxShadow: "0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08)",
         padding: "16px 20px",
@@ -58,7 +58,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: i <= currentStep ? "#6366f1" : "#e5e7eb",
+                background: i <= currentStep ? "var(--tandem-accent)" : "var(--tandem-border)",
                 transition: "background 0.2s",
               }}
             />
@@ -70,7 +70,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
         style={{
           fontSize: 14,
           fontWeight: 600,
-          color: "#1f2937",
+          color: "var(--tandem-fg)",
           marginBottom: 6,
         }}
       >
@@ -81,7 +81,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
         style={{
           fontSize: 13,
           lineHeight: 1.5,
-          color: "#4b5563",
+          color: "var(--tandem-fg-muted)",
           marginBottom: isComplete ? 0 : 14,
         }}
       >
@@ -96,7 +96,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 11, color: "#9ca3af" }}>
+          <span style={{ fontSize: 11, color: "var(--tandem-fg-subtle)" }}>
             Step {currentStep + 1} of {TOTAL_STEPS}
           </span>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -108,7 +108,7 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
                 border: "none",
                 cursor: "pointer",
                 fontSize: 12,
-                color: "#9ca3af",
+                color: "var(--tandem-fg-subtle)",
                 padding: 0,
                 textDecoration: "underline",
               }}
@@ -121,10 +121,10 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
               style={{
                 padding: "4px 12px",
                 fontSize: 12,
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--tandem-border-strong)",
                 borderRadius: 4,
-                background: "white",
-                color: "#374151",
+                background: "var(--tandem-surface)",
+                color: "var(--tandem-fg-muted)",
                 cursor: "pointer",
                 fontWeight: 500,
               }}

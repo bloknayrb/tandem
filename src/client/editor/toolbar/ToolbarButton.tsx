@@ -24,17 +24,17 @@ export function ToolbarButton({
   onClick,
   style,
 }: ToolbarButtonProps) {
-  let border = "1px solid #e5e7eb";
-  let background = "#fff";
-  let color = "#374151";
+  let border = "1px solid var(--tandem-border)";
+  let background = "var(--tandem-surface)";
+  let color = "var(--tandem-fg)";
 
   if (disabled) {
-    background = "#f9fafb";
-    color = "#9ca3af";
+    background = "var(--tandem-surface-muted)";
+    color = "var(--tandem-fg-subtle)";
   } else if (active) {
-    border = "1px solid #818cf8";
-    background = "#eef2ff";
-    color = "#4338ca";
+    border = "1px solid var(--tandem-accent)";
+    background = "var(--tandem-accent-bg)";
+    color = "var(--tandem-accent)";
   }
 
   const ariaLabelValue = ariaLabel ?? (typeof label === "string" ? label : undefined);
