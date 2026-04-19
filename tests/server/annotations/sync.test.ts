@@ -321,6 +321,38 @@ describe("legacy-type sanitize on write", () => {
     errorSpy.mockRestore();
   });
 
+  it("rewrites 'question' type to 'comment' with directedAt preserved, envelope stays loadable", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(
+      () =>
+        annMap.set("ann_question", {
+          ...annRecord({ id: "ann_question", rev: 3 }),
+          type: "question",
+        }),
+      MCP_ORIGIN,
+    );
+
+    await store.flush();
+
+    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.annotations[0].type).toBe("comment");
+    expect(onDisk.annotations[0].directedAt).toBe("claude");
+
+    // Envelope must parse cleanly — regression here means the store would
+    // self-quarantine on the next open.
+    const parsed = parseAnnotationDoc(raw);
+    expect(parsed.ok).toBe(true);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
   it("dedupes the upgrade warning to once per docHash per session", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
