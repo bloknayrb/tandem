@@ -3,13 +3,23 @@ import envPaths from "env-paths";
 import net from "net";
 import path from "path";
 
-const paths = envPaths("tandem", { suffix: "" });
+/**
+ * Resolve the Tandem app-data root directory. `TANDEM_APP_DATA_DIR` overrides
+ * the `env-paths` default. Not memoised so tests can swap tempdirs mid-run.
+ */
+export function resolveAppDataDir(): string {
+  const envOverride = process.env.TANDEM_APP_DATA_DIR;
+  if (envOverride && envOverride.length > 0) return envOverride;
+  return envPaths("tandem", { suffix: "" }).data;
+}
+
+const APP_DATA_DIR = resolveAppDataDir();
 
 /** Platform-appropriate session storage directory. */
-export const SESSION_DIR = path.join(paths.data, "sessions");
+export const SESSION_DIR = path.join(APP_DATA_DIR, "sessions");
 
 /** Path to the file tracking the last version the user ran. */
-export const LAST_SEEN_VERSION_FILE = path.join(paths.data, "last-seen-version");
+export const LAST_SEEN_VERSION_FILE = path.join(APP_DATA_DIR, "last-seen-version");
 
 /**
  * Kill any process currently listening on the given TCP port.

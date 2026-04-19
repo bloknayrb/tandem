@@ -1,7 +1,8 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { docHash, isUploadPath } from "../../../src/server/annotations/doc-hash.js";
+import { docHash } from "../../../src/server/annotations/doc-hash.js";
+import { isUploadPath } from "../../../src/shared/paths.js";
 
 const HEX_64_RE = /^[0-9a-f]{64}$/;
 const IS_WINDOWS = process.platform === "win32";

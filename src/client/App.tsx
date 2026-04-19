@@ -11,6 +11,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants";
+import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor, TandemMode } from "../shared/types";
 import { TandemModeSchema } from "../shared/types";
@@ -180,7 +181,7 @@ export default function App() {
       const before = loadRecentFiles();
       let recent = before;
       for (const tab of tabs) {
-        if (!tab.filePath.startsWith("upload://")) {
+        if (!isUploadPath(tab.filePath)) {
           recent = addRecentFile(recent, tab.filePath);
         }
       }
