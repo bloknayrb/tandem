@@ -394,6 +394,46 @@ describe("legacy-type sanitize on write", () => {
     cleanup2("close");
     errorSpy.mockRestore();
   });
+
+  it("loadAndMerge logs legacy-type upgrade when Y.Map has a non-canonical type that beats the file", async () => {
+    // Seed the Y.Map with a legacy-typed annotation at rev:2 (as session-restore
+    // would leave it). The Y.Map wins the merge — no file-side overwrite — so
+    // normalizeAnnotation runs against this Y.Map value at the file-vs-ymap
+    // comparison site (sync.ts ~line 438).
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_legacy_merge", {
+      ...annRecord({ id: "ann_legacy_merge", rev: 2 }),
+      type: "suggestion",
+    });
+
+    // Pre-write a file with a CANONICAL-typed record at rev:1 so the file
+    // parses cleanly (type:"suggestion" in the file body would Zod-reject as
+    // corrupt and route through the quarantine path, bypassing the merge loop).
+    // Y.Map rev:2 > file rev:1, so Y.Map wins and the legacy-typed Y.Map entry
+    // is the input to normalizeAnnotation at line ~438.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        annotations: [annRecord({ id: "ann_legacy_merge", rev: 1 })],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    // Without the docHash fix, normalizeAnnotation is called without docHash
+    // and the guard `if (!isCanonical && docHash && ...)` short-circuits → 0.
+    // With the fix, docHash is passed and the log fires → 1.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------
