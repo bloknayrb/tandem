@@ -254,7 +254,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  const openAtButton = useCallback(() => {
+  const openSettings = useCallback(() => {
     setSettingsOpen(true);
   }, []);
   const settingsOpenRef = useRef(settingsOpen);
@@ -264,8 +264,8 @@ export default function App() {
       setSettingsOpen(false);
       return;
     }
-    openAtButton();
-  }, [openAtButton]);
+    openSettings();
+  }, [openSettings]);
   useSettingsShortcut(toggleSettings);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting

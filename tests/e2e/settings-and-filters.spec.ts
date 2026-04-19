@@ -806,13 +806,16 @@ test("settings popover stays within viewport on short screens (#306)", async ({ 
   const box = await popover.boundingBox();
   const viewport = page.viewportSize();
   expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
 
-  const scrollable = await popover.evaluate(
-    (el) => el.scrollHeight > el.clientHeight,
-  );
-  expect(scrollable).toBe(true);
+  const { overflowed, overflowY } = await popover.evaluate((el) => ({
+    overflowed: el.scrollHeight > el.clientHeight,
+    overflowY: window.getComputedStyle(el).overflowY,
+  }));
+  expect(overflowed).toBe(true);
+  expect(overflowY).toBe("auto");
 });
 
 // Verifies that selections are buffered server-side and no longer emitted
