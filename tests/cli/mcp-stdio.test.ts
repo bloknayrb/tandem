@@ -803,13 +803,12 @@ describe("mcp-stdio per-request timeout", () => {
 
   it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
     // Regression guard: after the per-request timer fires and the proxy sends a
-    // -32000, the process should be able to exit cleanly. If shutdown is triggered
-    // (e.g., by the plugin host closing stdin which triggers stdio.close),
-    // uncleared timer handles must not delay process.exit.
+    // -32000, the process should exit cleanly when stdin is closed.
     //
-    // Here we verify a simpler invariant: after a half-open timeout fires (-32000
-    // arrives on stdout), the child can be killed cleanly and its 'close' event
-    // fires within 3s. The timer has already fired and been cleared from the map.
+    // stdin.end() routes through stdio.onclose → shutdown(0) → process.exit(0),
+    // exercising the real natural-exit path. SIGTERM would bypass the Node event
+    // loop entirely and cannot detect orphan timer handles that block clean exit.
+    // The timer has already fired and been cleared from the map before stdin.end().
     const { port } = await makeHalfOpenServer();
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
@@ -832,8 +831,10 @@ describe("mcp-stdio per-request timeout", () => {
     expect(parsed.id).toBe(40);
     expect(parsed.error?.code).toBe(-32000);
 
-    // Kill the child and verify it closes within 3s.
-    child.kill();
+    // Close stdin (routes through stdio.onclose → shutdown(0) → process.exit(0)).
+    // This exercises the natural exit path — SIGTERM would bypass the event loop
+    // and cannot detect orphan timer handles that prevent clean shutdown.
+    child.stdin.end();
     const closed = await new Promise<boolean>((resolve) => {
       const deadline = setTimeout(() => resolve(false), 3_000);
       child!.once("close", () => {
