@@ -1,10 +1,11 @@
 import net from "net";
 import path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   freePort,
   parseLsofPids,
   parseSsPid,
+  resolveAppDataDir,
   SESSION_DIR,
   waitForPort,
 } from "../../src/server/platform";
@@ -113,6 +114,41 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
         "Port 49172 still not available after 500ms",
       );
       expect(Date.now() - start).toBeGreaterThanOrEqual(400);
+    });
+  });
+
+  describe("resolveAppDataDir", () => {
+    let savedEnv: string | undefined;
+
+    beforeEach(() => {
+      savedEnv = process.env.TANDEM_APP_DATA_DIR;
+    });
+
+    afterEach(() => {
+      if (savedEnv === undefined) {
+        delete process.env.TANDEM_APP_DATA_DIR;
+      } else {
+        process.env.TANDEM_APP_DATA_DIR = savedEnv;
+      }
+    });
+
+    it("returns TANDEM_APP_DATA_DIR when set to a non-empty string", () => {
+      process.env.TANDEM_APP_DATA_DIR = "/custom/app-data";
+      expect(resolveAppDataDir()).toBe("/custom/app-data");
+    });
+
+    it("falls back to an absolute env-paths path when TANDEM_APP_DATA_DIR is unset", () => {
+      delete process.env.TANDEM_APP_DATA_DIR;
+      const result = resolveAppDataDir();
+      expect(path.isAbsolute(result)).toBe(true);
+      expect(result.replace(/\\/g, "/").toLowerCase()).toContain("tandem");
+    });
+
+    it("treats empty string as unset and falls back to env-paths", () => {
+      process.env.TANDEM_APP_DATA_DIR = "";
+      const result = resolveAppDataDir();
+      expect(path.isAbsolute(result)).toBe(true);
+      expect(result.replace(/\\/g, "/").toLowerCase()).toContain("tandem");
     });
   });
 });
