@@ -794,7 +794,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
 test("settings popover stays within viewport on short screens (#306)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
-  await page.setViewportSize({ width: 1024, height: 600 });
+  await page.setViewportSize({ width: 1024, height: 400 }); // 400px guarantees maxHeight overflow
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
