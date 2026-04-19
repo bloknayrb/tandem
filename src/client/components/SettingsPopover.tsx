@@ -18,7 +18,6 @@ import { useUserName } from "../hooks/useUserName";
 interface SettingsPopoverProps {
   open: boolean;
   onClose: () => void;
-  anchorRect: DOMRect | null;
   settings: TandemSettings;
   onUpdate: (partial: Partial<TandemSettings>) => void;
   /** Element to return focus to on close (typically the settings gear button). */
@@ -40,7 +39,6 @@ const FOCUSABLE_SELECTOR =
 export function SettingsPopover({
   open,
   onClose,
-  anchorRect,
   settings,
   onUpdate,
   returnFocusRef,
@@ -161,17 +159,7 @@ export function SettingsPopover({
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
-  if (!open || !anchorRect) return null;
-
-  // Position below the anchor, centered horizontally
-  const left = Math.max(
-    8,
-    Math.min(
-      anchorRect.left + anchorRect.width / 2 - POPOVER_WIDTH / 2,
-      window.innerWidth - POPOVER_WIDTH - 8,
-    ),
-  );
-  const top = anchorRect.bottom + 6;
+  if (!open) return null;
 
   const sectionLabelStyle: React.CSSProperties = {
     fontSize: "11px",
@@ -216,8 +204,11 @@ export function SettingsPopover({
       tabIndex={-1}
       style={{
         position: "fixed",
-        left: `${left}px`,
-        top: `${top}px`,
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        maxHeight: "calc(100vh - 32px)",
+        overflowY: "auto",
         width: `${POPOVER_WIDTH}px`,
         background: "var(--tandem-surface)",
         color: "var(--tandem-fg)",
