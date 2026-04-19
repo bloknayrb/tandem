@@ -69,7 +69,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **`--tandem-success-*`** — green. `--tandem-success`, `-fg`, `-fg-strong`, `-bg`, `-border`.
 - **`--tandem-warning-*`** — amber. `--tandem-warning`, `-fg`, `-fg-strong`, `-bg`, `-border`. Used for held-annotation banners and held badges.
 - **`--tandem-error-*`** — red. `--tandem-error`, `-fg`, `-fg-strong`, `-bg`, `-border`. Used for `ConnectionBanner`.
-- **`--tandem-info-*`** — blue. `--tandem-info`, `-fg`, `-fg-bg`, `-border`. Used for informational surfaces.
+- **`--tandem-info-*`** — blue. `--tandem-info`, `-fg`, `-bg`, `-border`. Used for informational surfaces.
 - **`--tandem-accent-border`** — single token for accent-family bordered elements.
 - **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark.
 - **Light mode:** all `*-bg` tokens use `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))` for consistency.
