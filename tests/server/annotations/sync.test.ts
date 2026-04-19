@@ -36,6 +36,7 @@ import {
 import {
   getTombstones,
   loadAndMerge,
+  pickWinner,
   recordTombstone,
   registerAnnotationObserver,
   resetForTesting,
@@ -789,5 +790,51 @@ describe("replies merge", () => {
     expect(winner.rev).toBe(4);
     expect(winner.text).toBe("from-ymap");
     cleanup();
+  });
+});
+
+describe("pickWinner", () => {
+  it("higher file rev wins (rule 1)", () => {
+    expect(pickWinner({ rev: 5 }, { rev: 4 })).toBe("file");
+  });
+
+  it("higher ymap rev wins (rule 1)", () => {
+    expect(pickWinner({ rev: 4 }, { rev: 5 })).toBe("ymap");
+  });
+
+  it("tied rev, higher file editedAt wins (rule 2)", () => {
+    expect(pickWinner({ rev: 3, editedAt: 200 }, { rev: 3, editedAt: 100 })).toBe("file");
+  });
+
+  it("tied rev, higher ymap editedAt wins (rule 2)", () => {
+    expect(pickWinner({ rev: 3, editedAt: 100 }, { rev: 3, editedAt: 200 })).toBe("ymap");
+  });
+
+  it("tied rev + tied editedAt → ymap wins (default to live session)", () => {
+    expect(pickWinner({ rev: 3, editedAt: 100 }, { rev: 3, editedAt: 100 })).toBe("ymap");
+  });
+
+  it("tied rev, file has editedAt but ymap does not → file wins (rule 3 — session-restore heuristic)", () => {
+    // Session-restored Y.Map entries from pre-plan Tandem versions lack
+    // `editedAt`. If the file carries a real timestamp, treat it as more
+    // recent than the ambient live-session state.
+    expect(pickWinner({ rev: 2, editedAt: 500 }, { rev: 2 })).toBe("file");
+  });
+
+  it("tied rev, neither has editedAt → ymap wins (rule 4)", () => {
+    expect(pickWinner({ rev: 2 }, { rev: 2 })).toBe("ymap");
+  });
+
+  it("tied rev, ymap has editedAt but file does not → ymap wins (rule 4 — no session-restore heuristic for reverse)", () => {
+    // Symmetric inverse of the session-restore heuristic: the heuristic only
+    // kicks in when the FILE carries a timestamp the Y.Map is missing. In
+    // the reverse shape, we default to Y.Map (live session).
+    expect(pickWinner({ rev: 2 }, { rev: 2, editedAt: 500 })).toBe("ymap");
+  });
+
+  it("rev 0 vs rev 0 with no editedAt → ymap (both-missing-everything case)", () => {
+    // Legacy session blob → legacy session blob. The default-ymap rule
+    // prevents a loadAndMerge loop on a file that carries the same state.
+    expect(pickWinner({ rev: 0 }, { rev: 0 })).toBe("ymap");
   });
 });
