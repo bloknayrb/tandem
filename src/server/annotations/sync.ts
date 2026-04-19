@@ -289,12 +289,12 @@ function pickWinner(
 }
 
 /**
- * Merge a Map of file records into a Y.Map under last-writer-wins rules.
- * For each file record: insert if absent (unless `shouldSkipInsert` vetoes),
- * otherwise run `pickWinner` against the normalized Y.Map copy. After the
- * pass, `needsWrite` is true if the Y.Map carries ids the file doesn't
- * (minus `ymapOnlyIgnoreIds`) — the caller queues a post-merge write so
- * those Y.Map-only entries land on disk.
+ * Merge a Map of file records into a Y.Map under `pickWinner`'s rules
+ * (higher `rev` wins; tied `rev` falls back to `editedAt`). For each file
+ * record: insert if absent (unless `shouldSkipInsert` vetoes), otherwise
+ * compare normalized copies and let the winner replace. After the pass,
+ * `needsWrite` is true if the Y.Map carries ids the file doesn't (minus
+ * `ymapOnlyIgnoreIds`) — caller queues a post-merge write so those land.
  */
 function mergeMap<T extends { rev: number; editedAt?: number }>(
   ymap: Y.Map<unknown>,
@@ -423,18 +423,20 @@ export async function loadAndMerge(
       // else: resurrection — leave the Y.Map entry alone.
     }
 
-    // Set of ids where the tombstone rev beats the file's alive record. The
-    // file shouldn't carry both, but if it does (bug, manual edit) the
-    // tombstone is authoritative — skip the insert.
+    // Set of ids where a tombstone beats the file's alive record. The file
+    // shouldn't carry both (contradiction — bug or manual edit), but if it
+    // does the tombstone is authoritative. This guards only the
+    // Y.Map-absent insert path; the preceding loop already handled the
+    // Y.Map-present case.
+    const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
     const winningTombstoneIds = new Set<string>();
     const tombstoneIds = new Set<string>();
     for (const stone of file.tombstones) {
       tombstoneIds.add(stone.id);
-      const fileAnn = file.annotations.find((a) => a.id === stone.id);
+      const fileAnn = fileAnns.get(stone.id);
       if (fileAnn && stone.rev > fileAnn.rev) winningTombstoneIds.add(stone.id);
     }
 
-    const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
     const annResult = mergeMap(annMap, fileAnns, normalizeAnnotation, {
       shouldSkipInsert: (id) => winningTombstoneIds.has(id),
       ymapOnlyIgnoreIds: tombstoneIds,

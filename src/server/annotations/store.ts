@@ -10,8 +10,9 @@
  *   - `store.lock` PID lockfile is a belt-and-braces fallback on top of the
  *     port 3479 bind, which is the primary concurrent-writer lock.
  *   - After `DISABLE_AFTER_FAILURES` consecutive write failures for a doc,
- *     that doc's writes are disabled in-memory until process restart — one
- *     persistent-notice toast fires, not a flood.
+ *     that doc's writes are disabled in-memory until process restart. Toasts
+ *     are throttled per-doc (`NOTIFY_THROTTLE_MS`) so a failing-disk burst
+ *     doesn't flood the UI.
  *   - `TANDEM_ANNOTATION_STORE=off` short-circuits the entire module.
  */
 
