@@ -224,6 +224,15 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
   return { ok: true, doc: result.data };
 }
 
+/** Result of `migrateToV1`. Drop counts let callers surface lossy upgrades. */
+export interface MigrationResult {
+  doc: AnnotationDocV1;
+  /** Number of annotation records the migration had to skip (non-object input or schema rejection). */
+  droppedAnnotations: number;
+  /** Number of reply records the migration had to skip (same criteria). */
+  droppedReplies: number;
+}
+
 /**
  * Best-effort migration from a legacy session-blob–shaped object (no `rev`,
  * no `tombstones`, no `docHash`, no `meta`) into the v1 envelope shape.
@@ -235,38 +244,54 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
  *   - `meta: { filePath: "", lastUpdated: 0 }` (caller overrides)
  *
  * Expects `raw` to be roughly `{ annotations?: unknown[]; replies?: unknown[] }`.
- * Anything unrecognized is coerced; invalid records are skipped silently —
- * this is a lossy upgrade path, not a strict validator.
- *
- * NOTE: Phase 1 ships only this single migration function. The general
- * v1 → vN migration framework is deferred to issue #320.
+ * Anything unrecognized is coerced; invalid records are skipped and tallied
+ * in `droppedAnnotations`/`droppedReplies` so callers can surface data loss
+ * rather than silently discarding records. The full v1 → vN migration
+ * framework is deferred to #320.
  */
-export function migrateToV1(raw: unknown): AnnotationDocV1 {
+export function migrateToV1(raw: unknown): MigrationResult {
   const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 
   const annotationsIn = Array.isArray(src.annotations) ? src.annotations : [];
   const repliesIn = Array.isArray(src.replies) ? src.replies : [];
 
-  const annotations = annotationsIn.flatMap((ann): AnnotationRecordV1[] => {
-    if (!ann || typeof ann !== "object") return [];
+  let droppedAnnotations = 0;
+  let droppedReplies = 0;
+
+  const annotations: AnnotationRecordV1[] = [];
+  for (const ann of annotationsIn) {
+    if (!ann || typeof ann !== "object") {
+      droppedAnnotations++;
+      continue;
+    }
     const withRev = { rev: 0, ...(ann as object) };
     const parsed = AnnotationRecordSchemaV1.safeParse(withRev);
-    return parsed.success ? [parsed.data] : [];
-  });
+    if (parsed.success) annotations.push(parsed.data);
+    else droppedAnnotations++;
+  }
 
-  const replies = repliesIn.flatMap((r): AnnotationReplyRecordV1[] => {
-    if (!r || typeof r !== "object") return [];
+  const replies: AnnotationReplyRecordV1[] = [];
+  for (const r of repliesIn) {
+    if (!r || typeof r !== "object") {
+      droppedReplies++;
+      continue;
+    }
     const withRev = { rev: 0, ...(r as object) };
     const parsed = AnnotationReplyRecordSchemaV1.safeParse(withRev);
-    return parsed.success ? [parsed.data] : [];
-  });
+    if (parsed.success) replies.push(parsed.data);
+    else droppedReplies++;
+  }
 
   return {
-    schemaVersion: SCHEMA_VERSION,
-    docHash: "",
-    meta: { filePath: "", lastUpdated: 0 },
-    annotations,
-    tombstones: [],
-    replies,
+    doc: {
+      schemaVersion: SCHEMA_VERSION,
+      docHash: "",
+      meta: { filePath: "", lastUpdated: 0 },
+      annotations,
+      tombstones: [],
+      replies,
+    },
+    droppedAnnotations,
+    droppedReplies,
   };
 }

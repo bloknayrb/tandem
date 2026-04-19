@@ -78,10 +78,10 @@ function makeFile(
   filePath: string,
   overrides: Partial<AnnotationDocV1> = {},
 ): AnnotationDocV1 {
-  const base = migrateToV1({});
-  base.docHash = docHash;
-  base.meta = { filePath, lastUpdated: Date.now() };
-  return { ...base, ...overrides };
+  const { doc } = migrateToV1({});
+  doc.docHash = docHash;
+  doc.meta = { filePath, lastUpdated: Date.now() };
+  return { ...doc, ...overrides };
 }
 
 function syncCtx(ydoc: Y.Doc, store: DocStore, overrides: Partial<SyncContext> = {}): SyncContext {

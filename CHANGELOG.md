@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Annotation serialization upgrades legacy `type` values on write** (#329) — records with non-canonical `type` (`"suggestion"` / `"question"` / anything outside `highlight` / `comment` / `flag`) are now routed through `sanitizeAnnotation` during snapshot serialization, which rewrites them to `"comment"`. Before this change, a legacy session-restored record would be written verbatim to disk, then fail Zod validation on the next load and quarantine the envelope to `.json.future`. **One-way lossy migration:** users with legacy-type annotations will see `type` flip to `"comment"` on the next durable write for that document — the original distinction between `suggestion` and `question` is not recoverable.
+
+### Added
+
+- **`migrateToV1` reports drop counts** (#330) — `migrateToV1(raw)` now returns `{ doc, droppedAnnotations, droppedReplies }` so future production callers can surface lossy upgrades to users rather than silently discarding malformed records. No production caller exists yet (load-time envelope validation goes through `parseAnnotationDoc`, which short-circuits on the v1 schema); a follow-up will wire drop counts to `npm run doctor` or a toast when the first caller lands.
+
 ## [0.6.2] - 2026-04-16
 
 ### Fixed

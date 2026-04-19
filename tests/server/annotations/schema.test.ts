@@ -194,7 +194,7 @@ describe("migrateToV1", () => {
       ],
     };
 
-    const migrated = migrateToV1(legacy);
+    const { doc: migrated, droppedAnnotations, droppedReplies } = migrateToV1(legacy);
 
     expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
     expect(migrated.docHash).toBe("");
@@ -210,6 +210,9 @@ describe("migrateToV1", () => {
     expect(migrated.replies).toHaveLength(1);
     expect(migrated.replies[0]?.rev).toBe(0);
     expect(migrated.replies[0]?.text).toBe("sounds good");
+
+    expect(droppedAnnotations).toBe(0);
+    expect(droppedReplies).toBe(0);
   });
 
   it("produces a doc that passes full v1 validation", () => {
@@ -227,17 +230,19 @@ describe("migrateToV1", () => {
       ],
       replies: [],
     };
-    const migrated = migrateToV1(legacy);
+    const { doc: migrated } = migrateToV1(legacy);
     const round = AnnotationDocSchemaV1.safeParse(migrated);
     expect(round.success).toBe(true);
   });
 
   it("tolerates completely empty input", () => {
-    const migrated = migrateToV1({});
+    const { doc: migrated, droppedAnnotations, droppedReplies } = migrateToV1({});
     expect(migrated.annotations).toEqual([]);
     expect(migrated.replies).toEqual([]);
     expect(migrated.tombstones).toEqual([]);
     expect(migrated.schemaVersion).toBe(1);
+    expect(droppedAnnotations).toBe(0);
+    expect(droppedReplies).toBe(0);
   });
 
   it("skips malformed annotation records silently (lossy upgrade)", () => {
@@ -266,16 +271,18 @@ describe("migrateToV1", () => {
         "garbage",
       ],
     };
-    const migrated = migrateToV1(legacy);
+    const { doc: migrated, droppedAnnotations } = migrateToV1(legacy);
     expect(migrated.annotations).toHaveLength(1);
     expect(migrated.annotations[0]?.id).toBe("good");
+    // Two invalid records (missing id, "garbage" string) → counted as drops.
+    expect(droppedAnnotations).toBe(2);
   });
 
   it("tolerates non-object input without throwing", () => {
     expect(() => migrateToV1(null)).not.toThrow();
     expect(() => migrateToV1("nope")).not.toThrow();
     expect(() => migrateToV1(42)).not.toThrow();
-    const migrated = migrateToV1(null);
+    const { doc: migrated } = migrateToV1(null);
     expect(migrated.annotations).toEqual([]);
   });
 });

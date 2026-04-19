@@ -56,6 +56,8 @@
 
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
+import { AnnotationTypeSchema } from "../../shared/types.js";
 import { FILE_SYNC_ORIGIN } from "../events/queue.js";
 import {
   type AnnotationDocV1,
@@ -94,21 +96,43 @@ const tombstonesByDoc = new Map<string, TombstoneRecordV1[]>();
 // Serialization
 // ---------------------------------------------------------------------------
 
+const CANONICAL_TYPES = new Set<string>(AnnotationTypeSchema.options);
+const loggedLegacyDocs = new Set<string>();
+
 /**
  * Normalize a Y.Map annotation value into an `AnnotationRecordV1`. Supplies
- * `rev: 0` for legacy session-blob entries that lack the field. All other
- * fields pass through unchanged — the Zod schema validates on parse, not
- * here (this is called on the write path, where we trust the Y.Map state).
+ * `rev: 0` for legacy session-blob entries that lack the field.
  *
- * Fast path: records that already carry a numeric `rev` are returned as-is
- * (cast only). The vast majority of post-migration traffic hits this path,
- * so we skip the object-spread allocation.
+ * Records with a non-canonical `type` (e.g. pre-canonicalization `"suggestion"`
+ * or `"question"`) are routed through `sanitizeAnnotation` which rewrites
+ * them to `"comment"`. Without this, the next `parseAnnotationDoc` would
+ * reject the file and self-quarantine the envelope. The Y.Map value is NOT
+ * rewritten in place, so every subsequent snapshot of a legacy record re-runs
+ * the sanitize spread until a user action overwrites the entry — acceptable
+ * cost given the small record count and infrequent snapshots.
+ *
+ * Fast path for the common case (canonical type + numeric rev) skips the
+ * spread/sanitize entirely — `snapshot()` runs once per debounced write
+ * across every annotation in the doc, so the hot path stays tight.
  */
-function normalizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
+function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1 | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown> & Partial<AnnotationRecordV1>;
-  if (typeof obj.rev === "number") return obj as AnnotationRecordV1;
-  return { ...(obj as AnnotationRecordV1), rev: 0 };
+  const isCanonical = CANONICAL_TYPES.has(obj.type as string);
+  if (typeof obj.rev === "number" && isCanonical) return obj as AnnotationRecordV1;
+
+  if (!isCanonical && docHash && !loggedLegacyDocs.has(docHash)) {
+    loggedLegacyDocs.add(docHash);
+    console.error(
+      `[ANNOTATION-STORE] upgrading legacy annotation type in ${docHash} to "comment" on write`,
+    );
+  }
+
+  const sanitized = sanitizeAnnotation(obj as unknown as RawAnnotation);
+  return {
+    ...sanitized,
+    rev: typeof obj.rev === "number" ? obj.rev : 0,
+  } as unknown as AnnotationRecordV1;
 }
 
 function normalizeReply(raw: unknown): AnnotationReplyRecordV1 | null {
@@ -130,7 +154,7 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
 
   const annotations: AnnotationRecordV1[] = [];
   for (const value of annMap.values()) {
-    const rec = normalizeAnnotation(value);
+    const rec = normalizeAnnotation(value, docHash);
     if (rec) annotations.push(rec);
   }
 
@@ -205,6 +229,9 @@ export function registerAnnotationObserver(
     repMap.unobserve(onMutation);
     if (phase === "close") {
       tombstonesByDoc.delete(docHash);
+      // Drop the dedupe flag so a subsequent reopen can log once again —
+      // matches "close" semantics (fresh context on next open).
+      loggedLegacyDocs.delete(docHash);
     }
   };
 }
@@ -415,7 +442,7 @@ export async function loadAndMerge(
     // Apply tombstones first so a later merge step can't overwrite a winning
     // delete.
     for (const stone of file.tombstones) {
-      const ymapAnn = normalizeAnnotation(annMap.get(stone.id));
+      const ymapAnn = normalizeAnnotation(annMap.get(stone.id), docHash);
       if (!ymapAnn) continue;
       if (stone.rev > ymapAnn.rev) {
         annMap.delete(stone.id);
@@ -437,7 +464,7 @@ export async function loadAndMerge(
       if (fileAnn && stone.rev > fileAnn.rev) winningTombstoneIds.add(stone.id);
     }
 
-    const annResult = mergeMap(annMap, fileAnns, normalizeAnnotation, {
+    const annResult = mergeMap(annMap, fileAnns, (raw) => normalizeAnnotation(raw, docHash), {
       shouldSkipInsert: (id) => winningTombstoneIds.has(id),
       ymapOnlyIgnoreIds: tombstoneIds,
     });
@@ -462,4 +489,5 @@ export async function loadAndMerge(
 /** Reset all module state. Tests only — never call in production. */
 export function resetForTesting(): void {
   tombstonesByDoc.clear();
+  loggedLegacyDocs.clear();
 }
