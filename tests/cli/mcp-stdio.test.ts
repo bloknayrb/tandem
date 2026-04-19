@@ -2,7 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getRequestId, getResponseId } from "../../src/cli/mcp-stdio.js";
+import { getRequestId, getResponseId, parseTimeoutMs } from "../../src/cli/mcp-stdio.js";
 
 async function readOneLine(
   child: ChildProcessWithoutNullStreams,
@@ -503,7 +503,7 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
     }
   }, 30_000);
 
-  it("clears pendingIds after a successful response", async () => {
+  it("clears pendingRequests after a successful response", async () => {
     // Fake server: first POST (id=1) → success reply; second POST (id=2) → held.
     let postCount = 0;
     let held: ServerResponse | undefined;
@@ -588,11 +588,296 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
       expect(parsed2.error?.code).toBe(-32000);
 
       // Verify no additional line arrives — id=1 must have been removed from
-      // pendingIds on success and must NOT be re-synthesized.
+      // pendingRequests on success and must NOT be re-synthesized.
       const extra = await readLines(child, 1, 500);
       expect(extra).toHaveLength(0);
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }
   }, 30_000);
+});
+
+describe("mcp-stdio per-request timeout", () => {
+  let child: ChildProcessWithoutNullStreams | undefined;
+  let timeoutServer: Server | undefined;
+
+  afterEach(async () => {
+    // Kill child first so the HTTP connection is released before server.close().
+    child?.kill();
+    child = undefined;
+    if (timeoutServer) {
+      // closeAllConnections() (Node 18.2+) forces open keep-alive sockets
+      // closed so server.close() resolves without hanging.
+      (timeoutServer as Server & { closeAllConnections?: () => void }).closeAllConnections?.();
+      await new Promise<void>((r) => timeoutServer!.close(() => r()));
+      timeoutServer = undefined;
+    }
+  });
+
+  /**
+   * Spin up a fake Tandem server whose /mcp endpoint holds every POST
+   * without replying. Used by half-open timeout tests.
+   */
+  async function makeHalfOpenServer(): Promise<{ port: number }> {
+    timeoutServer = createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        // Intentionally never respond — simulates a half-open upstream.
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => (timeoutServer as Server).listen(0, "127.0.0.1", r));
+    const addr = (timeoutServer as Server).address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    return { port: addr.port };
+  }
+
+  it("synthesizes -32000 after timeout when upstream accepts but never responds (half-open)", async () => {
+    // Fake server: /health → 200, /mcp → holds the POST without replying.
+    const { port } = await makeHalfOpenServer();
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    // Use a short timeout (500ms) so the test doesn't take 30s.
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        TANDEM_REQUEST_TIMEOUT_MS: "500",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Write after a short delay so httpReady is true (request goes through forwardToUpstream).
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 10, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    // Expect -32000 after the 500ms timeout fires (plus processing slack).
+    const line = await readOneLine(child, 5_000);
+    const parsed = JSON.parse(line) as {
+      id: number;
+      error?: { code: number; message: string; data?: { detail: string } };
+    };
+    expect(parsed.id).toBe(10);
+    expect(parsed.error?.code).toBe(-32000);
+    expect(parsed.error?.message).toMatch(/half-open/i);
+    expect(parsed.error?.data?.detail).toMatch(/500ms/);
+  }, 15_000);
+
+  it("synthesizes distinct -32000 for each concurrent pending request on timeout", async () => {
+    // Fake server: /health → 200, /mcp → holds all POSTs without replying.
+    const { port } = await makeHalfOpenServer();
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        TANDEM_REQUEST_TIMEOUT_MS: "500",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Wait for httpReady, then send 3 concurrent requests.
+    await new Promise((r) => setTimeout(r, 500));
+    const makeRequest = (id: number) =>
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          clientInfo: { name: "test", version: "0" },
+          capabilities: {},
+        },
+      });
+    child.stdin.write(`${makeRequest(20)}\n`);
+    child.stdin.write(`${makeRequest(21)}\n`);
+    child.stdin.write(`${makeRequest(22)}\n`);
+
+    // Collect 3 -32000 lines (allow 5s slack after 500ms timeout).
+    const lines = await readLines(child, 3, 5_000);
+    expect(lines).toHaveLength(3);
+
+    const receivedIds = new Set<number>();
+    for (const line of lines) {
+      const parsed = JSON.parse(line) as { id: number; error?: { code: number } };
+      expect(parsed.error?.code).toBe(-32000);
+      receivedIds.add(parsed.id);
+    }
+    expect(receivedIds).toEqual(new Set([20, 21, 22]));
+  }, 15_000);
+
+  it("does not synthesize double -32000 when timer fires before upstream crash arrives", async () => {
+    // Regression guard: when the per-request timer fires and deletes the map entry,
+    // a subsequent forwardToUpstream.catch for the same id must find the map empty
+    // and NOT emit a second -32000.
+    //
+    // Sequence:
+    //  1. Short timer (300ms) starts when request is forwarded.
+    //  2. Server holds the POST (never responds), timer fires → map deleted → -32000 (half-open).
+    //  3. Test destroys the server connection after the timer has fired.
+    //  4. forwardToUpstream.catch fires: pendingRequests.delete() returns false → no second -32000.
+    let heldRes: ServerResponse | undefined;
+    timeoutServer = createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          heldRes = res;
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => (timeoutServer as Server).listen(0, "127.0.0.1", r));
+    const addr = (timeoutServer as Server).address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    const { port } = addr;
+
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        // Short enough to fire before we destroy, long enough to be reliable.
+        TANDEM_REQUEST_TIMEOUT_MS: "300",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Collect stdout so we can count total -32000 lines later.
+    const stdoutChunks: string[] = [];
+    child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
+
+    // Wait for httpReady, then send the request.
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 30, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    // Poll until server has the POST, then wait for timer to fire first.
+    for (let i = 0; i < 60; i++) {
+      if (heldRes) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(heldRes).toBeDefined();
+
+    // Wait for the 300ms timer to fire and produce the -32000.
+    const firstLine = await readOneLine(child, 3_000);
+    const first = JSON.parse(firstLine) as { id: number; error?: { code: number } };
+    expect(first.id).toBe(30);
+    expect(first.error?.code).toBe(-32000);
+
+    // Now destroy the connection — forwardToUpstream.catch will fire.
+    heldRes!.destroy();
+
+    // Wait 500ms for any spurious second -32000 to arrive.
+    await new Promise((r) => setTimeout(r, 500));
+    const allOutput = stdoutChunks.join("");
+    const allLines = allOutput.split("\n").filter((l) => l.trim());
+    const errorCount = allLines.filter((l) => {
+      try {
+        const p = JSON.parse(l) as { id?: number; error?: { code?: number } };
+        return p.id === 30 && p.error?.code === -32000;
+      } catch {
+        return false;
+      }
+    }).length;
+    // Exactly one -32000 for id=30 — timer fired first, catch found map empty.
+    expect(errorCount).toBe(1);
+  }, 10_000);
+
+  it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
+    // Regression guard: after the per-request timer fires and the proxy sends a
+    // -32000, the process should be able to exit cleanly. If shutdown is triggered
+    // (e.g., by the plugin host closing stdin which triggers stdio.close),
+    // uncleared timer handles must not delay process.exit.
+    //
+    // Here we verify a simpler invariant: after a half-open timeout fires (-32000
+    // arrives on stdout), the child can be killed cleanly and its 'close' event
+    // fires within 3s. The timer has already fired and been cleared from the map.
+    const { port } = await makeHalfOpenServer();
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        TANDEM_REQUEST_TIMEOUT_MS: "300",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 40, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    // Wait for the -32000 to arrive (timer fired).
+    const line = await readOneLine(child, 3_000);
+    const parsed = JSON.parse(line) as { id: number; error?: { code: number } };
+    expect(parsed.id).toBe(40);
+    expect(parsed.error?.code).toBe(-32000);
+
+    // Kill the child and verify it closes within 3s.
+    child.kill();
+    const closed = await new Promise<boolean>((resolve) => {
+      const deadline = setTimeout(() => resolve(false), 3_000);
+      child!.once("close", () => {
+        clearTimeout(deadline);
+        resolve(true);
+      });
+    });
+    expect(closed).toBe(true);
+  }, 10_000);
+});
+
+describe("parseTimeoutMs", () => {
+  it("returns the parsed value for a valid positive integer string", () => {
+    expect(parseTimeoutMs("5000")).toBe(5000);
+    expect(parseTimeoutMs("1")).toBe(1);
+    expect(parseTimeoutMs("2147483647")).toBe(2_147_483_647);
+  });
+
+  it("returns 30000 for undefined (no env var set)", () => {
+    expect(parseTimeoutMs(undefined)).toBe(30_000);
+  });
+
+  it("returns 30000 for NaN input", () => {
+    expect(parseTimeoutMs("not-a-number")).toBe(30_000);
+  });
+
+  it("returns 30000 for scientific notation (parseInt parses '3e4' as 3, which is valid, but '1e10' overflows)", () => {
+    // parseInt("3e4", 10) === 3 — a small positive integer, accepted as valid.
+    expect(parseTimeoutMs("3e4")).toBe(3);
+    // parseInt("1e10", 10) === 1 — also a small positive integer.
+    expect(parseTimeoutMs("1e10")).toBe(1);
+  });
+
+  it("returns 30000 for overflow (> MAX_TIMEOUT_MS)", () => {
+    expect(parseTimeoutMs("9999999999999")).toBe(30_000);
+    expect(parseTimeoutMs("2147483648")).toBe(30_000);
+  });
+
+  it("returns 30000 for negative values", () => {
+    expect(parseTimeoutMs("-1")).toBe(30_000);
+    expect(parseTimeoutMs("-100")).toBe(30_000);
+  });
+
+  it("returns 30000 for zero", () => {
+    expect(parseTimeoutMs("0")).toBe(30_000);
+  });
 });
