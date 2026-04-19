@@ -9,8 +9,13 @@
 
 import { runChannel } from "./run.js";
 
-process.once("uncaughtException", (err: Error) => {
-  process.stderr.write(`[tandem channel] uncaughtException: ${err.message}\n${err.stack ?? ""}\n`);
+process.once("uncaughtException", (err: unknown) => {
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  try {
+    process.stderr.write(`[tandem channel] uncaughtException: ${msg}\n`);
+  } catch {
+    /* EPIPE */
+  }
   process.exit(1);
 });
 process.once("unhandledRejection", (reason: unknown) => {

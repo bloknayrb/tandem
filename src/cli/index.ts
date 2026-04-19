@@ -12,8 +12,13 @@
 
 import updateNotifier from "update-notifier";
 
-process.once("uncaughtException", (err: Error) => {
-  process.stderr.write(`[tandem cli] uncaughtException: ${err.message}\n${err.stack ?? ""}\n`);
+process.once("uncaughtException", (err: unknown) => {
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  try {
+    process.stderr.write(`[tandem cli] uncaughtException: ${msg}\n`);
+  } catch {
+    /* EPIPE */
+  }
   process.exit(1);
 });
 process.once("unhandledRejection", (reason: unknown) => {
