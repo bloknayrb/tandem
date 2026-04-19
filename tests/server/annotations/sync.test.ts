@@ -395,6 +395,33 @@ describe("legacy-type sanitize on write", () => {
     errorSpy.mockRestore();
   });
 
+  it("preserves the original rev value through the sanitize branch (not zeroed)", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Use a nonzero rev so a regression that resets to 0 is detectable.
+    ydoc.transact(
+      () =>
+        annMap.set("ann_rev_check", {
+          ...annRecord({ id: "ann_rev_check", rev: 7 }),
+          type: "suggestion",
+        }),
+      MCP_ORIGIN,
+    );
+
+    await store.flush();
+
+    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.annotations[0].rev).toBe(7);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
   it("loadAndMerge logs legacy-type upgrade when Y.Map has a non-canonical type that beats the file", async () => {
     // Seed the Y.Map with a legacy-typed annotation at rev:2 (as session-restore
     // would leave it). The Y.Map wins the merge — no file-side overwrite — so
