@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .tandem/
+.worktrees/
 *.log
 .env
 .env.local
