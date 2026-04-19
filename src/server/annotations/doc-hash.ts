@@ -44,20 +44,7 @@
 
 import * as crypto from "node:crypto";
 import * as path from "node:path";
-
-/** Prefix marker for synthetic upload paths. */
-const UPLOAD_PREFIX = "upload://";
-
-/**
- * Returns true for synthetic upload paths (`upload://<id>/<name>`).
- *
- * Exists primarily so `docHash`'s upload branch reads cleanly. Existing
- * inline `filePath.startsWith("upload://")` checks elsewhere in the codebase
- * are intentionally left as-is.
- */
-export function isUploadPath(filePath: string): boolean {
-  return filePath.startsWith(UPLOAD_PREFIX);
-}
+import { isUploadPath, UPLOAD_PREFIX } from "../../shared/paths.js";
 
 /**
  * Normalize a real filesystem path into a canonical string for hashing.

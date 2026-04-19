@@ -30,9 +30,9 @@
 import * as crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import envPaths from "env-paths";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
 import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -63,18 +63,11 @@ const DISABLE_AFTER_FAILURES = 3;
 const LOCK_FILE = "store.lock";
 
 /**
- * Resolve the annotations directory. Honors `TANDEM_APP_DATA_DIR` for test
- * isolation (mirrors `SESSION_DIR` but decouples from it so each module gets a
- * fresh tempdir per test run). Not memoised — cheap and callers may reset the
- * env var between tests.
+ * Returns `<app-data>/annotations`. Not memoised — `TANDEM_APP_DATA_DIR` is
+ * re-read on each call so tests can swap tempdirs between runs.
  */
 export function getAnnotationsDir(): string {
-  const override = process.env.TANDEM_APP_DATA_DIR;
-  if (override && override.length > 0) {
-    return path.join(override, "annotations");
-  }
-  const paths = envPaths("tandem", { suffix: "" });
-  return path.join(paths.data, "annotations");
+  return path.join(resolveAppDataDir(), "annotations");
 }
 
 function isFeatureDisabled(): boolean {

@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
 import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
+import { isUploadPath } from "../../shared/paths.js";
 import type { SessionData } from "../../shared/types.js";
 import { getAnnotationsDir } from "../annotations/store.js";
 import { MCP_ORIGIN } from "../events/queue.js";
@@ -21,7 +22,7 @@ export async function saveSession(filePath: string, format: string, doc: Y.Doc):
   const key = sessionKey(filePath);
   let sourceFileMtime = 0;
   // Upload paths have no disk file — skip stat
-  if (!filePath.startsWith("upload://")) {
+  if (!isUploadPath(filePath)) {
     try {
       const stat = await fs.stat(filePath);
       sourceFileMtime = stat.mtimeMs;
@@ -80,7 +81,7 @@ export function restoreYDoc(doc: Y.Doc, session: SessionData): void {
 /** Check if the source file has changed since the session was saved */
 export async function sourceFileChanged(session: SessionData): Promise<boolean> {
   // Uploaded files have no disk path — session is the only truth
-  if (session.filePath.startsWith("upload://")) return false;
+  if (isUploadPath(session.filePath)) return false;
   try {
     const stat = await fs.stat(session.filePath);
     return stat.mtimeMs !== session.sourceFileMtime;
@@ -191,7 +192,7 @@ export async function listSessionFilePaths(): Promise<
       try {
         const raw = await fs.readFile(path.join(SESSION_DIR, file), "utf-8");
         const data = JSON.parse(raw) as SessionData;
-        if (!data.filePath || data.filePath.startsWith("upload://")) continue;
+        if (!data.filePath || isUploadPath(data.filePath)) continue;
         results.push({ filePath: data.filePath, lastAccessed: data.lastAccessed ?? 0 });
       } catch (err) {
         console.error(`[Tandem] Skipping unreadable session file ${file}:`, err);

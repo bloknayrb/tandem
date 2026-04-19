@@ -16,6 +16,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
@@ -249,7 +250,7 @@ export async function openFileFromContent(
 
   const format = detectFormat(fileName);
   const readOnly = true;
-  const syntheticPath = `upload://${randomUUID()}/${fileName}`;
+  const syntheticPath = `${UPLOAD_PREFIX}${randomUUID()}/${fileName}`;
   const id = docIdFromPath(syntheticPath);
 
   const doc = getOrCreateDocument(id);
