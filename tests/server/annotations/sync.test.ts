@@ -521,6 +521,88 @@ describe("loadAndMerge", () => {
 
     cleanup();
   });
+
+  it("#18 merge: file has alive ann AND winning tombstone for same id, Y.Map empty → insert suppressed", async () => {
+    // Contradiction: file carries an alive record for "ann_1" (rev 2) and a
+    // tombstone for "ann_1" (rev 5). Tombstone wins (5 > 2) so the alive
+    // record must NOT be inserted. Exercises shouldSkipInsert /
+    // winningTombstoneIds — the only mergeMap path never hit by the existing
+    // suite (prior tombstone tests all use annotations: []).
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        annotations: [annRecord({ id: "ann_1", rev: 2 })],
+        tombstones: [{ id: "ann_1", rev: 5, deletedAt: 9999 }],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    expect(annMap.get("ann_1")).toBeUndefined();
+    expect(getTombstones(HASH_A)).toEqual([{ id: "ann_1", rev: 5, deletedAt: 9999 }]);
+    cleanup();
+  });
+
+  it("#18b merge: file has alive ann AND tombstone at equal rev → insert proceeds (strict-> contract)", async () => {
+    // Boundary: stone.rev === fileAnn.rev (both 5). The veto is strict
+    // greater-than, so equal rev must NOT suppress the insert. Guards against
+    // someone changing > to >=.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        annotations: [annRecord({ id: "ann_1", rev: 5 })],
+        tombstones: [{ id: "ann_1", rev: 5, deletedAt: 9999 }],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    const inserted = annMap.get("ann_1") as AnnotationRecordV1 | undefined;
+    expect(inserted).toBeDefined();
+    expect(inserted?.rev).toBe(5);
+    cleanup();
+  });
+
+  it("#19 merge: tombstone loses to Y.Map (resurrection) — no spurious queueWrite", async () => {
+    // Tombstone rev=2 loses to Y.Map rev=7. "ann_1" is in Y.Map but NOT in
+    // the file's alive list. Without ymapOnlyIgnoreIds, the "Y.Map keys
+    // absent from file" pass would see it and set needsWrite → spurious write.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        annotations: [],
+        tombstones: [{ id: "ann_1", rev: 2, deletedAt: 1 }],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_1", annRecord({ id: "ann_1", rev: 7, content: "reborn" }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    const survivor = annMap.get("ann_1") as AnnotationRecordV1 | undefined;
+    expect(survivor).toBeDefined();
+    expect(survivor?.rev).toBe(7);
+    expect(queueSpy).not.toHaveBeenCalled();
+    cleanup();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -633,6 +715,79 @@ describe("replies merge", () => {
     const onDisk = JSON.parse(raw);
     expect(onDisk.replies).toHaveLength(1);
     expect(onDisk.replies[0].id).toBe("rep_1");
+    cleanup();
+  });
+
+  it("#20 reply: file has reply, Y.Map empty → reply inserted", async () => {
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        replies: [replyRecord({ id: "rep_2", rev: 3, text: "from-disk" })],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const ydoc = new Y.Doc();
+    const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    const inserted = repMap.get("rep_2") as AnnotationReplyRecordV1 | undefined;
+    expect(inserted).toBeDefined();
+    expect(inserted?.rev).toBe(3);
+    expect(inserted?.text).toBe("from-disk");
+    cleanup();
+  });
+
+  it("#21 reply: Y.Map has reply, file has no replies → queueWrite fires", async () => {
+    // The file must have an annotation so fileEmpty is false — otherwise
+    // loadAndMerge takes the first-upgrade fast path and queueWrite fires for
+    // a different reason without ever reaching the reply merge loop.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        annotations: [annRecord({ id: "ann_other", rev: 1 })],
+        replies: [],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const ydoc = new Y.Doc();
+    const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    repMap.set("rep_3", replyRecord({ id: "rep_3", rev: 1, text: "in-memory" }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    expect(repMap.get("rep_3")).toBeDefined();
+    expect(queueSpy).toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("#22 reply: Y.Map rev > file rev → Y.Map wins (unchanged)", async () => {
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeFile(HASH_A, FILE_A, {
+        replies: [replyRecord({ id: "rep_1", rev: 1, text: "from-disk" })],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    const ydoc = new Y.Doc();
+    const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    repMap.set("rep_1", replyRecord({ id: "rep_1", rev: 4, text: "from-ymap" }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    const winner = repMap.get("rep_1") as AnnotationReplyRecordV1;
+    expect(winner.rev).toBe(4);
+    expect(winner.text).toBe("from-ymap");
     cleanup();
   });
 });
