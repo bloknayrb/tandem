@@ -289,6 +289,7 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   // three-panel handles.
   await expect(tabbedHandle).toHaveCount(1, { timeout: 10_000 });
   await expect(leftHandle).toHaveCount(0, { timeout: 10_000 });
+  await expect(rightHandle).toHaveCount(0, { timeout: 10_000 });
 
   const tabbedSaved = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
