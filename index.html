@@ -110,6 +110,11 @@
           --tandem-author-user: CanvasText;
           --tandem-author-claude: CanvasText;
         }
+
+        /* Held-count badge uses warning-bg only (no border) — add one so it stays visible. */
+        [data-testid="held-badge"] {
+          border: 1px solid ButtonText;
+        }
       }
     </style>
   </head>
