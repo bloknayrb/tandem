@@ -52,9 +52,6 @@
  *     (already-updated) tombstone list via its lazy thunk. If the caller
  *     needs a standalone write without a Y.Map.delete, they call
  *     `store.flush()` explicitly.
- *   - A per-docHash context registry (`docContexts`) is populated by
- *     observer registration and cleaned up on unregister. It's retained
- *     primarily for future diagnostic/admin paths.
  */
 
 import * as Y from "yjs";
@@ -86,22 +83,12 @@ export interface SyncContext {
   meta: SyncMeta;
 }
 
-/** Per-docHash live state, populated by `registerAnnotationObserver`. */
-interface DocContext {
-  ydoc: Y.Doc;
-  store: DocStore;
-  meta: SyncMeta;
-}
-
 // ---------------------------------------------------------------------------
 // Module-scoped state
 // ---------------------------------------------------------------------------
 
 /** Tombstones live in memory, keyed by docHash. Seeded from disk on load. */
 const tombstonesByDoc = new Map<string, TombstoneRecordV1[]>();
-
-/** Live ydoc+store handles so diagnostic paths can locate them by docHash. */
-const docContexts = new Map<string, DocContext>();
 
 // ---------------------------------------------------------------------------
 // Serialization
@@ -194,7 +181,6 @@ export function registerAnnotationObserver(
   ctx: SyncContext,
 ): (phase?: ObserverCleanupPhase) => void {
   const { ydoc, store, docHash, meta } = ctx;
-  docContexts.set(docHash, { ydoc, store, meta });
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -217,7 +203,6 @@ export function registerAnnotationObserver(
   return (phase: ObserverCleanupPhase = "close") => {
     annMap.unobserve(onMutation);
     repMap.unobserve(onMutation);
-    docContexts.delete(docHash);
     if (phase === "close") {
       tombstonesByDoc.delete(docHash);
     }
@@ -303,6 +288,55 @@ function pickWinner(
   return "ymap";
 }
 
+/**
+ * Merge a Map of file records into a Y.Map under `pickWinner`'s rules
+ * (higher `rev` wins; tied `rev` falls back to `editedAt`). For each file
+ * record: insert if absent (unless `shouldSkipInsert` vetoes), otherwise
+ * compare normalized copies and let the winner replace. After the pass,
+ * `needsWrite` is true if the Y.Map carries ids the file doesn't (minus
+ * `ymapOnlyIgnoreIds`) — caller queues a post-merge write so those land.
+ */
+function mergeMap<T extends { rev: number; editedAt?: number }>(
+  ymap: Y.Map<unknown>,
+  fileRecs: Map<string, T>,
+  normalize: (raw: unknown) => T | null,
+  opts: {
+    shouldSkipInsert?: (id: string, fileRec: T) => boolean;
+    ymapOnlyIgnoreIds?: Set<string>;
+  } = {},
+): { needsWrite: boolean } {
+  let needsWrite = false;
+
+  for (const [id, fileRec] of fileRecs) {
+    const ymapRaw = ymap.get(id);
+    if (ymapRaw === undefined) {
+      if (opts.shouldSkipInsert?.(id, fileRec)) continue;
+      ymap.set(id, fileRec);
+      continue;
+    }
+    const ymapRec = normalize(ymapRaw);
+    if (!ymapRec) {
+      ymap.set(id, fileRec);
+      continue;
+    }
+    const winner = pickWinner(fileRec, ymapRec);
+    if (winner === "file") {
+      ymap.set(id, fileRec);
+    } else {
+      needsWrite = true;
+    }
+  }
+
+  for (const id of ymap.keys()) {
+    if (fileRecs.has(id)) continue;
+    if (opts.ymapOnlyIgnoreIds?.has(id)) continue;
+    needsWrite = true;
+    break;
+  }
+
+  return { needsWrite };
+}
+
 // ---------------------------------------------------------------------------
 // loadAndMerge
 // ---------------------------------------------------------------------------
@@ -378,11 +412,8 @@ export async function loadAndMerge(
   let needsWrite = false;
 
   ydoc.transact(() => {
-    // --- Annotations ---
-    const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
-
-    // 1. Tombstones rule (process first so we don't overwrite a delete with
-    //    a concurrent file-side alive record that shouldn't have been there).
+    // Apply tombstones first so a later merge step can't overwrite a winning
+    // delete.
     for (const stone of file.tombstones) {
       const ymapAnn = normalizeAnnotation(annMap.get(stone.id));
       if (!ymapAnn) continue;
@@ -392,68 +423,29 @@ export async function loadAndMerge(
       // else: resurrection — leave the Y.Map entry alone.
     }
 
-    // 2. File annotations vs Y.Map.
-    for (const [id, fileAnn] of fileAnns) {
-      const ymapRaw = annMap.get(id);
-      if (ymapRaw === undefined) {
-        // Not in Y.Map and not blocked by a tombstone → file wins.
-        // (If it WAS in Y.Map + got tombstone-deleted above, it'll still be
-        // absent here, but that's a contradiction — a file can't carry both
-        // an alive record and a winning tombstone for the same id. We treat
-        // "tombstone won the deletion" as authoritative and drop the file's
-        // alive record in that case.)
-        const deletedByTombstone = file.tombstones.some((t) => t.id === id && t.rev > fileAnn.rev);
-        if (!deletedByTombstone) {
-          annMap.set(id, fileAnn);
-        }
-        continue;
-      }
-      const ymapAnn = normalizeAnnotation(ymapRaw);
-      if (!ymapAnn) {
-        annMap.set(id, fileAnn);
-        continue;
-      }
-      const winner = pickWinner(fileAnn, ymapAnn);
-      if (winner === "file") {
-        annMap.set(id, fileAnn);
-      } else {
-        // Y.Map is authoritative — its state needs to land on disk.
-        needsWrite = true;
-      }
+    // Set of ids where a tombstone beats the file's alive record. The file
+    // shouldn't carry both (contradiction — bug or manual edit), but if it
+    // does the tombstone is authoritative. This guards only the
+    // Y.Map-absent insert path; the preceding loop already handled the
+    // Y.Map-present case.
+    const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
+    const winningTombstoneIds = new Set<string>();
+    const tombstoneIds = new Set<string>();
+    for (const stone of file.tombstones) {
+      tombstoneIds.add(stone.id);
+      const fileAnn = fileAnns.get(stone.id);
+      if (fileAnn && stone.rev > fileAnn.rev) winningTombstoneIds.add(stone.id);
     }
 
-    // 3. Y.Map annotations absent from file, not tombstoned → keep + write.
-    const tombstoneIds = new Set(file.tombstones.map((t) => t.id));
-    for (const id of annMap.keys()) {
-      if (fileAnns.has(id)) continue;
-      if (tombstoneIds.has(id)) continue;
-      needsWrite = true;
-    }
+    const annResult = mergeMap(annMap, fileAnns, normalizeAnnotation, {
+      shouldSkipInsert: (id) => winningTombstoneIds.has(id),
+      ymapOnlyIgnoreIds: tombstoneIds,
+    });
+    if (annResult.needsWrite) needsWrite = true;
 
-    // --- Replies (same shape, no tombstones) ---
     const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
-    for (const [id, fileRep] of fileReplies) {
-      const ymapRaw = repMap.get(id);
-      if (ymapRaw === undefined) {
-        repMap.set(id, fileRep);
-        continue;
-      }
-      const ymapRep = normalizeReply(ymapRaw);
-      if (!ymapRep) {
-        repMap.set(id, fileRep);
-        continue;
-      }
-      const winner = pickWinner(fileRep, ymapRep);
-      if (winner === "file") {
-        repMap.set(id, fileRep);
-      } else {
-        needsWrite = true;
-      }
-    }
-
-    for (const id of repMap.keys()) {
-      if (!fileReplies.has(id)) needsWrite = true;
-    }
+    const repResult = mergeMap(repMap, fileReplies, normalizeReply);
+    if (repResult.needsWrite) needsWrite = true;
   }, FILE_SYNC_ORIGIN);
 
   if (needsWrite) {
@@ -470,5 +462,4 @@ export async function loadAndMerge(
 /** Reset all module state. Tests only — never call in production. */
 export function resetForTesting(): void {
   tombstonesByDoc.clear();
-  docContexts.clear();
 }

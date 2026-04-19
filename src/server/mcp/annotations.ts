@@ -9,6 +9,7 @@ import type {
   AnnotationReply,
   AnnotationType,
   HighlightColor,
+  ReplyAuthor,
 } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
@@ -76,7 +77,7 @@ export function addReplyToAnnotation(
   annotationsMap: Y.Map<unknown>,
   annotationId: string,
   text: string,
-  author: "user" | "claude",
+  author: ReplyAuthor,
   origin?: string,
 ): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
   const raw = annotationsMap.get(annotationId) as Annotation | undefined;

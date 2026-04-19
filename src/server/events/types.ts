@@ -6,6 +6,8 @@
  * `notifications/claude/channel` messages.
  */
 
+import type { ReplyAuthor } from "../../shared/types.js";
+
 // --- Per-event payload interfaces ---
 
 export interface AnnotationCreatedPayload {
@@ -49,7 +51,7 @@ export interface AnnotationReplyPayload {
   annotationId: string;
   replyId: string;
   replyText: string;
-  replyAuthor: "user" | "claude";
+  replyAuthor: ReplyAuthor;
   textSnippet: string;
 }
 
