@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-19
+
+### Fixed
+
+- **Annotation GC race on startup (#334)** — `cleanupOrphanedAnnotationFiles` previously ran as a `.then()` chain during boot, racing the boot-path doc opens. On upgrade paths where `sample/welcome.md` or `CHANGELOG.md` hadn't been opened in 30+ days, the GC could unlink the annotation file between read intent and the actual read, silently returning an empty doc. Now `await`-ed before all boot-path opens.
+- **Settings Popover extends out of view (#306)** — centered the popover in the viewport with `transform: translate(-50%, -50%)` and added `maxHeight: calc(100vh - 32px)` + `overflowY: auto` so it is always fully visible and internally scrollable on short screens.
+- **Dark-mode `*-bg` tokens inconsistent (#307)** — `--tandem-success-bg` and `--tandem-warning-bg` in dark mode were hand-coded hex while `--tandem-error-bg` used `color-mix`. All three now use `color-mix(in srgb, var(--tandem-<semantic>) 15%, var(--tandem-surface))` for consistency with light-mode behavior.
+- **stdio bridge silent-failure paths (#336 partial)** — three paths in `src/cli/mcp-stdio.ts` (preflight exit, `http.onclose`, `http.start()` TOCTOU) previously closed stdio without writing a JSON-RPC error, producing "tools never appear in Cowork" with no diagnostics. All three now synthesize `-32000` for any in-flight request ID before exit. Remaining #336 items (channel-shim tests, Windows npx smoke, nits) carry to v0.7.0.
+
 ### Changed
 
-- **Annotation serialization upgrades legacy `type` values on write** (#329) — records with non-canonical `type` (`"suggestion"` / `"question"` / anything outside `highlight` / `comment` / `flag`) are now routed through `sanitizeAnnotation` during snapshot serialization, which rewrites them to `"comment"`. Before this change, a legacy session-restored record would be written verbatim to disk, then fail Zod validation on the next load and quarantine the envelope to `.json.future`. **One-way lossy migration:** users with legacy-type annotations will see `type` flip to `"comment"` on the next durable write for that document — the original distinction between `suggestion` and `question` is not recoverable.
+- **Annotation module internals** — extracted `mergeMap<T>` helper (#324), promoted `UPLOAD_PREFIX` to shared constants (#327), centralized app-data dir resolution in `platform.ts` (#328), extracted `ReplyAuthorSchema`, trimmed module headers, and dropped unused `docContexts` map (#332). No user-facing behavior changes.
+- **Annotation serialization upgrades legacy `type` values on write** (#329) — records with non-canonical `type` (`"suggestion"` / `"question"` / anything outside `highlight` / `comment` / `flag`) are now routed through `sanitizeAnnotation` during snapshot serialization, which rewrites them to `"comment"`. **One-way lossy migration:** users with legacy-type annotations will see `type` flip to `"comment"` on the next durable write for that document — the original distinction between `suggestion` and `question` is not recoverable.
+- **`migrateToV1` reports drop counts** (#330) — `migrateToV1(raw)` now returns `{ doc, droppedAnnotations, droppedReplies }` so future production callers can surface lossy upgrades to users rather than silently discarding malformed records. No production caller exists yet; a follow-up will wire drop counts to `npm run doctor` or a toast when the first caller lands.
 
-### Added
+### Internal
 
-- **`migrateToV1` reports drop counts** (#330) — `migrateToV1(raw)` now returns `{ doc, droppedAnnotations, droppedReplies }` so future production callers can surface lossy upgrades to users rather than silently discarding malformed records. No production caller exists yet (load-time envelope validation goes through `parseAnnotationDoc`, which short-circuits on the v1 schema); a follow-up will wire drop counts to `npm run doctor` or a toast when the first caller lands.
+- Test coverage: `pickWinner`, `SerializedRelPos` edges, UNC paths, upload-path edges (#331); `wireAnnotationStore` perf baseline at 500/1000/5000 annotations (#335).
+- Test sweep: stale hex color refs cleaned up post-PR #303 (#309).
+- Accessibility: forced-colors fallback audit on PR #303 annotation surfaces (#311).
+- CI: typecheck / lint / tests now gate on all PRs regardless of base branch; dropped unused `baseUrl` from `tsconfig.server.json` (#310).
 
 ## [0.6.2] - 2026-04-16
 
