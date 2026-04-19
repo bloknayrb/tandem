@@ -20,6 +20,8 @@ export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "p
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
 export const TandemModeSchema = z.enum(["solo", "tandem"]);
 export const AuthorSchema = z.enum(["user", "claude", "import"]);
+/** Subset of {@link AuthorSchema} allowed on replies — `import` is annotations-only. */
+export const ReplyAuthorSchema = z.enum(["user", "claude"]);
 export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
 export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
@@ -42,13 +44,14 @@ export type TandemMode = z.infer<typeof TandemModeSchema>;
 export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
+export type ReplyAuthor = z.infer<typeof ReplyAuthorSchema>;
 
 // --- Reply types ---
 
 export interface AnnotationReply {
   id: string;
   annotationId: string;
-  author: "user" | "claude";
+  author: ReplyAuthor;
   text: string;
   timestamp: number;
   editedAt?: number;

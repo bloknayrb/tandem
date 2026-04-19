@@ -1,42 +1,16 @@
 /**
  * On-disk schema for Tandem's durable annotation envelope.
  *
- * The envelope is written to app-data JSON (per Phase 1 of the durable-annotations
- * plan). It wraps the existing in-memory annotation / reply shapes with:
- *   - `schemaVersion` for forward-compat migrations
- *   - `docHash` so a stale file can be detected when the underlying document has
- *     changed on disk
- *   - `meta` for bookkeeping (filePath, lastUpdated)
- *   - `tombstones` so deleted annotations don't resurrect on merge
- *   - `rev: number` on each annotation/reply for last-writer-wins semantics
- *
  * ## Unknown-field policy
  *
- * All object schemas in this module use `.passthrough()` (Zod default is to strip
- * unknowns; we intentionally override that). Forward-compatibility is the goal:
- * a future version might add fields (e.g. `pinnedBy`, `severity`) that a pre-
- * upgrade Tandem install should *preserve* when rewriting the file, not silently
- * drop. Strict rejection would turn a harmless additive change into a "corrupt"
- * error and trip the `.json.future` fallback path unnecessarily.
- *
- * Forward version jumps (`schemaVersion > 1`) are still handled explicitly via
- * `parseAnnotationDoc` returning `{ ok: false, error: "future" }` — passthrough
- * only covers *additive* changes inside the v1 shape.
- *
- * ## Why this schema doesn't fully mirror the Annotation TS discriminated union
- *
- * `src/shared/types.ts` defines `Annotation` as a three-variant discriminated
- * union (`highlight` / `comment` / `flag`) with mutually-exclusive `undefined`
- * markers on the non-applicable variant fields. Mirroring that shape in Zod
- * via `z.discriminatedUnion` would duplicate a lot of field surface area and
- * drift from the TS type as it evolves. Instead, we validate the *shared*
- * structural shape (AnnotationBase + optional `type`-tagged fields) and let
- * consumers cast to `Annotation` downstream. The Zod schema is a gatekeeper
- * against malformed files on disk, not the source of truth for the app's
- * annotation type system.
- *
- * Full migration framework for v1 → v2+ is deferred to issue #320. This module
- * ships only `migrateToV1` (legacy session-blob → v1).
+ * All object schemas use `.passthrough()` (overriding Zod's default strip).
+ * Forward-compatibility is the goal: a future version might add fields
+ * (e.g. `pinnedBy`, `severity`) that a pre-upgrade Tandem install should
+ * *preserve* when rewriting the file, not silently drop. Strict rejection
+ * would turn a harmless additive change into a "corrupt" error and trip the
+ * `.json.future` fallback path unnecessarily. Breaking version jumps
+ * (`schemaVersion > 1`) are still handled explicitly via
+ * `parseAnnotationDoc` returning `{ ok: false, error: "future" }`.
  */
 
 import { z } from "zod";
@@ -45,6 +19,7 @@ import {
   AnnotationTypeSchema,
   AuthorSchema,
   HighlightColorSchema,
+  ReplyAuthorSchema,
 } from "../../shared/types.js";
 
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
@@ -137,7 +112,7 @@ export const AnnotationReplyRecordSchemaV1 = z
   .object({
     id: z.string().min(1),
     annotationId: z.string().min(1),
-    author: z.enum(["user", "claude"]),
+    author: ReplyAuthorSchema,
     text: z.string(),
     timestamp: z.number(),
     editedAt: z.number().optional(),

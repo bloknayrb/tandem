@@ -1,29 +1,17 @@
 /**
- * Durable per-document annotation store.
+ * Durable per-document annotation store. One JSON file per document at
+ * `<annotationsDir>/<docHash>.json`; the Y.Map remains the live collab
+ * state, this module is the crash-safe source of record behind it.
  *
- * One JSON file per document at `<annotationsDir>/<docHash>.json`. The Y.Map
- * (`Y_MAP_ANNOTATIONS`) remains the live collab state; this module is the
- * crash-safe source of record behind it.
- *
- * Behaviour summary (see the Phase 1 durable-annotations plan for rationale):
- *   - Location: `env-paths("tandem").data/annotations/` by default, override
- *     via `TANDEM_APP_DATA_DIR`.
- *   - Writes are atomic (reuses `file-io/atomicWrite` with Windows retries).
- *   - Writes are debounced per docHash (100ms) — bursty rapid writes for the
- *     same doc coalesce, but parallel writes to different docs do NOT share a
- *     debounce timer.
- *   - `queueWrite` takes a THUNK, not a pre-computed doc. The snapshot runs at
- *     debounce-fire time, not at mutation time, so a 50-mutation burst only
- *     pays for one serialization.
- *   - Corrupt files are quarantined to `<hash>.json.corrupt.<epoch-ms>`.
- *   - Files from a newer schema are parked at `<hash>.json.future` (no ts so
- *     future migration tooling has a predictable name).
- *   - Cross-process concurrent-writer guard via a `store.lock` PID lockfile
- *     (belt-and-braces on top of the port 3479 bind, which is the primary
- *     lock).
- *   - Disk-full / permission-denied errors: 60s throttled toast per doc,
- *     disable writes for that doc after 3 consecutive failures (in-memory —
- *     restart clears the flag, matching the "restart to retry" UX).
+ * Non-obvious invariants:
+ *   - `queueWrite` takes a THUNK. The snapshot runs at debounce-fire time,
+ *     not at mutation time, so a 50-mutation burst only pays for one
+ *     serialization. The last-queued thunk wins (last-writer-wins coalescing).
+ *   - `store.lock` PID lockfile is a belt-and-braces fallback on top of the
+ *     port 3479 bind, which is the primary concurrent-writer lock.
+ *   - After `DISABLE_AFTER_FAILURES` consecutive write failures for a doc,
+ *     that doc's writes are disabled in-memory until process restart — one
+ *     persistent-notice toast fires, not a flood.
  *   - `TANDEM_ANNOTATION_STORE=off` short-circuits the entire module.
  */
 
