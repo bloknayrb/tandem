@@ -372,4 +372,48 @@ describe("AnnotationRecordSchemaV1 — per-record shape", () => {
     const result = AnnotationRecordSchemaV1.safeParse(bad);
     expect(result.success).toBe(false);
   });
+
+  it("accepts a relRange with all SerializedRelPos fields omitted (Yjs null-strip edge)", () => {
+    // `Y.relativePositionToJSON` omits fields that are null/undefined. A
+    // relative position anchored at the start/end of a type can serialize to
+    // `{}` — the schema must accept it, not reject as "missing required field".
+    const withRel = {
+      ...baseAnnotation,
+      relRange: { fromRel: {}, toRel: {} },
+    };
+    const result = AnnotationRecordSchemaV1.safeParse(withRel);
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts assoc: 0 (falsy but valid)", () => {
+    // Zod's `.optional()` uses `=== undefined` for the presence check, so a
+    // falsy-but-defined value like `0` is distinct from omitted and must
+    // pass. Guards against anyone "simplifying" to `z.number().positive()`.
+    const withRel = {
+      ...baseAnnotation,
+      relRange: {
+        fromRel: { assoc: 0 },
+        toRel: { assoc: 0 },
+      },
+    };
+    const result = AnnotationRecordSchemaV1.safeParse(withRel);
+    expect(result.success).toBe(true);
+  });
+
+  it("round-trips a relRange with only assoc through JSON", () => {
+    // Passthrough on SerializedRelPosSchema must preserve the Yjs-opaque
+    // `item` field untouched; round-trip guards against a future `.strict()`
+    // change silently stripping it.
+    const withRel = {
+      ...baseAnnotation,
+      relRange: {
+        fromRel: { item: { client: 42, clock: 100 }, assoc: 0 },
+        toRel: { item: { client: 42, clock: 105 }, assoc: 0, tname: "body" },
+      },
+    };
+    const parsed = parseAnnotationDoc({ ...validDoc, annotations: [withRel] });
+    if (!parsed.ok) throw new Error("expected success");
+    const ann = parsed.doc.annotations[0] as Record<string, unknown> & { relRange?: unknown };
+    expect(ann.relRange).toEqual(withRel.relRange);
+  });
 });

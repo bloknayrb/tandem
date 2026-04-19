@@ -298,7 +298,7 @@ export function getTombstones(docHash: string): TombstoneRecordV1[] {
  *   4. Otherwise Y.Map wins (the live-session state is preferred by default
  *      when nothing distinguishes the two).
  */
-function pickWinner(
+export function pickWinner(
   fileRec: { rev: number; editedAt?: number },
   ymapRec: { rev: number; editedAt?: number },
 ): "file" | "ymap" {

@@ -37,6 +37,7 @@ import {
 import {
   getTombstones,
   loadAndMerge,
+  pickWinner,
   recordTombstone,
   registerAnnotationObserver,
   resetForTesting,
@@ -1047,5 +1048,89 @@ describe("replies merge", () => {
     expect(winner.rev).toBe(4);
     expect(winner.text).toBe("from-ymap");
     cleanup();
+  });
+});
+
+describe("observer cleanup — tombstone survival (#333)", () => {
+  it("swap-phase cleanup preserves the per-doc tombstone ledger", () => {
+    // A debounced write queued against the OLD Y.Doc can still fire after
+    // the swap; it must see tombstones so they land on disk.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    recordTombstone(HASH_A, "ann_deleted", 3);
+    expect(getTombstones(HASH_A)).toHaveLength(1);
+
+    cleanup("swap");
+    expect(getTombstones(HASH_A)).toHaveLength(1);
+  });
+
+  it("close-phase cleanup drops the per-doc tombstone ledger", () => {
+    // Matches `loggedLegacyDocs` close semantics: fresh context on reopen.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    recordTombstone(HASH_A, "ann_deleted", 3);
+    expect(getTombstones(HASH_A)).toHaveLength(1);
+
+    cleanup("close");
+    expect(getTombstones(HASH_A)).toHaveLength(0);
+  });
+});
+
+describe("pickWinner", () => {
+  it("higher file rev wins (rule 1)", () => {
+    expect(pickWinner({ rev: 5 }, { rev: 4 })).toBe("file");
+  });
+
+  it("higher ymap rev wins (rule 1)", () => {
+    expect(pickWinner({ rev: 4 }, { rev: 5 })).toBe("ymap");
+  });
+
+  it("tied rev, higher file editedAt wins (rule 2)", () => {
+    expect(pickWinner({ rev: 3, editedAt: 200 }, { rev: 3, editedAt: 100 })).toBe("file");
+  });
+
+  it("tied rev, higher ymap editedAt wins (rule 2)", () => {
+    expect(pickWinner({ rev: 3, editedAt: 100 }, { rev: 3, editedAt: 200 })).toBe("ymap");
+  });
+
+  it("tied rev + tied editedAt → ymap wins (default to live session)", () => {
+    expect(pickWinner({ rev: 3, editedAt: 100 }, { rev: 3, editedAt: 100 })).toBe("ymap");
+  });
+
+  it("tied rev, file has editedAt but ymap does not → file wins (rule 3 — session-restore heuristic)", () => {
+    // Session-restored Y.Map entries from pre-plan Tandem versions lack
+    // `editedAt`. If the file carries a real timestamp, treat it as more
+    // recent than the ambient live-session state.
+    expect(pickWinner({ rev: 2, editedAt: 500 }, { rev: 2 })).toBe("file");
+  });
+
+  it("tied rev, ymap has editedAt but file does not → ymap wins (rule 4 — no session-restore heuristic for reverse)", () => {
+    // Symmetric inverse of the session-restore heuristic: the heuristic only
+    // kicks in when the FILE carries a timestamp the Y.Map is missing. In
+    // the reverse shape, we default to Y.Map (live session).
+    expect(pickWinner({ rev: 2 }, { rev: 2, editedAt: 500 })).toBe("ymap");
+  });
+
+  it("rev 0 vs rev 0 with no editedAt → ymap (both-missing-everything case)", () => {
+    // Legacy session blob → legacy session blob. The default-ymap rule
+    // prevents a loadAndMerge loop on a file that carries the same state.
+    expect(pickWinner({ rev: 0 }, { rev: 0 })).toBe("ymap");
+  });
+
+  it("tied rev, file editedAt: 0 beats ymap with no editedAt (typeof guard, not truthy)", () => {
+    // `pickWinner` uses `typeof === "number"`, so 0 is a valid defined
+    // timestamp. A truthy refactor (`if (fileEdit)`) would silently break
+    // the session-restore heuristic for epoch-0 records.
+    expect(pickWinner({ rev: 1, editedAt: 0 }, { rev: 1 })).toBe("file");
+  });
+
+  it("tied rev, both editedAt: 0 → ymap wins (Rule 2 tie, not Rule 3 fallback)", () => {
+    // Both sides carry a defined timestamp — `0 > 0` is false, Rule 2
+    // returns ymap. Guards against a truthy refactor dropping into Rule 4.
+    expect(pickWinner({ rev: 1, editedAt: 0 }, { rev: 1, editedAt: 0 })).toBe("ymap");
   });
 });

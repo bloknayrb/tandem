@@ -43,6 +43,29 @@ describe("docHash", () => {
     },
   );
 
+  it.runIf(IS_WINDOWS)("treats Windows UNC paths as case-insensitive (SMB semantics)", () => {
+    // SMB is case-insensitive at the protocol level; `\\Server\Share\file.md`
+    // and `\\server\share\FILE.MD` must resolve to the same annotation file.
+    const variants = [
+      "\\\\Server\\Share\\file.md",
+      "\\\\server\\share\\file.md",
+      "\\\\SERVER\\SHARE\\FILE.MD",
+      "//server/share/file.md",
+    ];
+    const hashes = variants.map(docHash);
+    for (const h of hashes) expect(h).toBe(hashes[0]);
+  });
+
+  it.runIf(IS_WINDOWS)(
+    "distinguishes Windows UNC paths from POSIX-shaped paths with the same segments",
+    () => {
+      // UNC normalizes to `//server/share/file.md` (two leading slashes);
+      // a single-leading-slash `/server/share/file.md` is a different string
+      // and must hash to a different value.
+      expect(docHash("\\\\server\\share\\file.md")).not.toBe(docHash("/server/share/file.md"));
+    },
+  );
+
   it("resolves relative paths to absolute before hashing", () => {
     // A relative path and its path.resolve'd absolute form should hash
     // identically — this guards against callers passing relative paths.
@@ -61,6 +84,39 @@ describe("docHash", () => {
 
   it("distinguishes different upload ids", () => {
     expect(docHash("upload://abc123/x.md")).not.toBe(docHash("upload://def456/x.md"));
+  });
+
+  it("upload://<id>/<nested/path> still hashes to upload_<id> (first-slash rule)", () => {
+    // The first `/` after the id separates id from name. Everything after is
+    // "name" and is ignored for hashing — including embedded slashes.
+    expect(docHash("upload://abc123/foo/bar.md")).toBe("upload_abc123");
+    expect(docHash("upload://abc123/deeply/nested/file.md")).toBe("upload_abc123");
+  });
+
+  it("upload://<id>/ (trailing slash, empty name) hashes to upload_<id>", () => {
+    // `upload://abc123/` has a `/` at index > 0 so the first-slash rule
+    // fires; empty name is fine, the id is still valid.
+    expect(docHash("upload://abc123/")).toBe("upload_abc123");
+  });
+
+  it("upload://<id> without a trailing slash falls back to SHA-256 (malformed)", () => {
+    // No separating slash → not `upload_<id>`. The hash is still deterministic
+    // because we SHA-256 the literal string.
+    const h = docHash("upload://abc123");
+    expect(h).not.toMatch(/^upload_/);
+    expect(h).toMatch(HEX_64_RE);
+    const expected = crypto.createHash("sha256").update("upload://abc123").digest("hex");
+    expect(h).toBe(expected);
+  });
+
+  it("upload:///<name> (empty id, slash at index 0) falls back to SHA-256", () => {
+    // `slashIdx > 0` rejects slash-at-index-0 (empty id). The literal
+    // string is SHA-256'd so results are deterministic and collision-safe.
+    const h = docHash("upload:///foo.md");
+    expect(h).not.toMatch(/^upload_/);
+    expect(h).toMatch(HEX_64_RE);
+    const expected = crypto.createHash("sha256").update("upload:///foo.md").digest("hex");
+    expect(h).toBe(expected);
   });
 
   it("falls back to SHA-256 for malformed upload paths (no id/name split)", () => {
