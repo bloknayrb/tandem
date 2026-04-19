@@ -125,6 +125,7 @@ export async function runMcpStdio(): Promise<void> {
   }
 
   function forwardToUpstream(msg: JSONRPCMessage): void {
+    if (shuttingDown) return;
     const requestId = getRequestId(msg);
     if (requestId !== undefined) {
       // Clear any existing timer for this id (duplicate/retry scenario).
@@ -182,6 +183,12 @@ export async function runMcpStdio(): Promise<void> {
   ): Promise<never> => {
     if (!shuttingDown) {
       shuttingDown = true;
+      // Hard deadline: if http.close() or stdio.close() hang (e.g., a half-
+      // open upstream holding an SSE GET open), don't let cleanup block the
+      // process exit indefinitely. .unref() means this timer doesn't itself
+      // keep the event loop alive — fast paths resolve and call process.exit
+      // below before the deadline fires; hung paths are forcibly terminated.
+      setTimeout(() => process.exit(code), 2_000).unref();
       // Unconditionally drain all pending timers before any await — prevents
       // orphan timers from firing into the half-closed transport during
       // http.close() / stdio.close() awaits. synthesizePending will also
@@ -222,6 +229,7 @@ export async function runMcpStdio(): Promise<void> {
   };
 
   http.onmessage = (msg: JSONRPCMessage) => {
+    if (shuttingDown) return;
     // Synchronous delete+clear FIRST — before stdio.send — to prevent the
     // per-request timer from firing in the window between response arrival
     // and stdio write completion (which would synthesize a false -32000 for
@@ -234,7 +242,7 @@ export async function runMcpStdio(): Promise<void> {
         pendingRequests.delete(responseId);
       }
     }
-    stdio.send(msg).catch((err: unknown) => {
+    const sendHandler = (err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(
         `[tandem mcp-stdio] stdio write failed for id ${responseId ?? "<notification>"}: ${detail}\n`,
@@ -249,7 +257,12 @@ export async function runMcpStdio(): Promise<void> {
         message: "Tandem stdio write failed",
         detail,
       });
-    });
+    };
+    try {
+      stdio.send(msg).catch(sendHandler);
+    } catch (err) {
+      sendHandler(err);
+    }
   };
 
   stdio.onerror = (err) => {
@@ -283,6 +296,14 @@ export async function runMcpStdio(): Promise<void> {
   // the preflight window is captured and either forwarded once upstream is
   // ready, or answered with -32000 if upstream never comes up.
   await stdio.start();
+
+  // The SDK's StdioServerTransport watches stdin for 'data' and 'error' only —
+  // it does not call onclose when the plugin host closes stdin (EOF). Register
+  // our own one-shot listener so that plugin-host close (stdin.end() / HUP)
+  // triggers the same clean shutdown path as stdio.onclose does.
+  process.stdin.once("end", () => {
+    void shutdown(0);
+  });
 
   const probe = await probeTandemServer({ url: baseUrl });
   if (!probe.ok) {
