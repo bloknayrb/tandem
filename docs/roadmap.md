@@ -350,7 +350,24 @@ Moves annotation storage from in-memory Y.Doc + session snapshots to explicit pe
 - **T7 + T8 (PR #337, merged):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
 - **Retrospective follow-ups (v0.6.3, merged):** GC race fix (#334), annotation module internals (#324, #327, #328, #332), legacy-type sanitization (#329), drop-counter (#330), test coverage (#331, #335), CI gate (#310), settings popover (#306), dark-mode tokens (#307), a11y sweep (#309, #311), stdio bridge silent-failure paths (#336 partial).
 
-### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f)
+### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f) — **target v0.7.0**
+
+Release cadence post-v0.6.3 (per open-issue triage 2026-04-19, correctness-first restructure).
+
+Each release targets **one coherent concern** so that a bad PR is bisectable and the CHANGELOG entry is unambiguous. Time-to-ship is secondary to blast-radius containment.
+
+| Release | Concern | Gating scope |
+|---------|---------|--------------|
+| v0.6.4 (if needed) | Silent-failure patch + flaky E2E | Live-silent-failure subset of #336 + #281 |
+| v0.7.0 | Cowork foundation (auth, token, bind, stdio) | Phase 2 PRs a–d + #347 + #336 polish |
+| v0.8.0 | Cowork surface + Phase 2 retrospective | Phase 2 PRs e–f + #316/#317/#318/#319/#322 + #313/#344/#351 + #269 §2.3/§2.4/§2.5 |
+| v0.9.0 | Desktop Integration (Tier 1 + palette + panes) | #269 §1.1/§1.2/§1.3/§1.4/§3.2/§2.1/§2.2 |
+| v0.10.0 | Theme & token hygiene (pre-Tailwind) | #340, #355, #356, #308, #311-residuals |
+| v0.11.0 | MCP API cleanup (breaking, standalone) | #259 |
+| v0.12.0 | Tailwind staging (light only + a11y gate) | #24 + #269 §2.6 |
+| v1.0.0 | Dark + First-run + polish + bump | #59, #265, #103, #269 §1.5/§3.1/§3.4 |
+
+`#269 §X.Y` refers to the Tiered breakdown in the "Issue #269 Revision" comment on that issue.
 
 End-user goal: install the Tauri desktop app → Cowork / Claude Desktop / Claude Code CLI all just work. Auth token stored in OS keychain, server opt-in bind-mode for LAN exposure, per-workspace Cowork installer.
 
