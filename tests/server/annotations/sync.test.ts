@@ -26,6 +26,7 @@ import {
   type AnnotationRecordV1,
   type AnnotationReplyRecordV1,
   migrateToV1,
+  parseAnnotationDoc,
   SCHEMA_VERSION,
 } from "../../../src/server/annotations/schema.js";
 import type { DocStore } from "../../../src/server/annotations/store.js";
@@ -273,6 +274,125 @@ describe("registerAnnotationObserver", () => {
 
     await store.flush();
     expect(queueSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy-type sanitize-on-write
+// ---------------------------------------------------------------------------
+
+describe("legacy-type sanitize on write", () => {
+  it("rewrites a non-canonical type to 'comment' so the envelope stays loadable", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    // The legacy-type branch emits `console.error`; silence for this assertion.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // A pre-canonicalization record — `AnnotationTypeSchema` no longer accepts
+    // "suggestion", so without sanitize-on-write this envelope would Zod-reject
+    // on the next load and end up quarantined to `.json.future`.
+    const legacy = {
+      ...annRecord({ id: "ann_legacy" }),
+      type: "suggestion",
+      suggestedText: "canonical form",
+      content: "a rationale string, not JSON",
+    };
+    ydoc.transact(() => annMap.set("ann_legacy", legacy), MCP_ORIGIN);
+
+    await store.flush();
+
+    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.annotations).toHaveLength(1);
+    expect(onDisk.annotations[0].type).toBe("comment");
+
+    // The critical invariant: the envelope we just wrote must round-trip
+    // cleanly through the v1 parser. If this assertion ever regresses, the
+    // durable store will self-quarantine on the next open.
+    const parsed = parseAnnotationDoc(raw);
+    expect(parsed.ok).toBe(true);
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
+  it("dedupes the upgrade warning to once per docHash per session", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(() => {
+      annMap.set("a1", { ...annRecord({ id: "a1" }), type: "suggestion" });
+      annMap.set("a2", { ...annRecord({ id: "a2" }), type: "question" });
+    }, MCP_ORIGIN);
+    await store.flush();
+
+    // Two legacy records, one docHash → exactly one warning.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
+  it("close-phase cleanup lets the next open log once again", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const cleanup1 = registerAnnotationObserver(syncCtx(ydoc, store));
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(
+      () => annMap.set("a1", { ...annRecord({ id: "a1" }), type: "suggestion" }),
+      MCP_ORIGIN,
+    );
+    await store.flush();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    cleanup1("close");
+
+    // Fresh observer for the same docHash — dedupe state should have been
+    // cleared so a further legacy record emits a new warning.
+    const cleanup2 = registerAnnotationObserver(syncCtx(ydoc, store));
+    ydoc.transact(
+      () => annMap.set("a2", { ...annRecord({ id: "a2" }), type: "question" }),
+      MCP_ORIGIN,
+    );
+    await store.flush();
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+
+    cleanup2("close");
+    errorSpy.mockRestore();
+  });
+
+  it("swap-phase cleanup preserves dedupe so a Y.Doc swap doesn't spam", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const cleanup1 = registerAnnotationObserver(syncCtx(ydoc, store));
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(
+      () => annMap.set("a1", { ...annRecord({ id: "a1" }), type: "suggestion" }),
+      MCP_ORIGIN,
+    );
+    await store.flush();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    cleanup1("swap");
+
+    const cleanup2 = registerAnnotationObserver(syncCtx(ydoc, store));
+    ydoc.transact(
+      () => annMap.set("a2", { ...annRecord({ id: "a2" }), type: "question" }),
+      MCP_ORIGIN,
+    );
+    await store.flush();
+    // Same docHash, swap semantics → no additional warning.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    cleanup2("close");
+    errorSpy.mockRestore();
   });
 });
 

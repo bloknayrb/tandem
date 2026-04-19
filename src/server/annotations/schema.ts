@@ -227,9 +227,9 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
 /** Result of `migrateToV1`. Drop counts let callers surface lossy upgrades. */
 export interface MigrationResult {
   doc: AnnotationDocV1;
-  /** Number of annotation records the migration had to skip (non-object input or schema rejection). */
+  /** Count of annotation records skipped during migration (non-object input or schema rejection). */
   droppedAnnotations: number;
-  /** Number of reply records the migration had to skip (same criteria). */
+  /** Count of reply records skipped during migration (same criteria). */
   droppedReplies: number;
 }
 
@@ -245,9 +245,11 @@ export interface MigrationResult {
  *
  * Expects `raw` to be roughly `{ annotations?: unknown[]; replies?: unknown[] }`.
  * Anything unrecognized is coerced; invalid records are skipped and tallied
- * in `droppedAnnotations`/`droppedReplies` so callers can surface data loss
- * rather than silently discarding records. The full v1 → vN migration
- * framework is deferred to #320.
+ * in `droppedAnnotations` / `droppedReplies` so callers can surface data loss
+ * rather than silently discarding records. As a second line of defense, a
+ * single `console.error` fires when any records are dropped — without it a
+ * caller that forgets to destructure the counts would lose the data-loss
+ * signal entirely. The full v1 → vN migration framework is deferred.
  */
 export function migrateToV1(raw: unknown): MigrationResult {
   const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -280,6 +282,12 @@ export function migrateToV1(raw: unknown): MigrationResult {
     const parsed = AnnotationReplyRecordSchemaV1.safeParse(withRev);
     if (parsed.success) replies.push(parsed.data);
     else droppedReplies++;
+  }
+
+  if (droppedAnnotations > 0 || droppedReplies > 0) {
+    console.error(
+      `[ANNOTATION-STORE] migrateToV1 dropped ${droppedAnnotations} annotation(s) and ${droppedReplies} reply/replies as malformed`,
+    );
   }
 
   return {

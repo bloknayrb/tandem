@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AnnotationDocSchemaV1,
   type AnnotationDocV1,
@@ -245,7 +245,8 @@ describe("migrateToV1", () => {
     expect(droppedReplies).toBe(0);
   });
 
-  it("skips malformed annotation records silently (lossy upgrade)", () => {
+  it("skips malformed annotation records (lossy upgrade, tallied in droppedAnnotations)", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const legacy = {
       annotations: [
         // Valid
@@ -276,6 +277,7 @@ describe("migrateToV1", () => {
     expect(migrated.annotations[0]?.id).toBe("good");
     // Two invalid records (missing id, "garbage" string) → counted as drops.
     expect(droppedAnnotations).toBe(2);
+    errorSpy.mockRestore();
   });
 
   it("tolerates non-object input without throwing", () => {
@@ -284,6 +286,61 @@ describe("migrateToV1", () => {
     expect(() => migrateToV1(42)).not.toThrow();
     const { doc: migrated } = migrateToV1(null);
     expect(migrated.annotations).toEqual([]);
+  });
+
+  it("counts reply drops separately from annotation drops", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const legacy = {
+      annotations: [],
+      replies: [
+        // Valid
+        {
+          id: "rep_good",
+          annotationId: "ann_1",
+          author: "user",
+          text: "ok",
+          timestamp: 1,
+        },
+        // Invalid — not an object
+        "garbage",
+        // Invalid — missing required fields
+        { author: "user" },
+      ],
+    };
+    const { droppedAnnotations, droppedReplies, doc } = migrateToV1(legacy);
+    expect(droppedAnnotations).toBe(0);
+    expect(droppedReplies).toBe(2);
+    expect(doc.replies).toHaveLength(1);
+    expect(doc.replies[0]?.id).toBe("rep_good");
+    errorSpy.mockRestore();
+  });
+
+  it("treats non-array annotations/replies as empty (no drops attributed)", () => {
+    const { droppedAnnotations, droppedReplies, doc } = migrateToV1({
+      annotations: "not-an-array",
+      replies: 42,
+    });
+    expect(droppedAnnotations).toBe(0);
+    expect(droppedReplies).toBe(0);
+    expect(doc.annotations).toEqual([]);
+    expect(doc.replies).toEqual([]);
+  });
+
+  it("logs once when any records are dropped (future-caller safety net)", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    migrateToV1({
+      annotations: [null, "garbage"],
+      replies: [{ author: "user" }],
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]?.[0]).toMatch(/migrateToV1/);
+
+    errorSpy.mockClear();
+    // Clean input → no log.
+    migrateToV1({});
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
   });
 });
 

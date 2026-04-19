@@ -103,17 +103,17 @@ const loggedLegacyDocs = new Set<string>();
  * Normalize a Y.Map annotation value into an `AnnotationRecordV1`. Supplies
  * `rev: 0` for legacy session-blob entries that lack the field.
  *
- * Records with a non-canonical `type` (e.g. pre-canonicalization `"suggestion"`
- * or `"question"`) are routed through `sanitizeAnnotation` which rewrites
- * them to `"comment"`. Without this, the next `parseAnnotationDoc` would
- * reject the file and self-quarantine the envelope. The Y.Map value is NOT
- * rewritten in place, so every subsequent snapshot of a legacy record re-runs
- * the sanitize spread until a user action overwrites the entry — acceptable
- * cost given the small record count and infrequent snapshots.
+ * Records whose `type` is outside `AnnotationTypeSchema.options` are routed
+ * through `sanitizeAnnotation` which rewrites them to `"comment"`. Without
+ * this, the next `parseAnnotationDoc` would reject the file and self-
+ * quarantine the envelope. The Y.Map value is NOT rewritten in place, so
+ * every subsequent snapshot of a legacy record re-runs the sanitize spread
+ * until a user action overwrites the entry — acceptable cost given the
+ * small record count and infrequent snapshots.
  *
  * Fast path for the common case (canonical type + numeric rev) skips the
- * spread/sanitize entirely — `snapshot()` runs once per debounced write
- * across every annotation in the doc, so the hot path stays tight.
+ * spread/sanitize — `snapshot()` runs this across every annotation in the
+ * doc on every debounced write.
  */
 function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1 | null {
   if (!raw || typeof raw !== "object") return null;
