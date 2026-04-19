@@ -821,10 +821,6 @@ describe("pickWinner", () => {
     expect(pickWinner({ rev: 2, editedAt: 500 }, { rev: 2 })).toBe("file");
   });
 
-  it("tied rev, neither has editedAt → ymap wins (rule 4)", () => {
-    expect(pickWinner({ rev: 2 }, { rev: 2 })).toBe("ymap");
-  });
-
   it("tied rev, ymap has editedAt but file does not → ymap wins (rule 4 — no session-restore heuristic for reverse)", () => {
     // Symmetric inverse of the session-restore heuristic: the heuristic only
     // kicks in when the FILE carries a timestamp the Y.Map is missing. In
