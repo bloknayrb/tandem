@@ -47,6 +47,8 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../src/shared
 
 const HASH_A = "a".repeat(64);
 const FILE_A = "/virtual/doc-a.md";
+const HASH_B = "b".repeat(64);
+const FILE_B = "/virtual/doc-b.md";
 
 function annRecord(overrides: Partial<AnnotationRecordV1> = {}): AnnotationRecordV1 {
   return {
@@ -419,6 +421,43 @@ describe("legacy-type sanitize on write", () => {
     expect(onDisk.annotations[0].rev).toBe(7);
 
     cleanup();
+    errorSpy.mockRestore();
+  });
+
+  it("dedupes independently per docHash (two docs each log once)", async () => {
+    const ydocA = new Y.Doc();
+    const storeA = createStore(HASH_A, { filePath: FILE_A });
+    const ydocB = new Y.Doc();
+    const storeB = createStore(HASH_B, { filePath: FILE_B });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const cleanupA = registerAnnotationObserver(syncCtx(ydocA, storeA));
+    const cleanupB = registerAnnotationObserver(
+      syncCtx(ydocB, storeB, { docHash: HASH_B, meta: { filePath: FILE_B } }),
+    );
+
+    const annMapA = ydocA.getMap(Y_MAP_ANNOTATIONS);
+    const annMapB = ydocB.getMap(Y_MAP_ANNOTATIONS);
+
+    ydocA.transact(
+      () => annMapA.set("a1", { ...annRecord({ id: "a1" }), type: "suggestion" }),
+      MCP_ORIGIN,
+    );
+    ydocB.transact(
+      () => annMapB.set("b1", { ...annRecord({ id: "b1" }), type: "question" }),
+      MCP_ORIGIN,
+    );
+
+    await storeA.flush();
+    await storeB.flush();
+
+    // Two different docHashes → two independent log entries.
+    // If dedupe collapsed to a single boolean, the second would be suppressed.
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+
+    cleanupA();
+    cleanupB();
     errorSpy.mockRestore();
   });
 
