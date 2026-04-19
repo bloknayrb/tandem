@@ -2,18 +2,12 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import * as Y from "yjs";
-import { CLAUDE_PRESENCE_COLOR, DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
+import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { flatOffsetToPmPos } from "../positions";
 
-const TYPING_DOT_STYLE: React.CSSProperties = {
-  width: "5px",
-  height: "5px",
-  borderRadius: "50%",
-  background: CLAUDE_PRESENCE_COLOR,
-};
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 

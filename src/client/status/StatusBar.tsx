@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CLAUDE_PRESENCE_COLOR, USER_NAME_MAX_LEN } from "../../shared/constants";
+import { USER_NAME_MAX_LEN } from "../../shared/constants";
 import { useUserName } from "../hooks/useUserName";
 import type { ConnectionStatus } from "../hooks/useYjsSync";
 
