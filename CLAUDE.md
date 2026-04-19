@@ -64,6 +64,19 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
 
+## Semantic Tokens
+- Token families defined in `index.html` `:root` (light) and `[data-theme="dark"]` blocks. Never use raw hex in `src/client/**/*.tsx` — use `var(--tandem-*)` or import from `src/client/utils/colors.ts`.
+- **`--tandem-success-*`** — green. `--tandem-success`, `-fg`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-warning-*`** — amber. `--tandem-warning`, `-fg`, `-fg-strong`, `-bg`, `-border`. Used for held-annotation banners and held badges.
+- **`--tandem-error-*`** — red. `--tandem-error`, `-fg`, `-fg-strong`, `-bg`, `-border`. Used for `ConnectionBanner`.
+- **`--tandem-info-*`** — blue. `--tandem-info`, `-fg`, `-fg-bg`, `-border`. Used for informational surfaces.
+- **`--tandem-accent-border`** — single token for accent-family bordered elements.
+- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark.
+- **Light mode:** all `*-bg` tokens use `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))` for consistency.
+- **Dark mode:** all `*-bg` tokens use hand-coded hex (e.g. `#052e16`, `#451a03`, `#450a0a`) — saturated values at ~1.02 luminance delta vs `--tandem-surface` read as "intentional color" vs washed-out `color-mix`.
+- **`src/client/utils/colors.ts`** exports `errorStateColors`, `successStateColors`, `warningStateColors` — import these instead of inlining all three CSS vars when you need the full set.
+- Raw hex in client code is a regression; a lint rule is planned for post-0.6.3.
+
 ## Tauri Desktop
 - `cargo tauri dev` -- Tauri dev mode (Vite hot-reload + Rust rebuild)
 - `cargo tauri build` -- Production build (installer output)
