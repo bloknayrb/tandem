@@ -1,6 +1,5 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { warningStateColors } from "../utils/colors";
 import * as Y from "yjs";
 import {
   DEFAULT_MCP_PORT,
@@ -12,6 +11,7 @@ import type { Annotation, AnnotationReply, AnnotationType, TandemMode } from "..
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 import { annotationToPmRange } from "../positions";
+import { warningStateColors } from "../utils/colors";
 import { AnnotationCard } from "./AnnotationCard";
 import { FilterSelect } from "./FilterSelect";
 
@@ -789,7 +789,9 @@ export function SidePanel({
                     style={{
                       ...SMALL_BTN,
                       background: isAccept ? "var(--tandem-success-bg)" : "var(--tandem-error-bg)",
-                      color: isAccept ? "var(--tandem-success-fg-strong)" : "var(--tandem-error-fg-strong)",
+                      color: isAccept
+                        ? "var(--tandem-success-fg-strong)"
+                        : "var(--tandem-error-fg-strong)",
                       fontWeight: 600,
                     }}
                   >
@@ -841,7 +843,10 @@ export function SidePanel({
       {/* Annotation list */}
       <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
         {filtered.length === 0 ? (
-          <p role="status" style={{ fontSize: "13px", color: "var(--tandem-fg-subtle)", marginTop: "8px" }}>
+          <p
+            role="status"
+            style={{ fontSize: "13px", color: "var(--tandem-fg-subtle)", marginTop: "8px" }}
+          >
             {hasFilters
               ? "No annotations match filters."
               : "No annotations yet. Open a document to get started."}
@@ -866,7 +871,9 @@ export function SidePanel({
             })}
             {resolved.length > 0 && (
               <details style={{ marginTop: "12px" }}>
-                <summary style={{ fontSize: "12px", color: "var(--tandem-fg-subtle)", cursor: "pointer" }}>
+                <summary
+                  style={{ fontSize: "12px", color: "var(--tandem-fg-subtle)", cursor: "pointer" }}
+                >
                   {resolved.length} resolved
                 </summary>
                 <div role="list" aria-label="Resolved annotations">

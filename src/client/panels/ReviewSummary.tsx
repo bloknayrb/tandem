@@ -37,7 +37,14 @@ export function ReviewSummary({ accepted, dismissed, total, onDismiss }: ReviewS
         <div style={{ fontSize: "48px", marginBottom: "8px" }}>
           {acceptRate >= 80 ? "\u2705" : acceptRate >= 50 ? "\uD83D\uDCCB" : "\uD83D\uDD0D"}
         </div>
-        <h2 style={{ margin: "0 0 8px", fontSize: "20px", fontWeight: 600, color: "var(--tandem-fg)" }}>
+        <h2
+          style={{
+            margin: "0 0 8px",
+            fontSize: "20px",
+            fontWeight: 600,
+            color: "var(--tandem-fg)",
+          }}
+        >
           Review Complete
         </h2>
         <p style={{ margin: "0 0 20px", color: "var(--tandem-fg-muted)", fontSize: "14px" }}>
@@ -47,17 +54,23 @@ export function ReviewSummary({ accepted, dismissed, total, onDismiss }: ReviewS
           style={{ display: "flex", justifyContent: "center", gap: "24px", marginBottom: "20px" }}
         >
           <div>
-            <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--tandem-success)" }}>{accepted}</div>
+            <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--tandem-success)" }}>
+              {accepted}
+            </div>
             <div style={{ fontSize: "12px", color: "var(--tandem-fg-muted)" }}>Accepted</div>
           </div>
           <div style={{ width: "1px", background: "var(--tandem-border)" }} />
           <div>
-            <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--tandem-error)" }}>{dismissed}</div>
+            <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--tandem-error)" }}>
+              {dismissed}
+            </div>
             <div style={{ fontSize: "12px", color: "var(--tandem-fg-muted)" }}>Dismissed</div>
           </div>
           <div style={{ width: "1px", background: "var(--tandem-border)" }} />
           <div>
-            <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--tandem-accent)" }}>{acceptRate}%</div>
+            <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--tandem-accent)" }}>
+              {acceptRate}%
+            </div>
             <div style={{ fontSize: "12px", color: "var(--tandem-fg-muted)" }}>Accept rate</div>
           </div>
         </div>

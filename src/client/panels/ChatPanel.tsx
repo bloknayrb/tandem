@@ -8,7 +8,6 @@ import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { flatOffsetToPmPos } from "../positions";
 
-
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
 interface ChatPanelProps {
@@ -265,7 +264,9 @@ export function ChatPanel({
                   {getDocFileName(msg.documentId) ?? msg.documentId}
                 </span>
               )}
-              <span style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginLeft: "auto" }}>
+              <span
+                style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginLeft: "auto" }}
+              >
                 {new Date(msg.timestamp).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",

@@ -50,7 +50,8 @@ export function CommentThread({ replies }: CommentThreadProps) {
               style={{
                 fontWeight: 600,
                 fontSize: "11px",
-                color: reply.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
+                color:
+                  reply.author === "claude" ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
               }}
             >
               {reply.author === "claude" ? "Claude" : "You"}

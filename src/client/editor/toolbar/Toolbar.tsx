@@ -236,16 +236,35 @@ export function Toolbar({
       }}
     >
       <span
-        style={{ fontWeight: 700, fontSize: "15px", color: "var(--tandem-accent)", letterSpacing: "-0.02em" }}
+        style={{
+          fontWeight: 700,
+          fontSize: "15px",
+          color: "var(--tandem-accent)",
+          letterSpacing: "-0.02em",
+        }}
       >
         Tandem
       </span>
-      <div style={{ width: "1px", height: "20px", background: "var(--tandem-border)", margin: "0 8px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "20px",
+          background: "var(--tandem-border)",
+          margin: "0 8px",
+        }}
+      />
 
       <FormattingToolbar editor={editor} disabled={inInputMode} />
 
       {/* Divider between formatting and annotation sections */}
-      <div style={{ width: "1px", height: "20px", background: "var(--tandem-border)", margin: "0 8px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "20px",
+          background: "var(--tandem-border)",
+          margin: "0 8px",
+        }}
+      />
 
       {/* Highlight with color picker */}
       <div style={{ display: "flex", alignItems: "center", gap: "2px", position: "relative" }}>
@@ -265,7 +284,8 @@ export function Toolbar({
             fontSize: "13px",
             border: "1px solid var(--tandem-border)",
             borderRadius: "0 4px 4px 0",
-            background: !canAnnotate || inInputMode ? "var(--tandem-surface-muted)" : "var(--tandem-surface)",
+            background:
+              !canAnnotate || inInputMode ? "var(--tandem-surface-muted)" : "var(--tandem-surface)",
             cursor: !canAnnotate || inInputMode ? "not-allowed" : "pointer",
             display: "flex",
             alignItems: "center",
@@ -310,7 +330,9 @@ export function Toolbar({
                   height: "24px",
                   borderRadius: "4px",
                   border:
-                    value === highlightColor ? "2px solid var(--tandem-fg)" : "1px solid rgba(0,0,0,0.15)",
+                    value === highlightColor
+                      ? "2px solid var(--tandem-fg)"
+                      : "1px solid rgba(0,0,0,0.15)",
                   background: HIGHLIGHT_COLORS[value],
                   cursor: "pointer",
                   padding: 0,
@@ -358,7 +380,13 @@ export function Toolbar({
           onCancel={handleModeCancel}
           placeholder={sendToClaude ? "Ask about this text..." : "Add a comment..."}
           submitLabel={showReplacement ? "Suggest" : sendToClaude ? "Ask" : "Add"}
-          borderColor={showReplacement ? "var(--tandem-author-user)" : sendToClaude ? "var(--tandem-accent)" : "var(--tandem-author-user)"}
+          borderColor={
+            showReplacement
+              ? "var(--tandem-author-user)"
+              : sendToClaude
+                ? "var(--tandem-accent)"
+                : "var(--tandem-author-user)"
+          }
           canSubmit={!!modeText.trim() || (showReplacement && !!replacementText.trim())}
           secondaryInput={
             <>
@@ -506,7 +534,8 @@ export function Toolbar({
                 border: "none",
                 cursor: "pointer",
                 background: tandemMode === "tandem" ? "var(--tandem-accent)" : "transparent",
-                color: tandemMode === "tandem" ? "var(--tandem-accent-fg)" : "var(--tandem-fg-muted)",
+                color:
+                  tandemMode === "tandem" ? "var(--tandem-accent-fg)" : "var(--tandem-fg-muted)",
                 fontWeight: tandemMode === "tandem" ? 600 : 400,
                 display: "flex",
                 alignItems: "center",

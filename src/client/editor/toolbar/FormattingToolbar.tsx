@@ -273,7 +273,14 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         onMouseDown={withPreventDefault(() => editor.commands.redo())}
         style={{ minWidth: "30px", padding: "4px 6px" }}
       />
-      <div style={{ width: "1px", height: "16px", background: "var(--tandem-border)", margin: "0 2px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "16px",
+          background: "var(--tandem-border)",
+          margin: "0 2px",
+        }}
+      />
       <ToolbarButton
         label="B"
         shortcut="Ctrl+B"
@@ -371,7 +378,14 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         )}
       </div>
 
-      <div style={{ width: "1px", height: "16px", background: "var(--tandem-border)", margin: "0 2px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "16px",
+          background: "var(--tandem-border)",
+          margin: "0 2px",
+        }}
+      />
 
       <ToolbarButton
         label={BulletListIcon}
@@ -401,7 +415,14 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         style={{ minWidth: "30px", padding: "4px 6px" }}
       />
 
-      <div style={{ width: "1px", height: "16px", background: "var(--tandem-border)", margin: "0 2px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "16px",
+          background: "var(--tandem-border)",
+          margin: "0 2px",
+        }}
+      />
 
       <ToolbarButton
         label={LinkIcon}

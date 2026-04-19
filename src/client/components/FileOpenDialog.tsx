@@ -330,7 +330,9 @@ export function FileOpenDialog({ onClose }: FileOpenDialogProps) {
                           (e.currentTarget as HTMLButtonElement).style.background = "transparent";
                         }}
                       >
-                        <span style={{ fontSize: "13px", color: "var(--tandem-fg)" }}>{filename}</span>
+                        <span style={{ fontSize: "13px", color: "var(--tandem-fg)" }}>
+                          {filename}
+                        </span>
                         <span
                           style={{
                             fontSize: "11px",

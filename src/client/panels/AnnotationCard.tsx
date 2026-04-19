@@ -181,7 +181,9 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 marginLeft: "6px",
                 fontSize: "10px",
                 color:
-                  annotation.status === "accepted" ? "var(--tandem-success)" : "var(--tandem-error)",
+                  annotation.status === "accepted"
+                    ? "var(--tandem-success)"
+                    : "var(--tandem-error)",
                 fontWeight: 600,
               }}
             >
@@ -212,7 +214,9 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           }}
         >
           {annotation.editedAt && (
-            <span style={{ fontStyle: "italic", fontSize: "10px", color: "var(--tandem-fg-subtle)" }}>
+            <span
+              style={{ fontStyle: "italic", fontSize: "10px", color: "var(--tandem-fg-subtle)" }}
+            >
               (edited)
             </span>
           )}
@@ -491,8 +495,12 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                     fontSize: "11px",
                     border: "1px solid var(--tandem-border-strong)",
                     borderRadius: "3px",
-                    background: replyText.trim() ? "var(--tandem-accent-bg)" : "var(--tandem-surface-muted)",
-                    color: replyText.trim() ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-subtle)",
+                    background: replyText.trim()
+                      ? "var(--tandem-accent-bg)"
+                      : "var(--tandem-surface-muted)",
+                    color: replyText.trim()
+                      ? "var(--tandem-accent-fg-strong)"
+                      : "var(--tandem-fg-subtle)",
                     cursor: replyText.trim() ? "pointer" : "default",
                   }}
                 >

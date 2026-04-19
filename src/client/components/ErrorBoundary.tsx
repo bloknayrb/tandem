@@ -25,7 +25,13 @@ export class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: "2rem", fontFamily: "system-ui, sans-serif", color: "var(--tandem-fg)" }}>
+        <div
+          style={{
+            padding: "2rem",
+            fontFamily: "system-ui, sans-serif",
+            color: "var(--tandem-fg)",
+          }}
+        >
           <h2>Something went wrong</h2>
           <p style={{ color: "var(--tandem-fg-muted)" }}>
             The editor encountered an unexpected error. Reload the page to continue.
