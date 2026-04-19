@@ -64,6 +64,19 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
 
+## Semantic Tokens
+- Token families defined in `index.html` `:root` (light) and `[data-theme="dark"]` blocks. Never use raw hex or non-neutral `rgba()` for semantic colors in `src/client/**/*.{ts,tsx}` — use `var(--tandem-*)` or import from `src/client/utils/colors.ts`. (`rgba(0,0,0,...)` / `rgba(255,255,255,...)` alpha values for shadows and overlays are fine.) Known exemption until #355 lands: `src/client/editor/extensions/awareness.ts` inlines `rgba(99, 102, 241, …)` for Claude focus/cursor decorations.
+- **`--tandem-success-*`** — green. Success toasts, completion states. `--tandem-success`, `-fg`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-warning-*`** — amber. Warnings, held-annotation banners, unsaved indicators. `--tandem-warning`, `-fg`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-error-*`** — red. Error banners, destructive actions, flag annotations. `--tandem-error`, `-fg`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-info-*`** — blue. Informational banners, review-only mode. `--tandem-info`, `-fg`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-accent-border`** — single token for accent-family bordered elements.
+- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark.
+- **Light mode:** `--tandem-success-bg`, `--tandem-warning-bg`, and `--tandem-error-bg` are derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` (`#eef2ff`) and `--tandem-info-bg` (`#eff6ff`) use hand-picked hex.
+- **Dark mode:** all `*-bg` tokens use hand-coded saturated hex (e.g. `#052e16`, `#451a03`, `#450a0a`). `color-mix` produces washed-out surfaces against the dark neutral; hand-picked values read as intentionally colored.
+- **`src/client/utils/colors.ts`** exports `errorStateColors`, `successStateColors`, `warningStateColors` — import these instead of inlining all three CSS vars when you need the full set (e.g. `SidePanel.tsx` held-banner).
+- Raw hex in client code is a regression; lint rule tracked in #356 (awareness.ts migration tracked in #355).
+
 ## Tauri Desktop
 - `cargo tauri dev` -- Tauri dev mode (Vite hot-reload + Rust rebuild)
 - `cargo tauri build` -- Production build (installer output)

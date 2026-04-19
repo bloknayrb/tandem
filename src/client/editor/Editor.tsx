@@ -62,7 +62,7 @@ export function Editor({
           provider: provider,
           user: {
             name: readStoredName(),
-            color: "#f59e0b",
+            color: "var(--tandem-warning)",
           },
         }),
         AnnotationExtension.configure({ ydoc }),
@@ -142,13 +142,13 @@ export function Editor({
         .tandem-editor p { margin: 0.5em 0; }
         .tandem-editor ul, .tandem-editor ol { padding-left: 1.5em; }
         .tandem-editor table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-        .tandem-editor td, .tandem-editor th { border: 1px solid #ddd; padding: 8px; }
-        .tandem-editor th { background: #f5f5f5; font-weight: 600; }
+        .tandem-editor td, .tandem-editor th { border: 1px solid var(--tandem-border); padding: 8px; }
+        .tandem-editor th { background: var(--tandem-surface-muted); font-weight: 600; }
         .tandem-editor blockquote {
-          border-left: 3px solid #e5e7eb;
+          border-left: 3px solid var(--tandem-border-strong);
           margin: 0.5em 0;
           padding-left: 1em;
-          color: #6b7280;
+          color: var(--tandem-fg-muted);
         }
         .collaboration-cursor__caret {
           position: relative;
@@ -164,12 +164,12 @@ export function Editor({
           white-space: nowrap;
           padding: 0 4px;
           border-radius: 3px 3px 3px 0;
-          color: white;
+          color: var(--tandem-accent-fg);
         }
         .ProseMirror-focused { outline: none; }
         .ProseMirror p.is-empty::before {
           content: attr(data-placeholder);
-          color: #adb5bd;
+          color: var(--tandem-fg-subtle);
           pointer-events: none;
           float: left;
           height: 0;
@@ -184,16 +184,16 @@ export function Editor({
 
         /* Review mode dimming — grays out text, keeps annotated spans readable */
         .tandem-review-dimmed .ProseMirror {
-          color: #9ca3af;
+          color: var(--tandem-fg-subtle);
           transition: color 0.2s;
         }
         .tandem-review-dimmed .tandem-highlight,
         .tandem-review-dimmed .tandem-comment,
         .tandem-review-dimmed .tandem-suggestion {
-          color: #1f2937;
+          color: var(--tandem-fg);
         }
         .tandem-review-dimmed .tandem-annotation-active {
-          outline: 2px solid #6366f1;
+          outline: 2px solid var(--tandem-accent);
           outline-offset: 1px;
           border-radius: 2px;
         }
@@ -214,7 +214,7 @@ export function Editor({
           top: 0;
           bottom: 0;
           width: 3px;
-          background: rgba(99, 102, 241, 0.6);
+          background: var(--tandem-accent);
           border-radius: 2px;
           animation: tandem-gutter-pulse 2s ease-in-out infinite;
         }
@@ -227,7 +227,7 @@ export function Editor({
         .tandem-claude-cursor {
           position: relative;
           display: inline;
-          border-left: 2px solid #8b5cf6;
+          border-left: 2px solid var(--tandem-author-claude);
           margin-left: -1px;
           z-index: 10;
           animation: tandem-claude-blink 1.2s step-end infinite;
@@ -245,8 +245,8 @@ export function Editor({
           white-space: nowrap;
           padding: 0 4px;
           border-radius: 3px 3px 3px 0;
-          background: #8b5cf6;
-          color: white;
+          background: var(--tandem-author-claude);
+          color: var(--tandem-accent-fg);
           pointer-events: none;
           z-index: 11;
         }

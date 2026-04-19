@@ -273,7 +273,14 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         onMouseDown={withPreventDefault(() => editor.commands.redo())}
         style={{ minWidth: "30px", padding: "4px 6px" }}
       />
-      <div style={{ width: "1px", height: "16px", background: "#e5e7eb", margin: "0 2px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "16px",
+          background: "var(--tandem-border)",
+          margin: "0 2px",
+        }}
+      />
       <ToolbarButton
         label="B"
         shortcut="Ctrl+B"
@@ -334,8 +341,8 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
               top: "100%",
               left: 0,
               marginTop: "4px",
-              background: "#fff",
-              border: "1px solid #e5e7eb",
+              background: "var(--tandem-surface)",
+              border: "1px solid var(--tandem-border)",
               borderRadius: "6px",
               padding: "4px",
               display: "flex",
@@ -356,8 +363,8 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
                   fontSize: "13px",
                   border: "none",
                   borderRadius: "4px",
-                  background: activeHeading === level ? "#eef2ff" : "transparent",
-                  color: activeHeading === level ? "#4338ca" : "#374151",
+                  background: activeHeading === level ? "var(--tandem-accent-bg)" : "transparent",
+                  color: activeHeading === level ? "var(--tandem-accent)" : "var(--tandem-fg)",
                   cursor: "pointer",
                   textAlign: "left",
                   fontWeight: HEADING_FONT_WEIGHTS[level],
@@ -371,7 +378,14 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         )}
       </div>
 
-      <div style={{ width: "1px", height: "16px", background: "#e5e7eb", margin: "0 2px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "16px",
+          background: "var(--tandem-border)",
+          margin: "0 2px",
+        }}
+      />
 
       <ToolbarButton
         label={BulletListIcon}
@@ -401,7 +415,14 @@ export function FormattingToolbar({ editor, disabled }: FormattingToolbarProps) 
         style={{ minWidth: "30px", padding: "4px 6px" }}
       />
 
-      <div style={{ width: "1px", height: "16px", background: "#e5e7eb", margin: "0 2px" }} />
+      <div
+        style={{
+          width: "1px",
+          height: "16px",
+          background: "var(--tandem-border)",
+          margin: "0 2px",
+        }}
+      />
 
       <ToolbarButton
         label={LinkIcon}

@@ -25,19 +25,27 @@ export class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
+        <div
+          style={{
+            padding: "2rem",
+            fontFamily: "system-ui, sans-serif",
+            color: "var(--tandem-fg)",
+          }}
+        >
           <h2>Something went wrong</h2>
-          <p style={{ color: "#666" }}>
+          <p style={{ color: "var(--tandem-fg-muted)" }}>
             The editor encountered an unexpected error. Reload the page to continue.
           </p>
           <pre
             style={{
-              background: "#f5f5f5",
+              background: "var(--tandem-surface-muted)",
               padding: "1rem",
               borderRadius: "4px",
               fontSize: "12px",
               overflow: "auto",
               maxHeight: "200px",
+              color: "var(--tandem-fg)",
+              border: "1px solid var(--tandem-border)",
             }}
           >
             {this.state.error?.message}
@@ -48,9 +56,10 @@ export class ErrorBoundary extends React.Component<
               marginTop: "1rem",
               padding: "8px 16px",
               cursor: "pointer",
-              border: "1px solid #d1d5db",
+              border: "1px solid var(--tandem-border-strong)",
               borderRadius: "4px",
-              background: "#fff",
+              background: "var(--tandem-surface)",
+              color: "var(--tandem-fg)",
             }}
           >
             Reload

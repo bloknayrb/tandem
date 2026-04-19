@@ -71,12 +71,14 @@ function TabItem({
         padding: "4px 12px",
         fontSize: "13px",
         cursor: "pointer",
-        background: isActive ? "#fff" : "transparent",
-        color: isActive ? "#111827" : "#6b7280",
-        borderTop: isActive ? "2px solid #6366f1" : "2px solid transparent",
-        borderBottom: isActive ? "1px solid #fff" : "1px solid transparent",
-        borderLeft: dropIndicator === "left" ? "2px solid #6366f1" : "2px solid transparent",
-        borderRight: dropIndicator === "right" ? "2px solid #6366f1" : "2px solid transparent",
+        background: isActive ? "var(--tandem-surface)" : "transparent",
+        color: isActive ? "var(--tandem-fg)" : "var(--tandem-fg-muted)",
+        borderTop: isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent",
+        borderBottom: isActive ? "1px solid var(--tandem-surface)" : "1px solid transparent",
+        borderLeft:
+          dropIndicator === "left" ? "2px solid var(--tandem-accent)" : "2px solid transparent",
+        borderRight:
+          dropIndicator === "right" ? "2px solid var(--tandem-accent)" : "2px solid transparent",
         marginBottom: "-1px",
         userSelect: "none",
         whiteSpace: "nowrap",
@@ -87,7 +89,7 @@ function TabItem({
       {isDirty && (
         <span
           data-testid={`unsaved-indicator-${tab.id}`}
-          style={{ color: "#f59e0b", fontSize: "10px" }}
+          style={{ color: "var(--tandem-warning)", fontSize: "10px" }}
         >
           ●
         </span>
@@ -96,7 +98,7 @@ function TabItem({
         style={{
           fontSize: "10px",
           fontWeight: 700,
-          color: isActive ? "#6366f1" : "#9ca3af",
+          color: isActive ? "var(--tandem-accent)" : "var(--tandem-fg-subtle)",
           width: "14px",
           textAlign: "center",
         }}
@@ -120,8 +122,8 @@ function TabItem({
         <span
           style={{
             fontSize: "9px",
-            color: "#92400e",
-            background: "#fef3c7",
+            color: "var(--tandem-warning-fg-strong)",
+            background: "var(--tandem-warning-bg)",
             padding: "0 3px",
             borderRadius: "2px",
           }}
@@ -148,12 +150,12 @@ function TabItem({
           cursor: "pointer",
           fontSize: "14px",
           lineHeight: 1,
-          color: "#9ca3af",
+          color: "var(--tandem-fg-subtle)",
           padding: "0 2px",
           borderRadius: "2px",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
-        onMouseLeave={(e) => (e.currentTarget.style.color = "#9ca3af")}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--tandem-error)")}
+        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--tandem-fg-subtle)")}
         title="Close document"
       >
         ×
@@ -184,18 +186,18 @@ const ARROW_BTN_STYLE: React.CSSProperties = {
   justifyContent: "center",
   width: "28px",
   minWidth: "28px",
-  background: "linear-gradient(to right, #f3f4f6 70%, transparent)",
+  background: "linear-gradient(to right, var(--tandem-surface-muted) 70%, transparent)",
   border: "none",
   cursor: "pointer",
   fontSize: "12px",
-  color: "#6b7280",
+  color: "var(--tandem-fg-muted)",
   padding: 0,
   zIndex: 1,
 };
 
 const ARROW_BTN_RIGHT_STYLE: React.CSSProperties = {
   ...ARROW_BTN_STYLE,
-  background: "linear-gradient(to left, #f3f4f6 70%, transparent)",
+  background: "linear-gradient(to left, var(--tandem-surface-muted) 70%, transparent)",
 };
 
 export function DocumentTabs({
@@ -366,8 +368,8 @@ export function DocumentTabs({
         position: "relative",
         display: "flex",
         alignItems: "center",
-        background: "#f3f4f6",
-        borderBottom: "1px solid #e5e7eb",
+        background: "var(--tandem-surface-muted)",
+        borderBottom: "1px solid var(--tandem-border)",
         minHeight: "32px",
       }}
     >
@@ -376,7 +378,11 @@ export function DocumentTabs({
         <button
           data-testid="tab-scroll-left"
           onClick={scrollLeft}
-          style={ARROW_BTN_STYLE}
+          style={{
+            ...ARROW_BTN_STYLE,
+            background: `linear-gradient(to right, var(--tandem-surface-muted) 70%, transparent)`,
+            color: "var(--tandem-fg-muted)",
+          }}
           title="Scroll tabs left"
         >
           ◀
@@ -418,7 +424,11 @@ export function DocumentTabs({
         <button
           data-testid="tab-scroll-right"
           onClick={scrollRight}
-          style={ARROW_BTN_RIGHT_STYLE}
+          style={{
+            ...ARROW_BTN_RIGHT_STYLE,
+            background: `linear-gradient(to left, var(--tandem-surface-muted) 70%, transparent)`,
+            color: "var(--tandem-fg-muted)",
+          }}
           title="Scroll tabs right"
         >
           ▶
@@ -430,24 +440,24 @@ export function DocumentTabs({
         title="Open file"
         style={{
           background: "none",
-          border: "1px solid #d1d5db",
+          border: "1px solid var(--tandem-border-strong)",
           borderRadius: "4px",
           cursor: "pointer",
           fontSize: "16px",
           lineHeight: 1,
-          color: "#6b7280",
+          color: "var(--tandem-fg-muted)",
           padding: "2px 8px",
           marginLeft: "4px",
           marginRight: "8px",
           flexShrink: 0,
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.color = "#6366f1";
-          e.currentTarget.style.borderColor = "#6366f1";
+          e.currentTarget.style.color = "var(--tandem-accent)";
+          e.currentTarget.style.borderColor = "var(--tandem-accent)";
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.color = "#6b7280";
-          e.currentTarget.style.borderColor = "#d1d5db";
+          e.currentTarget.style.color = "var(--tandem-fg-muted)";
+          e.currentTarget.style.borderColor = "var(--tandem-border-strong)";
         }}
       >
         +
