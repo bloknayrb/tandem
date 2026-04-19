@@ -791,6 +791,33 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await expect(reloadedSlider).toHaveValue("2000");
 });
 
+test("settings popover stays within viewport on short screens (#306)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.setViewportSize({ width: 1024, height: 400 }); // 400px guarantees maxHeight overflow
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible();
+
+  const box = await popover.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+
+  const { overflowed, overflowY } = await popover.evaluate((el) => ({
+    overflowed: el.scrollHeight > el.clientHeight,
+    overflowY: window.getComputedStyle(el).overflowY,
+  }));
+  expect(overflowed).toBe(true);
+  expect(overflowY).toBe("auto");
+});
+
 // Verifies that selections are buffered server-side and no longer emitted
 // as standalone SSE events (#188). This E2E proves the full pipeline from
 // browser selection → server awareness → SSE endpoint produces no

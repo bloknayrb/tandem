@@ -252,11 +252,9 @@ export default function App() {
 
   const { settings, updateSettings } = useTandemSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  const openAtButton = useCallback(() => {
-    setSettingsAnchor(settingsBtnRef.current?.getBoundingClientRect() ?? null);
+  const openSettings = useCallback(() => {
     setSettingsOpen(true);
   }, []);
   const settingsOpenRef = useRef(settingsOpen);
@@ -266,8 +264,8 @@ export default function App() {
       setSettingsOpen(false);
       return;
     }
-    openAtButton();
-  }, [openAtButton]);
+    openSettings();
+  }, [openSettings]);
   useSettingsShortcut(toggleSettings);
 
   // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
@@ -939,7 +937,6 @@ export default function App() {
       <SettingsPopover
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        anchorRect={settingsAnchor}
         settings={settings}
         onUpdate={updateSettings}
         returnFocusRef={settingsBtnRef}
