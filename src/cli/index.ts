@@ -13,20 +13,12 @@
 import updateNotifier from "update-notifier";
 
 process.once("uncaughtException", (err: Error) => {
-  try {
-    process.stderr.write(`[tandem cli] uncaught exception: ${err.message}\n`);
-  } catch {
-    /* EPIPE during teardown — swallow */
-  }
+  process.stderr.write(`[tandem cli] uncaughtException: ${err.message}\n${err.stack ?? ""}\n`);
   process.exit(1);
 });
 process.once("unhandledRejection", (reason: unknown) => {
-  try {
-    const msg = reason instanceof Error ? reason.message : String(reason);
-    process.stderr.write(`[tandem cli] unhandled rejection: ${msg}\n`);
-  } catch {
-    /* EPIPE during teardown — swallow */
-  }
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  process.stderr.write(`[tandem cli] unhandledRejection: ${detail}\n`);
   process.exit(1);
 });
 

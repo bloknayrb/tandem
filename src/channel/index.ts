@@ -10,20 +10,12 @@
 import { runChannel } from "./run.js";
 
 process.once("uncaughtException", (err: Error) => {
-  try {
-    process.stderr.write(`[tandem channel] uncaught exception: ${err.message}\n`);
-  } catch {
-    /* EPIPE during teardown — swallow */
-  }
+  process.stderr.write(`[tandem channel] uncaughtException: ${err.message}\n${err.stack ?? ""}\n`);
   process.exit(1);
 });
 process.once("unhandledRejection", (reason: unknown) => {
-  try {
-    const msg = reason instanceof Error ? reason.message : String(reason);
-    process.stderr.write(`[tandem channel] unhandled rejection: ${msg}\n`);
-  } catch {
-    /* EPIPE during teardown — swallow */
-  }
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  process.stderr.write(`[tandem channel] unhandledRejection: ${detail}\n`);
   process.exit(1);
 });
 
