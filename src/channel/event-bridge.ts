@@ -6,6 +6,7 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { TandemEvent } from "../server/events/types.js";
 import { formatEventContent, formatEventMeta, parseTandemEvent } from "../server/events/types.js";
+import { authFetch } from "../shared/cli-runtime.js";
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
@@ -31,7 +32,7 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
       if (retries >= CHANNEL_MAX_RETRIES) {
         console.error("[Channel] SSE connection exhausted, reporting error and exiting");
         try {
-          await fetch(`${tandemUrl}/api/channel-error`, {
+          await authFetch(`${tandemUrl}/api/channel-error`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -62,7 +63,7 @@ async function connectAndStream(
   const headers: Record<string, string> = { Accept: "text/event-stream" };
   if (lastEventId) headers["Last-Event-ID"] = lastEventId;
 
-  const res = await fetch(`${tandemUrl}/api/events`, { headers });
+  const res = await authFetch(`${tandemUrl}/api/events`, { headers });
   if (!res.ok) throw new Error(`SSE endpoint returned ${res.status}`);
   if (!res.body) throw new Error("SSE endpoint returned no body");
 
@@ -77,7 +78,7 @@ async function connectAndStream(
   const AWARENESS_CLEAR_MS = 3000; // Reset active state after 3s of no new events
 
   function clearAwareness(documentId?: string) {
-    fetch(`${tandemUrl}/api/channel-awareness`, {
+    authFetch(`${tandemUrl}/api/channel-awareness`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -92,7 +93,7 @@ async function connectAndStream(
     if (!pendingAwareness) return;
     const event = pendingAwareness;
     pendingAwareness = null;
-    fetch(`${tandemUrl}/api/channel-awareness`, {
+    authFetch(`${tandemUrl}/api/channel-awareness`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -188,7 +189,7 @@ async function getCachedMode(tandemUrl: string): Promise<string> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
   try {
-    const res = await fetch(`${tandemUrl}/api/mode`);
+    const res = await authFetch(`${tandemUrl}/api/mode`);
     if (res.ok) {
       const { mode } = (await res.json()) as { mode: string };
       cachedMode = mode;

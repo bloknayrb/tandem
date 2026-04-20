@@ -21,6 +21,7 @@ export interface McpEntry {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  headers?: Record<string, string>;
 }
 
 export interface McpEntries {
@@ -34,20 +35,31 @@ export interface BuildMcpEntriesOptions {
    *  can run `tandem setup --with-channel-shim` to preserve the shim. */
   withChannelShim?: boolean;
   nodeBinary?: string;
+  /** Auth token to embed in HTTP entry headers and stdio shim env.
+   *  When omitted (first-run before token provisioned), headers/env are omitted
+   *  and backward compatibility is preserved. */
+  token?: string;
 }
 
 export function buildMcpEntries(
   channelPath: string,
   opts: BuildMcpEntriesOptions = {},
 ): McpEntries {
-  const entries: McpEntries = {
-    tandem: { type: "http", url: `${MCP_URL}/mcp` },
-  };
+  const tandemEntry: McpEntry = { type: "http", url: `${MCP_URL}/mcp` };
+  if (opts.token) {
+    tandemEntry.headers = { Authorization: `Bearer ${opts.token}` };
+  }
+  const entries: McpEntries = { tandem: tandemEntry };
+
   if (opts.withChannelShim) {
+    const shimEnv: Record<string, string> = { TANDEM_URL: MCP_URL };
+    if (opts.token) {
+      shimEnv.TANDEM_AUTH_TOKEN = opts.token;
+    }
     entries["tandem-channel"] = {
       command: opts.nodeBinary ?? "node",
       args: [channelPath],
-      env: { TANDEM_URL: MCP_URL },
+      env: shimEnv,
     };
   }
   return entries;

@@ -22,6 +22,7 @@ import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TandemEvent } from "../server/events/types.js";
 import { formatEventContent, parseTandemEvent } from "../server/events/types.js";
+import { authFetch } from "../shared/cli-runtime.js";
 import {
   CHANNEL_MAX_RETRIES,
   CHANNEL_RETRY_DELAY_MS,
@@ -55,13 +56,14 @@ const STABLE_CONNECTION_MS = 60_000; // Reset retries after this much continuous
 const CHANNEL_RETRY_MAX_DELAY_MS = 30_000; // Exponential backoff cap
 
 // AbortSignal.timeout is supported on Node 20+; tsup target is node22.
+// Uses authFetch so TANDEM_AUTH_TOKEN is forwarded automatically when set.
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
 ): Promise<Response> {
   const signal = AbortSignal.timeout(timeoutMs);
-  return fetch(url, { ...init, signal });
+  return authFetch(url, { ...init, signal });
 }
 
 /**
@@ -185,7 +187,7 @@ export async function connectAndStream(
   );
   let res: Response;
   try {
-    res = await fetch(`${TANDEM_URL}/api/events`, { headers, signal: connectCtrl.signal });
+    res = await authFetch(`${TANDEM_URL}/api/events`, { headers, signal: connectCtrl.signal });
   } finally {
     clearTimeout(connectTimer);
   }

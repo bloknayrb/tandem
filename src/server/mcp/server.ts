@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import type { Server } from "http";
 import { createRequire } from "module";
 
+import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { openBrowser } from "../open-browser.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, registerApiRoutes } from "./api-routes.js";
@@ -123,7 +124,11 @@ export async function startMcpServerStdio(): Promise<void> {
 }
 
 /** Start the MCP server on HTTP using Streamable HTTP transport. Returns the http.Server for lifecycle management. */
-export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Promise<Server> {
+export async function startMcpServerHttp(
+  port: number,
+  host = "127.0.0.1",
+  token?: string,
+): Promise<Server> {
   mcpServer = createMcpServer();
 
   // We need two different body parser limits: 100kb for MCP (SDK default)
@@ -132,6 +137,14 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   // /api routes with a larger body parser, then mount the SDK app for /mcp.
   const { default: express } = await import("express");
   const app = express();
+
+  // Auth middleware: validates Bearer token for all non-loopback requests.
+  // Runs before per-route apiMiddleware; loopback bypass preserves DNS-rebinding
+  // for loopback callers. Rate-limit and token checks apply to non-loopback
+  // requests only.
+  // Loopback (127.0.0.1, ::1, ::ffff:127.0.0.1) is always exempt —
+  // Claude Code zero-config is preserved.
+  const authMiddleware = createAuthMiddleware(() => token ?? null);
 
   // Large body parser for file-open and upload routes only (up to 70MB).
   // NOT mounted globally — other routes (MCP, /health) use the SDK's own parser.
@@ -182,29 +195,44 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
     currentTransport = null;
   });
 
-  // Health endpoint — apiMiddleware protects against DNS rebinding
+  // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
+  // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).
+  // /health and /.well-known/* are intentionally omitted — they're public/diagnostic.
+  // Note: all channel routes use /api/channel-* paths (covered by /api below).
+  app.use("/mcp", authMiddleware);
+  app.use("/api", authMiddleware);
+
+  // Health endpoint — apiMiddleware protects against DNS rebinding.
+  // Auth-exempt: health is public diagnostic info.
+  // Invariant 7: omit hasSession when request is non-loopback (session presence leaks).
   app.get(
     "/health",
     apiMiddleware,
-    (_req: import("express").Request, res: import("express").Response) => {
-      res.json({
+    (req: import("express").Request, res: import("express").Response) => {
+      const body: Record<string, unknown> = {
         status: "ok",
         version: APP_VERSION,
         transport: "http",
-        hasSession: currentTransport !== null,
-      });
+      };
+      if (isLoopback(req.socket.remoteAddress)) {
+        body.hasSession = currentTransport !== null;
+      }
+      res.json(body);
     },
   );
 
-  // RFC 9728 Protected Resource Metadata — declares no auth required.
+  // RFC 9728 Protected Resource Metadata — declares Bearer auth via header.
   // Newer Claude Code versions probe this before connecting to MCP.
+  // resource uses literal "localhost" (invariant 6 — never req.host or a detected LAN IP).
+  // Auth-exempt: these endpoints must be reachable before auth is established.
   app.get(
     "/.well-known/oauth-protected-resource/mcp",
     (_req: import("express").Request, res: import("express").Response) => {
       res.header("Access-Control-Allow-Origin", "*");
       res.json({
         resource: `http://localhost:${port}/mcp`,
-        bearer_methods_supported: [],
+        bearer_methods_supported: ["header"],
+        authorization_servers: [`http://localhost:${port}`],
       });
     },
   );
@@ -214,7 +242,8 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
       res.header("Access-Control-Allow-Origin", "*");
       res.json({
         resource: `http://localhost:${port}/mcp`,
-        bearer_methods_supported: [],
+        bearer_methods_supported: ["header"],
+        authorization_servers: [`http://localhost:${port}`],
       });
     },
   );
@@ -223,7 +252,7 @@ export async function startMcpServerHttp(port: number, host = "127.0.0.1"): Prom
   app.use(mcpApp);
 
   // --- REST API for browser-initiated file opening ---
-  registerApiRoutes(app, largeBody);
+  registerApiRoutes(app, largeBody, token);
 
   // --- Channel support endpoints ---
   registerChannelRoutes(app, apiMiddleware);
