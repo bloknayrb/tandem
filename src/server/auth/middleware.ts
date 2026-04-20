@@ -23,13 +23,7 @@ interface PreviousTokenSlot {
 
 let _previousToken: PreviousTokenSlot | undefined;
 
-/**
- * Record the old token so it remains valid during the rotation grace window.
- * Called by `POST /api/rotate-token` immediately before the new token takes effect.
- *
- * @param token - The old token value (plain text, not hashed).
- * @param ttlMs - How long to honour the old token (default: 60 seconds).
- */
+/** Record the old token so it remains valid for `ttlMs` ms after the new token takes effect. */
 export function setPreviousToken(token: string, ttlMs = 60_000): void {
   _previousToken = { value: token, expiresAt: Date.now() + ttlMs };
 }
@@ -44,7 +38,7 @@ export function getPreviousToken(): PreviousTokenSlot | undefined {
   return _previousToken;
 }
 
-/** Clear the previous-token slot (used in tests for isolation). */
+/** Clear the previous-token slot. */
 export function clearPreviousToken(): void {
   _previousToken = undefined;
 }
@@ -222,10 +216,8 @@ export function createAuthMiddleware(
       }
     }
 
-    // Primary: check current token
     let match = digestsMatch(storedToken);
 
-    // Grace window: if primary fails, check whether the previous token is still valid
     if (!match) {
       const prev = getPreviousToken();
       if (prev) {

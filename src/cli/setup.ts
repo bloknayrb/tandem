@@ -209,9 +209,6 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
 
 /**
  * Write the given token into all detected Claude MCP config files.
- * Called by both `tandem setup` (with the freshly loaded/created token)
- * and `tandem rotate-token` (with the new token after rotation).
- *
  * Returns the number of configs successfully updated and any per-target errors.
  */
 export async function applyConfigWithToken(

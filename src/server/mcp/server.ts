@@ -153,9 +153,7 @@ export async function startMcpServerHttp(
   // Loopback (127.0.0.1, ::1, ::ffff:127.0.0.1) is always exempt —
   // Claude Code zero-config is preserved.
   //
-  // Mutable ref so `POST /api/rotate-token` can swap the current token at runtime
-  // without restarting the server. The grace-window slot in middleware.ts handles
-  // the old token for 60 seconds post-rotation.
+  // Mutable ref: `POST /api/rotate-token` swaps the token without a server restart.
   const tokenRef = { current: token ?? null };
   const authMiddleware = createAuthMiddleware(() => tokenRef.current);
 

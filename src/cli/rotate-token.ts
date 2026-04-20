@@ -1,26 +1,13 @@
-/**
- * `tandem rotate-token` — rotate the auth token with a 60-second grace window.
- *
- * Flow:
- * 1. Read the OLD token from disk (or env — rotation is a no-op in Tauri/env mode).
- * 2. Generate a NEW token and write it to the token file.
- * 3. POST /api/rotate-token with Bearer <OLD token> so the running server activates
- *    the grace window (old token remains valid for 60 s) and swaps to the new token.
- * 4. Re-run applyConfigWithToken to update all detected Claude MCP configs.
- * 5. Print fingerprints (first 8 hex chars of SHA-256) — never the full tokens.
- */
-
 import { createHash, randomBytes } from "node:crypto";
 import { getTokenFilePath, readTokenFromFile } from "../server/auth/token-store.js";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { applyConfigWithToken } from "./setup.js";
 
-/** Fingerprint: first 8 hex chars of SHA-256(token). Never logs the full value. */
+/** SHA-256 fingerprint — first 8 hex chars. Never logs the full token value. */
 function fingerprint(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex").slice(0, 8);
 }
 
-/** Generate a fresh 32-byte URL-safe base64 token. */
 function generateToken(): string {
   return randomBytes(32).toString("base64url");
 }
@@ -41,7 +28,6 @@ export async function rotateToken(): Promise<void> {
     process.exit(1);
   }
 
-  // 1. Read OLD token
   const oldToken = await readTokenFromFile();
   if (!oldToken) {
     console.error(
@@ -50,15 +36,12 @@ export async function rotateToken(): Promise<void> {
     process.exit(1);
   }
 
-  // 2. Generate and write NEW token (overwrite, not O_EXCL — rotation is intentional)
+  // writeTokenToFile uses O_EXCL; bypass it here — rotation is an intentional overwrite.
   const newToken = generateToken();
-  // writeTokenToFile uses O_EXCL on first-write but falls back to overwrite on EEXIST —
-  // we want a forced overwrite here. Open for writing directly.
   const { promises: fsPromises } = await import("node:fs");
   const tokenPath = getTokenFilePath();
   await fsPromises.writeFile(tokenPath, newToken, { encoding: "utf8", mode: 0o600 });
 
-  // 3. Notify running server → activate grace window + swap current token
   const serverUrl = `http://localhost:${DEFAULT_MCP_PORT}`;
   let graceWindowActive = false;
   try {
@@ -69,7 +52,6 @@ export async function rotateToken(): Promise<void> {
         Authorization: `Bearer ${oldToken}`,
       },
       body: JSON.stringify({ previousToken: oldToken }),
-      // Short timeout — if server isn't up, don't hang
       signal: AbortSignal.timeout(5000),
     });
     if (resp.ok) {
@@ -88,7 +70,6 @@ export async function rotateToken(): Promise<void> {
     );
   }
 
-  // 4. Re-write all detected Claude MCP configs with the new token
   let updatedCount = 0;
   let configErrors: string[] = [];
   try {
@@ -101,7 +82,6 @@ export async function rotateToken(): Promise<void> {
     );
   }
 
-  // 5. Print summary
   console.error("[tandem] Rotated auth token.");
   console.error(`  Old fingerprint: ${fingerprint(oldToken)}`);
   console.error(`  New fingerprint: ${fingerprint(newToken)}`);

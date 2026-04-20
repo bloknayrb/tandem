@@ -542,7 +542,6 @@ export function registerApiRoutes(
       return;
     }
 
-    // Read the new token from disk (CLI wrote it before calling us)
     let newToken: string | null;
     try {
       newToken = await readTokenFromFile();
@@ -559,10 +558,8 @@ export function registerApiRoutes(
       return;
     }
 
-    // Activate grace window so the old token remains valid for 60 seconds
     setPreviousToken(previousToken, 60_000);
 
-    // Swap the in-memory current token so new connections authenticate with the new token
     if (setCurrentToken) {
       setCurrentToken(newToken);
     }
