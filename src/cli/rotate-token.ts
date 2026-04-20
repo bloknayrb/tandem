@@ -45,8 +45,13 @@ export async function rotateToken(): Promise<void> {
   const tokenPath = getTokenFilePath();
   const dir = path.dirname(tokenPath);
   const tmpPath = path.join(dir, `.auth-token-tmp-${randomBytes(4).toString("hex")}`);
-  await fsPromises.writeFile(tmpPath, newToken, { encoding: "utf8", mode: 0o600 });
-  await fsPromises.rename(tmpPath, tokenPath);
+  try {
+    await fsPromises.writeFile(tmpPath, newToken, { encoding: "utf8", mode: 0o600 });
+    await fsPromises.rename(tmpPath, tokenPath);
+  } catch (err) {
+    await fsPromises.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 
   const serverUrl = `http://localhost:${DEFAULT_MCP_PORT}`;
 
