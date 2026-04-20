@@ -173,6 +173,22 @@ describe("SHA-256 approach handles token length variants without throwing", () =
   }
 });
 
+// ── getToken() null branch ────────────────────────────────────────────────────
+
+describe("getToken() returns null", () => {
+  it("returns 401 when getToken() returns null (no token loaded yet)", () => {
+    const mw = createAuthMiddleware(() => null);
+    const req = makeReq("192.168.1.1", "Bearer sometoken");
+    const res = makeRes();
+    let nextCalled = false;
+    mw(req as unknown as Request, res as unknown as Response, () => {
+      nextCalled = true;
+    });
+    expect(nextCalled).toBe(false);
+    expect(res._status).toBe(401);
+  });
+});
+
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
 describe("rate limiting", () => {
@@ -208,6 +224,24 @@ describe("rate limiting", () => {
     }
 
     // addr2 from the same /64 should now be rate-limited (429)
+    const res = makeRes();
+    mw(makeReq(addr2), res as unknown as Response, vi.fn());
+    expect(res._status).toBe(429);
+  });
+
+  it("IPv6 /64 keying: compressed :: notation shares bucket with expanded form", () => {
+    // Regression: 2001:db8::1 must map to the same /64 key as 2001:db8::2
+    // (both expand to 2001:db8:0:0:... so the /64 prefix key is "2001:db8:0:0")
+    const mw = createAuthMiddleware(() => VALID_TOKEN);
+    const addr1 = "2001:db8::1"; // compressed notation
+    const addr2 = "2001:db8::2"; // different host in the same /64
+
+    // 5 failures from addr1 (compressed)
+    for (let i = 0; i < 5; i++) {
+      mw(makeReq(addr1), makeRes() as unknown as Response, vi.fn());
+    }
+
+    // addr2 (also compressed, same /64) should now be rate-limited (429)
     const res = makeRes();
     mw(makeReq(addr2), res as unknown as Response, vi.fn());
     expect(res._status).toBe(429);

@@ -103,7 +103,7 @@ export function readAndValidateAuthToken(): string | null {
 
   if (!VALID_TOKEN_RE.test(trimmed)) {
     process.stderr.write(
-      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (empty, whitespace, or malformed — must be 32+ alphanumeric chars)\n",
+      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is malformed (must be 32+ URL-safe characters: [A-Za-z0-9_-])\n",
     );
     process.exit(1);
   }

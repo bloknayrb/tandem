@@ -941,22 +941,32 @@ describe("readAndValidateAuthToken", () => {
     expect(readAndValidateAuthToken()).toBeNull();
   });
 
-  it("exits 1 for token with newline (e.g. abc\\n)", () => {
-    process.env.TANDEM_AUTH_TOKEN = "abcdefghijklmnopqrstuvwxyz012345\n";
-    // The token with trailing newline — after trim it's valid, so no exit expected
-    // Actually the spec says: TANDEM_AUTH_TOKEN = "abc\n" → process exits 1
-    // "abc\n" trimmed = "abc" which is < 32 chars → exits 1
+  it("rejects token with invalid characters (e.g. embedded special chars)", () => {
+    // A token with an embedded invalid character (! is not in [A-Za-z0-9_-]).
+    // Must be ≥32 chars to ensure failure is due to invalid chars, not length.
     const result = mockExit();
-    process.env.TANDEM_AUTH_TOKEN = "abc\n";
+    process.env.TANDEM_AUTH_TOKEN = "validlengthtoken!@#$%^&*()1234567";
     expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
     expect(result.exitCode).toBe(1);
   });
 
   it("exits 1 for Bearer-prefixed token (double-prefix)", () => {
     process.env.TANDEM_AUTH_TOKEN = "Bearer abcdefghijklmnopqrstuvwxyz012345";
+    const stderrLines: string[] = [];
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((...args: Parameters<typeof process.stderr.write>) => {
+      stderrLines.push(String(args[0]));
+      return origStderrWrite(...args);
+    }) as typeof process.stderr.write;
     const result = mockExit();
-    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
-    expect(result.exitCode).toBe(1);
+    try {
+      expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+      expect(result.exitCode).toBe(1);
+      const stderrOutput = stderrLines.join("");
+      expect(stderrOutput).toMatch(/double[- ]prefix|Bearer/i);
+    } finally {
+      process.stderr.write = origStderrWrite;
+    }
   });
 
   it("exits 1 for token shorter than 32 chars", () => {

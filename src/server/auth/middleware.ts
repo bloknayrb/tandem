@@ -28,13 +28,26 @@ interface FailEntry {
  * Derive the rate-limit key from a remote address.
  * IPv4 literals are used as-is.
  * IPv6 addresses are reduced to their /64 prefix (first 4 colon-separated segments).
+ * Handles compressed :: notation by expanding to 8 segments first.
  * Already-normalized IPv4-mapped addresses ("127.0.0.1" after isLoopback) pass through.
  */
 function rateLimitKey(addr: string): string {
   if (!addr.includes(":")) return addr; // plain IPv4
-  // IPv6: take the first 4 segments as the /64 prefix
-  const segments = addr.split(":");
-  return segments.slice(0, 4).join(":");
+  const bare = addr.split("%")[0]; // strip zone identifier
+  // IPv4-mapped — extract IPv4 part (already normalized away from loopback)
+  const v4mapped = bare.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (v4mapped) return v4mapped[1] as string;
+  // Expand :: to fill 8 segments
+  if (bare.includes("::")) {
+    const [left, right] = bare.split("::");
+    const head = left ? left.split(":") : [];
+    const tail = right ? right.split(":") : [];
+    const fill = Array(8 - head.length - tail.length).fill("0");
+    const full = [...head, ...fill, ...tail];
+    return full.slice(0, 4).join(":");
+  }
+  // Already fully expanded (8 segments, no ::)
+  return addr.split(":").slice(0, 4).join(":");
 }
 
 /** Simple in-memory LRU-ish rate limiter using a Map with manual eviction. */

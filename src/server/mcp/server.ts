@@ -139,7 +139,9 @@ export async function startMcpServerHttp(
   const app = express();
 
   // Auth middleware: validates Bearer token for all non-loopback requests.
-  // Runs after DNS-rebinding checks (apiMiddleware) but before route handlers.
+  // Runs before per-route apiMiddleware; loopback bypass preserves DNS-rebinding
+  // for loopback callers. Rate-limit and token checks apply to non-loopback
+  // requests only.
   // Loopback (127.0.0.1, ::1, ::ffff:127.0.0.1) is always exempt —
   // Claude Code zero-config is preserved.
   const authMiddleware = createAuthMiddleware(() => token ?? null);

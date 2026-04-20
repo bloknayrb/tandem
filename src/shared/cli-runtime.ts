@@ -31,6 +31,9 @@ export function resolveTandemUrl(override?: string): string {
 /** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
 const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
 
+/** Guard so we only warn once per process (not on every SSE reconnect). */
+let _warnedInvalidToken = false;
+
 /**
  * Fetch wrapper that automatically injects `Authorization: Bearer <token>`
  * when TANDEM_AUTH_TOKEN is set and valid.
@@ -38,13 +41,24 @@ const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
  * This is the forgiving variant — used by monitor/channel which may run in
  * loopback-only mode without a token. Invalid or absent tokens are silently
  * ignored (no exit-1). The strict validation lives in mcp-stdio.ts only.
+ * When the token is set but fails validation, a one-time warning is emitted
+ * so operators know why auth headers are absent.
  */
 export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = process.env.TANDEM_AUTH_TOKEN;
-  if (token && VALID_TOKEN_RE.test(token)) {
-    const headers = new Headers(init?.headers);
-    headers.set("Authorization", `Bearer ${token}`);
-    return fetch(url, { ...init, headers });
+  if (token !== undefined && token.trim() !== "") {
+    if (VALID_TOKEN_RE.test(token.trim())) {
+      const headers = new Headers(init?.headers);
+      headers.set("Authorization", `Bearer ${token.trim()}`);
+      return fetch(url, { ...init, headers });
+    }
+    // Token is set but invalid — warn once so operators know why auth fails
+    if (!_warnedInvalidToken) {
+      _warnedInvalidToken = true;
+      console.error(
+        "[tandem] authFetch: TANDEM_AUTH_TOKEN is set but invalid (must be 32+ alphanumeric chars [A-Za-z0-9_-]); sending without Authorization header",
+      );
+    }
   }
   return fetch(url, init);
 }
