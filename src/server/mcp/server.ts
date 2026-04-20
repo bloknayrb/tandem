@@ -193,12 +193,12 @@ export async function startMcpServerHttp(
     currentTransport = null;
   });
 
-  // Auth middleware for /mcp, /api/*, /channel/* — AFTER apiMiddleware (DNS-rebinding)
+  // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
   // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).
   // /health and /.well-known/* are intentionally omitted — they're public/diagnostic.
+  // Note: all channel routes use /api/channel-* paths (covered by /api below).
   app.use("/mcp", authMiddleware);
   app.use("/api", authMiddleware);
-  app.use("/channel", authMiddleware);
 
   // Health endpoint — apiMiddleware protects against DNS rebinding.
   // Auth-exempt: health is public diagnostic info.

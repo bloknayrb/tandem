@@ -916,13 +916,11 @@ describe("readAndValidateAuthToken", () => {
     expect(readAndValidateAuthToken()).toBeNull();
   });
 
-  it("exits 1 when TANDEM_AUTH_TOKEN is empty string (set but empty = user error)", () => {
-    // Invariant 4: empty token is a user error (they set the var but left it empty) → exit 1.
-    // Only undefined (var not set at all) is the "loopback-only mode" null path.
+  it("returns null when TANDEM_AUTH_TOKEN is empty string (empty after trim = loopback-only mode)", () => {
+    // Spec: "If TANDEM_AUTH_TOKEN is not set (or empty after trim), proceed with no Authorization
+    // header — no exit." An explicitly-set-but-empty env var is treated the same as not set.
     process.env.TANDEM_AUTH_TOKEN = "";
-    const result = mockExit();
-    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
-    expect(result.exitCode).toBe(1);
+    expect(readAndValidateAuthToken()).toBeNull();
   });
 
   it("returns the token when valid (32+ alphanumeric chars)", () => {
@@ -937,11 +935,10 @@ describe("readAndValidateAuthToken", () => {
     expect(readAndValidateAuthToken()).toBe(validToken);
   });
 
-  it("exits 1 for whitespace-only token", () => {
+  it("returns null for whitespace-only token (empty after trim = loopback-only mode)", () => {
+    // Spec: "empty after trim" → no exit, return null.
     process.env.TANDEM_AUTH_TOKEN = "   ";
-    const result = mockExit();
-    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
-    expect(result.exitCode).toBe(1);
+    expect(readAndValidateAuthToken()).toBeNull();
   });
 
   it("exits 1 for token with newline (e.g. abc\\n)", () => {

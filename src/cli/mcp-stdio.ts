@@ -83,24 +83,16 @@ const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
 /**
  * Validate TANDEM_AUTH_TOKEN if set.
  * Rules (invariant 4):
- * - If set, must match /^[A-Za-z0-9_-]{32,}$/ (no whitespace, no newlines, no Bearer prefix).
+ * - If not set at all, or if empty/whitespace-only after trim → return null (loopback-only mode).
  * - "Bearer " prefix → exit 1 with "double-prefix" message.
- * - Empty string or whitespace-only → exit 1.
- * - If not set at all → return null (loopback-only mode is fine, no exit).
+ * - Must match /^[A-Za-z0-9_-]{32,}$/ (no whitespace, no newlines, no Bearer prefix).
  */
 export function readAndValidateAuthToken(): string | null {
   const raw = process.env.TANDEM_AUTH_TOKEN;
-  // Token not set at all → loopback-only mode, no auth header, no exit.
+  // Token not set at all, or empty/whitespace-only → loopback-only mode, no auth header, no exit.
   if (raw === undefined) return null;
-
-  // Token is set but empty or whitespace-only → user error, exit 1.
   const trimmed = raw.trim();
-  if (trimmed === "") {
-    process.stderr.write(
-      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (empty, whitespace, or malformed — must be 32+ alphanumeric chars)\n",
-    );
-    process.exit(1);
-  }
+  if (trimmed === "") return null;
 
   if (trimmed.startsWith("Bearer ") || raw.startsWith("Bearer ")) {
     process.stderr.write(
