@@ -29,6 +29,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 tokio = { version = "1", features = ["time"] }
+keyring = "3"
+base64 = "0.22"
+dirs = "6"
+rand = "0.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"

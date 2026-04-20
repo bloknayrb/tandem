@@ -1,3 +1,5 @@
+mod token_store;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -305,6 +307,17 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
     let app_data_dir_str = strip_win_prefix(&app_data_dir);
 
+    // Obtain or create the auth token before spawning — the Node sidecar
+    // reads TANDEM_AUTH_TOKEN and skips its own generation when it's present.
+    // Token-less is acceptable for now; PR b will enforce it.
+    let auth_token: Option<String> = match token_store::get_or_create_token() {
+        Ok(token) => Some(token),
+        Err(e) => {
+            log::error!("Failed to obtain auth token (sidecar will start token-less): {e}");
+            None
+        }
+    };
+
     for attempt in 0..=MAX_RESTARTS {
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt - 1));
@@ -314,13 +327,19 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
             tokio::time::sleep(backoff).await;
         }
 
-        let (rx, child) = handle
+        let mut cmd = handle
             .shell()
             .sidecar("node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
             .args([server_js_str.as_str()])
             .env("TANDEM_OPEN_BROWSER", "0")
-            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str())
+            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str());
+
+        if let Some(ref token) = auth_token {
+            cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
+        }
+
+        let (rx, child) = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
