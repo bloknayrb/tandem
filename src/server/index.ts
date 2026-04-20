@@ -1,4 +1,5 @@
 import type { Server } from "http";
+import { isIP } from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
@@ -243,12 +244,38 @@ async function main() {
 
   // ── Bind-host selection (MCP only — Hocuspocus always stays loopback) ────────
   const bindHost = process.env.TANDEM_BIND_HOST ?? DEFAULT_BIND_HOST;
+
+  // Fix 4: Validate TANDEM_BIND_HOST as an IP when it is non-loopback and non-wildcard.
+  // Loopback and wildcard values are reserved words handled by checkBindConfig;
+  // only concrete IPs need net.isIP validation here.
+  const LOOPBACK_AND_WILDCARD = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0", "::"]);
+  if (!LOOPBACK_AND_WILDCARD.has(bindHost) && isIP(bindHost) === 0) {
+    process.stderr.write(
+      `[tandem] TANDEM_BIND_HOST="${bindHost}" is not a valid IP address. Exiting.\n`,
+    );
+    process.exit(1);
+  }
+
+  // Fix 2: Coerce empty-string TANDEM_LAN_IP to undefined so nullish coalescing
+  // in bind-check.ts does not treat "" as a valid IP and add it to the Host allowlist.
+  // (An empty Host header would otherwise match "" via includes("") === true.)
+  const lanIP = process.env.TANDEM_LAN_IP || undefined;
+
+  // Fix 4: Validate TANDEM_LAN_IP when set.
+  if (lanIP && isIP(lanIP) === 0) {
+    process.stderr.write(`[tandem] TANDEM_LAN_IP="${lanIP}" is not a valid IP address. Exiting.\n`);
+    process.exit(1);
+  }
+
   const bindCheck = checkBindConfig({
     bindHost,
     port: mcpPort,
     authToken,
-    allowUnauthLAN: !!process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV],
-    lanIP: process.env.TANDEM_LAN_IP,
+    // Fix 3: Only treat the env var as truthy when it equals exactly "1".
+    // Values like "0", "false", or "no" were previously treated as opt-in due
+    // to the truthiness of any non-empty string.
+    allowUnauthLAN: process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV] === "1",
+    lanIP,
   });
 
   if (!bindCheck.ok) {

@@ -10,7 +10,7 @@ import { randomUUID } from "crypto";
 import type { Server } from "http";
 import { createRequire } from "module";
 
-import { DEFAULT_BIND_HOST } from "../../shared/constants.js";
+import { DEFAULT_BIND_HOST, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { openBrowser } from "../open-browser.js";
 import { registerAnnotationTools } from "./annotations.js";
@@ -165,8 +165,16 @@ export async function startMcpServerHttp(
   // NOT mounted globally — other routes (MCP, /health) use the SDK's own parser.
   const largeBody = express.json({ limit: "70mb" });
 
-  // SDK app provides express.json() (100kb limit) + DNS rebinding protection
-  const mcpApp = createMcpExpressApp({ host });
+  // SDK app provides express.json() (100kb limit) + DNS rebinding protection.
+  // When binding non-loopback, pass allowedHosts so the SDK's hostHeaderValidation
+  // activates for /mcp (port-agnostic hostname matching). This closes the
+  // DNS-rebinding gap that would otherwise exist because authMiddleware's loopback
+  // bypass runs before the SDK's host-header check on the inner mcpApp.
+  // The SDK strips the port via URL.hostname, so we supply bare hostnames only.
+  const allowedHosts = resolvedLanIP
+    ? ["127.0.0.1", "localhost", "::1", resolvedLanIP, TAURI_HOSTNAME]
+    : undefined;
+  const mcpApp = createMcpExpressApp({ host, ...(allowedHosts ? { allowedHosts } : {}) });
 
   mcpApp.post("/mcp", async (req: import("express").Request, res: import("express").Response) => {
     const body = req.body as unknown;

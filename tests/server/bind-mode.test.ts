@@ -366,6 +366,49 @@ describe("checkBindConfig — specific non-loopback IP (no multi-homed check)", 
   });
 });
 
+// ── Test 8b: IPv6 :: wildcard bind ───────────────────────────────────────────
+
+describe("checkBindConfig — IPv6 '::' wildcard bind", () => {
+  it("treats '::' as wildcard and triggers multi-homed detection like 0.0.0.0", () => {
+    const result = checkBindConfig({
+      bindHost: "::",
+      port: 3479,
+      authToken: VALID_TOKEN,
+      allowUnauthLAN: false,
+      networkInterfaces: multiLanInterfaces(),
+    });
+    // With multiple interfaces and no lanIP, multi-homed detection must fire
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderrMessage).toContain("Multiple non-internal IPv4 addresses detected");
+  });
+
+  it("'::' with single LAN interface resolves resolvedLanIP", () => {
+    const result = checkBindConfig({
+      bindHost: "::",
+      port: 3479,
+      authToken: VALID_TOKEN,
+      allowUnauthLAN: false,
+      networkInterfaces: singleLanInterfaces("192.168.1.50"),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.resolvedLanIP).toBe("192.168.1.50");
+  });
+
+  it("'::' with TANDEM_LAN_IP set bypasses multi-homed check", () => {
+    const result = checkBindConfig({
+      bindHost: "::",
+      port: 3479,
+      authToken: VALID_TOKEN,
+      allowUnauthLAN: false,
+      lanIP: "10.0.0.1",
+      networkInterfaces: multiLanInterfaces(),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.resolvedLanIP).toBe("10.0.0.1");
+  });
+});
+
 // ── Test 8: Hocuspocus stays loopback (static check) ─────────────────────────
 
 describe("Hocuspocus stays loopback", () => {

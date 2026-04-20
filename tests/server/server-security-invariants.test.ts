@@ -124,6 +124,92 @@ describe("Invariant 7 — /health includes hasSession for loopback callers", () 
   });
 });
 
+// ── Fix 1 regression: /mcp DNS-rebinding protection with allowedHosts ────────
+//
+// When startMcpServerHttp is called with resolvedLanIP set (non-loopback bind),
+// createMcpExpressApp receives allowedHosts and activates hostHeaderValidation.
+// A request to /mcp with Host: evil.com must be rejected 403.
+//
+// Node.js fetch() silently overrides the Host header with the connection target,
+// so we use http.request() with explicit headers to properly spoof the Host header.
+
+import { request as httpRequest } from "node:http";
+
+/** Low-level HTTP POST that preserves the Host header exactly as given. */
+function rawPost(
+  port: number,
+  path: string,
+  hostHeader: string,
+  body: string,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const bodyBuf = Buffer.from(body, "utf8");
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "POST",
+        headers: {
+          Host: hostHeader,
+          "Content-Type": "application/json",
+          "Content-Length": bodyBuf.length,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => {
+          data += chunk.toString();
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+      },
+    );
+    req.on("error", reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
+describe("Fix 1 regression — /mcp DNS-rebinding protection (non-loopback bind)", () => {
+  let lanHttpServer: Server;
+  let lanPort: number;
+
+  beforeEach(async () => {
+    lanPort = await allocPort();
+    // Pass resolvedLanIP to simulate a non-loopback bind (e.g. TANDEM_BIND_HOST=0.0.0.0
+    // with a single detected interface). The server itself still binds to 127.0.0.1 so
+    // the test runner can reach it; what matters is that allowedHosts gets activated.
+    lanHttpServer = await startMcpServerHttp(lanPort, "127.0.0.1", undefined, "192.168.1.50");
+  });
+
+  afterEach(() => {
+    return new Promise<void>((resolve, reject) => {
+      lanHttpServer.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+
+  it("blocks /mcp POST with Host: evil.com when resolvedLanIP is set", async () => {
+    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+    const res = await rawPost(lanPort, "/mcp", "evil.com", payload);
+    // SDK hostHeaderValidation must reject the spoofed Host header
+    expect(res.status).toBe(403);
+  });
+
+  it("allows /mcp POST with Host: 127.0.0.1 when resolvedLanIP is set", async () => {
+    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+    const res = await rawPost(lanPort, "/mcp", `127.0.0.1:${lanPort}`, payload);
+    // 127.0.0.1 is in the allowlist — should not be blocked by host-header validation
+    expect(res.status).not.toBe(403);
+  });
+
+  it("allows /mcp POST with Host matching resolvedLanIP", async () => {
+    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+    const res = await rawPost(lanPort, "/mcp", `192.168.1.50:${lanPort}`, payload);
+    // resolvedLanIP is in the allowlist — should not be blocked by host-header validation
+    expect(res.status).not.toBe(403);
+  });
+});
+
 // ── Invariant 7 (non-loopback path): /health must omit hasSession ─────────────
 //
 // The test server binds to 127.0.0.1; all fetch() calls from the test runner
