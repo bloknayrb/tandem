@@ -114,6 +114,12 @@ export const CHANNEL_RETRY_DELAY_MS = 2_000;
 /** Auth token filename inside the app-data directory. */
 export const TOKEN_FILE_NAME = "auth-token";
 
+/** Default MCP bind host — loopback only by default. */
+export const DEFAULT_BIND_HOST = "127.0.0.1";
+
+/** Env var name to opt in to unauthenticated LAN binding. */
+export const TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV = "TANDEM_ALLOW_UNAUTHENTICATED_LAN";
+
 /** Tauri WebView origin hostname — must be accepted alongside localhost. */
 export const TAURI_HOSTNAME = "tauri.localhost";
 

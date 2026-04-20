@@ -10,10 +10,11 @@ import { randomUUID } from "crypto";
 import type { Server } from "http";
 import { createRequire } from "module";
 
+import { DEFAULT_BIND_HOST } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { openBrowser } from "../open-browser.js";
 import { registerAnnotationTools } from "./annotations.js";
-import { apiMiddleware, registerApiRoutes } from "./api-routes.js";
+import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { registerChannelRoutes } from "./channel-routes.js";
 import { registerDocumentTools } from "./document.js";
@@ -126,8 +127,15 @@ export async function startMcpServerStdio(): Promise<void> {
 /** Start the MCP server on HTTP using Streamable HTTP transport. Returns the http.Server for lifecycle management. */
 export async function startMcpServerHttp(
   port: number,
-  host = "127.0.0.1",
+  host = DEFAULT_BIND_HOST,
   token?: string,
+  /**
+   * Resolved LAN IP for the Host-header allowlist.
+   * Passed when TANDEM_BIND_HOST is non-loopback so that browsers on the LAN
+   * (which send e.g. `Host: 192.168.1.50:3479`) pass the DNS-rebinding check.
+   * undefined for loopback binds — only localhost/127.0.0.1/tauri.localhost allowed.
+   */
+  resolvedLanIP?: string,
 ): Promise<Server> {
   mcpServer = createMcpServer();
 
@@ -145,6 +153,13 @@ export async function startMcpServerHttp(
   // Loopback (127.0.0.1, ::1, ::ffff:127.0.0.1) is always exempt —
   // Claude Code zero-config is preserved.
   const authMiddleware = createAuthMiddleware(() => token ?? null);
+
+  // DNS-rebinding middleware: extend the Host-header allowlist with the resolved
+  // LAN IP when binding non-loopback. For loopback binds resolvedLanIP is
+  // undefined and this falls back to the standard localhost-only middleware.
+  const lanAwareApiMiddleware = resolvedLanIP
+    ? createApiMiddleware([resolvedLanIP])
+    : apiMiddleware;
 
   // Large body parser for file-open and upload routes only (up to 70MB).
   // NOT mounted globally — other routes (MCP, /health) use the SDK's own parser.
@@ -202,12 +217,12 @@ export async function startMcpServerHttp(
   app.use("/mcp", authMiddleware);
   app.use("/api", authMiddleware);
 
-  // Health endpoint — apiMiddleware protects against DNS rebinding.
+  // Health endpoint — lanAwareApiMiddleware protects against DNS rebinding.
   // Auth-exempt: health is public diagnostic info.
   // Invariant 7: omit hasSession when request is non-loopback (session presence leaks).
   app.get(
     "/health",
-    apiMiddleware,
+    lanAwareApiMiddleware,
     (req: import("express").Request, res: import("express").Response) => {
       const body: Record<string, unknown> = {
         status: "ok",
@@ -252,10 +267,10 @@ export async function startMcpServerHttp(
   app.use(mcpApp);
 
   // --- REST API for browser-initiated file opening ---
-  registerApiRoutes(app, largeBody, token);
+  registerApiRoutes(app, largeBody, token, lanAwareApiMiddleware);
 
   // --- Channel support endpoints ---
-  registerChannelRoutes(app, apiMiddleware);
+  registerChannelRoutes(app, lanAwareApiMiddleware);
 
   // Serve built client assets when present (populated by `vite build`).
   // express.static falls through for paths it doesn't find, so /mcp, /api/*,

@@ -62,6 +62,8 @@ export function removeDocument(name: string): boolean {
 export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
     port,
+    // Hocuspocus always binds loopback — the MCP bind-host env var does not apply here.
+    // WebSocket collaboration traffic stays local-only per the Cowork architecture.
     address: "127.0.0.1",
     quiet: true, // stdout is the MCP wire — suppress the startup banner
 

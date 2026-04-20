@@ -32,10 +32,20 @@ import { openFileByPath, openFileFromContent } from "./file-opener.js";
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
 
-/** Check if a Host header value is allowed (localhost only). Exported for testing. */
-export function isHostAllowed(host: string | undefined): boolean {
+/**
+ * Check if a Host header value is allowed (localhost + optional extra hosts).
+ * Exported for testing.
+ *
+ * @param host - The Host header value (may include port).
+ * @param extraHosts - Additional hosts to allow (e.g. a LAN IP when
+ *   TANDEM_BIND_HOST is non-loopback). Always empty for loopback binds.
+ */
+export function isHostAllowed(host: string | undefined, extraHosts: string[] = []): boolean {
   const reqHost = (host ?? "").split(":")[0];
-  return reqHost === "localhost" || reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME;
+  if (reqHost === "localhost" || reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME) {
+    return true;
+  }
+  return extraHosts.includes(reqHost);
 }
 
 function escapeRegExp(s: string): string {
@@ -191,22 +201,34 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
   }
 }
 
-/** CORS + DNS rebinding protection middleware for /api/* routes */
-export function apiMiddleware(req: Request, res: Response, next: NextFunction): void {
-  if (!isHostAllowed(req.headers.host as string | undefined)) {
-    res.status(403).json({ error: "FORBIDDEN", message: "Host not allowed." });
-    return;
-  }
-  const origin = req.headers.origin as string | undefined;
-  res.header("Access-Control-Allow-Origin", isLocalhostOrigin(origin) ? origin! : "null");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") {
-    res.sendStatus(204);
-    return;
-  }
-  next();
+/**
+ * Create a CORS + DNS rebinding protection middleware for /api/* routes.
+ *
+ * @param extraHosts - Additional hosts to allow beyond localhost/127.0.0.1/tauri.localhost.
+ *   Pass the resolved LAN IP when TANDEM_BIND_HOST is non-loopback so that
+ *   browsers on the LAN (which send e.g. `Host: 192.168.1.50:3479`) are not
+ *   blocked by the DNS-rebinding check.
+ */
+export function createApiMiddleware(extraHosts: string[] = []): Handler {
+  return function apiMiddlewareFn(req: Request, res: Response, next: NextFunction): void {
+    if (!isHostAllowed(req.headers.host as string | undefined, extraHosts)) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Host not allowed." });
+      return;
+    }
+    const origin = req.headers.origin as string | undefined;
+    res.header("Access-Control-Allow-Origin", isLocalhostOrigin(origin) ? origin! : "null");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  };
 }
+
+/** Default CORS + DNS rebinding protection middleware (loopback-only allowlist). */
+export const apiMiddleware: Handler = createApiMiddleware();
 
 /** Map a Node/custom error code to a JSON-body error label. */
 function errorCodeToLabel(code: string): string {
@@ -293,12 +315,23 @@ function notifyStreamHandler(req: Request, res: Response): void {
   console.error("[NotifyStream] Client connected to /api/notify-stream");
 }
 
-/** Register /api/open, /api/upload, and /api/notify-stream routes on the Express app. */
-export function registerApiRoutes(app: Express, largeBody: Handler, token?: string): void {
+/**
+ * Register /api/open, /api/upload, and /api/notify-stream routes on the Express app.
+ *
+ * @param mw - The DNS-rebinding middleware to use. Pass `createApiMiddleware([lanIP])`
+ *   when TANDEM_BIND_HOST is non-loopback so LAN Host headers are allowed.
+ *   Defaults to the standard loopback-only `apiMiddleware`.
+ */
+export function registerApiRoutes(
+  app: Express,
+  largeBody: Handler,
+  token?: string,
+  mw: Handler = apiMiddleware,
+): void {
   // SSE notification stream for browser toasts
-  app.get("/api/notify-stream", apiMiddleware, notifyStreamHandler);
-  app.options("/api/open", apiMiddleware);
-  app.post("/api/open", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.get("/api/notify-stream", mw, notifyStreamHandler);
+  app.options("/api/open", mw);
+  app.post("/api/open", mw, largeBody, async (req: Request, res: Response) => {
     const { filePath, force } = (req.body ?? {}) as Record<string, unknown>;
     if (!filePath || typeof filePath !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "filePath is required" });
@@ -312,8 +345,8 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
     }
   });
 
-  app.options("/api/close", apiMiddleware);
-  app.post("/api/close", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.options("/api/close", mw);
+  app.post("/api/close", mw, largeBody, async (req: Request, res: Response) => {
     const { documentId } = (req.body ?? {}) as Record<string, unknown>;
     if (!documentId || typeof documentId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });
@@ -333,8 +366,8 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
     }
   });
 
-  app.options("/api/save", apiMiddleware);
-  app.post("/api/save", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.options("/api/save", mw);
+  app.post("/api/save", mw, largeBody, async (req: Request, res: Response) => {
     const { documentId } = (req.body ?? {}) as Record<string, unknown>;
     if (documentId !== undefined && typeof documentId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
@@ -353,8 +386,8 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
     }
   });
 
-  app.options("/api/upload", apiMiddleware);
-  app.post("/api/upload", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.options("/api/upload", mw);
+  app.post("/api/upload", mw, largeBody, async (req: Request, res: Response) => {
     const { fileName, content } = (req.body ?? {}) as Record<string, unknown>;
     if (!fileName || typeof fileName !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "fileName is required" });
@@ -378,8 +411,8 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
     }
   });
 
-  app.options("/api/convert", apiMiddleware);
-  app.post("/api/convert", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.options("/api/convert", mw);
+  app.post("/api/convert", mw, largeBody, async (req: Request, res: Response) => {
     const { documentId, outputPath } = (req.body ?? {}) as Record<string, unknown>;
     if (documentId !== undefined && typeof documentId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
@@ -401,15 +434,15 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
     }
   });
 
-  app.get("/api/mode", apiMiddleware, (_req: Request, res: Response) => {
+  app.get("/api/mode", mw, (_req: Request, res: Response) => {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
     const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
     res.json({ mode });
   });
 
-  app.options("/api/apply-changes", apiMiddleware);
-  app.post("/api/apply-changes", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.options("/api/apply-changes", mw);
+  app.post("/api/apply-changes", mw, largeBody, async (req: Request, res: Response) => {
     const { documentId, author, backupPath } = (req.body ?? {}) as Record<string, unknown>;
     if (documentId !== undefined && typeof documentId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
@@ -436,8 +469,8 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
     }
   });
 
-  app.options("/api/setup", apiMiddleware);
-  app.post("/api/setup", apiMiddleware, largeBody, async (req: Request, res: Response) => {
+  app.options("/api/setup", mw);
+  app.post("/api/setup", mw, largeBody, async (req: Request, res: Response) => {
     try {
       const result = await runSetupHandler(
         (req.body ?? {}) as Record<string, unknown>,
@@ -455,8 +488,8 @@ export function registerApiRoutes(app: Express, largeBody: Handler, token?: stri
   });
 
   // Annotation reply: browser user posts a reply to an annotation thread
-  app.options("/api/annotation-reply", apiMiddleware);
-  app.post("/api/annotation-reply", apiMiddleware, largeBody, (req: Request, res: Response) => {
+  app.options("/api/annotation-reply", mw);
+  app.post("/api/annotation-reply", mw, largeBody, (req: Request, res: Response) => {
     const { annotationId, text, documentId } = (req.body ?? {}) as Record<string, unknown>;
     if (!annotationId || typeof annotationId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "annotationId is required" });
