@@ -15,7 +15,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
+import { authFetch, redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { startEventBridge } from "./event-bridge.js";
 
@@ -83,7 +83,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     if (req.params.name === "tandem_reply") {
       const args = req.params.arguments as Record<string, unknown>;
       try {
-        const res = await fetch(`${tandemUrl}/api/channel-reply`, {
+        const res = await authFetch(`${tandemUrl}/api/channel-reply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(args),
@@ -133,7 +133,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
 
   mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     try {
-      const res = await fetch(`${tandemUrl}/api/channel-permission`, {
+      const res = await authFetch(`${tandemUrl}/api/channel-permission`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

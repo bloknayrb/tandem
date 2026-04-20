@@ -77,10 +77,55 @@ process.once("unhandledRejection", (reason: unknown) => {
   process.exit(1);
 });
 
+/** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
+const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
+
+/**
+ * Validate TANDEM_AUTH_TOKEN if set.
+ * Rules (invariant 4):
+ * - If set, must match /^[A-Za-z0-9_-]{32,}$/ (no whitespace, no newlines, no Bearer prefix).
+ * - "Bearer " prefix → exit 1 with "double-prefix" message.
+ * - Empty string or whitespace-only → exit 1.
+ * - If not set at all → return null (loopback-only mode is fine, no exit).
+ */
+export function readAndValidateAuthToken(): string | null {
+  const raw = process.env.TANDEM_AUTH_TOKEN;
+  // Token not set at all → loopback-only mode, no auth header, no exit.
+  if (raw === undefined) return null;
+
+  // Token is set but empty or whitespace-only → user error, exit 1.
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    process.stderr.write(
+      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (empty, whitespace, or malformed — must be 32+ alphanumeric chars)\n",
+    );
+    process.exit(1);
+  }
+
+  if (trimmed.startsWith("Bearer ") || raw.startsWith("Bearer ")) {
+    process.stderr.write(
+      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (double-prefix: do not include 'Bearer ' prefix — supply the raw token only)\n",
+    );
+    process.exit(1);
+  }
+
+  if (!VALID_TOKEN_RE.test(trimmed)) {
+    process.stderr.write(
+      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (empty, whitespace, or malformed — must be 32+ alphanumeric chars)\n",
+    );
+    process.exit(1);
+  }
+
+  return trimmed;
+}
+
 export async function runMcpStdio(): Promise<void> {
   const baseUrl = resolveTandemUrl();
+  const authToken = readAndValidateAuthToken();
 
-  const http = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
+  const http = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+    requestInit: authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : undefined,
+  });
   const stdio = new StdioServerTransport();
 
   // On upstream failure we synthesize -32000 for every entry before exit.

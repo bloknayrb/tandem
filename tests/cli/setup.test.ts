@@ -44,6 +44,37 @@ describe("buildMcpEntries", () => {
     });
     expect(entries["tandem-channel"]?.command).toBe("/app/MacOS/node-sidecar");
   });
+
+  it("includes Authorization header in HTTP entry when token is provided", () => {
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", { token });
+    expect(entries.tandem.headers?.["Authorization"]).toBe(`Bearer ${token}`);
+    expect(entries.tandem.type).toBe("http");
+    expect(entries.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
+  });
+
+  it("omits headers from HTTP entry when no token (backward compat)", () => {
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js");
+    expect(entries.tandem.headers).toBeUndefined();
+  });
+
+  it("includes TANDEM_AUTH_TOKEN in stdio shim env when token and withChannelShim are provided", () => {
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+      withChannelShim: true,
+      token,
+    });
+    expect(entries["tandem-channel"]?.env?.TANDEM_AUTH_TOKEN).toBe(token);
+    expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
+  });
+
+  it("omits TANDEM_AUTH_TOKEN from shim env when no token", () => {
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+      withChannelShim: true,
+    });
+    expect(entries["tandem-channel"]?.env?.TANDEM_AUTH_TOKEN).toBeUndefined();
+    expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
+  });
 });
 
 describe("validateChannelShimPrereq", () => {

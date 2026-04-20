@@ -229,10 +229,10 @@ async function main() {
     },
   );
 
-  // token loaded here; PR b will wire it into the auth middleware
+  // Load (or create) the auth token. Used by the HTTP auth middleware.
   // TANDEM_AUTH_TOKEN env (set by Tauri before sidecar spawn) takes priority
   // so this is effectively a no-op disk-wise in Tauri mode.
-  const _authToken = await loadOrCreateToken();
+  const authToken = await loadOrCreateToken();
 
   if (transportMode === "http") {
     // HTTP mode: no startup-order constraint — start both concurrently
@@ -282,7 +282,7 @@ async function main() {
     }
 
     const [srv] = await Promise.all([
-      startMcpServerHttp(mcpPort),
+      startMcpServerHttp(mcpPort, undefined, authToken),
       startHocuspocus(wsPort).then(() => {
         console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
       }),

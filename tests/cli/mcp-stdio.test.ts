@@ -2,7 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getRequestId, getResponseId, parseTimeoutMs } from "../../src/cli/mcp-stdio.js";
+import {
+  getRequestId,
+  getResponseId,
+  parseTimeoutMs,
+  readAndValidateAuthToken,
+} from "../../src/cli/mcp-stdio.js";
 
 async function readOneLine(
   child: ChildProcessWithoutNullStreams,
@@ -881,4 +886,206 @@ describe("parseTimeoutMs", () => {
   it("returns 30000 for zero", () => {
     expect(parseTimeoutMs("0")).toBe(30_000);
   });
+});
+
+describe("readAndValidateAuthToken", () => {
+  const origExit = process.exit;
+  const origEnv = process.env.TANDEM_AUTH_TOKEN;
+
+  afterEach(() => {
+    // Restore after each test
+    process.exit = origExit as typeof process.exit;
+    if (origEnv === undefined) {
+      delete process.env.TANDEM_AUTH_TOKEN;
+    } else {
+      process.env.TANDEM_AUTH_TOKEN = origEnv;
+    }
+  });
+
+  function mockExit(): { exitCode: number | undefined } {
+    const result = { exitCode: undefined as number | undefined };
+    process.exit = ((code?: number) => {
+      result.exitCode = code;
+      throw new Error(`process.exit(${code})`);
+    }) as typeof process.exit;
+    return result;
+  }
+
+  it("returns null when TANDEM_AUTH_TOKEN is not set", () => {
+    delete process.env.TANDEM_AUTH_TOKEN;
+    expect(readAndValidateAuthToken()).toBeNull();
+  });
+
+  it("exits 1 when TANDEM_AUTH_TOKEN is empty string (set but empty = user error)", () => {
+    // Invariant 4: empty token is a user error (they set the var but left it empty) → exit 1.
+    // Only undefined (var not set at all) is the "loopback-only mode" null path.
+    process.env.TANDEM_AUTH_TOKEN = "";
+    const result = mockExit();
+    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("returns the token when valid (32+ alphanumeric chars)", () => {
+    const validToken = "abcdefghijklmnopqrstuvwxyz012345";
+    process.env.TANDEM_AUTH_TOKEN = validToken;
+    expect(readAndValidateAuthToken()).toBe(validToken);
+  });
+
+  it("returns the token with underscores and hyphens (valid chars)", () => {
+    const validToken = "abcdef_GHIJKL-mnopqrstuvwxyz01234";
+    process.env.TANDEM_AUTH_TOKEN = validToken;
+    expect(readAndValidateAuthToken()).toBe(validToken);
+  });
+
+  it("exits 1 for whitespace-only token", () => {
+    process.env.TANDEM_AUTH_TOKEN = "   ";
+    const result = mockExit();
+    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("exits 1 for token with newline (e.g. abc\\n)", () => {
+    process.env.TANDEM_AUTH_TOKEN = "abcdefghijklmnopqrstuvwxyz012345\n";
+    // The token with trailing newline — after trim it's valid, so no exit expected
+    // Actually the spec says: TANDEM_AUTH_TOKEN = "abc\n" → process exits 1
+    // "abc\n" trimmed = "abc" which is < 32 chars → exits 1
+    const result = mockExit();
+    process.env.TANDEM_AUTH_TOKEN = "abc\n";
+    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("exits 1 for Bearer-prefixed token (double-prefix)", () => {
+    process.env.TANDEM_AUTH_TOKEN = "Bearer abcdefghijklmnopqrstuvwxyz012345";
+    const result = mockExit();
+    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("exits 1 for token shorter than 32 chars", () => {
+    process.env.TANDEM_AUTH_TOKEN = "short";
+    const result = mockExit();
+    expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+    expect(result.exitCode).toBe(1);
+  });
+});
+
+describe("mcp-stdio token forwarding integration", () => {
+  let server: Server;
+  let port: number;
+  let receivedHeaders: Record<string, string | string[] | undefined>[] = [];
+  let child: ChildProcessWithoutNullStreams | undefined;
+
+  beforeEach(async () => {
+    receivedHeaders = [];
+    server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/mcp") {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          receivedHeaders.push(req.headers);
+          let body: unknown;
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } catch {
+            body = null;
+          }
+          const msg = body as { id?: number | string; method?: string } | null;
+          if (msg && typeof msg.method === "string" && "id" in msg) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: msg.id,
+                result: {
+                  protocolVersion: "2024-11-05",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "fake-tandem", version: "0.0.0-test" },
+                },
+              }),
+            );
+          } else {
+            res.writeHead(202);
+            res.end();
+          }
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+    port = addr.port;
+  });
+
+  afterEach(async () => {
+    child?.kill();
+    child = undefined;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("forwards Authorization: Bearer header when TANDEM_AUTH_TOKEN is valid", async () => {
+    const token = "abcdefghijklmnopqrstuvwxyz012345"; // 32 chars
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}`, TANDEM_AUTH_TOKEN: token },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    await readOneLine(child);
+    expect(receivedHeaders.length).toBeGreaterThan(0);
+    const authHeader = receivedHeaders[0]?.authorization;
+    expect(authHeader).toBe(`Bearer ${token}`);
+  }, 30_000);
+
+  it("does NOT add Authorization header when TANDEM_AUTH_TOKEN is not set", async () => {
+    const env = { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` };
+    delete env.TANDEM_AUTH_TOKEN;
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    await readOneLine(child);
+    expect(receivedHeaders.length).toBeGreaterThan(0);
+    expect(receivedHeaders[0]?.authorization).toBeUndefined();
+  }, 30_000);
+
+  it("preserves Content-Type when token is set (requestInit merge regression)", async () => {
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}`, TANDEM_AUTH_TOKEN: token },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    await readOneLine(child);
+    expect(receivedHeaders.length).toBeGreaterThan(0);
+    // StreamableHTTPClientTransport sends application/json
+    expect(receivedHeaders[0]?.["content-type"]).toMatch(/application\/json/i);
+    expect(receivedHeaders[0]?.authorization).toBe(`Bearer ${token}`);
+  }, 30_000);
 });

@@ -27,3 +27,24 @@ export function resolveTandemUrl(override?: string): string {
   const raw = override ?? process.env.TANDEM_URL ?? `http://localhost:${DEFAULT_MCP_PORT}`;
   return raw.replace(/\/$/, "");
 }
+
+/** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
+const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
+
+/**
+ * Fetch wrapper that automatically injects `Authorization: Bearer <token>`
+ * when TANDEM_AUTH_TOKEN is set and valid.
+ *
+ * This is the forgiving variant — used by monitor/channel which may run in
+ * loopback-only mode without a token. Invalid or absent tokens are silently
+ * ignored (no exit-1). The strict validation lives in mcp-stdio.ts only.
+ */
+export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const token = process.env.TANDEM_AUTH_TOKEN;
+  if (token && VALID_TOKEN_RE.test(token)) {
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(url, { ...init, headers });
+  }
+  return fetch(url, init);
+}

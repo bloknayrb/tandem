@@ -96,6 +96,7 @@ interface SetupResult {
 export async function runSetupHandler(
   input: Record<string, unknown>,
   homeOverride?: string,
+  token?: string,
 ): Promise<SetupResult> {
   const { nodeBinary, channelPath } = input;
 
@@ -123,7 +124,7 @@ export async function runSetupHandler(
 
   const targets = detectTargets({ homeOverride });
   // Tauri setup always registers the channel shim — the sidecar IS the channel.
-  const entries = buildMcpEntries(channelPath, { withChannelShim: true, nodeBinary });
+  const entries = buildMcpEntries(channelPath, { withChannelShim: true, nodeBinary, token });
 
   const configured: string[] = [];
   const errors: string[] = [];
@@ -293,7 +294,7 @@ function notifyStreamHandler(req: Request, res: Response): void {
 }
 
 /** Register /api/open, /api/upload, and /api/notify-stream routes on the Express app. */
-export function registerApiRoutes(app: Express, largeBody: Handler): void {
+export function registerApiRoutes(app: Express, largeBody: Handler, token?: string): void {
   // SSE notification stream for browser toasts
   app.get("/api/notify-stream", apiMiddleware, notifyStreamHandler);
   app.options("/api/open", apiMiddleware);
@@ -438,7 +439,11 @@ export function registerApiRoutes(app: Express, largeBody: Handler): void {
   app.options("/api/setup", apiMiddleware);
   app.post("/api/setup", apiMiddleware, largeBody, async (req: Request, res: Response) => {
     try {
-      const result = await runSetupHandler((req.body ?? {}) as Record<string, unknown>);
+      const result = await runSetupHandler(
+        (req.body ?? {}) as Record<string, unknown>,
+        undefined,
+        token,
+      );
       res.status(result.status).json(result.body);
     } catch (err: unknown) {
       console.error("[Tandem] Setup handler threw:", err);
