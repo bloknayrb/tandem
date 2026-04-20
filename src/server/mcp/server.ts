@@ -152,7 +152,10 @@ export async function startMcpServerHttp(
   // requests only.
   // Loopback (127.0.0.1, ::1, ::ffff:127.0.0.1) is always exempt —
   // Claude Code zero-config is preserved.
-  const authMiddleware = createAuthMiddleware(() => token ?? null);
+  //
+  // Mutable ref: `POST /api/rotate-token` swaps the token without a server restart.
+  const tokenRef = { current: token ?? null };
+  const authMiddleware = createAuthMiddleware(() => tokenRef.current);
 
   // DNS-rebinding middleware: extend the Host-header allowlist with the resolved
   // LAN IP when binding non-loopback. For loopback binds resolvedLanIP is
@@ -275,7 +278,16 @@ export async function startMcpServerHttp(
   app.use(mcpApp);
 
   // --- REST API for browser-initiated file opening ---
-  registerApiRoutes(app, largeBody, token, lanAwareApiMiddleware);
+  registerApiRoutes(
+    app,
+    largeBody,
+    token,
+    lanAwareApiMiddleware,
+    (newToken) => {
+      tokenRef.current = newToken;
+    },
+    () => tokenRef.current,
+  );
 
   // --- Channel support endpoints ---
   registerChannelRoutes(app, lanAwareApiMiddleware);

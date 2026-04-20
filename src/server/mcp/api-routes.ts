@@ -19,6 +19,8 @@ import {
 import type { TandemNotification } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
+import { setPreviousToken } from "../auth/middleware.js";
+import { readTokenFromFile } from "../auth/token-store.js";
 import { pushNotification, subscribe as subscribeNotifications } from "../notifications.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { addReplyToAnnotation } from "./annotations.js";
@@ -321,12 +323,19 @@ function notifyStreamHandler(req: Request, res: Response): void {
  * @param mw - The DNS-rebinding middleware to use. Pass `createApiMiddleware([lanIP])`
  *   when TANDEM_BIND_HOST is non-loopback so LAN Host headers are allowed.
  *   Defaults to the standard loopback-only `apiMiddleware`.
+ * @param setCurrentToken - Required callback invoked by `POST /api/rotate-token` to
+ *   update the in-memory current-token slot in the auth middleware after rotation.
+ * @param getCurrentToken - Required callback that returns the current in-memory token
+ *   before rotation; used to register the grace-window slot from a trusted source
+ *   rather than from the request body.
  */
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
   token?: string,
   mw: Handler = apiMiddleware,
+  setCurrentToken: (t: string) => void = () => {},
+  getCurrentToken: () => string | null = () => null,
 ): void {
   // SSE notification stream for browser toasts
   app.get("/api/notify-stream", mw, notifyStreamHandler);
@@ -524,5 +533,49 @@ export function registerApiRoutes(
       return;
     }
     res.json({ data: { replyId: result.replyId, annotationId } });
+  });
+
+  // Token rotation: CLI calls this to activate the 60-second grace window and swap the
+  // in-memory current token to the NEW token that was already written to disk.
+  // Auth is handled by app.use("/api", authMiddleware) — request must carry Bearer <OLD token>.
+  // previousToken is NOT accepted from the request body — the handler captures it from
+  // getCurrentToken() to prevent callers from injecting arbitrary strings into the grace slot.
+  app.options("/api/rotate-token", mw);
+  app.post("/api/rotate-token", mw, largeBody, async (_req: Request, res: Response) => {
+    // Fix 4: Tauri-launched servers use env-injected tokens; rotation would diverge
+    // the disk token from what Tauri passes on next launch, breaking auth.
+    if (process.env.TANDEM_AUTH_TOKEN) {
+      res.status(409).json({ error: "Token is managed by Tauri; rotate via the app." });
+      return;
+    }
+
+    // Capture the current token BEFORE swapping — this is the grace-window credential.
+    // If null (server started without a token), there's nothing to preserve.
+    const oldToken = getCurrentToken();
+
+    let newToken: string | null;
+    try {
+      newToken = await readTokenFromFile();
+    } catch (err) {
+      console.error("[tandem] rotate-token: failed to read new token from disk:", err);
+      res.status(500).json({ error: "INTERNAL", message: "Could not read new token from disk." });
+      return;
+    }
+
+    if (!newToken) {
+      res
+        .status(500)
+        .json({ error: "INTERNAL", message: "No token found on disk after rotation." });
+      return;
+    }
+
+    if (oldToken) {
+      setPreviousToken(oldToken, 60_000);
+    }
+
+    setCurrentToken(newToken);
+
+    console.error("[tandem] auth token rotated; 60-second grace window active for old token");
+    res.json({ ok: true });
   });
 }

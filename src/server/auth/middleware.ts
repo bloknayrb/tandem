@@ -15,6 +15,34 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
+/** Grace-window slot: the previous token remains valid for a short TTL after rotation. */
+interface PreviousTokenSlot {
+  value: string;
+  expiresAt: number;
+}
+
+let _previousToken: PreviousTokenSlot | undefined;
+
+/** Record the old token so it remains valid for `ttlMs` ms after the new token takes effect. */
+export function setPreviousToken(token: string, ttlMs = 60_000): void {
+  _previousToken = { value: token, expiresAt: Date.now() + ttlMs };
+}
+
+/** Read the current previous-token slot (undefined when not set or expired). */
+export function getPreviousToken(): PreviousTokenSlot | undefined {
+  if (!_previousToken) return undefined;
+  if (Date.now() >= _previousToken.expiresAt) {
+    _previousToken = undefined;
+    return undefined;
+  }
+  return _previousToken;
+}
+
+/** Clear the previous-token slot. */
+export function clearPreviousToken(): void {
+  _previousToken = undefined;
+}
+
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 const RATE_LIMIT_MAX_FAILURES = 5;
 const RATE_LIMIT_MAX_ENTRIES = 1000;
@@ -175,16 +203,26 @@ export function createAuthMiddleware(
     }
 
     // SHA-256 both sides → timingSafeEqual (32-byte fixed-length digests eliminate length oracle)
-    const storedDigest = sha256(storedToken);
     const presentedDigest = sha256(presented);
 
-    let match: boolean;
-    try {
-      match = timingSafeEqual(storedDigest, presentedDigest);
-    } catch {
-      // timingSafeEqual would only throw if lengths differ; since we SHA-256 both
-      // to 32 bytes, this branch is unreachable but we fail-closed defensively.
-      match = false;
+    function digestsMatch(candidate: string): boolean {
+      const candidateDigest = sha256(candidate);
+      try {
+        return timingSafeEqual(candidateDigest, presentedDigest);
+      } catch {
+        // timingSafeEqual would only throw if lengths differ; since we SHA-256 both
+        // to 32 bytes, this branch is unreachable but we fail-closed defensively.
+        return false;
+      }
+    }
+
+    let match = digestsMatch(storedToken);
+
+    if (!match) {
+      const prev = getPreviousToken();
+      if (prev) {
+        match = digestsMatch(prev.value);
+      }
     }
 
     if (!match) {

@@ -10,7 +10,7 @@ import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
 import { acquireStoreLock, releaseStoreLock } from "./annotations/store.js";
-import { loadOrCreateToken } from "./auth/token-store.js";
+import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback } from "./bind-check.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
@@ -237,11 +237,6 @@ async function main() {
     },
   );
 
-  // Load (or create) the auth token. Used by the HTTP auth middleware.
-  // TANDEM_AUTH_TOKEN env (set by Tauri before sidecar spawn) takes priority
-  // so this is effectively a no-op disk-wise in Tauri mode.
-  const authToken = await loadOrCreateToken();
-
   // ── Bind-host selection (MCP only — Hocuspocus always stays loopback) ────────
   const bindHost = process.env.TANDEM_BIND_HOST ?? DEFAULT_BIND_HOST;
 
@@ -267,13 +262,16 @@ async function main() {
     process.exit(1);
   }
 
+  // Read the existing token (without generating) so the fail-closed check fires
+  // when there is no pre-provisioned token. loadOrCreateToken() runs AFTER this
+  // check passes — so a first-time LAN bind correctly refuses to auto-generate.
+  const existingToken = process.env.TANDEM_AUTH_TOKEN || (await readTokenFromFile());
+
   const bindCheck = checkBindConfig({
     bindHost,
     port: mcpPort,
-    authToken,
+    authToken: existingToken,
     // Fix 3: Only treat the env var as truthy when it equals exactly "1".
-    // Values like "0", "false", or "no" were previously treated as opt-in due
-    // to the truthiness of any non-empty string.
     allowUnauthLAN: process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV] === "1",
     lanIP,
   });
@@ -282,6 +280,10 @@ async function main() {
     process.stderr.write(bindCheck.stderrMessage ?? "");
     process.exit(bindCheck.exitCode ?? 1);
   }
+
+  // Load (or create) the auth token after the bind check passes.
+  // TANDEM_AUTH_TOKEN env (set by Tauri before sidecar spawn) takes priority.
+  const authToken = await loadOrCreateToken();
 
   if (bindCheck.lanWarning) {
     process.stderr.write(bindCheck.lanWarning);
