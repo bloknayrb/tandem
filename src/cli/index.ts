@@ -12,6 +12,21 @@
 
 import updateNotifier from "update-notifier";
 
+process.once("uncaughtException", (err: unknown) => {
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  try {
+    process.stderr.write(`[tandem cli] uncaughtException: ${msg}\n`);
+  } catch {
+    /* EPIPE */
+  }
+  process.exit(1);
+});
+process.once("unhandledRejection", (reason: unknown) => {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  process.stderr.write(`[tandem cli] unhandledRejection: ${detail}\n`);
+  process.exit(1);
+});
+
 // Injected at build time by tsup define; declared here for TypeScript
 declare const __TANDEM_VERSION__: string;
 const version = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : "0.0.0-dev";
