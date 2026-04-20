@@ -268,10 +268,17 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
+  // Explicit timeouts on the handle-count assertions below allow React to
+  // finish re-rendering panelLayout state before asserting — prevents flake
+  // under CI load (issue #281).
+  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  const rightHandle = page.locator("[data-testid='right-panel-resize-handle']");
+  const tabbedHandle = page.locator("[data-testid='panel-resize-handle']");
+
   // Three-panel layout (default) mounts separate left and right handles.
-  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(1);
-  await expect(page.locator("[data-testid='right-panel-resize-handle']")).toHaveCount(1);
-  await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0);
+  await expect(leftHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(rightHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(tabbedHandle).toHaveCount(0, { timeout: 10_000 });
 
   // Switch to tabbed.
   await page.locator("[data-testid='settings-btn']").click();
@@ -280,8 +287,9 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
 
   // Tabbed layout mounts exactly one resize handle and drops the
   // three-panel handles.
-  await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(1);
-  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0);
+  await expect(tabbedHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(leftHandle).toHaveCount(0, { timeout: 10_000 });
+  await expect(rightHandle).toHaveCount(0, { timeout: 10_000 });
 
   const tabbedSaved = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
@@ -291,9 +299,9 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
 
   // Switch back to three-panel.
   await page.locator("[data-testid='layout-three-panel-btn']").click();
-  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(1);
-  await expect(page.locator("[data-testid='right-panel-resize-handle']")).toHaveCount(1);
-  await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0);
+  await expect(leftHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(rightHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(tabbedHandle).toHaveCount(0, { timeout: 10_000 });
 });
 
 test("three-panel layout resizes left/right widths independently", async ({ page }) => {
