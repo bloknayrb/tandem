@@ -172,7 +172,7 @@ export async function startMcpServerHttp(
   // bypass runs before the SDK's host-header check on the inner mcpApp.
   // The SDK strips the port via URL.hostname, so we supply bare hostnames only.
   const allowedHosts = resolvedLanIP
-    ? ["127.0.0.1", "localhost", "::1", resolvedLanIP, TAURI_HOSTNAME]
+    ? ["127.0.0.1", "localhost", "[::1]", resolvedLanIP, TAURI_HOSTNAME]
     : undefined;
   const mcpApp = createMcpExpressApp({ host, ...(allowedHosts ? { allowedHosts } : {}) });
 
