@@ -6,7 +6,8 @@
  * then passes resolvedLanIP to startMcpServerHttp for the Host-header allowlist.
  */
 
-import type * as os from "os";
+import type { NetworkInterfaceInfo } from "os";
+import { networkInterfaces as osNetworkInterfaces } from "os";
 
 export interface BindCheckOptions {
   /** The value of TANDEM_BIND_HOST (or DEFAULT_BIND_HOST if not set). */
@@ -20,10 +21,10 @@ export interface BindCheckOptions {
   /** Explicit LAN IP from TANDEM_LAN_IP env var (may be undefined). */
   lanIP?: string;
   /**
-   * Injected for testing. Defaults to os.networkInterfaces at call time.
+   * Injected for testing. Defaults to os.networkInterfaces.
    * Signature matches the Node built-in.
    */
-  networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  networkInterfaces?: () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 }
 
 export interface BindCheckResult {
@@ -86,14 +87,7 @@ export function checkBindConfig(opts: BindCheckOptions): BindCheckResult {
   // supplied a specific IP they've chosen their interface — skip the check.
   const isWildcard = bindHost === "0.0.0.0" || bindHost === "::";
 
-  const getInterfaces =
-    opts.networkInterfaces ??
-    (() => {
-      // Lazy import so this module remains importable in environments without `os`
-      // (shouldn't happen in Node, but keeps the unit tests clean).
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require("os").networkInterfaces() as NodeJS.Dict<os.NetworkInterfaceInfo[]>;
-    });
+  const getInterfaces = opts.networkInterfaces ?? osNetworkInterfaces;
 
   let detectedIPs: string[] = [];
   let resolvedLanIP: string | undefined;
