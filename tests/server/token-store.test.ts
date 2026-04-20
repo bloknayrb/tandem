@@ -122,35 +122,35 @@ describe("token-store", () => {
 
     describe("O_EXCL race simulation", () => {
       it("adopts existing token when open(wx) throws EEXIST", async () => {
-        // Write a known token to disk first (simulates the racing process winning)
-        const existingToken = crypto.randomBytes(32).toString("base64url");
-        await writeTokenToFile(existingToken);
-
-        // Mock fs.promises.open to throw EEXIST on the first call, then succeed.
+        // No file on disk yet — loadOrCreateToken will generate a token and try
+        // open(wx). The spy intercepts, writes the "winner's" token inline
+        // (simulating the racing process winning), then throws EEXIST. Our code
+        // must fall back to readTokenFromFile and return the winner's token.
+        const winnerToken = crypto.randomBytes(32).toString("base64url");
+        const filePath = getTokenFilePath();
         const originalOpen = fs.promises.open;
-        let firstCall = true;
+        let exclAttempted = false;
+
         vi.spyOn(fs.promises, "open").mockImplementation(
-          async (filePath: fs.PathLike | fs.promises.FileHandle, flags: fs.OpenMode, ...rest) => {
-            if (firstCall && flags === "wx") {
-              firstCall = false;
-              const err = Object.assign(new Error("EEXIST: file already exists"), {
-                code: "EEXIST",
-              });
-              throw err;
+          async (fp: fs.PathLike | fs.promises.FileHandle, flags: fs.OpenMode, ...rest) => {
+            if (!exclAttempted && flags === "wx") {
+              exclAttempted = true;
+              // Write the winner's token to disk before throwing — simulates the
+              // other process winning the O_EXCL race and persisting its token.
+              await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+              await fs.promises.writeFile(filePath, winnerToken, "utf8");
+              throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
             }
             // @ts-ignore — spread rest args for arity compat
-            return originalOpen(filePath, flags, ...rest);
+            return originalOpen(fp, flags, ...rest);
           },
         );
 
-        // Delete the file so loadOrCreateToken tries to generate a new one,
-        // then restore it before the mock throws to simulate the race.
-        const filePath = getTokenFilePath();
-        // Actually: the mock already wrote the file via writeTokenToFile above.
-        // Just call loadOrCreateToken — it will try open(wx), get EEXIST, and
-        // fall back to readTokenFromFile which returns existingToken.
         const result = await loadOrCreateToken();
-        expect(result).toBe(existingToken);
+        // Must adopt the winner's token, not the one we generated.
+        expect(result).toBe(winnerToken);
+        // Verify the EEXIST branch actually fired (not just the file-read path).
+        expect(exclAttempted).toBe(true);
       });
     });
 
