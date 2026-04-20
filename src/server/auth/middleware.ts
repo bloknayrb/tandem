@@ -134,7 +134,6 @@ export function createAuthMiddleware(
       return;
     }
 
-    // Parse Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       limiter.recordFailure(normalizedAddr);
@@ -146,8 +145,8 @@ export function createAuthMiddleware(
 
     const presented = authHeader.slice("Bearer ".length);
 
-    // Reject empty or zero-byte token before hashing
-    if (!presented || presented.length === 0) {
+    // Reject empty token before hashing
+    if (!presented) {
       limiter.recordFailure(normalizedAddr);
       console.error(`[tandem] auth: rejected request from ${normalizedAddr} (no/bad token header)`);
       res.status(401).json({ error: "Unauthorized" });
@@ -183,7 +182,6 @@ export function createAuthMiddleware(
       return;
     }
 
-    // Success — reset the failure counter and continue
     limiter.reset(normalizedAddr);
     next();
   };

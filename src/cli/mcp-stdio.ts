@@ -94,7 +94,7 @@ export function readAndValidateAuthToken(): string | null {
   const trimmed = raw.trim();
   if (trimmed === "") return null;
 
-  if (trimmed.startsWith("Bearer ") || raw.startsWith("Bearer ")) {
+  if (trimmed.startsWith("Bearer ")) {
     process.stderr.write(
       "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (double-prefix: do not include 'Bearer ' prefix — supply the raw token only)\n",
     );

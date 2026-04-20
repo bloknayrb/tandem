@@ -131,11 +131,10 @@ describe("non-loopback auth", () => {
   });
 });
 
-// ── Host-header spoof regression ─────────────────────────────────────────────
+// ── Invariant 1 — Host header cannot bypass loopback check ───────────────────
 
-describe("Host header spoof regression", () => {
+describe("Invariant 1 — Host header cannot bypass loopback check", () => {
   it("forged Host: 127.0.0.1 with LAN remoteAddress → 401 (not bypass)", () => {
-    // Invariant 1: Host header NEVER used for the loopback bypass decision.
     const mw = createAuthMiddleware(() => VALID_TOKEN);
     const next = vi.fn();
     const res = makeRes();
