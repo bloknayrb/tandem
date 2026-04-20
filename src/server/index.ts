@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { CTRL_ROOM, DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import { acquireStoreLock, releaseStoreLock } from "./annotations/store.js";
+import { loadOrCreateToken } from "./auth/token-store.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import {
   attachCtrlObservers,
@@ -227,6 +228,11 @@ async function main() {
       detachObservers(docName);
     },
   );
+
+  // token loaded here; PR b will wire it into the auth middleware
+  // TANDEM_AUTH_TOKEN env (set by Tauri before sidecar spawn) takes priority
+  // so this is effectively a no-op disk-wise in Tauri mode.
+  const _authToken = await loadOrCreateToken();
 
   if (transportMode === "http") {
     // HTTP mode: no startup-order constraint — start both concurrently

@@ -111,6 +111,9 @@ export const CHANNEL_SSE_KEEPALIVE_MS = 15_000; // 15 seconds
 export const CHANNEL_MAX_RETRIES = 5;
 export const CHANNEL_RETRY_DELAY_MS = 2_000;
 
+/** Auth token filename inside the app-data directory. */
+export const TOKEN_FILE_NAME = "auth-token";
+
 /** Tauri WebView origin hostname — must be accepted alongside localhost. */
 export const TAURI_HOSTNAME = "tauri.localhost";
 
