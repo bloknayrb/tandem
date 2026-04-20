@@ -39,9 +39,31 @@ redirectConsoleToStderr();
 // preflight's own fetch timeout.
 const PREFLIGHT_GRACE_MS = 1500;
 
+// Per-request timeout. Node's setTimeout uses a 32-bit signed integer
+// internally — values above this constant are silently clamped to 1ms,
+// which would make every request immediately synthesize -32000.
+const MAX_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
+
+export function parseTimeoutMs(raw: string | undefined): number {
+  if (raw !== undefined) {
+    const parsed = parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed <= MAX_TIMEOUT_MS) {
+      return parsed;
+    }
+    // Note: parseInt("3e4", 10) returns 3 (stops at 'e'), which passes validation.
+    // Scientific notation lands here only when the leading integer is invalid.
+    process.stderr.write(
+      `[tandem mcp-stdio] TANDEM_REQUEST_TIMEOUT_MS must be a positive integer ≤ ${MAX_TIMEOUT_MS}; ignoring "${raw}", using 30000ms default\n`,
+    );
+  }
+  return 30_000;
+}
+
+const STDIO_REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.TANDEM_REQUEST_TIMEOUT_MS);
+
 // Last-gasp handlers for truly unexpected crashes: write one diagnostic to
 // stderr before exit. Installed at module load; process.once bounds each
-// handler to a single fire. No -32000 synthesis here because pendingIds
+// handler to a single fire. No -32000 synthesis here because pendingRequests
 // lives inside runMcpStdio()'s closure.
 process.once("uncaughtException", (err: Error) => {
   process.stderr.write(
@@ -62,7 +84,8 @@ export async function runMcpStdio(): Promise<void> {
   const stdio = new StdioServerTransport();
 
   // On upstream failure we synthesize -32000 for every entry before exit.
-  const pendingIds = new Set<string | number>();
+  // Value is the per-request timeout handle so we can cancel it on response.
+  const pendingRequests = new Map<string | number, ReturnType<typeof setTimeout>>();
   // Messages arriving before httpReady flips; either drained and forwarded
   // on success, or each request answered with -32000 on preflight/http-start
   // failure.
@@ -102,16 +125,34 @@ export async function runMcpStdio(): Promise<void> {
   }
 
   function forwardToUpstream(msg: JSONRPCMessage): void {
+    if (shuttingDown) return;
     const requestId = getRequestId(msg);
-    if (requestId !== undefined) pendingIds.add(requestId);
+    if (requestId !== undefined) {
+      // Clear any existing timer for this id (duplicate/retry scenario).
+      const existing = pendingRequests.get(requestId);
+      if (existing) clearTimeout(existing);
+
+      const timeoutHandle = setTimeout(() => {
+        // Atomic: delete returns false if synthesizePending already drained the map.
+        if (!pendingRequests.delete(requestId)) return;
+        void sendErrorResponse(
+          requestId,
+          "Tandem HTTP upstream not responding (half-open)",
+          `No response after ${STDIO_REQUEST_TIMEOUT_MS}ms`,
+        );
+      }, STDIO_REQUEST_TIMEOUT_MS);
+      pendingRequests.set(requestId, timeoutHandle);
+    }
     http.send(msg).catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[tandem mcp-stdio] upstream send failed: ${detail}\n`);
-      // `delete` returns true iff the id was still pending — prevents double-
-      // synth if a future change ever allows synthesizePending to fire while
-      // http.send is still in flight. (Not a current bug; belt-and-suspenders.)
-      if (requestId !== undefined && pendingIds.delete(requestId)) {
-        void sendErrorResponse(requestId, "Tandem HTTP upstream unreachable", detail);
+      if (requestId !== undefined) {
+        const handle = pendingRequests.get(requestId);
+        if (handle !== undefined) {
+          pendingRequests.delete(requestId);
+          clearTimeout(handle);
+          void sendErrorResponse(requestId, "Tandem HTTP upstream unreachable", detail);
+        }
       }
     });
   }
@@ -127,9 +168,12 @@ export async function runMcpStdio(): Promise<void> {
   }
 
   async function synthesizePending(message: string, detail?: string): Promise<void> {
-    if (pendingIds.size === 0) return;
-    const ids = [...pendingIds];
-    pendingIds.clear();
+    if (pendingRequests.size === 0) return;
+    const ids = [...pendingRequests.keys()];
+    // Synchronous before any await: clear all timers + drain map atomically.
+    // Timer callbacks that are already queued observe empty map and return early.
+    for (const handle of pendingRequests.values()) clearTimeout(handle);
+    pendingRequests.clear();
     await Promise.all(ids.map((id) => sendErrorResponse(id, message, detail)));
   }
 
@@ -139,6 +183,18 @@ export async function runMcpStdio(): Promise<void> {
   ): Promise<never> => {
     if (!shuttingDown) {
       shuttingDown = true;
+      // Hard deadline: if http.close() or stdio.close() hang (e.g., a half-
+      // open upstream holding an SSE GET open), don't let cleanup block the
+      // process exit indefinitely. .unref() means this timer doesn't itself
+      // keep the event loop alive — fast paths resolve and call process.exit
+      // below before the deadline fires; hung paths are forcibly terminated.
+      setTimeout(() => process.exit(code), 2_000).unref();
+      // Unconditionally drain all pending timers before any await — prevents
+      // orphan timers from firing into the half-closed transport during
+      // http.close() / stdio.close() awaits. synthesizePending will also
+      // drain the map if synth is provided; the clearTimeout calls here are
+      // defensive for the synth=undefined path (e.g., clean stdio.onclose).
+      for (const handle of pendingRequests.values()) clearTimeout(handle);
       if (synth) {
         await synthesizeBuffered(synth.message, synth.detail);
         await synthesizePending(synth.message, synth.detail);
@@ -173,26 +229,40 @@ export async function runMcpStdio(): Promise<void> {
   };
 
   http.onmessage = (msg: JSONRPCMessage) => {
+    if (shuttingDown) return;
+    // Synchronous delete+clear FIRST — before stdio.send — to prevent the
+    // per-request timer from firing in the window between response arrival
+    // and stdio write completion (which would synthesize a false -32000 for
+    // an id that already has a real response in flight).
     const responseId = getResponseId(msg);
-    stdio.send(msg).then(
-      () => {
-        if (responseId !== undefined) pendingIds.delete(responseId);
-      },
-      (err: unknown) => {
-        const detail = err instanceof Error ? err.message : String(err);
-        process.stderr.write(
-          `[tandem mcp-stdio] stdio write failed for id ${responseId ?? "<notification>"}: ${detail}\n`,
-        );
-        // Leave responseId in pendingIds — shutdown's synthesizePending will
-        // retry via sendErrorResponse. If stdio is truly gone, that send also
-        // fails and we log twice. Safe delete-after-send narrows the pending
-        // window; it never widens for well-ordered responses.
-        void shutdown(1, {
-          message: "Tandem stdio write failed",
-          detail,
-        });
-      },
-    );
+    if (responseId !== undefined) {
+      const handle = pendingRequests.get(responseId);
+      if (handle !== undefined) {
+        clearTimeout(handle);
+        pendingRequests.delete(responseId);
+      }
+    }
+    const sendHandler = (err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[tandem mcp-stdio] stdio write failed for id ${responseId ?? "<notification>"}: ${detail}\n`,
+      );
+      // Map entry already deleted above. Synthesize directly for this id,
+      // then tear down — stdio is broken so other pending requests can't
+      // be delivered either.
+      if (responseId !== undefined) {
+        void sendErrorResponse(responseId, "Tandem stdio write failed", detail);
+      }
+      void shutdown(1, {
+        message: "Tandem stdio write failed",
+        detail,
+      });
+    };
+    try {
+      stdio.send(msg).catch(sendHandler);
+    } catch (err) {
+      sendHandler(err);
+    }
   };
 
   stdio.onerror = (err) => {
@@ -226,6 +296,14 @@ export async function runMcpStdio(): Promise<void> {
   // the preflight window is captured and either forwarded once upstream is
   // ready, or answered with -32000 if upstream never comes up.
   await stdio.start();
+
+  // The SDK's StdioServerTransport watches stdin for 'data' and 'error' only —
+  // it does not call onclose when the plugin host closes stdin (EOF). Register
+  // our own one-shot listener so that plugin-host close (stdin.end() / HUP)
+  // triggers the same clean shutdown path as stdio.onclose does.
+  process.stdin.once("end", () => {
+    void shutdown(0);
+  });
 
   const probe = await probeTandemServer({ url: baseUrl });
   if (!probe.ok) {
