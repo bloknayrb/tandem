@@ -323,15 +323,19 @@ function notifyStreamHandler(req: Request, res: Response): void {
  * @param mw - The DNS-rebinding middleware to use. Pass `createApiMiddleware([lanIP])`
  *   when TANDEM_BIND_HOST is non-loopback so LAN Host headers are allowed.
  *   Defaults to the standard loopback-only `apiMiddleware`.
- * @param setCurrentToken - Optional callback invoked by `POST /api/rotate-token` to
+ * @param setCurrentToken - Required callback invoked by `POST /api/rotate-token` to
  *   update the in-memory current-token slot in the auth middleware after rotation.
+ * @param getCurrentToken - Required callback that returns the current in-memory token
+ *   before rotation; used to register the grace-window slot from a trusted source
+ *   rather than from the request body.
  */
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
   token?: string,
   mw: Handler = apiMiddleware,
-  setCurrentToken?: (t: string) => void,
+  setCurrentToken: (t: string) => void = () => {},
+  getCurrentToken: () => string | null = () => null,
 ): void {
   // SSE notification stream for browser toasts
   app.get("/api/notify-stream", mw, notifyStreamHandler);
@@ -531,16 +535,23 @@ export function registerApiRoutes(
     res.json({ data: { replyId: result.replyId, annotationId } });
   });
 
-  // Token rotation: CLI calls this with the OLD token to activate the 60-second grace window
-  // and swap the in-memory current token to the NEW token that was already written to disk.
+  // Token rotation: CLI calls this to activate the 60-second grace window and swap the
+  // in-memory current token to the NEW token that was already written to disk.
   // Auth is handled by app.use("/api", authMiddleware) — request must carry Bearer <OLD token>.
+  // previousToken is NOT accepted from the request body — the handler captures it from
+  // getCurrentToken() to prevent callers from injecting arbitrary strings into the grace slot.
   app.options("/api/rotate-token", mw);
-  app.post("/api/rotate-token", mw, largeBody, async (req: Request, res: Response) => {
-    const { previousToken } = (req.body ?? {}) as Record<string, unknown>;
-    if (!previousToken || typeof previousToken !== "string") {
-      res.status(400).json({ error: "BAD_REQUEST", message: "previousToken is required" });
+  app.post("/api/rotate-token", mw, largeBody, async (_req: Request, res: Response) => {
+    // Fix 4: Tauri-launched servers use env-injected tokens; rotation would diverge
+    // the disk token from what Tauri passes on next launch, breaking auth.
+    if (process.env.TANDEM_AUTH_TOKEN) {
+      res.status(409).json({ error: "Token is managed by Tauri; rotate via the app." });
       return;
     }
+
+    // Capture the current token BEFORE swapping — this is the grace-window credential.
+    // If null (server started without a token), there's nothing to preserve.
+    const oldToken = getCurrentToken();
 
     let newToken: string | null;
     try {
@@ -558,11 +569,11 @@ export function registerApiRoutes(
       return;
     }
 
-    setPreviousToken(previousToken, 60_000);
-
-    if (setCurrentToken) {
-      setCurrentToken(newToken);
+    if (oldToken) {
+      setPreviousToken(oldToken, 60_000);
     }
+
+    setCurrentToken(newToken);
 
     console.error("[tandem] auth token rotated; 60-second grace window active for old token");
     res.json({ ok: true });

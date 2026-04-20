@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { promises as fsPromises } from "node:fs";
+import path from "node:path";
 import { getTokenFilePath, readTokenFromFile } from "../server/auth/token-store.js";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { applyConfigWithToken } from "./setup.js";
@@ -37,13 +39,24 @@ export async function rotateToken(): Promise<void> {
   }
 
   // writeTokenToFile uses O_EXCL; bypass it here — rotation is an intentional overwrite.
+  // Use atomic write: write to a temp file first, then rename() into place.
+  // rename() is atomic on the same filesystem — power-loss mid-write cannot leave an empty file.
   const newToken = generateToken();
-  const { promises: fsPromises } = await import("node:fs");
   const tokenPath = getTokenFilePath();
-  await fsPromises.writeFile(tokenPath, newToken, { encoding: "utf8", mode: 0o600 });
+  const dir = path.dirname(tokenPath);
+  const tmpPath = path.join(dir, `.auth-token-tmp-${randomBytes(4).toString("hex")}`);
+  await fsPromises.writeFile(tmpPath, newToken, { encoding: "utf8", mode: 0o600 });
+  await fsPromises.rename(tmpPath, tokenPath);
 
   const serverUrl = `http://localhost:${DEFAULT_MCP_PORT}`;
+
+  // Three distinct outcomes:
+  //   graceWindowActive = true  → server accepted the rotation; grace window is live
+  //   serverRejected = true     → server reachable but returned non-2xx
+  //   (neither)                 → fetch threw; server was not running
   let graceWindowActive = false;
+  let serverRejected = false;
+  let serverRejectedStatus = 0;
   try {
     const resp = await fetch(`${serverUrl}/api/rotate-token`, {
       method: "POST",
@@ -51,17 +64,14 @@ export async function rotateToken(): Promise<void> {
         "Content-Type": "application/json",
         Authorization: `Bearer ${oldToken}`,
       },
-      body: JSON.stringify({ previousToken: oldToken }),
+      body: JSON.stringify({}),
       signal: AbortSignal.timeout(5000),
     });
     if (resp.ok) {
       graceWindowActive = true;
     } else {
-      const body = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-      console.error(
-        `[tandem] Warning: server responded with ${resp.status} to rotate-token request.`,
-        body.message ?? "",
-      );
+      serverRejected = true;
+      serverRejectedStatus = resp.status;
     }
   } catch {
     console.error(
@@ -80,6 +90,27 @@ export async function rotateToken(): Promise<void> {
     console.error(
       `[tandem] Warning: failed to update MCP configs: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+
+  if (serverRejected) {
+    // Configs now reference the new token but the server still holds the old one.
+    // Print a strong warning — do NOT print "Rotated auth token" as that implies success.
+    console.error(
+      `[tandem] WARNING: server rejected the rotation request (status: ${serverRejectedStatus}).`,
+    );
+    if (updatedCount > 0) {
+      console.error(
+        `  ${updatedCount} config file(s) updated to the new token, but the server still\n` +
+          "  holds the old token. Restart the server to complete rotation.",
+      );
+    }
+    console.error(`  Old fingerprint: ${fingerprint(oldToken)}`);
+    console.error(`  New fingerprint: ${fingerprint(newToken)}`);
+    for (const e of configErrors) {
+      console.error(`  Warning: could not update config — ${e}`);
+    }
+    console.error("");
+    return;
   }
 
   console.error("[tandem] Rotated auth token.");

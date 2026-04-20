@@ -17,6 +17,7 @@ import {
 // ── Top-level stubs (referenced by vi.mock factories) ────────────────────────
 
 const _writeFileSpy = vi.fn().mockResolvedValue(undefined);
+const _renameSpy = vi.fn().mockResolvedValue(undefined);
 const _readTokenSpy = vi.fn().mockResolvedValue("oldtoken_oldtoken_oldtoken_oldtoken");
 const _getTokenPathSpy = vi.fn().mockReturnValue("/tmp/tandem/token");
 const _applyConfigSpy = vi.fn().mockResolvedValue({ updated: 2, errors: [] });
@@ -30,6 +31,7 @@ vi.mock("node:fs", async (importOriginal) => {
     promises: {
       ...actual.promises,
       writeFile: _writeFileSpy,
+      rename: _renameSpy,
     },
   };
 });
@@ -171,6 +173,7 @@ describe("rotateToken CLI", () => {
 
     // Reset module-level stubs to defaults
     _writeFileSpy.mockReset().mockResolvedValue(undefined);
+    _renameSpy.mockReset().mockResolvedValue(undefined);
     _readTokenSpy.mockReset().mockResolvedValue(OLD_TOKEN);
     _getTokenPathSpy.mockReset().mockReturnValue("/tmp/tandem/token");
     _applyConfigSpy.mockReset().mockResolvedValue({ updated: 2, errors: [] });
@@ -186,21 +189,31 @@ describe("rotateToken CLI", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     clearPreviousToken();
     delete process.env.TANDEM_AUTH_TOKEN;
   });
 
-  it("writes new token to disk and calls server rotate endpoint", async () => {
+  it("writes new token to disk atomically and calls server rotate endpoint", async () => {
     // Dynamic import so module mocks are applied
     const { rotateToken } = await import("../../src/cli/rotate-token.js");
     await rotateToken();
 
-    // New token was written to disk
+    // New token was written to a temp file first (atomic write pattern)
     expect(_writeFileSpy).toHaveBeenCalledOnce();
     const [writtenPath, writtenToken] = _writeFileSpy.mock.calls[0] as [string, string, unknown];
-    expect(writtenPath).toBe("/tmp/tandem/token");
+    // Temp path sits in the same dir as the final path, with a random suffix.
+    // Use cross-platform match: path separator may be / or \ on Windows.
+    expect(writtenPath).toMatch(/\.auth-token-tmp-[0-9a-f]{8}$/);
     expect(typeof writtenToken).toBe("string");
     expect(writtenToken.length).toBeGreaterThanOrEqual(32);
+
+    // rename() moves the temp file to the final path atomically
+    expect(_renameSpy).toHaveBeenCalledOnce();
+    const [renameFrom, renameTo] = _renameSpy.mock.calls[0] as [string, string];
+    expect(renameFrom).toBe(writtenPath);
+    // Final path matches the mocked token path (cross-platform: may use \ or /)
+    expect(renameTo).toMatch(/token$/);
 
     // Server was called with old token in Authorization header
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -210,8 +223,9 @@ describe("rotateToken CLI", () => {
     ];
     expect(url).toContain("/api/rotate-token");
     expect(init.headers["Authorization"]).toBe(`Bearer ${OLD_TOKEN}`);
-    const body = JSON.parse(init.body as string) as { previousToken: string };
-    expect(body.previousToken).toBe(OLD_TOKEN);
+    // previousToken is no longer sent in the body — the server derives it from its own state
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("previousToken");
   });
 
   it("calls applyConfigWithToken with the new token", async () => {
@@ -228,15 +242,47 @@ describe("rotateToken CLI", () => {
 
   it("warns and continues when server is not reachable", async () => {
     fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
-    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
 
     const { rotateToken } = await import("../../src/cli/rotate-token.js");
     await rotateToken(); // should not throw
 
     expect(_writeFileSpy).toHaveBeenCalledOnce();
     expect(_applyConfigSpy).toHaveBeenCalledOnce();
-    const messages = stderrSpy.mock.calls.flat().join("\n");
+    const messages = stderrCalls.flat().join("\n");
     expect(messages).toContain("not reachable");
+    // "not reachable" path still prints success since disk write succeeded
+    expect(messages).toContain("Rotated auth token");
+    // Must NOT print WARNING (that's the rejected case)
+    expect(messages).not.toContain("WARNING");
+
+    stderrSpy.mockRestore();
+  });
+
+  it("prints strong warning (not success) when server returns non-2xx", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: vi.fn().mockResolvedValue({ error: "Token is managed by Tauri; rotate via the app." }),
+    });
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await rotateToken(); // should not throw
+
+    const messages = stderrCalls.flat().join("\n");
+    expect(messages).toContain("WARNING");
+    expect(messages).toContain("409");
+    // Must NOT print "Rotated auth token." — that implies success
+    expect(messages).not.toContain("[tandem] Rotated auth token.");
+    // Config files were updated; warning about divergence should be present
+    expect(messages).toContain("Restart the server");
 
     stderrSpy.mockRestore();
   });

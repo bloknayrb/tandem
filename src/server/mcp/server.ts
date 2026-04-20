@@ -278,9 +278,16 @@ export async function startMcpServerHttp(
   app.use(mcpApp);
 
   // --- REST API for browser-initiated file opening ---
-  registerApiRoutes(app, largeBody, token, lanAwareApiMiddleware, (newToken) => {
-    tokenRef.current = newToken;
-  });
+  registerApiRoutes(
+    app,
+    largeBody,
+    token,
+    lanAwareApiMiddleware,
+    (newToken) => {
+      tokenRef.current = newToken;
+    },
+    () => tokenRef.current,
+  );
 
   // --- Channel support endpoints ---
   registerChannelRoutes(app, lanAwareApiMiddleware);
