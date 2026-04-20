@@ -12,6 +12,18 @@ export async function readTokenFromFile(): Promise<string | null> {
   const filePath = getTokenFilePath();
   try {
     const content = await fs.promises.readFile(filePath, "utf8");
+    // Remediate insecure permissions if a previous chmod failed (e.g., process crashed).
+    if (process.platform !== "win32") {
+      try {
+        const stat = await fs.promises.stat(filePath);
+        if ((stat.mode & 0o077) !== 0) {
+          console.error("[tandem] auth token file has insecure permissions; attempting chmod 0600");
+          await fs.promises.chmod(filePath, 0o600);
+        }
+      } catch {
+        // Non-fatal: stat/chmod failure doesn't invalidate the token we already read
+      }
+    }
     const trimmed = content.trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch (err) {
@@ -44,7 +56,7 @@ export async function writeTokenToFile(token: string): Promise<string> {
   // O_EXCL first-write: on EEXIST, adopt the winner's token instead of overwriting.
   let fh: fs.promises.FileHandle;
   try {
-    fh = await fs.promises.open(filePath, "wx");
+    fh = await fs.promises.open(filePath, "wx", 0o600);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
       // Concurrent start won the race — read and adopt their token.
@@ -73,9 +85,9 @@ export async function writeTokenToFile(token: string): Promise<string> {
 }
 
 // Priority: env var (Tauri injects before sidecar spawn) → existing file → generate+persist.
-// Exits with code 1 on crypto failure or unwritable dir — non-recoverable in Tauri/Cowork mode.
-// Returns string | null: PR a never produces null; null is reserved for PR b's CLI loopback gating.
-export async function loadOrCreateToken(): Promise<string | null> {
+// Returns the token string. Exits with code 1 on unrecoverable failure. Return type will be
+// widened to string|null in PR b when CLI loopback-only mode may proceed token-less.
+export async function loadOrCreateToken(): Promise<string> {
   // Tauri passes the token via env before spawning the sidecar.
   const envToken = process.env.TANDEM_AUTH_TOKEN;
   if (envToken && envToken.trim().length > 0) {

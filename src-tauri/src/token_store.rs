@@ -76,7 +76,12 @@ pub fn get_or_create_token() -> Result<String, String> {
     match entry.get_password() {
         Ok(token) if !token.trim().is_empty() => return Ok(token),
         Ok(_) => {} // empty keyring entry — treat as missing
-        Err(_) => {} // keyring unavailable (headless Linux CI, etc.) — fall through
+        Err(keyring::Error::NoEntry) => {
+            // token not yet stored — fall through to file or generate
+        }
+        Err(e) => {
+            eprintln!("[tandem] keyring read failed (falling through to file): {e}");
+        }
     }
 
     // 2. Try env-paths file.

@@ -69,15 +69,20 @@ describe("token-store", () => {
       expect(read).toBe(token);
     });
 
-    it("creates parent directory if missing", async () => {
-      const token = crypto.randomBytes(32).toString("base64url");
-      // tempDir exists but no sub-dir for the token file yet
-      const nestedDir = path.join(tempDir, "nested", "sub");
-      vi.spyOn(path, "dirname").mockReturnValueOnce(nestedDir);
-      // Re-implement: just verify writeTokenToFile handles recursive mkdir
-      await writeTokenToFile(token);
-      const read = await readTokenFromFile();
-      expect(read).toBe(token);
+    it("creates parent directories if missing", async () => {
+      const originalTempDir = tempDir;
+      // Re-route getTokenFilePath() to a deeply nested path that doesn't exist yet.
+      // The env-paths mock uses a closure over `tempDir`, so changing it here redirects
+      // writeTokenToFile/readTokenFromFile to the new path.
+      tempDir = path.join(originalTempDir, "nested", "sub");
+      try {
+        const token = crypto.randomBytes(32).toString("base64url");
+        await writeTokenToFile(token);
+        expect(await readTokenFromFile()).toBe(token);
+      } finally {
+        // Restore so afterEach rm covers the whole subtree
+        tempDir = originalTempDir;
+      }
     });
   });
 
@@ -158,6 +163,15 @@ describe("token-store", () => {
 
       // vitest intercepts process.exit and throws its own error — we just
       // verify it was called with the right code rather than matching message.
+      await expect(loadOrCreateToken()).rejects.toThrow();
+      expect(mockExit).toHaveBeenCalledWith(1);
+    });
+
+    it("calls process.exit(1) when writeTokenToFile throws (EPERM)", async () => {
+      // Simulate unwritable directory: open("wx") throws EPERM
+      vi.spyOn(fs.promises, "open").mockRejectedValue(
+        Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }),
+      );
       await expect(loadOrCreateToken()).rejects.toThrow();
       expect(mockExit).toHaveBeenCalledWith(1);
     });
