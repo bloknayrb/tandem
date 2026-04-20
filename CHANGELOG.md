@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-20
+
+### Fixed
+
+- **Flaky layout-switch E2E test (#281)** — `toHaveCount` assertions on resize-handle locators lacked explicit timeouts, causing intermittent CI failures under load when React re-renders were slower than the default 5 s expectation. All 8 assertions now carry `{ timeout: 10_000 }`, and the missing `right-panel-resize-handle` absence assertion in the tabbed-layout block has been added.
+- **Silent crashes in CLI entry points (#336)** — `src/cli/index.ts` and `src/channel/index.ts` lacked `process.once("uncaughtException")` / `process.once("unhandledRejection")` handlers. Uncaught throws in `tandem start`, `tandem setup`, and the Tauri channel sidecar exited silently with code 0, surfacing as "tools never appear" with no diagnostics. Both entries now write a labelled message to stderr and exit 1. The `uncaughtException` handler uses `err: unknown` with an `instanceof Error` guard so non-Error throws (strings, plain objects) produce the actual thrown value rather than `"undefined"`.
+
 ## [0.6.3] - 2026-04-19
 
 ### Fixed
