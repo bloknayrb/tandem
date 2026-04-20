@@ -72,17 +72,9 @@ export async function writeTokenToFile(token: string): Promise<string> {
   return token;
 }
 
-/**
- * Returns the active auth token:
- *  - Env var (injected by Tauri before sidecar spawn) takes priority — no file I/O.
- *  - Existing valid file is adopted on all subsequent boots.
- *  - Otherwise a fresh token is generated, persisted, and returned.
- *
- * Exits with code 1 on crypto failure or unwritable dir; those are
- * non-recoverable in Tauri/Cowork mode. Returns null only when the caller
- * is in CLI loopback mode and no token exists yet — PR b will gate on this.
- * NOTE: PR a never produces null; the union is reserved for PR b's gating logic.
- */
+// Priority: env var (Tauri injects before sidecar spawn) → existing file → generate+persist.
+// Exits with code 1 on crypto failure or unwritable dir — non-recoverable in Tauri/Cowork mode.
+// Returns string | null: PR a never produces null; null is reserved for PR b's CLI loopback gating.
 export async function loadOrCreateToken(): Promise<string | null> {
   // Tauri passes the token via env before spawning the sidecar.
   const envToken = process.env.TANDEM_AUTH_TOKEN;

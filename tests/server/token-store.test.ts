@@ -120,51 +120,46 @@ describe("token-store", () => {
       expect(token).toMatch(BASE64URL_RE);
     });
 
-    describe("O_EXCL race simulation", () => {
-      it("adopts existing token when open(wx) throws EEXIST", async () => {
-        // No file on disk yet — loadOrCreateToken will generate a token and try
-        // open(wx). The spy intercepts, writes the "winner's" token inline
-        // (simulating the racing process winning), then throws EEXIST. Our code
-        // must fall back to readTokenFromFile and return the winner's token.
-        const winnerToken = crypto.randomBytes(32).toString("base64url");
-        const filePath = getTokenFilePath();
-        const originalOpen = fs.promises.open;
-        let exclAttempted = false;
+    it("adopts existing token when open(wx) throws EEXIST (O_EXCL race)", async () => {
+      // No file on disk yet — loadOrCreateToken will generate a token and try
+      // open(wx). The spy writes the "winner's" token to disk before throwing
+      // EEXIST — this is the critical invariant: readTokenFromFile must find a
+      // real token there so our code adopts the winner's value, not its own.
+      const winnerToken = crypto.randomBytes(32).toString("base64url");
+      const filePath = getTokenFilePath();
+      const originalOpen = fs.promises.open;
+      let exclAttempted = false;
 
-        vi.spyOn(fs.promises, "open").mockImplementation(
-          async (fp: fs.PathLike | fs.promises.FileHandle, flags: fs.OpenMode, ...rest) => {
-            if (!exclAttempted && flags === "wx") {
-              exclAttempted = true;
-              // Write the winner's token to disk before throwing — simulates the
-              // other process winning the O_EXCL race and persisting its token.
-              await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-              await fs.promises.writeFile(filePath, winnerToken, "utf8");
-              throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
-            }
-            // @ts-ignore — spread rest args for arity compat
-            return originalOpen(fp, flags, ...rest);
-          },
-        );
+      vi.spyOn(fs.promises, "open").mockImplementation(
+        async (fp: fs.PathLike | fs.promises.FileHandle, flags: fs.OpenMode, ...rest) => {
+          if (!exclAttempted && flags === "wx") {
+            exclAttempted = true;
+            // Simulate the racing process: persist its token, then surface EEXIST.
+            await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+            await fs.promises.writeFile(filePath, winnerToken, "utf8");
+            throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
+          }
+          // @ts-expect-error — spread rest args for arity compat
+          return originalOpen(fp, flags, ...rest);
+        },
+      );
 
-        const result = await loadOrCreateToken();
-        // Must adopt the winner's token, not the one we generated.
-        expect(result).toBe(winnerToken);
-        // Verify the EEXIST branch actually fired (not just the file-read path).
-        expect(exclAttempted).toBe(true);
-      });
+      const result = await loadOrCreateToken();
+      // Must adopt the winner's token, not the one we generated.
+      expect(result).toBe(winnerToken);
+      // Verify the EEXIST branch actually fired (not just the file-read path).
+      expect(exclAttempted).toBe(true);
     });
 
-    describe("process.exit on crypto failure", () => {
-      it("calls process.exit(1) when randomBytes throws", async () => {
-        vi.spyOn(crypto, "randomBytes").mockImplementationOnce(() => {
-          throw new Error("Entropy source failed");
-        });
-
-        // vitest intercepts process.exit and throws its own error — we just
-        // verify it was called with the right code rather than matching message.
-        await expect(loadOrCreateToken()).rejects.toThrow();
-        expect(mockExit).toHaveBeenCalledWith(1);
+    it("calls process.exit(1) when randomBytes throws", async () => {
+      vi.spyOn(crypto, "randomBytes").mockImplementationOnce(() => {
+        throw new Error("Entropy source failed");
       });
+
+      // vitest intercepts process.exit and throws its own error — we just
+      // verify it was called with the right code rather than matching message.
+      await expect(loadOrCreateToken()).rejects.toThrow();
+      expect(mockExit).toHaveBeenCalledWith(1);
     });
   });
 });
