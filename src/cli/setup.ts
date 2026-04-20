@@ -207,6 +207,36 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
   return existsSync(channelPath);
 }
 
+/**
+ * Write the given token into all detected Claude MCP config files.
+ * Called by both `tandem setup` (with the freshly loaded/created token)
+ * and `tandem rotate-token` (with the new token after rotation).
+ *
+ * Returns the number of configs successfully updated and any per-target errors.
+ */
+export async function applyConfigWithToken(
+  token: string | null,
+  opts: { force?: boolean; withChannelShim?: boolean } = {},
+): Promise<{ updated: number; errors: string[] }> {
+  const targets = detectTargets({ force: opts.force });
+  const entries = buildMcpEntries(CHANNEL_DIST, {
+    withChannelShim: opts.withChannelShim,
+    token: token ?? undefined,
+  });
+
+  let updated = 0;
+  const errors: string[] = [];
+  for (const t of targets) {
+    try {
+      await applyConfig(t.configPath, entries);
+      updated++;
+    } catch (err) {
+      errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { updated, errors };
+}
+
 /** Run the setup command. Writes MCP config to all detected Claude installs. */
 export async function runSetup(
   opts: { force?: boolean; withChannelShim?: boolean } = {},

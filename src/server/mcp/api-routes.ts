@@ -19,6 +19,8 @@ import {
 import type { TandemNotification } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
+import { setPreviousToken } from "../auth/middleware.js";
+import { readTokenFromFile } from "../auth/token-store.js";
 import { pushNotification, subscribe as subscribeNotifications } from "../notifications.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { addReplyToAnnotation } from "./annotations.js";
@@ -321,12 +323,15 @@ function notifyStreamHandler(req: Request, res: Response): void {
  * @param mw - The DNS-rebinding middleware to use. Pass `createApiMiddleware([lanIP])`
  *   when TANDEM_BIND_HOST is non-loopback so LAN Host headers are allowed.
  *   Defaults to the standard loopback-only `apiMiddleware`.
+ * @param setCurrentToken - Optional callback invoked by `POST /api/rotate-token` to
+ *   update the in-memory current-token slot in the auth middleware after rotation.
  */
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
   token?: string,
   mw: Handler = apiMiddleware,
+  setCurrentToken?: (t: string) => void,
 ): void {
   // SSE notification stream for browser toasts
   app.get("/api/notify-stream", mw, notifyStreamHandler);
@@ -524,5 +529,45 @@ export function registerApiRoutes(
       return;
     }
     res.json({ data: { replyId: result.replyId, annotationId } });
+  });
+
+  // Token rotation: CLI calls this with the OLD token to activate the 60-second grace window
+  // and swap the in-memory current token to the NEW token that was already written to disk.
+  // Auth is handled by app.use("/api", authMiddleware) — request must carry Bearer <OLD token>.
+  app.options("/api/rotate-token", mw);
+  app.post("/api/rotate-token", mw, largeBody, async (req: Request, res: Response) => {
+    const { previousToken } = (req.body ?? {}) as Record<string, unknown>;
+    if (!previousToken || typeof previousToken !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "previousToken is required" });
+      return;
+    }
+
+    // Read the new token from disk (CLI wrote it before calling us)
+    let newToken: string | null;
+    try {
+      newToken = await readTokenFromFile();
+    } catch (err) {
+      console.error("[tandem] rotate-token: failed to read new token from disk:", err);
+      res.status(500).json({ error: "INTERNAL", message: "Could not read new token from disk." });
+      return;
+    }
+
+    if (!newToken) {
+      res
+        .status(500)
+        .json({ error: "INTERNAL", message: "No token found on disk after rotation." });
+      return;
+    }
+
+    // Activate grace window so the old token remains valid for 60 seconds
+    setPreviousToken(previousToken, 60_000);
+
+    // Swap the in-memory current token so new connections authenticate with the new token
+    if (setCurrentToken) {
+      setCurrentToken(newToken);
+    }
+
+    console.error("[tandem] auth token rotated; 60-second grace window active for old token");
+    res.json({ ok: true });
   });
 }
