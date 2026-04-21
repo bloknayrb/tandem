@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Default permissions. Cowork tauri::commands are enumerated in src/lib.rs invoke_handler! (commands: cowork_scan_workspaces, cowork_toggle_integration, cowork_rescan, cowork_get_status, cowork_get_meta, cowork_detect_vethernet_subnet, cowork_apply_token, cowork_install_into_workspace, cowork_uninstall_from_workspace, cowork_set_lan_ip_override, cowork_retry_admin_elevation).",
   "windows": [
     "main"
   ],

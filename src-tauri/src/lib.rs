@@ -1,5 +1,22 @@
 mod token_store;
 
+#[cfg(target_os = "windows")]
+mod cowork_atomic_json;
+
+/// Process-wide mutex for tests that mutate `TANDEM_COWORK_ROOT_OVERRIDE`.
+/// Shared across `cowork_installer` and `cowork_workspace_scan` test modules so
+/// they serialize against each other and do not race on the env var.
+#[cfg(test)]
+pub(crate) static COWORK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(target_os = "windows")]
+mod cowork_workspace_scan;
+#[cfg(target_os = "windows")]
+mod cowork_installer;
+#[cfg(target_os = "windows")]
+mod firewall;
+#[cfg(target_os = "windows")]
+mod cowork_meta;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -251,6 +268,19 @@ pub fn run() {
                 }
             }
         })
+        .invoke_handler(tauri::generate_handler![
+            cowork_scan_workspaces,
+            cowork_toggle_integration,
+            cowork_rescan,
+            cowork_get_status,
+            cowork_get_meta,
+            cowork_detect_vethernet_subnet,
+            cowork_apply_token,
+            cowork_install_into_workspace,
+            cowork_uninstall_from_workspace,
+            cowork_set_lan_ip_override,
+            cowork_retry_admin_elevation,
+        ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
         .run(|app, event| {
@@ -664,6 +694,421 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cowork Tauri invoke commands
+// ---------------------------------------------------------------------------
+// All commands have Windows-native and non-Windows stub variants so that
+// tauri::generate_handler![] compiles on all platforms.
+
+/// Scan for Cowork workspace directories.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
+    let paths = cowork_workspace_scan::find_cowork_workspaces();
+    Ok(paths
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Enable or disable the Cowork integration.
+///
+/// On enable: fetches auth token, detects vEthernet subnet, adds allow firewall
+/// rule, walks workspaces, installs plugin entries. On UAC decline: fail-closed —
+/// writes a deny rule and does NOT write plugin entries (invariant §4).
+/// On disable: uninstalls plugin entries, removes firewall rules.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
+    use cowork_installer::{install_tandem_plugin_into_workspace, uninstall_tandem_plugin_from_workspace};
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    if enabled {
+        // Fetch token.
+        let token = token_store::get_or_create_token()?;
+
+        // Detect vEthernet subnet.
+        let cidr = firewall::detect_vethernet_subnet().map_err(|e| e.to_string())?;
+
+        // Add allow firewall rule.
+        let firewall_result = firewall::add_cowork_allow_rule(&cidr);
+        if let Err(ref e) = firewall_result {
+            // Fail-closed: on UAC decline, write a deny rule and bail — do NOT
+            // walk workspaces (invariant §4).
+            if let firewall::FirewallError::AdminDeclined = e {
+                log::warn!("[cowork] UAC declined — writing deny rule and updating meta; no plugin entries written");
+                if let Err(deny_err) = firewall::add_cowork_deny_rule(&cidr) {
+                    log::warn!("[cowork] failed to write deny rule: {deny_err}");
+                }
+                let _ = cowork_meta::update(|m| {
+                    m.uac_declined_last_attempt = true;
+                    m.uac_declined_at = Some(iso_now());
+                    m.vethernet_cidr_detected = Some(cidr.clone());
+                    m.enabled = false;
+                });
+                return Err(e.to_string());
+            }
+            return Err(e.to_string());
+        }
+
+        // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
+        let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().unwrap_or_default());
+
+        // Orphan reconciliation (invariant §12).
+        let workspaces = find_cowork_workspaces();
+        let reconcile = cowork_installer::reconcile_orphans(&workspaces, &token);
+        if !reconcile.removed_firewall_rules.is_empty() || !reconcile.rewritten_stale_entries.is_empty() {
+            log::info!(
+                "[cowork] orphan reconcile: removed {} rule(s), rewrote {} stale entry(s)",
+                reconcile.removed_firewall_rules.len(),
+                reconcile.rewritten_stale_entries.len()
+            );
+        }
+
+        let workspace_count = workspaces.len();
+
+        let reports: Vec<_> = workspaces
+            .iter()
+            .map(|ws| install_tandem_plugin_into_workspace(ws, &token, &tandem_url))
+            .collect();
+
+        let errors: Vec<_> = reports
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .collect();
+
+        if !errors.is_empty() {
+            log::warn!("[cowork] {} install error(s): {:?}", errors.len(), errors);
+        }
+
+        let _ = cowork_meta::update(|m| {
+            m.enabled = true;
+            m.vethernet_cidr_detected = Some(cidr.clone());
+            m.workspaces_last_scanned_at = Some(iso_now());
+            m.uac_declined_last_attempt = false;
+            m.uac_declined_at = None;
+        });
+
+        Ok(format!("Cowork enabled: {workspace_count} workspace(s) configured"))
+    } else {
+        // Disable: uninstall from all workspaces and remove firewall rules.
+        let workspaces = find_cowork_workspaces();
+        for ws in &workspaces {
+            if let Err(e) = uninstall_tandem_plugin_from_workspace(ws) {
+                log::warn!("[cowork] uninstall error for {}: {e}", ws.display());
+            }
+        }
+        if let Err(e) = firewall::remove_cowork_rules() {
+            log::warn!("[cowork] remove firewall rules error: {e}");
+        }
+        let _ = cowork_meta::update(|m| { m.enabled = false; });
+        Ok("Cowork disabled".to_string())
+    }
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_toggle_integration(_enabled: bool) -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Re-scan workspaces and install into any new ones.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_rescan() -> Result<String, String> {
+    use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    let meta = cowork_meta::load().map_err(|e| e.to_string())?;
+    if !meta.enabled {
+        return Ok("Cowork not enabled — rescan skipped".to_string());
+    }
+
+    let token = token_store::get_or_create_token()?;
+    let tandem_url = resolve_tandem_url(&meta);
+
+    let workspaces = find_cowork_workspaces();
+    let count = workspaces.len();
+
+    for ws in &workspaces {
+        if let Err(e) = install_tandem_plugin_into_workspace(ws, &token, &tandem_url) {
+            log::warn!("[cowork] rescan install error for {}: {e}", ws.display());
+        }
+    }
+
+    let _ = cowork_meta::update(|m| {
+        m.workspaces_last_scanned_at = Some(iso_now());
+    });
+
+    Ok(format!("Rescan complete: {count} workspace(s)"))
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_rescan() -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Get the current Cowork integration status.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_get_status() -> Result<serde_json::Value, String> {
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    let meta = cowork_meta::load().map_err(|e| e.to_string())?;
+    let workspaces = find_cowork_workspaces();
+    let cowork_detected = !workspaces.is_empty();
+
+    Ok(serde_json::json!({
+        "enabled": meta.enabled,
+        "vethernetCidr": meta.vethernet_cidr_detected,
+        "lanIpFallback": meta.lan_ip_fallback,
+        "useLanIpOverride": meta.use_lan_ip_override,
+        "workspacesLastScannedAt": meta.workspaces_last_scanned_at,
+        "uacDeclined": meta.uac_declined_last_attempt,
+        "uacDeclinedAt": meta.uac_declined_at,
+        "workspaceCount": workspaces.len(),
+        "coworkDetected": cowork_detected,
+        "osSupported": true,
+    }))
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_get_status() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({ "osSupported": false, "enabled": false, "coworkDetected": false }))
+}
+
+/// Read the Cowork metadata file.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_get_meta() -> Result<cowork_meta::CoworkMeta, String> {
+    cowork_meta::load()
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_get_meta() -> Result<serde_json::Value, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Detect the Hyper-V vEthernet subnet.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_detect_vethernet_subnet() -> Result<String, String> {
+    firewall::detect_vethernet_subnet().map_err(|e| e.to_string())
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_detect_vethernet_subnet() -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Re-walk all workspaces with a new auth token (called after `tandem rotate-token`).
+///
+/// Token is never logged — passed through to `apply_token_to_all_workspaces`
+/// which also never logs it.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_apply_token(token: String) -> Result<String, String> {
+    let reports = cowork_installer::apply_token_to_all_workspaces(&token);
+    let success = reports
+        .iter()
+        .filter(|r| r.installed_plugins == cowork_installer::WriteStatus::Ok)
+        .count();
+    Ok(format!("Cowork: {success} workspace(s) re-walked with new token"))
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_apply_token(_token: String) -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Install the Tandem plugin into a specific workspace path.
+///
+/// Precondition: the path must be under the canonical `local-agent-mode-sessions\`
+/// root — this command re-applies invariant §3 before any file I/O (§9).
+/// On mismatch: returns `Err`, does NOT trust the walker.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_install_into_workspace(ws_path: String) -> Result<String, String> {
+    use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    let path = std::path::PathBuf::from(&ws_path);
+
+    // Re-apply invariant §9 path check: the path must match one of the
+    // workspaces returned by the guarded walker. The walker is the single
+    // source of safe paths; if the user-supplied path isn't in that list,
+    // reject — do NOT install.
+    let valid_roots = find_cowork_workspaces();
+    let canonical_supplied = std::fs::canonicalize(&path)
+        .map_err(|e| format!("invalid workspace path: {e}"))?;
+    let path_valid = valid_roots
+        .iter()
+        .any(|valid| valid == &canonical_supplied);
+    if !path_valid {
+        log::warn!(
+            "[cowork] cowork_install_into_workspace: path {} is not in the canonical workspace list — rejected",
+            ws_path
+        );
+        return Err("Path is not within the canonical Cowork workspace root".to_string());
+    }
+
+    let token = token_store::get_or_create_token()?;
+    let meta = cowork_meta::load().map_err(|e| e.to_string())?;
+    let tandem_url = resolve_tandem_url(&meta);
+
+    let report = install_tandem_plugin_into_workspace(&canonical_supplied, &token, &tandem_url)
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::to_string(&report).unwrap_or_default())
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_install_into_workspace(_ws_path: String) -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Uninstall the Tandem plugin from a specific workspace path.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_uninstall_from_workspace(ws_path: String) -> Result<String, String> {
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    let path = std::path::PathBuf::from(&ws_path);
+    let valid_roots = find_cowork_workspaces();
+    let canonical_supplied = std::fs::canonicalize(&path)
+        .map_err(|e| format!("invalid workspace path: {e}"))?;
+    let path_valid = valid_roots
+        .iter()
+        .any(|valid| valid == &canonical_supplied);
+    if !path_valid {
+        log::warn!(
+            "[cowork] cowork_uninstall_from_workspace: path {} is not in the canonical workspace list — rejected",
+            ws_path
+        );
+        return Err("Path is not within the canonical Cowork workspace root".to_string());
+    }
+
+    let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&canonical_supplied)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_string(&report).unwrap_or_default())
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_uninstall_from_workspace(_ws_path: String) -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Set or unset the LAN-IP override for TANDEM_URL.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_set_lan_ip_override(enabled: bool) -> Result<String, String> {
+    use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    cowork_meta::update(|m| { m.use_lan_ip_override = enabled; })
+        .map_err(|e| e.to_string())?;
+
+    // If Cowork is enabled, re-walk to apply the new URL.
+    let meta = cowork_meta::load().map_err(|e| e.to_string())?;
+    if meta.enabled {
+        let token = token_store::get_or_create_token()?;
+        let tandem_url = resolve_tandem_url(&meta);
+        for ws in find_cowork_workspaces() {
+            if let Err(e) = install_tandem_plugin_into_workspace(&ws, &token, &tandem_url) {
+                log::warn!("[cowork] set_lan_ip_override re-walk error: {e}");
+            }
+        }
+    }
+
+    Ok(format!("LAN IP override {}", if enabled { "enabled" } else { "disabled" }))
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_set_lan_ip_override(_enabled: bool) -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Clear the UAC-declined flag and retry the enable flow.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn cowork_retry_admin_elevation() -> Result<String, String> {
+    cowork_meta::update(|m| {
+        m.uac_declined_last_attempt = false;
+        m.uac_declined_at = None;
+    })
+    .map_err(|e| e.to_string())?;
+    cowork_toggle_integration(true)
+}
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn cowork_retry_admin_elevation() -> Result<String, String> {
+    Err("Cowork integration is Windows-only in v0.8.0".into())
+}
+
+/// Minimal ISO-8601 (UTC) timestamp without pulling in chrono.
+///
+/// Uses the proleptic Gregorian calendar starting from the Unix epoch
+/// (1970-01-01T00:00:00Z). Handles leap years; timezone is always UTC.
+#[cfg(target_os = "windows")]
+fn iso_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = now.as_secs();
+
+    // Compute time of day first.
+    let secs = (total_secs % 60) as u32;
+    let mins = ((total_secs / 60) % 60) as u32;
+    let hours = ((total_secs / 3600) % 24) as u32;
+
+    // Days since Unix epoch.
+    let mut days = (total_secs / 86_400) as i64;
+
+    // Walk forward from 1970 accounting for leap years.
+    let mut year: i64 = 1970;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    // Now walk through months of the current year.
+    let months_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = if is_leap(year) { &months_leap } else { &months_normal };
+    let mut month: usize = 0;
+    for (i, &dim) in months.iter().enumerate() {
+        if days < dim {
+            month = i;
+            break;
+        }
+        days -= dim;
+    }
+    let day = days + 1; // 1-indexed.
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month + 1,
+        day,
+        hours,
+        mins,
+        secs
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 /// Show a non-blocking dialog informing the user that Claude is not installed.

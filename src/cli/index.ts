@@ -67,7 +67,15 @@ if (args.includes("--version") || args.includes("-v")) {
 }
 
 try {
-  if (args[0] === "setup") {
+  if (args[0] === "--uninstall-scrub") {
+    // Hidden subcommand invoked by the Tauri NSIS uninstaller hook. Walks
+    // Cowork workspaces and removes Tandem plugin entries + firewall rules.
+    // Runs inside the already-signed tandem.exe (security invariant §10 —
+    // prevents binary-planting during uninstall).
+    const { runUninstallScrub } = await import("./uninstall-scrub.js");
+    const exitCode = await runUninstallScrub();
+    process.exit(exitCode);
+  } else if (args[0] === "setup") {
     const { runSetup } = await import("./setup.js");
     await runSetup({
       force: args.includes("--force"),
