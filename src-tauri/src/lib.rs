@@ -739,7 +739,8 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let token = token_store::get_or_create_token()?;
 
         // Detect vEthernet subnet.
-        let cidr = firewall::detect_vethernet_subnet().map_err(|e| e.to_string())?;
+        let cidr = firewall::detect_vethernet_subnet()
+            .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))?;
 
         // Add allow firewall rule.
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
@@ -765,9 +766,9 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
                 }) {
                     log::warn!("[cowork] failed to persist UAC-declined meta: {meta_err}");
                 }
-                return Err(e.to_string());
+                return Err(serde_json::to_string(e).unwrap_or_else(|_| e.to_string()));
             }
-            return Err(e.to_string());
+            return Err(serde_json::to_string(e).unwrap_or_else(|_| e.to_string()));
         }
 
         // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
@@ -948,18 +949,47 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
                     {
                         "ok"
                     }
-                    _ => "notInstalled",
+                    _ => "failed",
                 }
             } else {
-                "notInstalled"
+                "failed"
+            };
+
+            // Read-only check: does known_marketplaces.json exist?
+            let marketplaces_file = ws_path.join("cowork_plugins").join("known_marketplaces.json");
+            let marketplaces_status = if marketplaces_file.exists() {
+                match std::fs::read_to_string(&marketplaces_file)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                {
+                    Some(_) => "ok",
+                    _ => "failed",
+                }
+            } else {
+                "failed"
+            };
+
+            // Read-only check: does cowork_settings.json exist?
+            let settings_file = ws_path.join("cowork_plugins").join("cowork_settings.json");
+            let cowork_settings_status = if settings_file.exists() {
+                match std::fs::read_to_string(&settings_file)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                {
+                    Some(_) => "ok",
+                    _ => "failed",
+                }
+            } else {
+                "failed"
             };
 
             serde_json::json!({
                 "workspaceId": workspace_id,
                 "vmId": vm_id,
+                "path": ws_path.to_string_lossy(),
                 "installedPlugins": installed_status,
-                "knownMarketplaces": installed_status,
-                "coworkSettings": installed_status,
+                "knownMarketplaces": marketplaces_status,
+                "coworkSettings": cowork_settings_status,
             })
         })
         .collect();
@@ -1009,7 +1039,8 @@ fn cowork_get_meta() -> Result<serde_json::Value, String> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn cowork_detect_vethernet_subnet() -> Result<String, String> {
-    firewall::detect_vethernet_subnet().map_err(|e| e.to_string())
+    firewall::detect_vethernet_subnet()
+        .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
