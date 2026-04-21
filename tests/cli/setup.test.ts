@@ -75,6 +75,36 @@ describe("buildMcpEntries", () => {
     expect(entries["tandem-channel"]?.env?.TANDEM_AUTH_TOKEN).toBeUndefined();
     expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
   });
+
+  it("generates stdio entry for claude-desktop targets", () => {
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+      targetKind: "claude-desktop",
+    });
+    expect(entries.tandem.command).toBe("npx");
+    expect(entries.tandem.args).toEqual(["-y", "tandem-editor", "mcp-stdio"]);
+    expect(entries.tandem.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
+    expect(entries.tandem.type).toBeUndefined();
+    expect(entries.tandem.url).toBeUndefined();
+  });
+
+  it("includes token in stdio entry env for claude-desktop targets", () => {
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+      targetKind: "claude-desktop",
+      token,
+    });
+    expect(entries.tandem.env?.TANDEM_AUTH_TOKEN).toBe(token);
+    expect(entries.tandem.headers).toBeUndefined();
+  });
+
+  it("generates HTTP entry for claude-code targets (default)", () => {
+    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+      targetKind: "claude-code",
+    });
+    expect(entries.tandem.type).toBe("http");
+    expect(entries.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
+    expect(entries.tandem.command).toBeUndefined();
+  });
 });
 
 describe("validateChannelShimPrereq", () => {
@@ -229,6 +259,103 @@ describe("detectTargets", () => {
   it("detects Claude Code with --force even when ~/.claude is absent", async () => {
     const targets = detectTargets({ homeOverride: tmpDir, force: true });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
+  });
+
+  it("sets kind to claude-code for Claude Code targets", () => {
+    writeFileSync(join(tmpDir, ".claude.json"), "{}");
+    const targets = detectTargets({ homeOverride: tmpDir });
+    const cc = targets.find((t) => t.label === "Claude Code");
+    expect(cc?.kind).toBe("claude-code");
+  });
+});
+
+describe.skipIf(process.platform !== "win32")("detectTargets — MSIX", () => {
+  let tmpDir: string;
+  let localAppData: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "tandem-msix-test-"));
+    localAppData = join(tmpDir, "LocalAppData");
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("detects MSIX config when Claude_* package dir has config file", () => {
+    const msixConfigDir = join(
+      localAppData,
+      "Packages",
+      "Claude_abc123",
+      "LocalCache",
+      "Roaming",
+      "Claude",
+    );
+    mkdirSync(msixConfigDir, { recursive: true });
+    writeFileSync(join(msixConfigDir, "claude_desktop_config.json"), "{}");
+
+    const targets = detectTargets({
+      homeOverride: tmpDir,
+      localAppDataOverride: localAppData,
+    });
+    const msix = targets.find((t) => t.label.includes("MSIX"));
+    expect(msix).toBeDefined();
+    expect(msix!.kind).toBe("claude-desktop");
+    expect(msix!.configPath).toContain("Claude_abc123");
+  });
+
+  it("skips MSIX when no Claude_* package dirs exist", () => {
+    mkdirSync(join(localAppData, "Packages", "SomeOtherApp_xyz"), { recursive: true });
+
+    const targets = detectTargets({
+      homeOverride: tmpDir,
+      localAppDataOverride: localAppData,
+    });
+    expect(targets.some((t) => t.label.includes("MSIX"))).toBe(false);
+  });
+
+  it("skips MSIX when Packages dir does not exist", () => {
+    const targets = detectTargets({
+      homeOverride: tmpDir,
+      localAppDataOverride: localAppData,
+    });
+    expect(targets.some((t) => t.label.includes("MSIX"))).toBe(false);
+  });
+
+  it("detects multiple MSIX installs and adds suffix", () => {
+    for (const pkg of ["Claude_aaa111", "Claude_bbb222"]) {
+      const dir = join(localAppData, "Packages", pkg, "LocalCache", "Roaming", "Claude");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "claude_desktop_config.json"), "{}");
+    }
+
+    const targets = detectTargets({
+      homeOverride: tmpDir,
+      localAppDataOverride: localAppData,
+    });
+    const msixTargets = targets.filter((t) => t.label.includes("MSIX"));
+    expect(msixTargets.length).toBe(2);
+    expect(msixTargets.every((t) => t.label.includes("…"))).toBe(true);
+  });
+
+  it("detects MSIX with --force even when config file is absent", () => {
+    const msixDir = join(
+      localAppData,
+      "Packages",
+      "Claude_abc123",
+      "LocalCache",
+      "Roaming",
+      "Claude",
+    );
+    mkdirSync(msixDir, { recursive: true });
+
+    const targets = detectTargets({
+      homeOverride: tmpDir,
+      localAppDataOverride: localAppData,
+      force: true,
+    });
+    const msix = targets.find((t) => t.label.includes("MSIX"));
+    expect(msix).toBeDefined();
   });
 });
 
