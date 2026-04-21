@@ -196,6 +196,34 @@ describe("applyConfig", () => {
     expect(written.mcpServers.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
   });
 
+  it("removes stale tandem-channel entry left by older installers", async () => {
+    const configPath = join(tmpDir, ".claude.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          tandem: { type: "http", url: "http://old:9999/mcp" },
+          "tandem-channel": { command: "/app/MacOS/node-sidecar", args: ["/old/channel.js"] },
+          "my-other-server": { command: "foo" },
+        },
+      }),
+    );
+    const entries = buildMcpEntries("/fake/channel/index.js");
+    await applyConfig(configPath, entries);
+    const written = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(written.mcpServers["tandem-channel"]).toBeUndefined();
+    expect(written.mcpServers["my-other-server"]).toEqual({ command: "foo" });
+    expect(written.mcpServers.tandem).toBeDefined();
+  });
+
+  it("preserves tandem-channel when explicitly included in entries", async () => {
+    const configPath = join(tmpDir, ".claude.json");
+    const entries = buildMcpEntries("/fake/channel/index.js", { withChannelShim: true });
+    await applyConfig(configPath, entries);
+    const written = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(written.mcpServers["tandem-channel"]).toBeDefined();
+  });
+
   it("overwrites malformed JSON with fresh config", async () => {
     const configPath = join(tmpDir, ".claude.json");
     writeFileSync(configPath, "{ this is not json }}}");

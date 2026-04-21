@@ -152,8 +152,7 @@ describe("runSetupHandler", () => {
     // Verify the config file was actually written
     const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
     expect(config.mcpServers.tandem.url).toContain("/mcp");
-    expect(config.mcpServers["tandem-channel"].command).toBe("node");
-    expect(config.mcpServers["tandem-channel"].args).toEqual(["/fake/dist/channel/index.js"]);
+    expect(config.mcpServers["tandem-channel"]).toBeUndefined();
   });
 
   it("does not detect Claude Code when .claude dir is absent", async () => {
@@ -202,7 +201,7 @@ describe("runSetupHandler", () => {
     expect(result.status).toBe(207);
   });
 
-  it("uses custom nodeBinary in MCP config", async () => {
+  it("does not write tandem-channel entry (channel shim is Claude Code-only)", async () => {
     const result = await runSetupHandler(
       {
         nodeBinary: "/app/MacOS/node-sidecar",
@@ -212,6 +211,6 @@ describe("runSetupHandler", () => {
     );
     expect(result.status).toBe(200);
     const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
-    expect(config.mcpServers["tandem-channel"].command).toBe("/app/MacOS/node-sidecar");
+    expect(config.mcpServers["tandem-channel"]).toBeUndefined();
   });
 });

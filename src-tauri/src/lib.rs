@@ -452,6 +452,35 @@ async fn wait_for_port_release(client: &reqwest::Client, deadline_secs: u64) -> 
     false
 }
 
+/// Resolve the sidecar executable path (alongside the main binary).
+fn sidecar_exe_path() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let name = if cfg!(target_os = "windows") {
+        format!("node-sidecar-{}.exe", env!("TARGET_TRIPLE"))
+    } else {
+        format!("node-sidecar-{}", env!("TARGET_TRIPLE"))
+    };
+    Some(exe_dir.join(name))
+}
+
+/// Poll until the sidecar exe file is writable (OS released the handle).
+#[cfg(target_os = "windows")]
+async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
+    let sidecar_path = match sidecar_exe_path() {
+        Some(p) if p.exists() => p,
+        _ => return true,
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(deadline_secs);
+    while tokio::time::Instant::now() < deadline {
+        if std::fs::OpenOptions::new().write(true).open(&sidecar_path).is_ok() {
+            log::info!("Sidecar exe file lock released");
+            return true;
+        }
+        tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
+    }
+    false
+}
+
 const CLAUDE_DOWNLOAD_URL: &str = "https://claude.ai/download";
 
 /// POST to /api/setup with resolved paths. Best-effort — failures are logged, not fatal.
@@ -545,19 +574,8 @@ fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), St
             .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
         let channel_path = resource_dir.join("dist/channel/index.js");
 
-        // Sidecar binary lives alongside the main executable with target triple suffix
-        let exe_dir = std::env::current_exe()
-            .map_err(|e| format!("Failed to get current exe: {e}"))?
-            .parent()
-            .ok_or("Failed to get exe parent dir")?
-            .to_path_buf();
-
-        let sidecar_name = if cfg!(target_os = "windows") {
-            format!("node-sidecar-{}.exe", env!("TARGET_TRIPLE"))
-        } else {
-            format!("node-sidecar-{}", env!("TARGET_TRIPLE"))
-        };
-        let node_binary = exe_dir.join(sidecar_name);
+        let node_binary = sidecar_exe_path()
+            .ok_or("Failed to resolve sidecar exe path")?;
 
         Ok((
             strip_win_prefix(&node_binary),
@@ -737,6 +755,24 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     // If the process is still running, the file is locked and install fails.
     kill_sidecar(app);
     let client = app.state::<reqwest::Client>().inner().clone();
+
+    // Wait for port release and (on Windows) file-lock release concurrently.
+    // Port-down alone isn't sufficient on Windows: TerminateProcess returns
+    // before the OS releases the exe file handle.
+    #[cfg(target_os = "windows")]
+    {
+        let (port_ok, file_ok) = tokio::join!(
+            wait_for_port_release(&client, 5),
+            wait_for_sidecar_unlock(5),
+        );
+        if !port_ok {
+            log::warn!("Sidecar still responding after 5s kill deadline -- proceeding with install anyway");
+        }
+        if !file_ok {
+            log::warn!("Sidecar exe still locked after 5s -- installer may prompt for retry");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
     if !wait_for_port_release(&client, 5).await {
         log::warn!("Sidecar still responding after 5s kill deadline -- proceeding with install anyway");
     }
