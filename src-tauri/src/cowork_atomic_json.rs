@@ -246,12 +246,12 @@ where
     })();
 
     // Release the lock regardless of outcome.
+    // The lock file is persistent — never deleted. Mutual exclusion lives in
+    // the lock state, not the file's existence.  Deleting it between unlock()
+    // and the next writer's open() would let two writers hold the critical
+    // section simultaneously (classic TOCTOU race on lock files).
     let _ = FileExt::unlock(&lock_file);
-    // Best-effort cleanup of the sidecar lock file. If another process picked
-    // up the lock between our unlock and this remove, the remove silently
-    // fails — that's fine; they own it now.
     drop(lock_file);
-    let _ = std::fs::remove_file(&lock_path);
 
     result
 }

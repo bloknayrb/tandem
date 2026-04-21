@@ -749,14 +749,22 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             if let firewall::FirewallError::AdminDeclined = e {
                 log::warn!("[cowork] UAC declined — writing deny rule and updating meta; no plugin entries written");
                 if let Err(deny_err) = firewall::add_cowork_deny_rule(&cidr) {
-                    log::warn!("[cowork] failed to write deny rule: {deny_err}");
+                    // Deny rule failed to write — port 3479 has no rule at all.
+                    // Return a distinct error so the UI can show a recovery prompt.
+                    return Err(format!(
+                        "UAC declined and deny-rule could not be written: {deny_err}. \
+                         Port 3479 may be unprotected. Please add a deny rule manually \
+                         in Windows Defender Firewall."
+                    ));
                 }
-                let _ = cowork_meta::update(|m| {
+                if let Err(meta_err) = cowork_meta::update(|m| {
                     m.uac_declined_last_attempt = true;
                     m.uac_declined_at = Some(iso_now());
                     m.vethernet_cidr_detected = Some(cidr.clone());
                     m.enabled = false;
-                });
+                }) {
+                    log::warn!("[cowork] failed to persist UAC-declined meta: {meta_err}");
+                }
                 return Err(e.to_string());
             }
             return Err(e.to_string());
@@ -792,13 +800,51 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             log::warn!("[cowork] {} install error(s): {:?}", errors.len(), errors);
         }
 
-        let _ = cowork_meta::update(|m| {
+        // Count workspaces where installed_plugins was written successfully.
+        // A workspace is "successful" if its installed_plugins status is Ok or
+        // AlreadyPresent — anything else (Locked, SchemaDrift, InsecureAcl, Failed)
+        // counts as a failure.
+        if !workspaces.is_empty() {
+            let success_count = reports.iter().filter(|r| {
+                match r {
+                    Ok(report) => matches!(
+                        report.installed_plugins,
+                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+                    ),
+                    Err(_) => false,
+                }
+            }).count();
+
+            if success_count == 0 {
+                let failure_summary: Vec<String> = reports.iter().map(|r| match r {
+                    Ok(report) => format!("{}/{}: {:?}", report.workspace_id, report.vm_id, report.installed_plugins),
+                    Err(e) => e.to_string(),
+                }).collect();
+                return Err(format!(
+                    "Cowork enable failed: all {} workspace(s) failed to install. Failures: {}",
+                    workspaces.len(),
+                    failure_summary.join("; ")
+                ));
+            }
+
+            if success_count < workspaces.len() {
+                log::warn!(
+                    "[cowork] partial install: {}/{} workspace(s) succeeded",
+                    success_count,
+                    workspaces.len()
+                );
+            }
+        }
+
+        if let Err(e) = cowork_meta::update(|m| {
             m.enabled = true;
             m.vethernet_cidr_detected = Some(cidr.clone());
             m.workspaces_last_scanned_at = Some(iso_now());
             m.uac_declined_last_attempt = false;
             m.uac_declined_at = None;
-        });
+        }) {
+            log::warn!("[cowork] failed to persist meta after enable: {e}");
+        }
 
         Ok(format!("Cowork enabled: {workspace_count} workspace(s) configured"))
     } else {
@@ -812,7 +858,9 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         if let Err(e) = firewall::remove_cowork_rules() {
             log::warn!("[cowork] remove firewall rules error: {e}");
         }
-        let _ = cowork_meta::update(|m| { m.enabled = false; });
+        if let Err(e) = cowork_meta::update(|m| { m.enabled = false; }) {
+            log::warn!("[cowork] failed to persist meta after disable: {e}");
+        }
         Ok("Cowork disabled".to_string())
     }
 }
@@ -846,9 +894,11 @@ fn cowork_rescan() -> Result<String, String> {
         }
     }
 
-    let _ = cowork_meta::update(|m| {
+    if let Err(e) = cowork_meta::update(|m| {
         m.workspaces_last_scanned_at = Some(iso_now());
-    });
+    }) {
+        log::warn!("[cowork] rescan: failed to persist meta: {e}");
+    }
 
     Ok(format!("Rescan complete: {count} workspace(s)"))
 }
@@ -865,8 +915,54 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
     use cowork_workspace_scan::find_cowork_workspaces;
 
     let meta = cowork_meta::load().map_err(|e| e.to_string())?;
-    let workspaces = find_cowork_workspaces();
-    let cowork_detected = !workspaces.is_empty();
+    let workspace_paths = find_cowork_workspaces();
+    let cowork_detected = !workspace_paths.is_empty();
+
+    // Build a workspace status array compatible with the TypeScript WorkspaceStatus[]
+    // type declared in PR f.  This is a read-only status check — no writes, no ACL
+    // checks, no firewall operations.
+    let workspaces: Vec<serde_json::Value> = workspace_paths
+        .iter()
+        .map(|ws_path| {
+            // Extract workspace_id (grandparent leaf) and vm_id (leaf).
+            let vm_id = ws_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let workspace_id = ws_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            // Read-only check: does installed_plugins.json contain a tandem entry?
+            let plugins_file = ws_path.join("cowork_plugins").join("installed_plugins.json");
+            let installed_status = if plugins_file.exists() {
+                match std::fs::read_to_string(&plugins_file)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                {
+                    Some(json) if json.get("mcpServers")
+                        .and_then(|s| s.get("tandem"))
+                        .is_some() =>
+                    {
+                        "ok"
+                    }
+                    _ => "notInstalled",
+                }
+            } else {
+                "notInstalled"
+            };
+
+            serde_json::json!({
+                "workspaceId": workspace_id,
+                "vmId": vm_id,
+                "installedPlugins": installed_status,
+                "knownMarketplaces": installed_status,
+                "coworkSettings": installed_status,
+            })
+        })
+        .collect();
 
     Ok(serde_json::json!({
         "enabled": meta.enabled,
@@ -876,7 +972,7 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
         "workspacesLastScannedAt": meta.workspaces_last_scanned_at,
         "uacDeclined": meta.uac_declined_last_attempt,
         "uacDeclinedAt": meta.uac_declined_at,
-        "workspaceCount": workspaces.len(),
+        "workspaces": workspaces,
         "coworkDetected": cowork_detected,
         "osSupported": true,
     }))
@@ -884,7 +980,17 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_get_status() -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({ "osSupported": false, "enabled": false, "coworkDetected": false }))
+    Ok(serde_json::json!({
+        "osSupported": false,
+        "enabled": false,
+        "coworkDetected": false,
+        "workspaces": [],
+        "vethernetCidr": null,
+        "lanIpFallback": null,
+        "useLanIpOverride": false,
+        "uacDeclined": false,
+        "uacDeclinedAt": null,
+    }))
 }
 
 /// Read the Cowork metadata file.

@@ -116,9 +116,13 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
     };
 
     // Canonicalize both for comparison.
+    // Only fail-open for NotFound (path doesn't exist yet — that's fine for
+    // new workspace directories). All other errors fail closed: we can't verify
+    // the path is safe, so reject rather than silently allow.
     let canonical_path = match std::fs::canonicalize(path) {
         Ok(p) => p,
-        Err(_) => return Ok(()), // Can't canonicalize — allow optimistically
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(CoworkError::InsecureAcl { path: path.to_path_buf() }),
     };
     let canonical_lad = match std::fs::canonicalize(&local_app_data) {
         Ok(p) => p,
@@ -181,12 +185,16 @@ pub fn install_tandem_plugin_into_workspace(
     // ACL check before any write.
     let acl_result = check_acl(ws_path);
 
-    // Create the cowork_plugins subdirectory if it doesn't exist.
+    // Create the cowork_plugins subdirectory only after ACL check passes.
+    // Creating the dir before we know the ACL is safe leaves a directory behind
+    // even when the write is rejected.
     let plugins_dir = ws_path.join("cowork_plugins");
-    std::fs::create_dir_all(&plugins_dir).map_err(|e| {
-        log::warn!("[cowork-install] mkdir cowork_plugins failed: {e}");
-        CoworkError::from(e)
-    })?;
+    if acl_result.is_ok() {
+        std::fs::create_dir_all(&plugins_dir).map_err(|e| {
+            log::warn!("[cowork-install] mkdir cowork_plugins failed: {e}");
+            CoworkError::from(e)
+        })?;
+    }
 
     let installed_status = if let Err(ref e) = acl_result {
         log::warn!("[cowork-install] InsecureAcl for installed_plugins.json: {e}");
@@ -334,7 +342,20 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
 pub fn reconcile_orphans(workspaces: &[PathBuf], current_token: &str) -> ReconcileReport {
     use crate::firewall;
 
-    let orphan_rules = firewall::scan_orphan_rules();
+    let orphan_rules = match firewall::scan_orphan_rules() {
+        Ok(rules) => rules,
+        Err(e) => {
+            log::warn!(
+                "[cowork-install] reconcile: orphan rule scan failed ({e}) — skipping rule removal"
+            );
+            // Return early with an empty report so callers know the scan was
+            // not conclusive, rather than silently treating failure as "no orphans".
+            return ReconcileReport {
+                removed_firewall_rules: vec![],
+                rewritten_stale_entries: vec![],
+            };
+        }
+    };
     let mut removed_rules = Vec::new();
 
     if !orphan_rules.is_empty() {

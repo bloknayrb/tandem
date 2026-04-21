@@ -142,8 +142,18 @@ pub fn save(meta: &CoworkMeta) -> Result<(), String> {
     })
 }
 
+/// Process-level mutex to serialise concurrent `update()` calls from Tauri
+/// invoke handlers.  Without this, two concurrent invocations could interleave
+/// their load → mutate → save sequences, causing one writer to silently lose
+/// its changes.
+static META_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Update a single field via a closure, loading and saving atomically.
+///
+/// Acquires `META_LOCK` so the load → mutate → save triple is exclusive
+/// with respect to other `update()` callers in this process.
 pub fn update<F: FnOnce(&mut CoworkMeta)>(f: F) -> Result<(), String> {
+    let _guard = META_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut meta = load()?;
     f(&mut meta);
     save(&meta)
