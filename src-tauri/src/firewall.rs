@@ -28,7 +28,7 @@ pub enum FirewallError {
     /// `netsh.exe` was not found on PATH.
     NetshNotFound,
     /// `netsh.exe` ran but returned a non-zero exit code.
-    NetshFailure { exit_code: i32, stderr_tail: String },
+    NetshFailure { exit_code: i32, stderr_tail: String, stdout_tail: String },
     /// The vEthernet subnet could not be determined (e.g. adapter absent, prefix
     /// too broad, or PowerShell returned unexpected output).
     SubnetDetectionFailed,
@@ -48,9 +48,10 @@ impl fmt::Display for FirewallError {
             FirewallError::NetshFailure {
                 exit_code,
                 stderr_tail,
+                stdout_tail,
             } => write!(
                 f,
-                "netsh.exe failed (exit {exit_code}): {stderr_tail}"
+                "netsh.exe failed (exit {exit_code}): stdout={stdout_tail:?} stderr={stderr_tail:?}"
             ),
             FirewallError::SubnetDetectionFailed => write!(
                 f,
@@ -267,10 +268,14 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
         &format!("name={RULE_NAME_PREFIX}"),
     ])
     .or_else(|e| {
-        // "No rules match" is not an error — the user may never have had a rule.
+        // "No rules match the specified criteria." is written to stdout (not stderr)
+        // by netsh on Windows. Only treat exit_code==1 as "nothing to do" when
+        // stdout confirms the "no match" case — all other exit-1 failures propagate.
         match e {
-            FirewallError::NetshFailure { exit_code: 1, .. } => {
-                log::debug!("[firewall] no Tandem Cowork rules to remove");
+            FirewallError::NetshFailure { exit_code: 1, ref stdout_tail, .. }
+                if stdout_tail.contains("No rules match") =>
+            {
+                log::debug!("[firewall] no Tandem Cowork rules to remove (allow rule)");
                 Ok(())
             }
             other => Err(other),
@@ -286,7 +291,12 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
         &format!("name={RULE_NAME_DENY}"),
     ])
     .or_else(|e| match e {
-        FirewallError::NetshFailure { exit_code: 1, .. } => Ok(()),
+        FirewallError::NetshFailure { exit_code: 1, ref stdout_tail, .. }
+            if stdout_tail.contains("No rules match") =>
+        {
+            log::debug!("[firewall] no Tandem Cowork rules to remove (deny rule)");
+            Ok(())
+        }
         other => Err(other),
     })
 }
@@ -295,7 +305,10 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
 ///
 /// Used by install-time orphan reconciliation (security invariant §12) to detect
 /// stale rules from a previous failed uninstall.
-pub fn scan_orphan_rules() -> Vec<String> {
+///
+/// Returns `Err` on spawn failure or unexpected netsh errors so that
+/// `reconcile_orphans` can distinguish "no orphans" from "scan failed".
+pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
     let start = Instant::now();
     let output = Command::new("netsh")
         .args([
@@ -311,22 +324,45 @@ pub fn scan_orphan_rules() -> Vec<String> {
 
     let output = match output {
         Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log::warn!("[firewall] scan_orphan_rules: netsh.exe not found");
+            return Err(FirewallError::NetshNotFound);
+        }
         Err(e) => {
             log::warn!("[firewall] scan_orphan_rules spawn failed: {e}");
-            return vec![];
+            return Err(FirewallError::NetshFailure {
+                exit_code: -1,
+                stderr_tail: e.to_string(),
+                stdout_tail: String::new(),
+            });
         }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let exit_code = output.status.code().unwrap_or(-1);
 
     log::debug!(
-        "[firewall] scan_orphan_rules: exit={}, elapsed={:.2}s",
-        output.status.code().unwrap_or(-1),
+        "[firewall] scan_orphan_rules: exit={exit_code}, elapsed={:.2}s",
         elapsed.as_secs_f64()
     );
 
+    // netsh `show rule` exits 1 with "No rules match" when there are no matching
+    // rules — treat that as an empty (not an error) result.
+    if !output.status.success() {
+        let combined = format!("{stdout}{stderr}");
+        if combined.contains("No rules match") {
+            return Ok(vec![]);
+        }
+        return Err(FirewallError::NetshFailure {
+            exit_code,
+            stderr_tail: truncate_tail(stderr.trim(), 400).to_string(),
+            stdout_tail: truncate_tail(stdout.trim(), 400).to_string(),
+        });
+    }
+
     // Parse "Rule Name: ..." lines from netsh output.
-    stdout
+    let names = stdout
         .lines()
         .filter_map(|line| {
             let line = line.trim();
@@ -337,7 +373,9 @@ pub fn scan_orphan_rules() -> Vec<String> {
             stripped.map(|s| s.trim().to_string())
         })
         .filter(|name| name.starts_with(RULE_NAME_PREFIX))
-        .collect()
+        .collect();
+
+    Ok(names)
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +402,7 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
             return Err(FirewallError::NetshFailure {
                 exit_code: -1,
                 stderr_tail: e.to_string(),
+                stdout_tail: String::new(),
             });
         }
     };
@@ -381,17 +420,31 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
     );
 
     if !output.status.success() {
-        // Detect UAC-declined pattern: exit code 1 + "The requested operation
-        // requires elevation" in stdout (netsh writes errors to stdout on Windows).
+        // Detect UAC-declined pattern for `add rule` commands.
+        //
+        // The string-match approach ("requires elevation", "access is denied")
+        // fails on localized Windows builds. Instead, use exit code 1 combined
+        // with the command being an `add rule` invocation — `delete` and `show`
+        // commands also return exit 1 for "no rules found", so we restrict the
+        // AdminDeclined classification to `add` commands only.
+        //
+        // We still keep the string-match as an additional signal when available,
+        // but it is not required — exit_code == 1 on an `add` command is
+        // sufficient to classify as a potential UAC decline.
+        let is_add_command = args.contains(&"add");
         let combined = format!("{stdout}{stderr}");
-        if combined.contains("requires elevation") || combined.contains("access is denied") {
-            log::warn!("[firewall] UAC elevation declined");
+        let locale_strings_match =
+            combined.contains("requires elevation") || combined.contains("access is denied");
+
+        if is_add_command && (exit_code == 1 || locale_strings_match) {
+            log::warn!("[firewall] UAC elevation declined (exit={exit_code}, add_cmd={is_add_command})");
             return Err(FirewallError::AdminDeclined);
         }
 
         return Err(FirewallError::NetshFailure {
             exit_code,
             stderr_tail: truncate_tail(stderr.trim(), 400).to_string(),
+            stdout_tail: truncate_tail(stdout.trim(), 400).to_string(),
         });
     }
 

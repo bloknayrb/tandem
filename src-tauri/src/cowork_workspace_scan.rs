@@ -219,7 +219,8 @@ pub(crate) fn check_path_safe(candidate: &Path, canonical_root: &Path) -> Result
     }
 
     // (c) Reject reparse points anywhere in the chain.
-    if has_reparse_point_in_chain(candidate) {
+    // Pass the canonical path so the check operates on the resolved form.
+    if has_reparse_point_in_chain(&canonical) {
         return Err("reparse point detected in path chain".to_string());
     }
 
@@ -244,20 +245,30 @@ fn is_unc_path(path: &Path) -> bool {
 
 /// Returns true if any component in the path chain (from root to candidate)
 /// has the `FILE_ATTRIBUTE_REPARSE_POINT` bit set.
+///
+/// Fails closed: if `symlink_metadata` returns an error, returns `true` (reject)
+/// rather than `false` (allow). This prevents a metadata failure from silently
+/// bypassing the reparse-point guard.
 fn has_reparse_point_in_chain(path: &Path) -> bool {
-    // Check the candidate itself.
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return true;
-        }
-    }
-    // Check each ancestor.
-    let mut ancestor = path.parent();
-    while let Some(p) = ancestor {
-        if let Ok(metadata) = std::fs::symlink_metadata(p) {
+    // Check the candidate itself. Fail closed on metadata errors.
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
             if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 return true;
             }
+        }
+        Err(_) => return true, // Can't inspect — reject for safety.
+    }
+    // Check each ancestor. Fail closed on metadata errors.
+    let mut ancestor = path.parent();
+    while let Some(p) = ancestor {
+        match std::fs::symlink_metadata(p) {
+            Ok(metadata) => {
+                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return true;
+                }
+            }
+            Err(_) => return true, // Can't inspect ancestor — reject for safety.
         }
         ancestor = p.parent();
     }
