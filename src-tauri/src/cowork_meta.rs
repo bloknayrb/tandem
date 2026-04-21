@@ -120,7 +120,10 @@ pub fn save(meta: &CoworkMeta) -> Result<(), String> {
         .parent()
         .ok_or("cowork-meta.json has no parent directory")?;
 
-    let tmp_path = dir.join(format!(".tandem-meta-tmp-{}", rand_hex(8)));
+    let tmp_path = dir.join(format!(
+        ".tandem-meta-tmp-{}",
+        crate::cowork_atomic_json::unique_suffix()
+    ));
 
     (|| -> Result<(), io::Error> {
         use std::io::Write;
@@ -144,21 +147,4 @@ pub fn update<F: FnOnce(&mut CoworkMeta)>(f: F) -> Result<(), String> {
     let mut meta = load()?;
     f(&mut meta);
     save(&meta)
-}
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-fn rand_hex(len: usize) -> String {
-    use rand::RngCore;
-    let mut bytes = vec![0u8; (len + 1) / 2];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
-        .chars()
-        .take(len)
-        .collect()
 }

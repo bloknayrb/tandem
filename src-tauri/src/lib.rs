@@ -702,6 +702,10 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 // All commands have Windows-native and non-Windows stub variants so that
 // tauri::generate_handler![] compiles on all platforms.
 
+/// Error string returned by every non-Windows Cowork stub.
+#[cfg(not(target_os = "windows"))]
+const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only in v0.8.0";
+
 /// Scan for Cowork workspace directories.
 #[cfg(target_os = "windows")]
 #[tauri::command]
@@ -715,7 +719,7 @@ fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Enable or disable the Cowork integration.
@@ -815,7 +819,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_toggle_integration(_enabled: bool) -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Re-scan workspaces and install into any new ones.
@@ -851,7 +855,7 @@ fn cowork_rescan() -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_rescan() -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Get the current Cowork integration status.
@@ -892,7 +896,7 @@ fn cowork_get_meta() -> Result<cowork_meta::CoworkMeta, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_get_meta() -> Result<serde_json::Value, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Detect the Hyper-V vEthernet subnet.
@@ -904,7 +908,7 @@ fn cowork_detect_vethernet_subnet() -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_detect_vethernet_subnet() -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Re-walk all workspaces with a new auth token (called after `tandem rotate-token`).
@@ -924,7 +928,7 @@ fn cowork_apply_token(token: String) -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_apply_token(_token: String) -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Install the Tandem plugin into a specific workspace path.
@@ -970,7 +974,7 @@ fn cowork_install_into_workspace(ws_path: String) -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_install_into_workspace(_ws_path: String) -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Uninstall the Tandem plugin from a specific workspace path.
@@ -1001,7 +1005,7 @@ fn cowork_uninstall_from_workspace(ws_path: String) -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_uninstall_from_workspace(_ws_path: String) -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Set or unset the LAN-IP override for TANDEM_URL.
@@ -1031,7 +1035,7 @@ fn cowork_set_lan_ip_override(enabled: bool) -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_set_lan_ip_override(_enabled: bool) -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Clear the UAC-declined flag and retry the enable flow.
@@ -1048,7 +1052,7 @@ fn cowork_retry_admin_elevation() -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_retry_admin_elevation() -> Result<String, String> {
-    Err("Cowork integration is Windows-only in v0.8.0".into())
+    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Minimal ISO-8601 (UTC) timestamp without pulling in chrono.
