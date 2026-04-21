@@ -2,8 +2,10 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { CapturedAnchor } from "../shared/types";
+import type { CapturedAnchor, TandemMode } from "../shared/types";
+import { TandemModeSchema } from "../shared/types";
 import { ConnectionBanner } from "./components/ConnectionBanner";
+import { CoworkAdminDeclinedModal } from "./components/CoworkAdminDeclinedModal";
 import { EmptyState } from "./components/EmptyState";
 import { HelpModal } from "./components/HelpModal";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
@@ -11,6 +13,7 @@ import { ChatSlot, SideSlot } from "./components/PanelSlot";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { ToastContainer } from "./components/ToastContainer";
+import { isTauriRuntime } from "./cowork/cowork-helpers";
 import { Editor } from "./editor/Editor";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { Toolbar } from "./editor/toolbar/Toolbar";
@@ -653,6 +656,7 @@ export default function App() {
       />
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      {isTauriRuntime() && <CoworkAdminDeclinedModal />}
       {tutorialActive && (
         <OnboardingTutorial
           currentStep={currentStep}

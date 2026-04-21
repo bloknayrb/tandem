@@ -3,6 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { TUTORIAL_ANNOTATION_PREFIX, TUTORIAL_COMPLETED_KEY } from "../../shared/constants";
 import type { Annotation } from "../../shared/types";
+import {
+  isTauriRuntime,
+  readCoworkOnboardingSkipped,
+  shouldShowCoworkOnboarding,
+} from "../cowork/cowork-helpers";
+import { useCoworkStatus } from "./useCoworkStatus";
 
 interface UseTutorialResult {
   tutorialActive: boolean;
@@ -28,11 +34,16 @@ function writeCompleted(): void {
 }
 
 /**
- * Drives the onboarding tutorial through 4 steps (0-3):
+ * Drives the onboarding tutorial through 4–5 steps. The Cowork step (index 3)
+ * is only present when running under Tauri AND the Rust side reports an
+ * eligible Cowork install that isn't already enabled. Index numbering:
  *   0 — Review an annotation (detect any tutorial annotation resolved)
  *   1 — Ask a question (detect user annotation or chat)
  *   2 — Make an edit (detect editor content change while focused)
- *   3 — Complete (auto-dismiss after 3s)
+ *   3 — Cowork (conditional) OR Completion
+ *   4 — Completion (only when Cowork is present)
+ * The `totalSteps` local tracks the max index so the step 2→next advance lands
+ * on the right completion index regardless of whether Cowork is visible.
  */
 export function useTutorial(
   annotations: Annotation[],
@@ -45,6 +56,14 @@ export function useTutorial(
 
   const isWelcome = activeTabFileName === "welcome.md";
   const tutorialActive = !completed && isWelcome;
+
+  // Cowork step eligibility — drives the step count so step 2 advances to
+  // the right completion index (3 when no Cowork, 4 when Cowork is inserted).
+  const tauri = isTauriRuntime();
+  const { status: coworkStatus } = useCoworkStatus(tauri && tutorialActive);
+  const [coworkSkipped] = useState(readCoworkOnboardingSkipped);
+  const includeCoworkStep = tauri && shouldShowCoworkOnboarding(coworkStatus, coworkSkipped);
+  const completionStep = includeCoworkStep ? 4 : 3;
 
   // Step 0: detect any tutorial annotation resolved, or auto-skip if none exist
   useEffect(() => {
@@ -93,15 +112,16 @@ export function useTutorial(
     };
   }, [tutorialActive, currentStep, editor]);
 
-  // Step 3: auto-complete after 3 seconds
+  // Completion step: auto-complete after 3 seconds. Completion index is 3
+  // when no Cowork step is inserted, 4 when it is.
   useEffect(() => {
-    if (!tutorialActive || currentStep !== 3) return;
+    if (!tutorialActive || currentStep !== completionStep) return;
     const timer = setTimeout(() => {
       writeCompleted();
       setCompleted(true);
     }, 3000);
     return () => clearTimeout(timer);
-  }, [tutorialActive, currentStep]);
+  }, [tutorialActive, currentStep, completionStep]);
 
   const dismissTutorial = useCallback(() => {
     writeCompleted();
@@ -110,8 +130,8 @@ export function useTutorial(
 
   const nextStep = useCallback(() => {
     stepAdvancedAt.current = Date.now();
-    setCurrentStep((prev) => Math.min(prev + 1, 3));
-  }, []);
+    setCurrentStep((prev) => Math.min(prev + 1, completionStep));
+  }, [completionStep]);
 
   return {
     tutorialActive,

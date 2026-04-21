@@ -97,6 +97,12 @@ export const NOTIFICATION_BUFFER_SIZE = 50;
 // Onboarding tutorial
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 export const TUTORIAL_ANNOTATION_PREFIX = "tutorial-";
+/** Persists "user skipped the Cowork onboarding step" across sessions. */
+export const COWORK_ONBOARDING_SKIPPED_KEY = "tandem:coworkOnboardingSkipped";
+/** Polling interval for `cowork_get_status` while the consumer is active. */
+export const COWORK_STATUS_POLL_MS = 30_000;
+/** Debounce interval for the "Re-scan workspaces" button. */
+export const COWORK_RESCAN_DEBOUNCE_MS = 2_000;
 
 // Editor layout
 export const EDITOR_WIDTH_MODE_KEY = "tandem:editorWidthMode";
