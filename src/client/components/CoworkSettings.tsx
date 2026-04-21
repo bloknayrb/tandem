@@ -3,6 +3,7 @@ import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
   coworkSettingsVariant,
+  firewallErrorHint,
   makeDebouncer,
   type StatusTokenFamily,
   workspaceFileStatusFamily,
@@ -16,7 +17,12 @@ import {
   loadInvoke,
 } from "../cowork/cowork-invoke";
 import { useCoworkStatus } from "../hooks/useCoworkStatus";
-import type { CoworkStatus, WorkspaceFileStatus, WorkspaceStatus } from "../types";
+import type {
+  CoworkStatus,
+  FirewallErrorVariant,
+  WorkspaceFileStatus,
+  WorkspaceStatus,
+} from "../types";
 
 const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
   success: {
@@ -61,9 +67,16 @@ export function CoworkSettings() {
   const [inlineToast, setInlineToast] = useState<InlineToast | null>(null);
   const [confirming, setConfirming] = useState<"enable" | null>(null);
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(true);
 
   const debouncerRef = useRef(makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS));
   useEffect(() => () => debouncerRef.current.cancel(), []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   const withInvoke = useCallback(
     async (op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<void> => {
@@ -71,12 +84,22 @@ export function CoworkSettings() {
       try {
         const invoke = await loadInvoke();
         await op(invoke);
-        setInlineToast(null);
+        if (mountedRef.current) setInlineToast(null);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setInlineToast({ message: `${errorPrefix}: ${msg}`, severity: "error" });
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        let display = rawMsg;
+        try {
+          const parsed = JSON.parse(rawMsg) as { kind?: string };
+          if (parsed.kind) {
+            display = firewallErrorHint(parsed as FirewallErrorVariant);
+          }
+        } catch {
+          // not JSON — use raw message
+        }
+        if (mountedRef.current)
+          setInlineToast({ message: `${errorPrefix}: ${display}`, severity: "error" });
       } finally {
-        setBusy(false);
+        if (mountedRef.current) setBusy(false);
       }
     },
     [],

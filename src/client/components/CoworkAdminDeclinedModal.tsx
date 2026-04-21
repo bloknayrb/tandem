@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { firewallErrorHint } from "../cowork/cowork-helpers";
 import {
   coworkRetryAdminElevation,
   coworkToggleIntegration,
@@ -6,6 +7,7 @@ import {
   loadInvoke,
 } from "../cowork/cowork-invoke";
 import { useCoworkStatus } from "../hooks/useCoworkStatus";
+import type { FirewallErrorVariant } from "../types";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -17,13 +19,21 @@ const FOCUSABLE_SELECTOR =
  * there's no close button.
  */
 export function CoworkAdminDeclinedModal() {
-  const { status, refetch } = useCoworkStatus(true);
+  const { status, error: statusError, refetch } = useCoworkStatus(true);
   const uacDeclined = status?.uacDeclined === true;
 
   const modalRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
   const [confirmingDisable, setConfirmingDisable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   // Title badge — surfaces the warning in the OS window/tab list even when
   // the Tandem UI isn't focused. Captures the prior title on mount and
@@ -83,10 +93,19 @@ export function CoworkAdminDeclinedModal() {
         const invoke = await loadInvoke();
         await op(invoke);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(`${errorPrefix}: ${msg}`);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        let display = rawMsg;
+        try {
+          const parsed = JSON.parse(rawMsg) as { kind?: string };
+          if (parsed.kind) {
+            display = firewallErrorHint(parsed as FirewallErrorVariant);
+          }
+        } catch {
+          // not JSON — use raw message
+        }
+        if (mountedRef.current) setError(`${errorPrefix}: ${display}`);
       } finally {
-        setBusy(false);
+        if (mountedRef.current) setBusy(false);
       }
     },
     [],
@@ -106,6 +125,35 @@ export function CoworkAdminDeclinedModal() {
     }, "Failed to disable Cowork");
     setConfirmingDisable(false);
   }, [withInvoke, refetch]);
+
+  // When cowork_get_status itself fails (IPC error, startup race), status stays
+  // null and uacDeclined is falsy — the modal would silently not appear. Render
+  // a persistent error banner so the user knows something is wrong.
+  if (statusError && !status) {
+    return (
+      <div
+        data-testid="cowork-admin-declined-status-error"
+        role="alert"
+        style={{
+          position: "fixed",
+          bottom: 16,
+          right: 16,
+          zIndex: 10000,
+          maxWidth: 400,
+          border: "1px solid var(--tandem-error-border)",
+          background: "var(--tandem-error-bg)",
+          color: "var(--tandem-error-fg-strong)",
+          borderRadius: 6,
+          padding: "10px 14px",
+          fontSize: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        Cowork status check failed: unable to determine if admin elevation was declined. Please
+        restart Tandem to restore normal operation.
+      </div>
+    );
+  }
 
   if (!uacDeclined) return null;
 
