@@ -4,6 +4,7 @@
  * environment — no DOM / testing-library required.
  */
 
+import { COWORK_ONBOARDING_SKIPPED_KEY } from "../../shared/constants";
 import type {
   CoworkStatus,
   FirewallErrorVariant,
@@ -139,8 +140,6 @@ export function shouldShowCoworkOnboarding(
  * Persistent skip flag — read/write via localStorage with try/catch so
  * incognito / storage-disabled browsers don't crash the tutorial.
  */
-import { COWORK_ONBOARDING_SKIPPED_KEY } from "../../shared/constants";
-
 export function readCoworkOnboardingSkipped(): boolean {
   try {
     return localStorage.getItem(COWORK_ONBOARDING_SKIPPED_KEY) === "true";

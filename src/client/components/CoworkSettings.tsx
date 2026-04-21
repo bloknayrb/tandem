@@ -4,6 +4,7 @@ import {
   aggregateWorkspaceStatus,
   coworkSettingsVariant,
   makeDebouncer,
+  type StatusTokenFamily,
   workspaceFileStatusFamily,
   workspaceFileStatusLabel,
 } from "../cowork/cowork-helpers";
@@ -17,20 +18,22 @@ import {
 import { useCoworkStatus } from "../hooks/useCoworkStatus";
 import type { CoworkStatus, WorkspaceFileStatus, WorkspaceStatus } from "../types";
 
-const STATUS_BG: Record<"success" | "warning" | "error", string> = {
-  success: "var(--tandem-success-bg)",
-  warning: "var(--tandem-warning-bg)",
-  error: "var(--tandem-error-bg)",
-};
-const STATUS_FG: Record<"success" | "warning" | "error", string> = {
-  success: "var(--tandem-success-fg-strong)",
-  warning: "var(--tandem-warning-fg-strong)",
-  error: "var(--tandem-error-fg-strong)",
-};
-const STATUS_BORDER: Record<"success" | "warning" | "error", string> = {
-  success: "var(--tandem-success-border)",
-  warning: "var(--tandem-warning-border)",
-  error: "var(--tandem-error-border)",
+const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
+  success: {
+    bg: "var(--tandem-success-bg)",
+    fg: "var(--tandem-success-fg-strong)",
+    border: "var(--tandem-success-border)",
+  },
+  warning: {
+    bg: "var(--tandem-warning-bg)",
+    fg: "var(--tandem-warning-fg-strong)",
+    border: "var(--tandem-warning-border)",
+  },
+  error: {
+    bg: "var(--tandem-error-bg)",
+    fg: "var(--tandem-error-fg-strong)",
+    border: "var(--tandem-error-border)",
+  },
 };
 
 const sectionLabelStyle: React.CSSProperties = {
@@ -351,7 +354,7 @@ function NormalState({
 
 function WorkspaceRow({ ws }: { ws: WorkspaceStatus }) {
   const agg: WorkspaceFileStatus = aggregateWorkspaceStatus(ws);
-  const family = workspaceFileStatusFamily(agg);
+  const tokens = STATUS_TOKENS[workspaceFileStatusFamily(agg)];
   const label = workspaceFileStatusLabel(agg);
   return (
     <div
@@ -364,9 +367,9 @@ function WorkspaceRow({ ws }: { ws: WorkspaceStatus }) {
         alignItems: "center",
         gap: 8,
         padding: "4px 6px",
-        border: `1px solid ${STATUS_BORDER[family]}`,
-        background: STATUS_BG[family],
-        color: STATUS_FG[family],
+        border: `1px solid ${tokens.border}`,
+        background: tokens.bg,
+        color: tokens.fg,
         borderRadius: 4,
         fontSize: 11,
       }}
