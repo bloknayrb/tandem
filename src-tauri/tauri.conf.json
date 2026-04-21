@@ -48,6 +48,11 @@
       "../sample/": "sample/",
       "../skills/": "skills/",
       "../CHANGELOG.md": "CHANGELOG.md"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/installer-hook.nsi"
+      }
     }
   },
   "plugins": {
