@@ -29,6 +29,10 @@ export function useCoworkStatus(active: boolean): UseCoworkStatusResult {
   const tauriMissingRef = useRef<boolean>(false);
   // Guards against setState calls after unmount (strict-mode + dev HMR).
   const mountedRef = useRef<boolean>(true);
+  // Held in a ref so refetch() can clear the interval when it detects a
+  // non-Tauri environment (the rejection travels through refetch, not through
+  // the loadInvoke().catch() chain).
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refetch = useCallback(async (): Promise<void> => {
     if (tauriMissingRef.current) {
@@ -50,7 +54,19 @@ export function useCoworkStatus(active: boolean): UseCoworkStatusResult {
       setError(null);
     } catch (err) {
       if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      // The rejecting stub loadInvoke() returns when Tauri is absent produces
+      // this sentinel. Stop polling silently — this is not an error condition.
+      if (msg === "Tauri runtime not available") {
+        tauriMissingRef.current = true;
+        if (intervalRef.current !== null) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        setLoading(false);
+        return;
+      }
+      setError(msg);
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -70,31 +86,26 @@ export function useCoworkStatus(active: boolean): UseCoworkStatusResult {
     }
 
     let cancelled = false;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
 
     // Kick off the dynamic import, then start polling once it resolves.
+    // loadInvoke() always resolves — Tauri absence is detected inside refetch()
+    // when the rejecting stub fires, not here.
     loadInvoke()
       .then((invoke) => {
         if (cancelled) return;
-        // `loadInvoke` returns a rejecting stub when Tauri is absent; detect
-        // that by doing one probe call and marking the runtime missing if it
-        // throws with our sentinel message.
         invokeRef.current = invoke;
         setLoading(true);
         return refetch();
       })
       .catch((err: unknown) => {
+        // loadInvoke() itself should never reject, but guard defensively.
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("Tauri runtime not available")) {
-          tauriMissingRef.current = true;
-        } else {
-          setError(msg);
-        }
+        setError(msg);
         setLoading(false);
       });
 
-    intervalId = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       if (cancelled) return;
       if (tauriMissingRef.current) return;
       void refetch();
@@ -102,7 +113,10 @@ export function useCoworkStatus(active: boolean): UseCoworkStatusResult {
 
     return () => {
       cancelled = true;
-      if (intervalId !== null) clearInterval(intervalId);
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
   }, [active, refetch]);
 

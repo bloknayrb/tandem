@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
-import { writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { firewallErrorHint, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
-import type { CoworkStatus } from "../types";
+import type { CoworkStatus, FirewallErrorVariant } from "../types";
 
 export interface CoworkOnboardingStepProps {
   /** The current `cowork_get_status` snapshot — used to show the detected subnet. */
@@ -26,30 +26,49 @@ export function CoworkOnboardingStep({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   const withInvoke = useCallback(
-    async (op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<void> => {
+    async (op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<boolean> => {
       setBusy(true);
       setError(null);
       try {
         const invoke = await loadInvoke();
         await op(invoke);
+        return true;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(`${errorPrefix}: ${msg}`);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        let display = rawMsg;
+        try {
+          const parsed = JSON.parse(rawMsg) as { kind?: string };
+          if (parsed.kind) {
+            display = firewallErrorHint(parsed as FirewallErrorVariant);
+          }
+        } catch {
+          // not JSON — use raw message
+        }
+        if (mountedRef.current) setError(`${errorPrefix}: ${display}`);
+        return false;
       } finally {
-        setBusy(false);
+        if (mountedRef.current) setBusy(false);
       }
     },
     [],
   );
 
   const handleEnable = useCallback(async (): Promise<void> => {
-    await withInvoke(async (invoke) => {
+    const ok = await withInvoke(async (invoke) => {
       await coworkToggleIntegration(invoke, true);
     }, "Failed to enable Cowork");
-    if (!error) onAdvance();
-  }, [withInvoke, onAdvance, error]);
+    if (ok) onAdvance();
+  }, [withInvoke, onAdvance]);
 
   const handleSkip = useCallback((): void => {
     writeCoworkOnboardingSkipped();
