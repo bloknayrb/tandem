@@ -20,7 +20,12 @@ use std::time::Instant;
 ///
 /// Variants are designed to give the PR-f Settings UI distinct recovery hints
 /// (security invariant §13).
-#[derive(Debug)]
+///
+/// `Serialize`/`Deserialize` enable structured JSON errors over the Tauri IPC:
+/// `{"kind": "adminDeclined"}` etc., matching the TypeScript discriminant in
+/// the Settings UI firewall hint handler.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FirewallError {
     /// The user declined the UAC elevation prompt. The install is fail-closed:
     /// a deny rule is written instead.
@@ -422,22 +427,28 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
     if !output.status.success() {
         // Detect UAC-declined pattern for `add rule` commands.
         //
-        // The string-match approach ("requires elevation", "access is denied")
-        // fails on localized Windows builds. Instead, use exit code 1 combined
-        // with the command being an `add rule` invocation — `delete` and `show`
-        // commands also return exit 1 for "no rules found", so we restrict the
-        // AdminDeclined classification to `add` commands only.
+        // Strategy: locale-sensitive string match is the primary signal (works on
+        // EN-locale Windows). For non-English locales we fall back to exit code 1
+        // on an `add` command, BUT only when stdout is empty — a successful partial
+        // execution (e.g. "Ok.", "The command was executed") will always produce
+        // stdout, so an empty stdout on exit 1 indicates the process never ran the
+        // rule-write path (which is what UAC denial looks like).
         //
-        // We still keep the string-match as an additional signal when available,
-        // but it is not required — exit_code == 1 on an `add` command is
-        // sufficient to classify as a potential UAC decline.
+        // Exit code 1 alone is too broad: malformed args, duplicate rule names,
+        // invalid CIDR, and quota errors also return exit 1 — those all produce
+        // some stdout. UAC denial exits 1 with no stdout.
         let is_add_command = args.contains(&"add");
         let combined = format!("{stdout}{stderr}");
-        let locale_strings_match =
-            combined.contains("requires elevation") || combined.contains("access is denied");
+        let locale_strings_match = combined.contains("requires elevation")
+            || combined.contains("access is denied")
+            || combined.contains("Access is denied");
+        // Locale-independent fallback: exit 1 on add with no stdout output.
+        let exit1_no_stdout = is_add_command && exit_code == 1 && stdout.trim().is_empty();
 
-        if is_add_command && (exit_code == 1 || locale_strings_match) {
-            log::warn!("[firewall] UAC elevation declined (exit={exit_code}, add_cmd={is_add_command})");
+        if is_add_command && (locale_strings_match || exit1_no_stdout) {
+            log::warn!(
+                "[firewall] UAC elevation declined (exit={exit_code}, locale_match={locale_strings_match}, no_stdout={exit1_no_stdout})"
+            );
             return Err(FirewallError::AdminDeclined);
         }
 
