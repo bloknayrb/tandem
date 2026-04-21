@@ -173,7 +173,7 @@ pub fn install_tandem_plugin_into_workspace(
     token: &str,
     tandem_url: &str,
 ) -> Result<WorkspaceWriteReport, CoworkError> {
-    let workspace_id = parent_component(ws_path, 1);
+    let workspace_id = parent_component(ws_path);
     let vm_id = leaf_component(ws_path);
 
     warn_if_onedrive(ws_path);
@@ -235,7 +235,7 @@ pub fn install_tandem_plugin_into_workspace(
 pub fn uninstall_tandem_plugin_from_workspace(
     ws_path: &Path,
 ) -> Result<WorkspaceWriteReport, CoworkError> {
-    let workspace_id = parent_component(ws_path, 1);
+    let workspace_id = parent_component(ws_path);
     let vm_id = leaf_component(ws_path);
 
     let plugins_dir = ws_path.join("cowork_plugins");
@@ -297,7 +297,7 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
     workspaces
         .iter()
         .map(|ws_path| {
-            let workspace_id = parent_component(ws_path, 1);
+            let workspace_id = parent_component(ws_path);
             let vm_id = leaf_component(ws_path);
             let plugins_dir = ws_path.join("cowork_plugins");
             let path = plugins_dir.join("installed_plugins.json");
@@ -650,13 +650,9 @@ fn leaf_component(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Extract the Nth ancestor component name (0 = leaf, 1 = parent, …).
-fn parent_component(path: &Path, n: usize) -> String {
-    let mut p: &Path = path;
-    for _ in 0..n {
-        p = p.parent().unwrap_or(p);
-    }
-    leaf_component(p)
+/// Extract the parent directory's leaf name (one level above `path`).
+fn parent_component(path: &Path) -> String {
+    leaf_component(path.parent().unwrap_or(path))
 }
 
 /// Resolve the TANDEM_URL to write into `env.TANDEM_URL` for a workspace.

@@ -219,8 +219,7 @@ where
         let mutation_result = mutate(&mut json_value)?;
 
         // Write to temp file in the same directory (same volume — atomic rename).
-        let tmp_name = format!(".tandem-tmp-{}", rand_hex(8));
-        let tmp_path = dir.join(&tmp_name);
+        let tmp_path = dir.join(format!(".tandem-tmp-{}", unique_suffix()));
 
         let serialised = serde_json::to_string_pretty(&json_value)?;
 
@@ -273,16 +272,18 @@ fn json_value_type_name(v: &Value) -> &'static str {
     }
 }
 
-/// Generate a short random hex string for temp-file suffixes.
-fn rand_hex(len: usize) -> String {
-    use rand::RngCore;
-    let mut bytes = vec![0u8; (len + 1) / 2];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
-        .chars()
-        .take(len)
-        .collect()
+/// Generate a per-process-unique hex suffix for temp files.
+///
+/// Combines PID, monotonic nanosecond timestamp, and a process-local counter —
+/// sufficient to avoid collisions with concurrent writers and leftover files
+/// from a crashed previous run. Cryptographic randomness is not required here.
+pub(crate) fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{:x}-{:x}", std::process::id(), nanos, count)
 }
