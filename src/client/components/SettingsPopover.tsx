@@ -1,15 +1,30 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
-import type { TandemSettings } from "../hooks/useTandemSettings";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
+import { useRadioGroup } from "../hooks/useRadioGroup";
+import type {
+  LayoutMode,
+  PanelOrder,
+  PrimaryTab,
+  TandemSettings,
+  TextSize,
+  ThemePreference,
+} from "../hooks/useTandemSettings";
 import { useUserName } from "../hooks/useUserName";
 import { AccessibilitySettings } from "./AccessibilitySettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { EditorSettings } from "./EditorSettings";
 import { sectionLabelStyle } from "./settingsStyles";
+
+// Lazy-imported so non-Tauri bundles defer loading the Cowork code path and
+// so the popover's initial render stays cheap.
+const CoworkSettings = lazy(() =>
+  import("./CoworkSettings").then((m) => ({ default: m.CoworkSettings })),
+);
 
 interface SettingsPopoverProps {
   open: boolean;
@@ -260,6 +275,23 @@ export function SettingsPopover({
           <span>{(SELECTION_DWELL_MAX_MS / 1000).toFixed(1)}s</span>
         </div>
       </div>
+
+      {/* Cowork integration — Tauri desktop only (CLI / pure web callers don't
+          have the invoke surface PR e ships). */}
+      {isTauriRuntime() && (
+        <Suspense
+          fallback={
+            <div
+              data-testid="cowork-settings-suspense-fallback"
+              style={{ fontSize: 12, color: "var(--tandem-fg-subtle)" }}
+            >
+              Loading Cowork integration...
+            </div>
+          }
+        >
+          <CoworkSettings />
+        </Suspense>
+      )}
     </div>
   );
 }
