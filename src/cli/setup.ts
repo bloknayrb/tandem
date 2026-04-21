@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -39,15 +39,34 @@ export interface BuildMcpEntriesOptions {
    *  When omitted (first-run before token provisioned), headers/env are omitted
    *  and backward compatibility is preserved. */
   token?: string;
+  /** Target kind controls entry shape. Claude Code uses HTTP (direct);
+   *  Claude Desktop uses stdio (npx bridge) because Cowork sessions can
+   *  only surface stdio MCP servers. */
+  targetKind?: TargetKind;
 }
 
 export function buildMcpEntries(
   channelPath: string,
   opts: BuildMcpEntriesOptions = {},
 ): McpEntries {
-  const tandemEntry: McpEntry = { type: "http", url: `${MCP_URL}/mcp` };
-  if (opts.token) {
-    tandemEntry.headers = { Authorization: `Bearer ${opts.token}` };
+  const isDesktop = opts.targetKind === "claude-desktop";
+
+  let tandemEntry: McpEntry;
+  if (isDesktop) {
+    const env: Record<string, string> = { TANDEM_URL: MCP_URL };
+    if (opts.token) {
+      env.TANDEM_AUTH_TOKEN = opts.token;
+    }
+    tandemEntry = {
+      command: "npx",
+      args: ["-y", "tandem-editor", "mcp-stdio"],
+      env,
+    };
+  } else {
+    tandemEntry = { type: "http", url: `${MCP_URL}/mcp` };
+    if (opts.token) {
+      tandemEntry.headers = { Authorization: `Bearer ${opts.token}` };
+    }
   }
   const entries: McpEntries = { tandem: tandemEntry };
 
@@ -65,13 +84,17 @@ export function buildMcpEntries(
   return entries;
 }
 
+export type TargetKind = "claude-code" | "claude-desktop";
+
 export interface DetectedTarget {
   label: string;
   configPath: string;
+  kind: TargetKind;
 }
 
-interface DetectOptions {
+export interface DetectOptions {
   homeOverride?: string;
+  localAppDataOverride?: string;
   force?: boolean;
 }
 
@@ -86,7 +109,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   const claudeCodeConfig = join(home, ".claude.json");
   const claudeCodeDir = join(home, ".claude");
   if (opts.force || existsSync(claudeCodeConfig) || existsSync(claudeCodeDir)) {
-    targets.push({ label: "Claude Code", configPath: claudeCodeConfig });
+    targets.push({ label: "Claude Code", configPath: claudeCodeConfig, kind: "claude-code" });
   }
 
   // Claude Desktop — platform-specific.
@@ -109,7 +132,43 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   }
 
   if (desktopConfig && (opts.force || existsSync(desktopConfig))) {
-    targets.push({ label: "Claude Desktop", configPath: desktopConfig });
+    targets.push({ label: "Claude Desktop", configPath: desktopConfig, kind: "claude-desktop" });
+  }
+
+  // Claude Desktop (MSIX) — Windows only.
+  // MSIX-packaged installs (Microsoft Store) redirect %APPDATA% to a per-package
+  // LocalCache dir. The config lives under %LOCALAPPDATA%\Packages\Claude_*\
+  // LocalCache\Roaming\Claude\. Multiple package families may exist.
+  if (process.platform === "win32") {
+    const localAppData =
+      opts.localAppDataOverride ?? process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+    const packagesDir = join(localAppData, "Packages");
+    try {
+      const entries = readdirSync(packagesDir);
+      for (const pkg of entries.filter((n) => n.startsWith("Claude_"))) {
+        const msixConfig = join(
+          packagesDir,
+          pkg,
+          "LocalCache",
+          "Roaming",
+          "Claude",
+          "claude_desktop_config.json",
+        );
+        if (opts.force || existsSync(msixConfig)) {
+          const suffix =
+            entries.filter((n) => n.startsWith("Claude_")).length > 1
+              ? ` (${pkg.slice(0, 12)}…)`
+              : "";
+          targets.push({
+            label: `Claude Desktop MSIX${suffix}`,
+            configPath: msixConfig,
+            kind: "claude-desktop",
+          });
+        }
+      }
+    } catch {
+      // %LOCALAPPDATA%\Packages doesn't exist or isn't readable — not an MSIX install
+    }
   }
 
   return targets;
@@ -216,14 +275,15 @@ export async function applyConfigWithToken(
   opts: { force?: boolean; withChannelShim?: boolean } = {},
 ): Promise<{ updated: number; errors: string[] }> {
   const targets = detectTargets({ force: opts.force });
-  const entries = buildMcpEntries(CHANNEL_DIST, {
-    withChannelShim: opts.withChannelShim,
-    token: token ?? undefined,
-  });
 
   let updated = 0;
   const errors: string[] = [];
   for (const t of targets) {
+    const entries = buildMcpEntries(CHANNEL_DIST, {
+      withChannelShim: opts.withChannelShim,
+      token: token ?? undefined,
+      targetKind: t.kind,
+    });
     try {
       await applyConfig(t.configPath, entries);
       updated++;
@@ -266,10 +326,13 @@ export async function runSetup(
   }
 
   console.error("\nWriting MCP configuration...");
-  const entries = buildMcpEntries(CHANNEL_DIST, { withChannelShim: opts.withChannelShim });
 
   let failures = 0;
   for (const t of targets) {
+    const entries = buildMcpEntries(CHANNEL_DIST, {
+      withChannelShim: opts.withChannelShim,
+      targetKind: t.kind,
+    });
     try {
       await applyConfig(t.configPath, entries);
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
