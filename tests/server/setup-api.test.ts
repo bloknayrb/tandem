@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -152,8 +152,7 @@ describe("runSetupHandler", () => {
     // Verify the config file was actually written
     const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
     expect(config.mcpServers.tandem.url).toContain("/mcp");
-    expect(config.mcpServers["tandem-channel"].command).toBe("node");
-    expect(config.mcpServers["tandem-channel"].args).toEqual(["/fake/dist/channel/index.js"]);
+    expect(config.mcpServers["tandem-channel"]).toBeUndefined();
   });
 
   it("does not detect Claude Code when .claude dir is absent", async () => {
@@ -202,7 +201,7 @@ describe("runSetupHandler", () => {
     expect(result.status).toBe(207);
   });
 
-  it("uses custom nodeBinary in MCP config", async () => {
+  it("does not write tandem-channel entry (channel shim is Claude Code-only)", async () => {
     const result = await runSetupHandler(
       {
         nodeBinary: "/app/MacOS/node-sidecar",
@@ -212,6 +211,42 @@ describe("runSetupHandler", () => {
     );
     expect(result.status).toBe(200);
     const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
-    expect(config.mcpServers["tandem-channel"].command).toBe("/app/MacOS/node-sidecar");
+    expect(config.mcpServers["tandem-channel"]).toBeUndefined();
+  });
+
+  it("removes pre-existing stale tandem-channel entry from .claude.json", async () => {
+    const configPath = join(tmpDir, ".claude.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": {
+            command: "node",
+            args: ["/legacy/path/channel.js"],
+          },
+          "some-other-server": {
+            url: "http://localhost:9999",
+          },
+        },
+      }),
+    );
+
+    const result = await runSetupHandler(
+      {
+        nodeBinary: "/app/MacOS/node-sidecar",
+        channelPath: "/app/Resources/dist/channel/index.js",
+      },
+      tmpDir,
+    );
+    expect(result.status).toBe(200);
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(config.mcpServers["tandem-channel"]).toBeUndefined();
+    expect(config.mcpServers["some-other-server"]).toBeDefined();
+    expect(config.mcpServers["some-other-server"].url).toBe("http://localhost:9999");
+    // Load-bearing: proves runSetupHandler's merge actually ran, not a silent no-op.
+    // Claude Code targets use HTTP format (url), not stdio (command).
+    expect(config.mcpServers.tandem).toBeDefined();
+    expect(config.mcpServers.tandem.url).toContain("/mcp");
   });
 });

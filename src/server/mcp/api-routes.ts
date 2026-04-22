@@ -141,7 +141,6 @@ export async function runSetupHandler(
 
   for (const target of targets) {
     const entries = buildMcpEntries(channelPath, {
-      withChannelShim: true,
       nodeBinary,
       token,
       targetKind: target.kind,

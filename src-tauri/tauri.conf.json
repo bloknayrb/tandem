@@ -46,7 +46,8 @@
       "../dist/channel/": "dist/channel/",
       "../dist/client/": "dist/client/",
       "../sample/": "sample/",
-      "../skills/": "skills/"
+      "../skills/": "skills/",
+      "../CHANGELOG.md": "CHANGELOG.md"
     }
   },
   "plugins": {

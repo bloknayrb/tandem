@@ -234,13 +234,21 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
     }
   }
 
-  const updated = {
-    ...existing,
-    mcpServers: {
-      ...(existing.mcpServers ?? {}),
-      ...entries,
-    },
+  const merged = {
+    ...(existing.mcpServers ?? {}),
+    ...entries,
   };
+  // Remove stale tandem-channel entry left by older Tauri installers.
+  // The channel shim is Claude Code-only; Cowork can't use it.
+  if (!entries["tandem-channel"]) {
+    if (merged["tandem-channel"]) {
+      console.error(
+        `  Warning: removed stale tandem-channel entry from ${configPath} (legacy Tauri install artifact)`,
+      );
+    }
+    delete merged["tandem-channel"];
+  }
+  const updated = { ...existing, mcpServers: merged };
 
   await mkdir(dirname(configPath), { recursive: true });
   await atomicWrite(JSON.stringify(updated, null, 2) + "\n", configPath);
