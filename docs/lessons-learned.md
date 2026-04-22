@@ -452,3 +452,19 @@ The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `
 **Fix:** Change the cleanup signature to `(phase?: "swap" | "close") => void`. The swap phase unobserves maps and drops the live context registry entry but LEAVES the tombstone ledger in place for any in-flight debounced write to snapshot. The close phase does the full teardown including the ledger. Callers that don't care about the distinction (file-opener, document-service) keep passing the raw cleanup through the queue-registry indirection; only `reattachObservers` needs to explicitly thread the `"swap"` phase.
 
 **Key insight:** When a teardown function is shared across distinct lifecycle phases (live-swap vs unload), a single nullary cleanup hides the phase distinction from future readers and invites silent data loss. A typed phase parameter makes the "what survives what" question explicit at every call site and at the cleanup definition. Default the parameter to the more conservative phase (close/full-teardown) so legacy callers stay safe.
+
+## 45. Tiptap Markdown Round-Trip Destroys Content It Can't Parse
+
+**Problem:** Opening `docs/roadmap.md` in Tandem silently dropped all markdown tables. The Tiptap ProseMirror schema doesn't include a table node type, so `mdastToYDoc()` skips table MDAST nodes during conversion. When `saveMarkdown()` serializes the Y.Doc back, the tables are gone. Also injects blank lines after headings, wraps bare URLs in angle brackets, and adds HTML entities for bold formatting.
+
+**Fix (pending, #379):** Either add `@tiptap/extension-table` to preserve table nodes, or implement raw-markdown pass-through for blocks Tiptap can't parse. At minimum, `tandem_save` should warn or refuse if the round-trip would lose content compared to the original file.
+
+**Key insight:** A WYSIWYG editor that silently drops content it can't render is worse than one that refuses to open the file. The lossless round-trip guarantee in Step 5a only holds for the markdown subset Tiptap understands. Any markdown feature outside that subset — tables, footnotes, definition lists — is silently destroyed. Test round-trip fidelity on representative documents, not just simple markdown.
+
+## 46. Annotation Offsets Can Diverge Between Browser and Server After File Edit
+
+**Problem:** A user placed an annotation on the "Progressive Web App (PWA)" text near the bottom of `docs/roadmap.md`. When read via `tandem_checkInbox`, the `textSnippet` returned text from the Svelte probe section ~200 lines earlier. The annotation rendered correctly in the browser (highlight was on the right text) but the server's flat offset resolution pointed to the wrong location.
+
+**Investigation (pending, #377):** Likely cause is that the browser's ProseMirror-to-flat-offset conversion and the server's `extractText()` disagree on character positions — possibly because the file was recently edited (PR #375) and the browser had a stale or differently-formatted Y.Doc. The CRDT RelativePosition anchors should handle this, but if they resolve against a different Y.Doc state than the flat offsets, the mismatch manifests as "correct in browser, wrong on server."
+
+**Key insight:** The three-coordinate-system design (flat offsets, ProseMirror positions, CRDT RelativePositions) means any divergence between what the browser sees and what the server has produces silent misbehavior — Claude responds to the wrong text. This class of bug is invisible to unit tests that only exercise one coordinate system at a time. End-to-end testing must verify that annotations placed in the browser resolve to the same text on the server.

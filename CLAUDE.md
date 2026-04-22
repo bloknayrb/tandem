@@ -22,7 +22,7 @@
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-024)
-- [Lessons Learned](docs/lessons-learned.md) -- 44 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 46 lessons including E2E testing gotchas
 
 ## Critical Rules
 
