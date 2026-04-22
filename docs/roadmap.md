@@ -56,7 +56,7 @@ Implemented via unified/remark with MDAST↔Y.Doc conversion:
 ## Step 6: Session Persistence — DONE
 
 ### Goal
-Close the browser, restart the server, reopen — document and annotations are still there.
+Close the editor, restart the server, reopen — document and annotations are still there.
 
 **Files:** `src/server/session/manager.ts`
 
@@ -101,7 +101,7 @@ Implemented in Phase 1:
 - **documentId parameter**: All 22 existing MCP tools accept optional `documentId` (backward compatible)
 - **New tools**: `tandem_listDocuments`, `tandem_switchDocument` (24 tools total)
 - **DocumentTabs**: Tab bar UI with format icons, active indicator, close buttons
-- **Per-tab Y.Doc**: Browser manages separate Y.Doc + HocuspocusProvider per open document
+- **Per-tab Y.Doc**: Editor manages separate Y.Doc + HocuspocusProvider per open document
 - **broadcastOpenDocs**: Server writes open document list to Y.Map('documentMeta') on active doc
 
 ### 7b: Document Groups (Future)
@@ -117,7 +117,7 @@ Deferred — only if demand appears:
 
 - **MCP stdio disconnect (Issue #8):** Resolved. Migrated from stdio to Streamable HTTP transport (ADR-012). MCP HTTP on :3479, Hocuspocus WS on :3478. Stdio fallback via `TANDEM_TRANSPORT=stdio`.
 - **Y.js "Invalid access" warnings:** Appear in stderr during session restore when the browser connects to a room before the MCP-populated Y.Doc is merged. Harmless (data still syncs correctly) but noisy. Could be silenced by deferring session restore until after `onLoadDocument` merge.
-- **Browser tab discovery requires `/mcp` restart:** After restarting the Tandem MCP server, the browser must reload to reconnect its bootstrap provider. No auto-reconnect logic yet.
+- **Editor tab discovery requires `/mcp` restart:** After restarting the Tandem MCP server, the editor must reload to reconnect its bootstrap provider. No auto-reconnect logic yet.
 
 ---
 
@@ -166,7 +166,7 @@ Superseded by the Wave 4 Solo/Tandem redesign (PRs #226, #227). The All/Urgent/P
 
 ### 8e: Error Handling — PARTIALLY DONE
 
-- Toast notifications (Issue #101): SSE-based notification system via `GET /api/notify-stream`. Server pushes annotation range failures, save errors. Browser renders via `ToastContainer` with type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible.
+- Toast notifications (Issue #101): SSE-based notification system via `GET /api/notify-stream`. Server pushes annotation range failures, save errors. Editor renders via `ToastContainer` with type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible.
 - Connection error messages (Issue #105): Three-state `ConnectionStatus` (connected/connecting/disconnected), reconnect attempt count + elapsed time in StatusBar, 30s prolonged disconnect banner (dismissible, auto-clears on reconnect).
 - File lock detection: clear message telling user to close Word
 - WebSocket reconnection: automatic, no data loss (Yjs handles this)
@@ -251,7 +251,7 @@ On server startup, `listSessionFilePaths()` scans the session directory for prev
 
 **Files:** `src/server/mcp/document-service.ts`, `src/server/mcp/api-routes.ts`, `src/server/mcp/document.ts`, `src/client/components/DocumentTabs.tsx`
 
-Closing a tab in the browser now actually closes the document on the server. Previously, tab close only affected the client UI without cleaning up the server-side document state.
+Closing a tab in the editor now actually closes the document on the server. Previously, tab close only affected the client UI without cleaning up the server-side document state.
 
 - **`closeDocumentById()`** shared helper in `document-service.ts` — single source of truth for document close logic (session save, doc removal, broadcast), used by both `tandem_close` MCP tool and `POST /api/close` HTTP endpoint
 - **`POST /api/close`** HTTP endpoint in `api-routes.ts` — browser-callable close, parallel to `/api/open`
@@ -344,7 +344,7 @@ Plan doc: [`docs/superpowers/plans/2026-04-16-durable-annotations-cowork.md`](su
 
 ### Phase 1 — Durable Annotations in App Data (T1–T8) — DONE
 
-Moves annotation storage from in-memory Y.Doc + session snapshots to explicit per-document durable JSON under `env-paths` app data. Survives browser/tab loss, tandem-editor reinstalls, OS restarts.
+Moves annotation storage from in-memory Y.Doc + session snapshots to explicit per-document durable JSON under `env-paths` app data. Survives editor/tab loss, tandem-editor reinstalls, OS restarts.
 
 - **T1–T6 (PR #323, merged):** Per-doc on-disk store, migration from session snapshots, load/save wiring, in-memory cache, tests.
 - **T7 + T8 (PR #337, merged):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
@@ -383,13 +383,13 @@ Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
-> **Phase 1 (Bug Fixes) is done.** #268, #267, #266 fixed in PR #278.
+> **Bug-fix phase is done.** #268, #267, #266 fixed in PR #278.
 
 ### Pre-Release: Codebase Audit Remediation
 
 Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three independent review agents verified all findings against actual source code. Runs before v0.8.0 to ensure the foundation is clean before adding more features.
 
-**Summary:** 24,370 LOC source, 22,062 LOC tests. 8 god-files needing decomposition, 2 layer boundary violations, missing file-opener lifecycle tests, unused Tauri JS deps inflating bundles, tsconfig drift. Strengths: architecture is sound, security is thorough, durability layer is well-tested, position system uses branded types correctly.
+**Summary:** 24,370 LOC source, 23,548 LOC tests. 8 god-files needing decomposition, 2 layer boundary violations, missing file-opener lifecycle tests, unused Tauri JS deps inflating bundles, tsconfig drift. Strengths: architecture is sound, security is thorough, durability layer is well-tested, position system uses branded types correctly.
 
 **Phases (detail in audit doc):**
 

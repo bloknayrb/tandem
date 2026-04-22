@@ -2,7 +2,7 @@
 
 ## Context
 
-Tandem is at v0.7.1 heading toward v1.0. Before adding more features, we're auditing the entire codebase (24,370 LOC source, 22,062 LOC tests) for modularity, interface quality, cleanliness, and correctness. This is a "report then fix" approach: findings first, then we prioritize and execute together.
+Tandem is at v0.7.1 heading toward v1.0. Before adding more features, we're auditing the entire codebase (24,370 LOC source, 23,548 LOC tests) for modularity, interface quality, cleanliness, and correctness. This is a "report then fix" approach: findings first, then we prioritize and execute together.
 
 Plan reviewed by three independent agents against actual source code. Corrections applied.
 
@@ -66,13 +66,13 @@ Plan reviewed by three independent agents against actual source code. Correction
 ### Strengths (What's Working Well)
 
 - **Architecture is sound.** Three-layer separation (Client → Server → Claude Code) with clean boundaries. Shared layer has zero `any` types and uses branded types for coordinate systems.
-- **Security is thorough.** DNS rebinding protection, bearer token auth with rotation, loopback bypass, UNC path rejection, CSPRNG token generation, system keyring storage.
+- **Security is thorough.** DNS rebinding protection, bearer token auth with rotation, loopback bypass, UNC path rejection, CSPRNG token generation, OS keyring (desktop) / file-based token storage (npm install).
 - **Annotation durability is well-tested.** store.ts and sync.ts have comprehensive suites covering lockfile, merge semantics, tombstones, rev-counter, swap/close phase cleanup.
 - **Event queue tests are excellent.** 44 test cases covering origin filtering, buffer eviction, swap/close phases, tombstone lifecycle, dwell timer — all critical CRDT invariants.
 - **Position system is well-designed.** Branded types prevent coordinate-system confusion. Both server and client modules are well-tested (545 LOC).
 - **CLI and Tauri layers are clean.** CLI is 1,177 LOC with good error handling. Tauri integration handles sidecar lifecycle, updates, and graceful degradation correctly.
 - **Documentation is excellent.** Architecture docs, ADRs, lessons learned, MCP tool reference — rare for a project this size.
-- **Test ratio is healthy.** 22k LOC of tests for 24k LOC of source (0.9:1).
+- **Test ratio is healthy.** 22k LOC of tests for 24k LOC of source (~1:1).
 - **Error handling is consistent.** Auto-save, mode cache, and annotation observer all have proper error logging (initially suspected as silent failures but confirmed to have logging at all three sites).
 
 ---
@@ -186,7 +186,7 @@ src/server/events/
 - Extract `AnnotationCardActions`, `AnnotationEditForm`, `ReplyThread`
 
 **Effort:** ~3 days. All 4 PRs parallelizable via worktree agents.
-**Verification:** `npm run typecheck && npm test && npm run test:e2e`. Visual check in browser for layout/interaction regressions.
+**Verification:** `npm run typecheck && npm test && npm run test:e2e`. Visual check in editor for layout/interaction regressions.
 
 ### Phase 5: Prop-Drilling Evaluation (Conditional)
 **Why:** After Phase 4, re-evaluate SidePanel's prop count. Currently 14 props; post-Phase 4b, likely 8-10. If still >8, introduce `DocumentContext` (editor, ydoc, documentId, format) and `ReviewContext` (reviewMode, toggleReviewMode, exitReviewMode, activeAnnotationId).
@@ -218,17 +218,12 @@ These are things the audit surfaced where I'm recommending we **don't** act. Ove
 
 ```
 Phase 1 (shared/foundation, 6 parallel PRs)
-   |
-   v
-Phase 2 (server splits, 2 parallel PRs)
-   |
-   v
-Phase 3 (queue observer split, sequential)
-   |
-Phase 4 (client splits, 4 parallel PRs) ──> Phase 5 (context, if needed)
-                                                |
-                                                v
-                                           Phase 6 (polish)
+   |              \
+   v               v
+Phase 2           Phase 4 (client splits, 4 parallel PRs) --> Phase 5 (context, if needed)
+   |                                                              |
+   v                                                              v
+Phase 3 (queue observer split, sequential)                   Phase 6 (polish)
 ```
 
 Phases 1, 2, and 3 are sequential in dependency but internally parallelizable. Phase 4 can start once Phase 1 lands (no server dependency). Phase 3 no longer blocks on a separate Phase 0 — existing test suites provide the safety net.

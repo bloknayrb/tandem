@@ -102,7 +102,7 @@ Claude: tandem_highlight({
 })
 ```
 
-Red highlight appears in Bryan's browser. Claude suggests the fix:
+Red highlight appears in Bryan's editor. Claude suggests the fix:
 
 ```
 Claude: tandem_comment({
@@ -132,7 +132,7 @@ Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.docx" })
 → { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", readOnly: true, ... }
 ```
 
-Bryan sees two tabs in the browser. Claude verifies both are open:
+Bryan sees two tabs in the editor. Claude verifies both are open:
 
 ```
 Claude: tandem_listDocuments()
@@ -202,7 +202,7 @@ Claude: tandem_edit({
 })
 ```
 
-The placeholder is replaced with draft text -- Bryan sees it appear live. He edits inline in the browser, refining the language. Claude notices Bryan is working:
+The placeholder is replaced with draft text -- Bryan sees it appear live. He edits inline in the editor, refining the language. Claude notices Bryan is working:
 
 ```
 Claude: tandem_getActivity()
@@ -241,7 +241,7 @@ Agent C: tandem_getTextContent({ section: "Issues and Risks" })
 // Checks for completeness and specificity
 ```
 
-Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_flag` independently. All annotations appear in Bryan's browser in real-time. Opus monitors progress:
+Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_flag` independently. All annotations appear in Bryan's editor in real-time. Opus monitors progress:
 
 ```
 Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
@@ -252,7 +252,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 
 **Setup:** Claude has finished and left 15+ annotations. Bryan wants to process them efficiently.
 
-The browser's side panel shows all pending annotations with filter controls:
+The editor's side panel shows all pending annotations with filter controls:
 - Filter by type (highlights, comments, flags) — comments with replacement text show as "With replacement", comments with `directedAt` show as "For Claude"
 - Filter by author (Claude, You)
 - Filter by status (pending, accepted, dismissed)
@@ -403,9 +403,9 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 **If a file changed on disk while already open (git pull, external editor):**
 
 1. Call `tandem_open({ filePath: "...", force: true })` to reload from disk
-2. The browser updates to show the new content automatically
+2. The editor updates to show the new content automatically
 3. Annotations and session state are cleared (they reference old positions)
-4. `POST /api/open` also accepts `force: true` for browser-initiated reloads
+4. `POST /api/open` also accepts `force: true` for editor-initiated reloads
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
 

@@ -38,7 +38,7 @@ All MCP tools use **flat text offsets** -- the same positions you'd get from the
 ^0     ^7^8                  ^28^29
 ```
 
-Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The browser uses ProseMirror positions internally (which differ), but you never need to know that -- MCP tools handle the conversion.
+Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The editor uses ProseMirror positions internally (which differ), but you never need to know that -- MCP tools handle the conversion.
 
 **Important:** Edit ranges that overlap heading markup (e.g., targeting offset 0-1 which is `# `) are rejected with `INVALID_RANGE`. Always target the text content, not the markdown prefix.
 
@@ -56,7 +56,7 @@ Document IDs are stable -- the same file path always produces the same ID across
 
 ### tandem_open
 
-Open a file in the Tandem editor. Returns a `documentId` for multi-document workflows. Auto-opens the browser on first call.
+Open a file in the Tandem editor. Returns a `documentId` for multi-document workflows. Auto-opens the editor on first call.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -90,9 +90,9 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 
 **Notes:**
 - Supported formats: `.md`, `.txt`, `.html`, `.docx` (review-only).
-- Browser opens automatically to `http://localhost:3479` on the first call.
+- Editor opens automatically to `http://localhost:3479` on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
-- **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the browser.
+- **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
 - Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
@@ -217,7 +217,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 - Always use `tandem_resolveRange` first to get safe offsets.
 - Newlines in `newText` are inserted as literal characters, not new paragraphs.
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
-- Edits appear instantly in the browser.
+- Edits appear instantly in the editor.
 - Read-only documents (.docx) reject edits -- use annotations instead.
 
 ---
@@ -421,7 +421,7 @@ tandem_comment({ from: 100, to: 120, text: "Is this figure correct?", directedAt
 
 > **Legacy shim.** Prefer `tandem_comment` with `suggestedText`. This tool still works but internally delegates to `tandem_comment`.
 
-Propose a text replacement (tracked-change style). User sees it as accept/reject in the browser.
+Propose a text replacement (tracked-change style). User sees it as accept/reject in the editor.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -564,7 +564,7 @@ tandem_editAnnotation({
 - At least one of `content`, `reason`, or `newText` must be provided.
 - `reason` is an alias for `content` — if both are provided, `content` takes precedence.
 - Only pending annotations can be edited — accepted or dismissed annotations return an error.
-- Sets `editedAt` timestamp on the annotation. The browser shows an "(edited)" indicator.
+- Sets `editedAt` timestamp on the annotation. The editor shows an "(edited)" indicator.
 - `newText` sets the `suggestedText` field directly on the annotation, turning a plain comment into a replacement suggestion (or updating an existing one).
 
 ---
@@ -595,7 +595,7 @@ tandem_annotationReply({
 ```
 
 **Notes:**
-- Replies are threaded under the parent annotation. The browser renders them as a conversation.
+- Replies are threaded under the parent annotation. The editor renders them as a conversation.
 - Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
 - The reply author is set to `"claude"` when called via MCP.
 
@@ -779,7 +779,7 @@ Read content around a range without pulling the full document.
 
 ### tandem_getSelections
 
-Get text the user currently has selected in the browser editor.
+Get text the user currently has selected in the editor.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -888,15 +888,15 @@ tandem_reply({ text: "I've finished reviewing the cost section. Two figures need
 
 ---
 
-## HTTP API (Browser File Opening)
+## HTTP API (Editor File Opening)
 
-In addition to MCP tools, the server exposes REST endpoints on the same port (:3479) for browser-initiated file opening. These are NOT MCP tools — they use standard HTTP request/response with JSON bodies.
+In addition to MCP tools, the server exposes REST endpoints on the same port (:3479) for editor-initiated file opening. These are NOT MCP tools — they use standard HTTP request/response with JSON bodies.
 
 Both endpoints converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
 
 ### POST /api/open
 
-Open a file by its absolute path on disk. Equivalent to `tandem_open` but callable from the browser.
+Open a file by its absolute path on disk. Equivalent to `tandem_open` but callable from the editor UI.
 
 **Request:**
 ```json
@@ -917,7 +917,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 
 ### POST /api/close
 
-Close an open document by its document ID. Equivalent to `tandem_close` but callable from the browser. Used by the client's tab close button.
+Close an open document by its document ID. Equivalent to `tandem_close` but callable from the editor UI. Used by the client's tab close button.
 
 **Request:**
 ```json
@@ -939,7 +939,7 @@ Close an open document by its document ID. Equivalent to `tandem_close` but call
 
 ### POST /api/upload
 
-Open a file from uploaded content (no disk path). Used by the browser's drag-and-drop and file picker UI.
+Open a file from uploaded content (no disk path). Used by the editor's drag-and-drop and file picker UI.
 
 **Request:**
 ```json
@@ -965,7 +965,7 @@ Both `/api/*` endpoints include CORS headers reflecting any `http://localhost:*`
 
 ## Channel API (Real-Time Push)
 
-The channel API endpoints support the Tandem channel shim, which pushes real-time events from the browser to Claude Code via the Channels API. These are NOT MCP tools — they are HTTP endpoints on port 3479.
+The channel API endpoints support the Tandem channel shim, which pushes real-time events from the editor to Claude Code via the Channels API. These are NOT MCP tools — they are HTTP endpoints on port 3479.
 
 ### GET /api/events
 
@@ -985,11 +985,11 @@ data: {"id":"evt_1710936000000_a1b2c3","type":"chat:message","timestamp":1710936
 : keepalive
 ```
 
-Events are only emitted for browser-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.
+Events are only emitted for editor-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.
 
 ### POST /api/channel-awareness
 
-Channel shim reports Claude's current processing status for the browser StatusBar.
+Channel shim reports Claude's current processing status for the editor StatusBar.
 
 **Request:**
 ```json
@@ -1011,7 +1011,7 @@ Channel shim forwards Claude's chat reply to the Y.Map('chat') on `__tandem_ctrl
 
 ### DELETE /api/chat
 
-Clear all chat messages from the CTRL_ROOM Y.Map. The change syncs to connected browsers in real time.
+Clear all chat messages from the CTRL_ROOM Y.Map. The change syncs to connected editors in real time.
 
 **Request body:** none
 
@@ -1030,7 +1030,7 @@ Channel shim reports connection errors.
 
 ### POST /api/channel-permission
 
-Channel shim forwards Claude Code's tool approval prompt for browser-side permission UI.
+Channel shim forwards Claude Code's tool approval prompt for editor-side permission UI.
 
 **Request:**
 ```json
@@ -1041,7 +1041,7 @@ Channel shim forwards Claude Code's tool approval prompt for browser-side permis
 
 ### GET /api/channel-permission
 
-Poll pending permission requests (for browser UI).
+Poll pending permission requests (for editor UI).
 
 **Response:**
 ```json
@@ -1063,7 +1063,7 @@ Browser submits allow/deny verdict for a permission request.
 
 ### GET /api/notify-stream
 
-SSE (Server-Sent Events) stream of toast notifications for the browser. Separate from `GET /api/events` (which pushes Y.Map events to the channel shim). Used for ephemeral notifications like annotation range failures and save errors.
+SSE (Server-Sent Events) stream of toast notifications for the editor. Separate from `GET /api/events` (which pushes Y.Map events to the channel shim). Used for ephemeral notifications like annotation range failures and save errors.
 
 **Headers:**
 - `Accept: text/event-stream`
@@ -1075,7 +1075,7 @@ data: {"type":"error","title":"Range Error","message":"Annotation target text ha
 data: {"type":"warning","title":"Save Warning","message":"File is read-only","timestamp":1710936001000}
 ```
 
-**Notification types:** `error` (auto-dismiss 8s), `warning` (auto-dismiss 6s), `info` (auto-dismiss 4s). The ring buffer holds up to 50 notifications. Duplicate notifications within a short window are deduplicated with a count badge in the browser.
+**Notification types:** `error` (auto-dismiss 8s), `warning` (auto-dismiss 6s), `info` (auto-dismiss 4s). The ring buffer holds up to 50 notifications. Duplicate notifications within a short window are deduplicated with a count badge in the editor.
 
 ---
 

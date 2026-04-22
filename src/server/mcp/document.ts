@@ -159,7 +159,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_open",
-    "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens browser. Pass force=true to reload from disk if the file changed externally.",
+    "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens editor. Pass force=true to reload from disk if the file changed externally.",
     {
       filePath: z.string().describe("Absolute path to the file to open"),
       force: z

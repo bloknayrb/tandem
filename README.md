@@ -131,7 +131,7 @@ curl http://localhost:3479/health
 git clone https://github.com/bloknayrb/tandem.git
 cd tandem
 npm install
-npm run dev:standalone   # starts server (:3478/:3479) + browser client (:5173)
+npm run dev:standalone   # starts server (:3478/:3479) + editor client (:5173)
 ```
 
 Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
