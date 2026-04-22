@@ -348,7 +348,7 @@ Moves annotation storage from in-memory Y.Doc + session snapshots to explicit pe
 
 - **T1–T6 (PR #323, merged):** Per-doc on-disk store, migration from session snapshots, load/save wiring, in-memory cache, tests.
 - **T7 + T8 (PR #337, merged):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
-- **Retrospective follow-ups (v0.6.3, merged):** GC race fix (#334), annotation module internals (#324, #327, #328, #332), legacy-type sanitization (#329), drop-counter (#330), test coverage (#331, #335), CI gate (#310), settings popover (#306), dark-mode tokens (#307), a11y sweep (#309, #311), stdio bridge silent-failure paths (#336 partial).
+- **Retrospective follow-ups (v0.6.3, merged):** GC race fix (#334), annotation module internals (#324, #327, #328, #332), legacy-type sanitization (#329), drop-counter (#330), test coverage (#331, #335), CI gate (#310), settings popover (#306), dark-mode tokens (#307), a11y sweep (#309, #311 partial), stdio bridge silent-failure paths (#336 partial).
 
 ### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f)
 
@@ -366,12 +366,12 @@ Each release targets **one coherent concern** so that a bad PR is bisectable and
 - **PR b (DONE)** — Auth middleware + OAuth protected-resource metadata. Loopback-exempt, `crypto.timingSafeEqual`, SHA-256 length oracle elimination, rate-limit (5/min) with LRU eviction.
 - **PR c (DONE)** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`, Cowork mode binds `0.0.0.0`. Hocuspocus stays loopback-only. Fail-closed on LAN bind without token.
 - **PR d (DONE)** — `tandem rotate-token` CLI subcommand with 60s grace window; re-runs setup across detected MCP configs.
-- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup. Scheduled for v0.9.0.
-- **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Scheduled after Svelte probe decision.
+- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup. Implementation done (draft PR #370, reviewed); merge targeting v0.9.0.
+- **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Implementation done in React (draft PR #371); merge timing depends on Svelte probe outcome — if Svelte Go, rebuild in Svelte for v0.13.0.
 
 ### Cowork integration status
 
-Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge shipped in tandem-editor@0.6.2. See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail.
+Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail.
 
 Remaining Cowork work (PRs e-f, #316, #317, #322) is polish — making the installer turnkey and adding cross-platform firewall scoping. Not a capability blocker.
 
@@ -408,10 +408,10 @@ The probe produces a decision document filed as an ADR. The result determines th
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.8.0 | Correctness foundations | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369 |
+| v0.8.0 | Token hygiene + annotation correctness | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369 |
 | v0.9.0 | MCP API cleanup + distribution | #259, PR e, #316, #317, #322, #341, ADR-023 CI smoke test |
 
-**v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity.
+**v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity. #369 (dark-mode scrollbars) is a standalone visual fix that lands here as a prerequisite, not part of the full dark theme release.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
 
@@ -490,8 +490,10 @@ Net result: ~28 tools (down from 31).
 | #315 — DocumentStore interface | Architecture cleanup |
 | #320 — Annotation schema v2 framework | Can wait |
 | #314 — Export annotations as sharable file | Enhancement |
+| #269 §2.5 — Disconnection/offline resilience | Sidecar health indicator; graceful degradation. Low risk, but not a v1.0 gate. |
 | Desktop UI Tier 3 remainder (§3.2 tray, §3.3 context menus) | Polish |
 | Desktop UI deferred (frameless window, vibrancy, multi-window, file explorer sidebar) | Identity decisions |
+| Smaller follow-ups (#282, #283, #284, #287, #292, #299, #300) | Rolling maintenance; not blocking v1.0 quality |
 
 ---
 
