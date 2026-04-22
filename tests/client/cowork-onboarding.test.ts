@@ -18,6 +18,7 @@ function makeStatus(overrides: Partial<CoworkStatus> = {}): CoworkStatus {
     workspaces: [],
     uacDeclined: false,
     uacDeclinedAt: null,
+    workspacesLastScannedAt: null,
     ...overrides,
   };
 }

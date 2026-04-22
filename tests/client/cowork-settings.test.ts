@@ -3,6 +3,7 @@ import {
   aggregateWorkspaceStatus,
   coworkSettingsVariant,
   firewallErrorHint,
+  formatCoworkError,
   isTauriRuntime,
   makeDebouncer,
   workspaceFileStatusFamily,
@@ -38,6 +39,7 @@ function makeStatus(overrides: Partial<CoworkStatus> = {}): CoworkStatus {
     workspaces: [],
     uacDeclined: false,
     uacDeclinedAt: null,
+    workspacesLastScannedAt: null,
     ...overrides,
   };
 }
@@ -72,11 +74,11 @@ describe("coworkSettingsVariant", () => {
 
 describe("firewallErrorHint", () => {
   const variants: FirewallErrorVariant[] = [
-    { kind: "AdminDeclined" },
-    { kind: "NetshNotFound" },
-    { kind: "NetshFailure", exitCode: 2, stderrTail: "Access is denied." },
-    { kind: "SubnetDetectionFailed" },
-    { kind: "AdapterEnumerationFailed" },
+    { kind: "adminDeclined" },
+    { kind: "netshNotFound" },
+    { kind: "netshFailure", exitCode: 2, stderrTail: "Access is denied.", stdoutTail: "" },
+    { kind: "subnetDetectionFailed" },
+    { kind: "adapterEnumerationFailed" },
   ];
 
   it("returns a distinct non-empty hint for every variant", () => {
@@ -85,40 +87,85 @@ describe("firewallErrorHint", () => {
     for (const h of hints) expect(h.length).toBeGreaterThan(0);
   });
 
-  it("AdminDeclined hint mentions retry", () => {
-    expect(firewallErrorHint({ kind: "AdminDeclined" }).toLowerCase()).toContain("retry");
+  it("adminDeclined hint mentions retry", () => {
+    expect(firewallErrorHint({ kind: "adminDeclined" }).toLowerCase()).toContain("retry");
   });
 
-  it("NetshFailure embeds the exit code and stderr tail", () => {
+  it("netshFailure embeds the exit code and stderr tail", () => {
     const hint = firewallErrorHint({
-      kind: "NetshFailure",
+      kind: "netshFailure",
       exitCode: 42,
       stderrTail: "something broke",
+      stdoutTail: "",
     });
     expect(hint).toContain("42");
     expect(hint).toContain("something broke");
   });
 
-  it("NetshFailure with empty stderr reports '(no output)'", () => {
-    const hint = firewallErrorHint({ kind: "NetshFailure", exitCode: 1, stderrTail: "   " });
+  it("netshFailure with empty stderr reports '(no output)'", () => {
+    const hint = firewallErrorHint({
+      kind: "netshFailure",
+      exitCode: 1,
+      stderrTail: "   ",
+      stdoutTail: "",
+    });
     expect(hint).toContain("(no output)");
   });
 
-  it("NetshFailure truncates excessively long stderr", () => {
+  it("netshFailure truncates excessively long stderr", () => {
     const longStderr = "x".repeat(1000);
-    const hint = firewallErrorHint({ kind: "NetshFailure", exitCode: 1, stderrTail: longStderr });
+    const hint = firewallErrorHint({
+      kind: "netshFailure",
+      exitCode: 1,
+      stderrTail: longStderr,
+      stdoutTail: "",
+    });
     expect(hint.length).toBeLessThan(longStderr.length + 200);
     expect(hint).toContain("...");
   });
 
-  it("SubnetDetectionFailed hint mentions VM / subnet context", () => {
-    const hint = firewallErrorHint({ kind: "SubnetDetectionFailed" }).toLowerCase();
+  it("subnetDetectionFailed hint mentions VM / subnet context", () => {
+    const hint = firewallErrorHint({ kind: "subnetDetectionFailed" }).toLowerCase();
     expect(hint).toContain("subnet");
   });
 
-  it("AdapterEnumerationFailed hint mentions Hyper-V adapter", () => {
-    const hint = firewallErrorHint({ kind: "AdapterEnumerationFailed" }).toLowerCase();
+  it("adapterEnumerationFailed hint mentions Hyper-V adapter", () => {
+    const hint = firewallErrorHint({ kind: "adapterEnumerationFailed" }).toLowerCase();
     expect(hint).toContain("hyper-v");
+  });
+
+  it("returns a generic hint including the kind for an unknown variant", () => {
+    const hint = firewallErrorHint({ kind: "unknownFuture" } as FirewallErrorVariant);
+    expect(hint).toContain("unknownFuture");
+    expect(hint).toContain("Unexpected");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatCoworkError — JSON error parsing + firewallErrorHint integration
+// ---------------------------------------------------------------------------
+
+describe("formatCoworkError", () => {
+  it("returns the raw message when it is not JSON", () => {
+    expect(formatCoworkError("something went wrong")).toBe("something went wrong");
+  });
+
+  it("returns firewallErrorHint result for JSON with a known kind", () => {
+    const json = JSON.stringify({ kind: "adminDeclined" });
+    expect(formatCoworkError(json).toLowerCase()).toContain("retry");
+  });
+
+  it("returns raw message for JSON without a kind field", () => {
+    const json = JSON.stringify({ error: "oops" });
+    expect(formatCoworkError(json)).toBe(json);
+  });
+
+  it("returns raw message for JSON.parse('null')", () => {
+    expect(formatCoworkError("null")).toBe("null");
+  });
+
+  it("returns raw message for non-object JSON (number)", () => {
+    expect(formatCoworkError("42")).toBe("42");
   });
 });
 
@@ -268,7 +315,9 @@ describe("cowork invoke wrappers", () => {
   });
 
   it("coworkRescan calls 'cowork_rescan' with no args", async () => {
-    const invoke = vi.fn<InvokeFn>().mockResolvedValue({ workspaces: [] } as unknown);
+    const invoke = vi
+      .fn<InvokeFn>()
+      .mockResolvedValue("Rescan complete: 2 workspace(s)" as unknown);
     await coworkRescan(invoke as unknown as InvokeFn);
     expect(invoke).toHaveBeenCalledWith("cowork_rescan");
   });
