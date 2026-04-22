@@ -3,7 +3,7 @@ import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
   coworkSettingsVariant,
-  firewallErrorHint,
+  formatCoworkError,
   makeDebouncer,
   type StatusTokenFamily,
   workspaceFileStatusFamily,
@@ -17,12 +17,7 @@ import {
   loadInvoke,
 } from "../cowork/cowork-invoke";
 import { useCoworkStatus } from "../hooks/useCoworkStatus";
-import type {
-  CoworkStatus,
-  FirewallErrorVariant,
-  WorkspaceFileStatus,
-  WorkspaceStatus,
-} from "../types";
+import type { CoworkStatus, WorkspaceFileStatus, WorkspaceStatus } from "../types";
 
 const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
   success: {
@@ -59,7 +54,7 @@ const helpTextStyle: React.CSSProperties = {
 
 interface InlineToast {
   message: string;
-  severity: "error" | "info";
+  severity: "error";
 }
 
 export function CoworkSettings() {
@@ -71,12 +66,12 @@ export function CoworkSettings() {
 
   const debouncerRef = useRef(makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS));
   useEffect(() => () => debouncerRef.current.cancel(), []);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const withInvoke = useCallback(
     async (op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<void> => {
@@ -87,15 +82,7 @@ export function CoworkSettings() {
         if (mountedRef.current) setInlineToast(null);
       } catch (err) {
         const rawMsg = err instanceof Error ? err.message : String(err);
-        let display = rawMsg;
-        try {
-          const parsed = JSON.parse(rawMsg) as { kind?: string };
-          if (parsed.kind) {
-            display = firewallErrorHint(parsed as FirewallErrorVariant);
-          }
-        } catch {
-          // not JSON — use raw message
-        }
+        const display = formatCoworkError(rawMsg);
         if (mountedRef.current)
           setInlineToast({ message: `${errorPrefix}: ${display}`, severity: "error" });
       } finally {
@@ -109,8 +96,8 @@ export function CoworkSettings() {
     await withInvoke(async (invoke) => {
       await coworkToggleIntegration(invoke, true);
       await refetch();
+      if (mountedRef.current) setConfirming(null);
     }, "Failed to enable Cowork");
-    setConfirming(null);
   }, [withInvoke, refetch]);
 
   const handleToggleOff = useCallback(async (): Promise<void> => {
@@ -172,11 +159,7 @@ export function CoworkSettings() {
       )}
 
       {inlineToast && (
-        <div
-          data-testid="cowork-inline-toast"
-          role={inlineToast.severity === "error" ? "alert" : "status"}
-          style={errorBannerStyle}
-        >
+        <div data-testid="cowork-inline-toast" role="alert" style={errorBannerStyle}>
           {inlineToast.message}
         </div>
       )}

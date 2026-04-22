@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { firewallErrorHint, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
+import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
-import type { CoworkStatus, FirewallErrorVariant } from "../types";
+import type { CoworkStatus } from "../types";
 
 export interface CoworkOnboardingStepProps {
   /** The current `cowork_get_status` snapshot — used to show the detected subnet. */
@@ -28,12 +28,12 @@ export function CoworkOnboardingStep({
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const withInvoke = useCallback(
     async (op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<boolean> => {
@@ -45,15 +45,7 @@ export function CoworkOnboardingStep({
         return true;
       } catch (err) {
         const rawMsg = err instanceof Error ? err.message : String(err);
-        let display = rawMsg;
-        try {
-          const parsed = JSON.parse(rawMsg) as { kind?: string };
-          if (parsed.kind) {
-            display = firewallErrorHint(parsed as FirewallErrorVariant);
-          }
-        } catch {
-          // not JSON — use raw message
-        }
+        const display = formatCoworkError(rawMsg);
         if (mountedRef.current) setError(`${errorPrefix}: ${display}`);
         return false;
       } finally {

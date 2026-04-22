@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { firewallErrorHint } from "../cowork/cowork-helpers";
+import { formatCoworkError } from "../cowork/cowork-helpers";
 import {
   coworkRetryAdminElevation,
   coworkToggleIntegration,
@@ -7,16 +7,14 @@ import {
   loadInvoke,
 } from "../cowork/cowork-invoke";
 import { useCoworkStatus } from "../hooks/useCoworkStatus";
-import type { FirewallErrorVariant } from "../types";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Non-dismissable modal rendered globally whenever the Rust side reports a
- * persistent UAC-declined state (security invariant §4 / silent-failure H3).
- * The user must either retry elevation or explicitly disable Cowork —
- * there's no close button.
+ * persistent UAC-declined state. The user must either retry elevation or
+ * explicitly disable Cowork — there's no close button.
  */
 export function CoworkAdminDeclinedModal() {
   const { status, error: statusError, refetch } = useCoworkStatus(true);
@@ -28,12 +26,12 @@ export function CoworkAdminDeclinedModal() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   // Title badge — surfaces the warning in the OS window/tab list even when
   // the Tandem UI isn't focused. Captures the prior title on mount and
@@ -94,15 +92,7 @@ export function CoworkAdminDeclinedModal() {
         await op(invoke);
       } catch (err) {
         const rawMsg = err instanceof Error ? err.message : String(err);
-        let display = rawMsg;
-        try {
-          const parsed = JSON.parse(rawMsg) as { kind?: string };
-          if (parsed.kind) {
-            display = firewallErrorHint(parsed as FirewallErrorVariant);
-          }
-        } catch {
-          // not JSON — use raw message
-        }
+        const display = formatCoworkError(rawMsg);
         if (mountedRef.current) setError(`${errorPrefix}: ${display}`);
       } finally {
         if (mountedRef.current) setBusy(false);
