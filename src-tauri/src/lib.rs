@@ -453,22 +453,43 @@ async fn wait_for_port_release(client: &reqwest::Client, deadline_secs: u64) -> 
 }
 
 /// Resolve the sidecar executable path (alongside the main binary).
-fn sidecar_exe_path() -> Option<std::path::PathBuf> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+fn sidecar_exe_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("current_exe failed: {e}"))?;
+    let exe_dir = exe
+        .parent()
+        .ok_or_else(|| "exe path has no parent dir".to_string())?
+        .to_path_buf();
     let name = if cfg!(target_os = "windows") {
         format!("node-sidecar-{}.exe", env!("TARGET_TRIPLE"))
     } else {
         format!("node-sidecar-{}", env!("TARGET_TRIPLE"))
     };
-    Some(exe_dir.join(name))
+    Ok(exe_dir.join(name))
 }
 
 /// Poll until the sidecar exe file is writable (OS released the handle).
 #[cfg(target_os = "windows")]
 async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
     let sidecar_path = match sidecar_exe_path() {
-        Some(p) if p.exists() => p,
-        _ => return true,
+        Ok(p) if p.exists() => p,
+        Ok(p) => {
+            // Missing in release = packaging bug; in dev = normal (no bundled sidecar).
+            if cfg!(debug_assertions) {
+                log::debug!("Sidecar exe not on disk at {} — skipping unlock wait (dev mode)", p.display());
+            } else {
+                log::warn!("Sidecar exe not on disk at {} — skipping unlock wait (packaging bug?)", p.display());
+            }
+            return true;
+        }
+        Err(e) => {
+            if cfg!(debug_assertions) {
+                log::debug!("Could not resolve sidecar exe path: {e} — skipping unlock wait");
+            } else {
+                log::warn!("Could not resolve sidecar exe path: {e} — skipping unlock wait");
+            }
+            return true;
+        }
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(deadline_secs);
     while tokio::time::Instant::now() < deadline {
@@ -575,7 +596,7 @@ fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), St
         let channel_path = resource_dir.join("dist/channel/index.js");
 
         let node_binary = sidecar_exe_path()
-            .ok_or("Failed to resolve sidecar exe path")?;
+            .map_err(|e| format!("Failed to resolve sidecar exe path: {e}"))?;
 
         Ok((
             strip_win_prefix(&node_binary),
@@ -759,6 +780,12 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     // Wait for port release and (on Windows) file-lock release concurrently.
     // Port-down alone isn't sufficient on Windows: TerminateProcess returns
     // before the OS releases the exe file handle.
+    //
+    // Collect human-readable warnings so we can thread them into the failure
+    // dialog if download_and_install later fails. Declared outside the cfg
+    // block so the non-Windows branch contributes too.
+    let mut pre_install_warnings: Vec<String> = Vec::new();
+
     #[cfg(target_os = "windows")]
     {
         let (port_ok, file_ok) = tokio::join!(
@@ -766,15 +793,21 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
             wait_for_sidecar_unlock(5),
         );
         if !port_ok {
-            log::warn!("Sidecar still responding after 5s kill deadline -- proceeding with install anyway");
+            let msg = "Sidecar still responding after 5s kill deadline -- proceeding with install anyway";
+            log::warn!("{msg}");
+            pre_install_warnings.push(msg.to_string());
         }
         if !file_ok {
-            log::warn!("Sidecar exe still locked after 5s -- installer may prompt for retry");
+            let msg = "Sidecar exe still locked after 5s -- installer may prompt for retry";
+            log::warn!("{msg}");
+            pre_install_warnings.push(msg.to_string());
         }
     }
     #[cfg(not(target_os = "windows"))]
     if !wait_for_port_release(&client, 5).await {
-        log::warn!("Sidecar still responding after 5s kill deadline -- proceeding with install anyway");
+        let msg = "Sidecar still responding after 5s kill deadline -- proceeding with install anyway";
+        log::warn!("{msg}");
+        pre_install_warnings.push(msg.to_string());
     }
 
     match update.download_and_install(
@@ -791,7 +824,15 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         }
         Err(e) => {
             log::error!("Update install failed: {e}");
-            show_update_error_dialog(app, &e.to_string());
+            let dialog_msg = if pre_install_warnings.is_empty() {
+                e.to_string()
+            } else {
+                format!(
+                    "{e}\n\nPre-install warnings:\n  - {}",
+                    pre_install_warnings.join("\n  - ")
+                )
+            };
+            show_update_error_dialog(app, &dialog_msg);
         }
     }
 }

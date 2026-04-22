@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -212,5 +212,41 @@ describe("runSetupHandler", () => {
     expect(result.status).toBe(200);
     const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
     expect(config.mcpServers["tandem-channel"]).toBeUndefined();
+  });
+
+  it("removes pre-existing stale tandem-channel entry from .claude.json", async () => {
+    const configPath = join(tmpDir, ".claude.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": {
+            command: "node",
+            args: ["/legacy/path/channel.js"],
+          },
+          "some-other-server": {
+            url: "http://localhost:9999",
+          },
+        },
+      }),
+    );
+
+    const result = await runSetupHandler(
+      {
+        nodeBinary: "/app/MacOS/node-sidecar",
+        channelPath: "/app/Resources/dist/channel/index.js",
+      },
+      tmpDir,
+    );
+    expect(result.status).toBe(200);
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(config.mcpServers["tandem-channel"]).toBeUndefined();
+    expect(config.mcpServers["some-other-server"]).toBeDefined();
+    expect(config.mcpServers["some-other-server"].url).toBe("http://localhost:9999");
+    // Load-bearing: proves runSetupHandler's merge actually ran, not a silent no-op.
+    // Claude Code targets use HTTP format (url), not stdio (command).
+    expect(config.mcpServers.tandem).toBeDefined();
+    expect(config.mcpServers.tandem.url).toContain("/mcp");
   });
 });
