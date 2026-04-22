@@ -244,7 +244,7 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
-  const { tutorialActive, currentStep, dismissTutorial, nextStep } = useTutorial(
+  const { tutorialActive, currentStep, dismissTutorial, nextStep, coworkStatus } = useTutorial(
     annotations,
     editorRef,
     activeTab?.fileName,
@@ -662,6 +662,7 @@ export default function App() {
           currentStep={currentStep}
           onNext={nextStep}
           onDismiss={dismissTutorial}
+          coworkStatus={coworkStatus}
         />
       )}
     </div>
