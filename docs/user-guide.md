@@ -2,15 +2,15 @@
 
 A complete guide to using Tandem — from first launch to advanced workflows.
 
-> **Using Claude Code?** If you're setting up Claude Code integration rather than learning the browser UI, skip to [Working with Claude Code](#working-with-claude-code).
+> **Using Claude Code?** If you're setting up Claude Code integration rather than learning the editor, skip to [Working with Claude Code](#working-with-claude-code).
 
 ## Overview
 
 Tandem lets you work on documents with an LLM without the constant copy-paste. You open a document — a progress report, RFP response, compliance filing, or any prose — highlight the text you want to discuss, and Claude sees it directly. Claude can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because Claude connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
 
-Tandem runs as a local server with two surfaces: a **browser editor** where you read and edit documents, and **Claude Code** where Claude connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
+Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and **Claude Code** where Claude connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
-Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`). The desktop app manages the server automatically; the npm install requires starting it from the terminal. Once running, the browser experience is identical either way.
+Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`). The desktop app manages the server automatically; the npm install requires starting it from the terminal. Once running, the editor experience is identical either way.
 
 ## First Launch
 
@@ -326,11 +326,11 @@ Previously-open documents are auto-restored when the server starts — no manual
 
 ### "Cannot reach the Tandem server"
 
-The browser couldn't connect to the server via WebSocket. Make sure the server is running:
+The editor couldn't connect to the server via WebSocket. Make sure the server is running:
 - **Global install:** Run `tandem` in a terminal
 - **Development:** Run `npm run dev:standalone`
 
-The message appears after 3 seconds of failed connection. If the server was restarted, refresh the browser tab.
+The message appears after 3 seconds of failed connection. If the server was restarted, refresh the page.
 
 ### Annotations not appearing
 
@@ -338,7 +338,7 @@ Check the connection indicator in the status bar. If it shows "Reconnecting...",
 
 If connected but annotations still aren't showing, check your **mode** in the toolbar. **Solo** mode holds Claude's pending annotations. Switch to **Tandem** to see everything.
 
-Check the browser console for CRDT fallback warnings (`buildDecorations()` warnings indicate annotations falling back from CRDT-anchored to flat offsets).
+Check the developer console for CRDT fallback warnings (`buildDecorations()` warnings indicate annotations falling back from CRDT-anchored to flat offsets).
 
 ### Document won't load
 

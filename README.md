@@ -29,7 +29,7 @@ Requires **Node.js 22+** ([download](https://nodejs.org)) and **Claude Code** (`
 ```bash
 npm install -g tandem-editor
 tandem setup     # registers MCP tools + installs Claude Code skill
-tandem           # starts server + opens browser
+tandem           # starts server + opens editor
 ```
 
 `tandem setup` auto-detects Claude Code and Claude Desktop, writes MCP configuration, and installs a skill (`~/.claude/skills/tandem/SKILL.md`) that teaches Claude how to use Tandem's tools effectively. Re-run after upgrading (`npm update -g tandem-editor && tandem setup`).
@@ -73,7 +73,7 @@ claude --dangerously-load-development-channels server:tandem-channel
 
 This is the magic-sauce mode — and it's the one I'd recommend you run with. The channel shim pushes events (selections, annotations, chat) to Claude over SSE the moment they happen, so Tandem genuinely feels like there's another person on the other end of the document: someone watching what you highlight, reacting to edits you accept, and chiming in on a paragraph the instant you select it, the way a collaborator on a Google Doc would. The `--dangerously-load-development-channels` flag is an experimental Claude Code feature, which is why it isn't on by default — but turning it on is what makes the whole experience click.
 
-**Recommended layout:** snap the Claude Code terminal to one side of your screen and the Tandem browser window to the other. You'll be flipping attention between them constantly, and having both visible is what makes the side-by-side-collaborator feeling land.
+**Recommended layout:** snap the Claude Code terminal to one side of your screen and the Tandem editor window to the other. You'll be flipping attention between them constantly, and having both visible is what makes the side-by-side-collaborator feeling land.
 
 Then try:
 
@@ -81,11 +81,11 @@ Then try:
 "Open sample/welcome.md and review it with me"
 ```
 
-Claude calls `tandem_open`, the document appears in the browser, and you're ready to collaborate.
+Claude calls `tandem_open`, the document appears in the editor, and you're ready to collaborate.
 
 #### The core loop — no copy/paste
 
-1. Highlight a paragraph in the browser editor.
+1. Highlight a paragraph in the editor.
 2. With channels on, Claude often reacts before you even say anything. Otherwise, just type what you want in the terminal: *"what do you think of this paragraph?"* or *"rewrite this to be more concise"*.
 3. Claude reads your selection directly from the shared Tandem state (via `activity.selectedText` on `tandem_checkInbox`). You never paste the passage into the terminal.
 4. Claude replies in the Tandem chat sidebar (`tandem_reply`) or drops annotations on the document (`tandem_annotate` / `tandem_suggestEdit`), which you can accept, dismiss, or edit in the side panel.
@@ -131,7 +131,7 @@ curl http://localhost:3479/health
 git clone https://github.com/bloknayrb/tandem.git
 cd tandem
 npm install
-npm run dev:standalone   # starts server (:3478/:3479) + browser client (:5173)
+npm run dev:standalone   # starts server (:3478/:3479) + editor client (:5173)
 ```
 
 Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
@@ -142,7 +142,7 @@ Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatical
 
 You point at text, Claude sees it. Here's how that plays out day-to-day:
 
-- **Open a document.** Ask Claude (`"let's work on notes.md in tandem"`), drag a file onto the browser, or click the **+** in the tab bar. `.md`, `.txt`, `.html`, and `.docx` (review-only) are supported.
+- **Open a document.** Ask Claude (`"let's work on notes.md in tandem"`), drag a file onto the editor, or click the **+** in the tab bar. `.md`, `.txt`, `.html`, and `.docx` (review-only) are supported.
 - **Point at what you mean.** Select text in the editor and ask Claude about "this paragraph" in the terminal — or just wait for Claude to react if you have channels on. Claude reads your selection directly, no copy-paste needed. Hold the selection for about a second so it registers (dwell-time gating filters out incidental clicks).
 - **Iterate on Claude's response.** Claude's suggestions appear as annotations in the side panel — accept, dismiss, edit, or ask follow-up questions. Each round refines the text without you ever leaving the document. Press **Ctrl+Shift+R** for keyboard review mode: **Tab** to navigate, **Y** accept, **N** dismiss, **E** edit, **Z** undo within a 10-second window.
 - **Heads-down vs collaborative.** Toggle **Solo** mode when you want to write without interruptions — Tandem queues non-urgent annotations until you flip back to **Tandem** mode. Both `tandem_status` and `tandem_checkInbox` return the current mode so Claude adapts its behavior automatically.
@@ -198,13 +198,13 @@ Since the v0.4.0 desktop app launch, Tandem has added auth tokens for LAN exposu
 - **High-fidelity .docx round-trip** — current `.docx` support is review-only; production export is planned so you can stay in Tandem through the final draft.
 - **Exportable annotated documents** — PDF (and eventually `.docx`) with annotations baked in, so you can share reviewed drafts outside Tandem.
 - **Code editing mode** — CodeMirror 6 surface for reviewing code the same way you review prose.
-- **Standalone mode** — direct Anthropic API connection so Tandem can run without Claude Code in the loop, for users who want a pure browser-based experience.
+- **Standalone mode** — direct Anthropic API connection so Tandem can run without Claude Code in the loop, for users who want a pure standalone experience.
 
 See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#known-limitations-v1) for the complete picture, including items that are explicitly out of scope for v1.
 
 ## Documentation
 
-- **[User Guide](docs/user-guide.md)** — How to use Tandem: browser UI, annotations, chat, review mode, keyboard shortcuts
+- **[User Guide](docs/user-guide.md)** — How to use Tandem: editor UI, annotations, chat, review mode, keyboard shortcuts
 - [MCP Tool Reference](docs/mcp-tools.md) — 31 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: text iteration, cross-referencing, multi-model
@@ -216,7 +216,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 
 | Command | What it does |
 |---------|-------------|
-| `tandem` | Start server and open browser (global install) |
+| `tandem` | Start server and open editor (global install) |
 | `tandem setup` | Register MCP tools with Claude Code / Claude Desktop |
 | `tandem setup --force` | Register to default paths regardless of auto-detection |
 | `tandem --version` | Show installed version |
@@ -287,10 +287,10 @@ Tandem kills stale processes on :3478/:3479 at startup. If another app uses thos
 **Channel shim fails to start**
 The `tandem-channel` entry spawns a subprocess. For global installs, `tandem setup` writes absolute paths to the bundled `dist/channel/index.js` — re-run `tandem setup` after upgrading. For dev setup, if you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
 
-**Browser shows "Cannot reach the Tandem server"**
-The browser connects to the server via WebSocket. For global installs, run `tandem` to start the server. For dev setup, use `npm run dev:standalone` (or `npm run dev:server`). The message appears after 3 seconds of failed connection.
+**Editor shows "Cannot reach the Tandem server"**
+The editor connects to the server via WebSocket. For global installs, run `tandem` to start the server. For dev setup, use `npm run dev:standalone` (or `npm run dev:server`). The message appears after 3 seconds of failed connection.
 
-**Empty browser with no document**
+**Empty editor with no document**
 On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or deleted the sample file, click the **+** button in the tab bar or drop a file onto the editor.
 
 ## Development

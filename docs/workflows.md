@@ -1,12 +1,12 @@
 # Workflows
 
-> **Looking for browser UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
+> **Looking for editor UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
 
 Real-world patterns for using Tandem with Claude on toll consulting documents.
 
-> **Desktop app users:** These workflows apply to you too — the only difference is how the server starts. With the desktop app, the server runs automatically and Claude Code is configured on launch. Skip the `npm install` / `tandem setup` steps below and go straight to starting Claude Code.
+> **Note:** These workflows assume the desktop app, where the server runs automatically and Claude Code is configured on launch. If you installed via npm instead (`npm install -g tandem-editor`), run `tandem setup` first, then `tandem` to start the server before proceeding.
 
-## Quick Start (Global Install)
+## Quick Start (npm Global Install)
 
 **Setup:** First-time user installs Tandem globally and connects Claude.
 
@@ -39,7 +39,7 @@ Start Tandem from any directory:
 tandem
 ```
 
-The server starts and the browser opens to `http://localhost:3479`. `sample/welcome.md` loads on first run with the onboarding tutorial.
+The server starts and the editor opens at `http://localhost:3479`. `sample/welcome.md` loads on first run with the onboarding tutorial.
 
 In a separate terminal, open Claude Code with the channel flag for real-time push notifications:
 ```bash
@@ -67,7 +67,7 @@ tandem setup    # re-writes MCP config with new paths
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
 ```
 
-Browser opens, document loads. Claude starts by understanding the structure:
+Editor opens, document loads. Claude starts by understanding the structure:
 
 ```
 Claude: tandem_getOutline()
@@ -102,7 +102,7 @@ Claude: tandem_highlight({
 })
 ```
 
-Red highlight appears in Bryan's browser. Claude suggests the fix:
+Red highlight appears in Bryan's editor. Claude suggests the fix:
 
 ```
 Claude: tandem_comment({
@@ -132,7 +132,7 @@ Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.docx" })
 → { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", readOnly: true, ... }
 ```
 
-Bryan sees two tabs in the browser. Claude verifies both are open:
+Bryan sees two tabs in the editor. Claude verifies both are open:
 
 ```
 Claude: tandem_listDocuments()
@@ -202,7 +202,7 @@ Claude: tandem_edit({
 })
 ```
 
-The placeholder is replaced with draft text -- Bryan sees it appear live. He edits inline in the browser, refining the language. Claude notices Bryan is working:
+The placeholder is replaced with draft text -- Bryan sees it appear live. He edits inline in the editor, refining the language. Claude notices Bryan is working:
 
 ```
 Claude: tandem_getActivity()
@@ -241,7 +241,7 @@ Agent C: tandem_getTextContent({ section: "Issues and Risks" })
 // Checks for completeness and specificity
 ```
 
-Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_flag` independently. All annotations appear in Bryan's browser in real-time. Opus monitors progress:
+Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_flag` independently. All annotations appear in Bryan's editor in real-time. Opus monitors progress:
 
 ```
 Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
@@ -252,7 +252,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 
 **Setup:** Claude has finished and left 15+ annotations. Bryan wants to process them efficiently.
 
-The browser's side panel shows all pending annotations with filter controls:
+The editor's side panel shows all pending annotations with filter controls:
 - Filter by type (highlights, comments, flags) — comments with replacement text show as "With replacement", comments with `directedAt` show as "For Claude"
 - Filter by author (Claude, You)
 - Filter by status (pending, accepted, dismissed)
@@ -340,7 +340,7 @@ After all three steps, the tutorial card disappears and doesn't return (persiste
 
 **Setup:** Claude left annotations during review, and the user (or Claude) wants to refine one without deleting and recreating it.
 
-### Browser-Side Editing
+### Editor-Side Editing
 
 Each pending annotation card shows a pencil (edit) button. Clicking it enters inline edit mode:
 
@@ -403,15 +403,15 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 **If a file changed on disk while already open (git pull, external editor):**
 
 1. Call `tandem_open({ filePath: "...", force: true })` to reload from disk
-2. The browser updates to show the new content automatically
+2. The editor updates to show the new content automatically
 3. Annotations and session state are cleared (they reference old positions)
-4. `POST /api/open` also accepts `force: true` for browser-initiated reloads
+4. `POST /api/open` also accepts `force: true` for editor-initiated reloads
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
 
-## Opening Files from the Browser
+## Opening Files from the Editor
 
-Users can open files without Claude Code using the browser UI:
+Users can open files without Claude Code using the editor UI:
 
 ### Path Input
 1. Click the **+** button at the end of the tab bar
