@@ -3,7 +3,7 @@
  * Shebang is added by tsup banner at build time.
  *
  * Usage:
- *   tandem            Start the Tandem server and open the browser
+ *   tandem            Start the Tandem server and open the editor
  *   tandem setup      Register Tandem MCP tools with Claude Code / Claude Desktop
  *   tandem setup --force  Register even if no Claude install is auto-detected
  *   tandem --help     Show this help
@@ -45,7 +45,7 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log(`tandem v${version}
 
 Usage:
-  tandem                            Start Tandem server and open the browser
+  tandem                            Start Tandem server and open the editor
   tandem setup                      Register MCP tools with Claude Code / Claude Desktop
   tandem setup --force              Register to default paths regardless of detection
   tandem setup --with-channel-shim  Also register the stdio channel shim (legacy opt-in)

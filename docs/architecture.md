@@ -4,7 +4,7 @@
 
 ```mermaid
 graph TB
-    User["Bryan (Browser)"]
+    User["Bryan (Tandem Desktop / Browser)"]
     Claude["Claude Code (CLI)"]
     Tandem["Tandem Server"]
     Shim["Channel Shim<br/>(stdio subprocess)"]
@@ -18,21 +18,21 @@ graph TB
 
 Tandem is a single Node.js process that serves three roles simultaneously:
 1. **MCP server** (HTTP on port 3479) -- Claude Code connects here for tool discovery and execution via Streamable HTTP transport
-2. **Hocuspocus WebSocket server** (port 3478) -- Browser connects here for real-time Yjs sync
+2. **Hocuspocus WebSocket server** (port 3478) -- Editor connects here for real-time Yjs sync
 3. **Channel event source** (SSE on port 3479) -- The channel shim connects here to receive real-time push events
 4. **Static file server** (HTTP on port 3479) -- Serves the Vite-built client from `dist/client/` when present (global install mode)
 
-When installed globally (`npm install -g tandem-editor`), the `tandem` CLI starts the server and opens the browser. The `tandem setup` command writes MCP config to Claude Code and/or Claude Desktop. In development, `npm run dev:standalone` runs the server alongside a Vite dev server for hot-reloading.
+When installed globally (`npm install -g tandem-editor`), the `tandem` CLI starts the server and opens the editor. The `tandem setup` command writes MCP config to Claude Code and/or Claude Desktop. In development, `npm run dev:standalone` runs the server alongside a Vite dev server for hot-reloading.
 
 A separate **channel shim** process (`dist/channel/index.js`) bridges the Tandem server and Claude Code's Channels API. Claude Code spawns it as a stdio subprocess. The shim connects to the server's SSE endpoint and forwards events as `notifications/claude/channel` to Claude Code, enabling push-based communication instead of polling.
 
-Both the MCP server and browser share the same `Y.Doc` instance. Edits from either side propagate to the other in real-time.
+Both the MCP server and editor share the same `Y.Doc` instance. Edits from either side propagate to the other in real-time.
 
 ## Container Diagram
 
 ```mermaid
 graph LR
-    subgraph Browser
+    subgraph "Editor (WebView / Browser)"
         DocTabs["DocumentTabs<br/>(React)"]
         Tiptap["Tiptap Editor<br/>(React)"]
         AnnExt["AnnotationExtension<br/>(ProseMirror Plugin)"]
@@ -552,7 +552,7 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 
 ## Tauri Desktop Layer
 
-The Tauri app wraps the existing web stack — it does not replace or modify it. In dev mode the WebView loads from `http://localhost:5173` (Vite); in production builds it loads from `tauri://localhost` (bundled `dist/client/`). The Node.js server continues to run on `:3478`/`:3479` in both modes; the WebView talks to it the same way a browser would.
+Tandem ships primarily as a Tauri desktop app. The WebView renders the same Tiptap/React editor used in development; in production builds it loads from `tauri://localhost` (bundled `dist/client/`), while dev mode points to `http://localhost:5173` (Vite hot-reload). The Node.js server runs on `:3478`/`:3479` in both modes. When installed via npm instead of the desktop app, the same editor opens in the default browser — the underlying web stack is identical.
 
 ```mermaid
 graph TB

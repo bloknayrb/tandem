@@ -38,14 +38,14 @@ These WILL break things if violated:
 
 ## Architecture
 
-Three layers: Browser (Tiptap) <-> Tandem Server (Hocuspocus on :3478 + MCP HTTP on :3479) <-> Claude Code. Channel shim (`src/channel/`) pushes real-time events to Claude Code via SSE, replacing polling.
+Three layers: Editor (Tiptap in Tauri desktop or browser) <-> Tandem Server (Hocuspocus on :3478 + MCP HTTP on :3479) <-> Claude Code. The desktop app is the primary distribution; npm global install opens the same editor in a browser. Channel shim (`src/channel/`) pushes real-time events to Claude Code via SSE, replacing polling.
 
 Key files for navigation:
 - `src/cli/index.ts` -- CLI entrypoint (`tandem` command), arg parsing, dispatches to start/setup
 - `src/cli/setup.ts` -- `tandem setup`: auto-detect Claude installs, write MCP config atomically
-- `src/cli/start.ts` -- `tandem start`: spawn server with `TANDEM_OPEN_BROWSER=1`
+- `src/cli/start.ts` -- `tandem start`: spawn server (opens editor via `TANDEM_OPEN_BROWSER=1`)
 - `src/server/index.ts` -- Entry point, port binding, console redirect
-- `src/server/open-browser.ts` -- Cross-platform browser launcher (execFile-based)
+- `src/server/open-browser.ts` -- Cross-platform browser launcher for npm-install path (execFile-based)
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
@@ -55,7 +55,7 @@ Key files for navigation:
 Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Key Patterns
-- All document mutations go through the server's Y.Doc -> changes sync to browser via Hocuspocus
+- All document mutations go through the server's Y.Doc -> changes sync to editor via Hocuspocus
 - Annotations stored in Y.Map('annotations'), not in document content. `author` field: `"user" | "claude" | "import"` (import = Word comments from .docx files)
 - Three coordinate systems: flat text offsets (server, includes heading prefixes), ProseMirror positions (client, structural), Yjs RelativePositions (CRDT-anchored, survive edits). Modules: `src/server/positions.ts`, `src/client/positions.ts`, shared types in `src/shared/positions/`
 - Multi-document: each file gets a documentId (hash of path) = Hocuspocus room name. All MCP tools accept optional `documentId`, defaulting to active document. `CTRL_ROOM` is reserved -- never use as a document ID. Server broadcasts `openDocuments` via Y.Map('documentMeta')
@@ -77,7 +77,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **`src/client/utils/colors.ts`** exports `errorStateColors`, `successStateColors`, `warningStateColors` — import these instead of inlining all three CSS vars when you need the full set (e.g. `SidePanel.tsx` held-banner).
 - Raw hex in client code is a regression; lint rule tracked in #356 (awareness.ts migration tracked in #355).
 
-## Tauri Desktop
+## Desktop App (Tauri)
 - `cargo tauri dev` -- Tauri dev mode (Vite hot-reload + Rust rebuild)
 - `cargo tauri build` -- Production build (installer output)
 - `src-tauri/` layout: `Cargo.toml`, `tauri.conf.json`, `capabilities/` (permission manifests), `src/lib.rs` (plugin registration), `src/main.rs` (entry point)

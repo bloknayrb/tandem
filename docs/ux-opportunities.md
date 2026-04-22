@@ -19,7 +19,7 @@ Tiptap's StarterKit is loaded but there are no toolbar buttons for it.
 
 - **No formatting toolbar.** Can't bold, italic, bullet list, or code-block from the UI. Only annotation buttons exist. Users must know Tiptap keyboard shortcuts (Ctrl+B, etc.) or go without.
 - **No undo/redo buttons.** Yjs handles undo/redo under the hood, but there's no visible UI for it.
-- **No document search (Ctrl+F).** Claude has `tandem_search`, but the user has no equivalent in the browser. Browser-native Ctrl+F works but doesn't integrate with Tandem's coordinate system.
+- **No document search (Ctrl+F).** Claude has `tandem_search`, but the user has no equivalent in the editor. Browser-native Ctrl+F works but doesn't integrate with Tandem's coordinate system.
 
 ## 3. Annotation Workflow Gaps
 

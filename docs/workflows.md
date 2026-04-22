@@ -1,12 +1,12 @@
 # Workflows
 
-> **Looking for browser UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
+> **Looking for editor UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
 
 Real-world patterns for using Tandem with Claude on toll consulting documents.
 
-> **Desktop app users:** These workflows apply to you too — the only difference is how the server starts. With the desktop app, the server runs automatically and Claude Code is configured on launch. Skip the `npm install` / `tandem setup` steps below and go straight to starting Claude Code.
+> **Note:** These workflows assume the desktop app, where the server runs automatically and Claude Code is configured on launch. If you installed via npm instead (`npm install -g tandem-editor`), run `tandem setup` first, then `tandem` to start the server before proceeding.
 
-## Quick Start (Global Install)
+## Quick Start (npm Global Install)
 
 **Setup:** First-time user installs Tandem globally and connects Claude.
 
@@ -39,7 +39,7 @@ Start Tandem from any directory:
 tandem
 ```
 
-The server starts and the browser opens to `http://localhost:3479`. `sample/welcome.md` loads on first run with the onboarding tutorial.
+The server starts and the editor opens at `http://localhost:3479`. `sample/welcome.md` loads on first run with the onboarding tutorial.
 
 In a separate terminal, open Claude Code with the channel flag for real-time push notifications:
 ```bash
@@ -67,7 +67,7 @@ tandem setup    # re-writes MCP config with new paths
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
 ```
 
-Browser opens, document loads. Claude starts by understanding the structure:
+Editor opens, document loads. Claude starts by understanding the structure:
 
 ```
 Claude: tandem_getOutline()
@@ -340,7 +340,7 @@ After all three steps, the tutorial card disappears and doesn't return (persiste
 
 **Setup:** Claude left annotations during review, and the user (or Claude) wants to refine one without deleting and recreating it.
 
-### Browser-Side Editing
+### Editor-Side Editing
 
 Each pending annotation card shows a pencil (edit) button. Clicking it enters inline edit mode:
 
@@ -409,9 +409,9 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
 
-## Opening Files from the Browser
+## Opening Files from the Editor
 
-Users can open files without Claude Code using the browser UI:
+Users can open files without Claude Code using the editor UI:
 
 ### Path Input
 1. Click the **+** button at the end of the tab bar

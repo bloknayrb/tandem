@@ -1,6 +1,6 @@
 # Roadmap — Remaining Implementation Steps
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (browser file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. npm global install (Step 9, PR #161) is complete. This document contains the design spec for remaining work.
+Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. npm global install (Step 9, PR #161) is complete. This document contains the design spec for remaining work.
 
 ## Step 5: File I/O
 
@@ -215,7 +215,7 @@ Run: `npm run test:e2e` (auto-starts servers) or `npm run test:e2e:ui` (Playwrig
 
 **Files:** `src/channel/index.ts`, `src/channel/event-bridge.ts`, `src/server/events/queue.ts`, `src/server/events/sse.ts`, `src/server/events/types.ts`
 
-Real-time push notifications from browser to Claude Code via the Channels API, replacing polling.
+Real-time push notifications from editor to Claude Code via the Channels API, replacing polling.
 
 - **Channel shim** (`src/channel/`): Separate stdio subprocess spawned by Claude Code. Low-level MCP `Server` class (not `McpServer`) with `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
 - **Event queue** (`src/server/events/queue.ts`): Y.Map observers on annotations, chat, user awareness, and document metadata. Circular buffer (200 events / 60s). Origin tagging filters MCP-initiated changes.
@@ -280,7 +280,7 @@ Closing a tab in the browser now actually closes the document on the server. Pre
 
 `npm install -g tandem-editor` makes Tandem available as a global CLI command:
 
-- **`tandem`** — Starts the server and opens the browser at `http://localhost:3479`
+- **`tandem`** — Starts the server and opens the editor at `http://localhost:3479`
 - **`tandem setup`** — Auto-detects Claude Code and Claude Desktop, writes MCP config entries with absolute paths to `~/.claude/mcp_settings.json` and/or `claude_desktop_config.json`
 - **`tandem setup --force`** — Writes config to default paths regardless of auto-detection
 - **Static file serving** — Express serves the Vite-built client from `dist/client/` on `:3479`, eliminating the need for a separate Vite dev server in production

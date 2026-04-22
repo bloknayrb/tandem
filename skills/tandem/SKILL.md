@@ -9,7 +9,7 @@ description: >
 
 # Tandem — Collaborative Document Editor
 
-Tandem lets you annotate and edit documents alongside the user in real time. The user sees your changes in a browser editor; you interact via the tandem_* MCP tool suite.
+Tandem lets you annotate and edit documents alongside the user in real time. The user sees your changes in the editor; you interact via the tandem_* MCP tool suite.
 
 ## Hard Rules
 
@@ -59,7 +59,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 ## Collaboration Etiquette
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area.
-- Use `tandem_setStatus` to show what you're working on — the user sees it in the browser status bar.
+- Use `tandem_setStatus` to show what you're working on — the user sees it in the editor status bar.
 - **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. The real-time channel is often not connected; polling is the reliable path.
 - Reply to chat messages with `tandem_reply`, not annotations.
 
