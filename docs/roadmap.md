@@ -379,11 +379,32 @@ Remaining Cowork work (PRs e-f, #316, #317, #322) is polish — making the insta
 
 ## v1.0 Release Plan
 
-Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Remaining work: correctness foundations, API cleanup, framework decision, dark theme, desktop UI polish, and first-run UX.
+Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Remaining work: codebase audit remediation, correctness foundations, API cleanup, framework decision, dark theme, desktop UI polish, and first-run UX.
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
 > **Phase 1 (Bug Fixes) is done.** #268, #267, #266 fixed in PR #278.
+
+### Pre-Release: Codebase Audit Remediation
+
+Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three independent review agents verified all findings against actual source code. Runs before v0.8.0 to ensure the foundation is clean before adding more features.
+
+**Summary:** 24,370 LOC source, 22,062 LOC tests. 8 god-files needing decomposition, 2 layer boundary violations, missing file-opener lifecycle tests, unused Tauri JS deps inflating bundles, tsconfig drift. Strengths: architecture is sound, security is thorough, durability layer is well-tested, position system uses branded types correctly.
+
+**Phases (detail in audit doc):**
+
+| Phase | Scope | Effort | PRs |
+|-------|-------|--------|-----|
+| 1 | Foundation: wire-protocol types to shared, token-store extraction, awareness.ts #355, Editor CSS extraction, tsconfig tightening, dead Tauri deps | ~2 days | 6 |
+| 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | 2 |
+| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | 1-2 |
+| 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | 4 |
+| 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | 0-1 |
+| 6 | Polish: accessibility, E2E error recovery, Tauri integration tests (post-v1.0) | incremental | 5-7 |
+
+**Deferrals (with rationale in audit doc):** useYjsSync.ts (350 LOC, tight coupling makes splitting fragile), mcp/server.ts (331 LOC, manageable), shared/types.ts (274 LOC, reasonable for barrel), React.memo (measure with Profiler first), Biome linter (conflicts with ESLint).
+
+**Phases 1-3 are the minimum viable audit remediation** (~5.5 days). Phases 4-5 improve client maintainability but don't affect correctness. Phase 6 is post-v1.0 polish.
 
 ### Decision Gate: Svelte Probe (#312)
 
