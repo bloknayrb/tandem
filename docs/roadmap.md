@@ -338,7 +338,7 @@ Future hardening (not blocking release):
 
 ---
 
-## Durable Annotations + Cowork Auto-Setup — IN PROGRESS
+## Durable Annotations + Cowork Auto-Setup — PHASE 1 DONE, PHASE 2 PARTIAL
 
 Plan doc: [`docs/superpowers/plans/2026-04-16-durable-annotations-cowork.md`](superpowers/plans/2026-04-16-durable-annotations-cowork.md). Roadmap issues #313–#322.
 
@@ -350,109 +350,148 @@ Moves annotation storage from in-memory Y.Doc + session snapshots to explicit pe
 - **T7 + T8 (PR #337, merged):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
 - **Retrospective follow-ups (v0.6.3, merged):** GC race fix (#334), annotation module internals (#324, #327, #328, #332), legacy-type sanitization (#329), drop-counter (#330), test coverage (#331, #335), CI gate (#310), settings popover (#306), dark-mode tokens (#307), a11y sweep (#309, #311), stdio bridge silent-failure paths (#336 partial).
 
-### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f) — **target v0.7.0**
-
-Release cadence post-v0.6.3 (per open-issue triage 2026-04-19, correctness-first restructure).
+### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f)
 
 Each release targets **one coherent concern** so that a bad PR is bisectable and the CHANGELOG entry is unambiguous. Time-to-ship is secondary to blast-radius containment.
 
-| Release | Concern | Gating scope |
-|---------|---------|--------------|
-| v0.6.4 (if needed) | Silent-failure patch + flaky E2E | Live-silent-failure subset of #336 + #281 |
-| v0.7.0 | Cowork foundation (auth, token, bind, stdio) | Phase 2 PRs a–d + #347 + #336 polish |
-| v0.8.0 | Cowork surface + Phase 2 retrospective | Phase 2 PRs e–f + #316/#317/#318/#319/#322 + #313/#344/#351 + #269 §2.3/§2.4/§2.5 |
-| v0.9.0 | Desktop Integration (Tier 1 + palette + panes) | #269 §1.1/§1.2/§1.3/§1.4/§3.2/§2.1/§2.2 |
-| v0.10.0 | Theme & token hygiene (pre-Tailwind) | #340, #355, #356, #308, #311-residuals |
-| v0.11.0 | MCP API cleanup (breaking, standalone) | #259 |
-| v0.12.0 | Tailwind staging (light only + a11y gate) | #24 + #269 §2.6 |
-| v1.0.0 | Dark + First-run + polish + bump | #59, #265, #103, #269 §1.5/§3.1/§3.4 |
+#### Completed releases
 
-`#269 §X.Y` refers to the Tiered breakdown in the "Issue #269 Revision" comment on that issue.
+| Release | Concern | Status |
+|---------|---------|--------|
+| v0.6.4 | Silent-failure patch + flaky E2E (#336 partial, #281) | **DONE** |
+| v0.7.0 | Cowork foundation: auth token storage, auth middleware, `TANDEM_BIND_HOST` bind mode, `tandem rotate-token`, token forwarding in stdio/monitor/channel | **DONE** (PRs a–d) |
+| v0.7.1 | MSIX Claude Desktop detection + stdio entry generation (#372) | **DONE** |
 
-End-user goal: install the Tauri desktop app → Cowork / Claude Desktop / Claude Code CLI all just work. Auth token stored in OS keychain, server opt-in bind-mode for LAN exposure, per-workspace Cowork installer.
+- **PR a (DONE)** — Token storage (`env-paths` data directory, `O_EXCL` file creation, Tauri sidecar passthrough via `TANDEM_AUTH_TOKEN`).
+- **PR b (DONE)** — Auth middleware + OAuth protected-resource metadata. Loopback-exempt, `crypto.timingSafeEqual`, SHA-256 length oracle elimination, rate-limit (5/min) with LRU eviction.
+- **PR c (DONE)** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`, Cowork mode binds `0.0.0.0`. Hocuspocus stays loopback-only. Fail-closed on LAN bind without token.
+- **PR d (DONE)** — `tandem rotate-token` CLI subcommand with 60s grace window; re-runs setup across detected MCP configs.
+- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup. Scheduled for v0.9.0.
+- **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Scheduled after Svelte probe decision.
 
-- **PR a** — Token storage (`keyring` crate + `env-paths` fallback). Keychain on Windows/macOS/Linux.
-- **PR b** — Auth middleware + OAuth metadata advertising. Loopback-exempt, `crypto.timingSafeEqual`, rate-limit (5/min).
-- **PR c** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`, Cowork mode binds `0.0.0.0`. Hocuspocus stays loopback-only.
-- **PR d** — `tandem rotate-token` CLI subcommand; re-runs setup across known configs.
-- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup.
-- **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status.
+### Cowork integration status
 
-PRs e and f can run in parallel (separate worktrees) once PR c lands. Estimate: 4.5–5 weeks calendar.
+Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge shipped in tandem-editor@0.6.2. See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail.
 
-**Prerequisite spikes (Task 5 in execution plan, ~1 day total):**
-- Verify Anthropic's `plugin.json` `http` type supports a `headers` field (fall back to session-exchange endpoint if not).
-- Verify OAuth-protected-resource metadata advertising (`bearer_methods_supported`) actually causes Claude Code's MCP client to send `Authorization` headers.
-
-### Exit criteria (Phase 2)
-
-- Fresh Windows profile: install Tauri → Claude Desktop Cowork workspace → ask Claude to list tools → `tandem_*` tools surface, no terminal used.
-- Claude Code CLI users (no Tauri) continue to work unchanged via loopback-exempt auth.
-- Uninstaller strips all integration entries without touching third-party MCP configs.
-- `npm run doctor` reports Cowork integration status.
-
-### Cowork plugin bridge (shipped)
-
-Separate from Phase 2, the Cowork plugin-bridge itself is already shipped (tandem-editor@0.6.2). Plugin MCP entries use `npx -y tandem-editor mcp-stdio` (and `... channel`) because Claude Desktop's Cowork VM does NOT forward loopback HTTP servers. See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail, Phase 0 probe results, and the `workspaces`-in-tarball bug that blocked 0.6.1.
+Remaining Cowork work (PRs e-f, #316, #317, #322) is polish — making the installer turnkey and adding cross-platform firewall scoping. Not a capability blocker.
 
 ---
 
 ## v1.0 Release Plan
 
-Five-phase plan to ship Tandem v1.0. Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop). Remaining work focuses on UI polish and API cleanup.
+Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Remaining work: correctness foundations, API cleanup, framework decision, dark theme, desktop UI polish, and first-run UX.
 
-> **Phase 1 (Bug Fixes) is done.** #268 (session persistence), #267 (tab bar height), and #266 (keyboard shortcuts) were all fixed in PR #278.
+Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
-### Phase 2: Tailwind CSS 4 Migration (#24)
+> **Phase 1 (Bug Fixes) is done.** #268, #267, #266 fixed in PR #278.
 
-Estimated 10–12 dev days. Replaces ~290 inline `style={{}}` objects across ~22 files. Foundation for dark mode, design consistency, and faster UI iteration.
+### Decision Gate: Svelte Probe (#312)
 
-1. **Infrastructure:** Install Tailwind CSS 4 + Vite plugin. Configure theme (primary indigo, gray scale, status colors, highlight colors). Create `editor.css` for Tiptap/ProseMirror content. Configure `dark:` via `class` strategy on `<html>`.
-2. **Extract reusable components first:** `Button` (variants: primary/secondary/ghost/danger), `PanelHeader`, `Badge`/`Pill`.
-3. **Migrate small files first:** StatusBar, DocumentTabs, OnboardingTutorial, ToastContainer, FileOpenDialog, ToolbarButton.
-4. **Migrate large files:** Toolbar (547 LOC), SettingsPopover (326 LOC), ChatPanel (426 LOC), SidePanel (881 LOC), App (913 LOC).
-5. **Verify:** Typecheck, E2E tests (use `data-testid`, unaffected by style changes), visual inspection.
+Time-boxed to 1-2 weeks, runs alongside v0.8.0 work. Success criteria are **behavioral, not volumetric:**
 
-### Phase 3: MCP Tool Consolidation (#259)
+1. `svelte-tiptap` renders with Yjs collaboration extensions (rendering gate)
+2. Svelte equivalent of `useYjsSync` handles tab switch, Y.Doc swap, observer cleanup, and reconnect without memory leaks or orphaned WebSocket connections (lifecycle gate)
+3. Mount → unmount → remount → swap → close cycle without observer lifecycle bugs (stress gate)
+4. CRDT RelativePosition resolution works in Svelte reactivity model
 
-Clean up API surface before v1.0 locks it. Breaking changes are acceptable pre-1.0 but not after.
+**Go:** All four gates pass. Observer lifecycle management is genuinely simpler — not just syntactically shorter — than the React `useRef` + cleanup ceremony.
+
+**No-go:** svelte-tiptap collaboration fails; observer lifecycle requires equivalent manual management; Y.Doc swap produces bugs from the same class as Lessons 5, 10, 14, 16, 34, 44.
+
+The probe produces a decision document filed as an ADR. The result determines the client-side path for v0.10.0 onward.
+
+### Release Cadence
+
+`#269 §X.Y` refers to the Tiered breakdown in the "Issue #269 Revision" comment on that issue.
+
+#### Framework-independent (safe regardless of Svelte decision)
+
+| Release | Concern | Scope |
+|---------|---------|-------|
+| v0.8.0 | Correctness foundations | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369 |
+| v0.9.0 | MCP API cleanup + distribution | #259, PR e, #316, #317, #322, #341, ADR-023 CI smoke test |
+
+**v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity.
+
+**v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
+
+**Distribution coordination:** v0.9.0 is the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Document rollback strategy per surface.
+
+#### If Svelte Go
+
+| Release | Concern | Scope |
+|---------|---------|-------|
+| v0.10.0 | Svelte core migration | #312 Phase 2 (Vite plugin, `useYjsSync` rune, core hooks, Editor, DocumentTabs) |
+| v0.11.0 | Svelte complete | #312 Phase 3-4 (remaining panels, React removal, `<svelte:boundary>` error recovery) |
+| v0.12.0 | Dark theme | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification |
+| v0.13.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319 |
+| v0.14.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
+| v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
+
+**v0.10.0 test strategy:** E2E tests (`data-testid` selectors) survive unchanged. Unit tests rewritten against `@testing-library/svelte` per ported component, same PR. Floor: no net behavioral coverage loss. React and Svelte coexist during this release (transitional); dual-framework state MUST NOT persist beyond v0.11.0.
+
+**v0.11.0:** Each new Svelte component includes ARIA attributes as definition-of-done (accessibility is continuous, not a v1.0 audit). CLI is structurally unaffected by the migration — verify with server tests + manual CLI smoke test.
+
+**v0.12.0 dark theme completeness:** #355 landed (v0.8.0), `editor.css` has dark overrides for all content-area rules, awareness decorations verified in dark mode, WCAG AA contrast on annotation highlights against dark surface. Test in both Tauri WebView and browser.
+
+#### If Svelte No-Go
+
+| Release | Concern | Scope |
+|---------|---------|-------|
+| v0.10.0 | Dark theme | #59, `editor.css` dark overrides, #311, ErrorBoundary audit, WCAG AA |
+| v0.11.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319 |
+| v0.12.0 | First-run + desktop polish | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
+| v1.0.0 | Verification + bump | Same as Svelte Go path |
+
+**No Tailwind migration.** The `--tandem-*` CSS custom-property system is already semantically correct. Dark mode works via `[data-theme="dark"]` token switching, which keeps dark logic in CSS rather than markup. The ~290 inline styles are a code-style preference, not a correctness issue. Evaluate Tailwind post-1.0 if inline styles become a contribution barrier.
+
+### MCP Tool Consolidation (#259)
 
 | Tool | Action |
 |------|--------|
-| `tandem_suggest` | Deprecate (keep shim with warning, hard-remove in v1.1) |
-| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`, 1 test dep in `document-tools.test.ts`) |
+| `tandem_suggest` | Deprecate (keep error-returning stub for one release, hard-remove in v0.10.0) |
+| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`) |
 | `tandem_getSelections` | Hard-remove (redundant with `tandem_checkInbox.activity.selectedText`) |
-| `tandem_setStatus` | Merge into `tandem_status` (make read/write with optional params) |
-| `tandem_getActivity` | Keep (distinct semantic: user activity vs. editor state) |
-| `tandem_getContext` | Keep (low cost, distinct purpose from text reads) |
-| `tandem_removeAnnotation` | Keep (orphan-reply cleanup logic must stay explicit) |
+| `tandem_setStatus` | Merge into `tandem_status` (read/write with optional params) |
+| `tandem_getActivity` | Keep |
+| `tandem_getContext` | Keep |
+| `tandem_removeAnnotation` | Keep |
 
-Net result: ~28 tools (down from 31). Files: `document.ts`, `awareness.ts`, `navigation.ts`, `annotations.ts`, `docs/mcp-tools.md`.
+Net result: ~28 tools (down from 31).
 
-### Phase 4: Dark Theme (#59)
+### v1.0.0 Exit Criteria
 
-Depends on Phase 2. Tailwind `dark:` classes on `<html>`, toggle in settings, `prefers-color-scheme` default, localStorage persistence, `editor.css` dark overrides, annotation highlight legibility verification.
-
-### Phase 5: First-Run & Session UX
-
-- **#265 — Welcome tutorial update:** Update `sample/welcome.md`, tutorial annotations, and onboarding steps for current UI (Solo/Tandem mode, unified comment button, etc.).
-- **#103 — Session management UI:** Session browser in FileOpenDialog. List sessions with metadata (path, date, annotation count, open/closed). Actions: reopen, delete, clear all. Depends on Phase 2 (Tailwind).
-
-### Phase 6: Version Bump to 1.0.0
-
-Bump version, update CHANGELOG, update roadmap, update `CLAUDE.md` and `docs/mcp-tools.md` to reflect any tool removals from Phase 3, final E2E pass + full build verification.
+- **Windows:** Fresh profile → install Tauri → Claude Desktop Cowork workspace → `tandem_*` tools surface, no terminal
+- **macOS:** Same flow, notarized `.app`, Gatekeeper-clean
+- **Linux:** Same flow (Cowork if available, CLI otherwise)
+- **Claude Code CLI:** Loopback-exempt, zero-config, tools work unchanged
+- **Tauri update flow:** Download → install → restart verified on all three platforms
+- **Tutorial:** Completes end-to-end on `sample/welcome.md`
+- **Dark/light toggle:** Works in both desktop and browser
+- **Accessibility:** ARIA verified with Windows Narrator + macOS VoiceOver, forced-colors mode, WCAG AA contrast
+- **Observer soak test:** 6 concurrent documents, rapid tab switching, Y.Doc swaps, reconnect after network drop — no leaks
+- **Uninstaller:** Strips all integration entries cleanly
+- **npm tarball:** `npm pack` → install → `npx -y tandem-editor --version` on Linux + Windows
+- **Zero open position-related bugs** (#260 deferral criterion)
 
 ### Deferred to Post-v1.0
 
 | Item | Reason |
 |------|--------|
-| #260 — Coordinate system refactoring | Risky refactor; tests solid; historical bugs fixed |
-| #153 — Inline images | Nice-to-have, not core |
-| #244 — Windows Playwright deadlock | Investigation-only, CI workaround exists |
+| #260 — Coordinate system refactoring | All known position bugs fixed, tests solid, abstraction stable. Refactoring pre-1.0 risks regression. **Deferral criterion:** zero open position-related bugs at v1.0 branch cut. If any surface, #260 moves into scope. |
+| #24 — Tailwind CSS 4 | Token system is correct. Tailwind is a code-style question, not correctness. |
+| #153 — Inline images | Nice-to-have |
+| #244 — Windows Playwright deadlock | CI workaround exists |
 | Three-way merge / conflict UI (5c partial) | Complex; reload behavior acceptable for v1.0 |
 | RANGE_MOVED auto-retry | Edge case |
 | Flag markers / highlight color picker | Minor toolbar gaps |
-| #269 — Desktop UI exploration | Needs scoping |
+| #312 (if no-go) | Svelte deferred to v2 |
+| #321 — WS LAN auth | Only if WS exposed to LAN |
+| #315 — DocumentStore interface | Architecture cleanup |
+| #320 — Annotation schema v2 framework | Can wait |
+| #314 — Export annotations as sharable file | Enhancement |
+| Desktop UI Tier 3 remainder (§3.2 tray, §3.3 context menus) | Polish |
+| Desktop UI deferred (frameless window, vibrancy, multi-window, file explorer sidebar) | Identity decisions |
 
 ---
 
