@@ -28,6 +28,7 @@ import { execFile } from "node:child_process";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { assertSafeWorkspacePath } from "./win-path-guard.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,13 +88,24 @@ async function openLogger(): Promise<ScrubLogger> {
  * Matches `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\
  * local-agent-mode-sessions\<ws-id>\<vm-id>\`.
  *
+ * Each candidate vm-path is validated by the 4-step Windows path guard before
+ * being included — callers receive only safe, realpath'd paths.
+ *
  * Returns an empty array on any error (e.g. Cowork not installed).
  */
-async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
+export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
   const localAppData = process.env.LOCALAPPDATA;
   if (!localAppData) {
     logger.info("%LOCALAPPDATA% not set — skipping workspace scan");
     return [];
+  }
+
+  // Realpath %LOCALAPPDATA% once for use by the path guard.
+  let realLad: string;
+  try {
+    realLad = await fsPromises.realpath(localAppData);
+  } catch {
+    realLad = localAppData; // best-effort fallback
   }
 
   const packagesDir = path.join(localAppData, "Packages");
@@ -125,7 +137,8 @@ async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
     let wsEntries: string[];
     try {
       wsEntries = await fsPromises.readdir(sessionsRoot);
-    } catch {
+    } catch (err) {
+      logger.warn(`cannot read sessions root ${sessionsRoot}: ${(err as Error).message}`);
       continue;
     }
 
@@ -134,7 +147,8 @@ async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
       let vmEntries: string[];
       try {
         vmEntries = await fsPromises.readdir(wsPath);
-      } catch {
+      } catch (err) {
+        logger.warn(`cannot read workspace dir ${wsPath}: ${(err as Error).message}`);
         continue;
       }
 
@@ -142,11 +156,15 @@ async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
         const vmPath = path.join(wsPath, vm);
         try {
           const stat = await fsPromises.stat(vmPath);
-          if (stat.isDirectory()) {
-            workspaces.push(vmPath);
+          if (!stat.isDirectory()) continue;
+
+          // 4-step path guard — only include validated, realpath'd paths.
+          const safePath = await assertSafeWorkspacePath(vmPath, realLad, logger);
+          if (safePath !== null) {
+            workspaces.push(safePath);
           }
-        } catch {
-          // Skip unreadable entries.
+        } catch (err) {
+          logger.warn(`cannot stat ${vmPath}: ${(err as Error).message}`);
         }
       }
     }
@@ -159,10 +177,13 @@ async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
 /**
  * Atomically rewrite a JSON file, invoking `mutate` on the parsed object.
  *
+ * Precondition: `filePath` has already been validated by the path guard.
+ * This function trusts its callers (consistent with `with_locked_json` on the Rust side).
+ *
  * Returns true if the mutation changed something and was written, false if
  * the file was absent or unchanged.
  */
-async function rewriteJson(
+export async function rewriteJson(
   filePath: string,
   mutate: (obj: Record<string, unknown>) => boolean,
   logger: ScrubLogger,
@@ -213,7 +234,7 @@ async function rewriteJson(
 /**
  * Remove the Tandem entry from `installed_plugins.json`.
  */
-function removeInstalledPlugins(obj: Record<string, unknown>): boolean {
+export function removeInstalledPlugins(obj: Record<string, unknown>): boolean {
   let changed = false;
   for (const key of ["mcpServers", "servers"]) {
     const servers = obj[key];
@@ -231,7 +252,7 @@ function removeInstalledPlugins(obj: Record<string, unknown>): boolean {
 /**
  * Remove the Tandem marketplace entry from `known_marketplaces.json`.
  */
-function removeKnownMarketplaces(obj: Record<string, unknown>): boolean {
+export function removeKnownMarketplaces(obj: Record<string, unknown>): boolean {
   const mp = obj.marketplaces;
   if (typeof mp === "object" && mp !== null && !Array.isArray(mp)) {
     const map = mp as Record<string, unknown>;
@@ -246,7 +267,7 @@ function removeKnownMarketplaces(obj: Record<string, unknown>): boolean {
 /**
  * Remove `tandem@tandem` from `enabledPlugins` in `cowork_settings.json`.
  */
-function removeCoworkSettings(obj: Record<string, unknown>): boolean {
+export function removeCoworkSettings(obj: Record<string, unknown>): boolean {
   const enabled = obj.enabledPlugins;
   if (Array.isArray(enabled)) {
     const before = enabled.length;

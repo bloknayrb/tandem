@@ -223,7 +223,7 @@ where
 
         let serialised = serde_json::to_string_pretty(&json_value)?;
 
-        {
+        let write_result: std::io::Result<()> = (|| {
             use std::io::Write;
             let mut tmp_file = std::fs::OpenOptions::new()
                 .write(true)
@@ -232,6 +232,12 @@ where
             tmp_file.write_all(serialised.as_bytes())?;
             tmp_file.flush()?;
             tmp_file.sync_all()?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_result {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e.into());
         }
 
         // Atomic rename into place. Safe on Windows now because we only hold

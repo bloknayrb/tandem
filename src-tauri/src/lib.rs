@@ -772,7 +772,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         }
 
         // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
-        let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().unwrap_or_default());
+        let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().map_err(|e| e.to_string())?);
 
         // Orphan reconciliation (invariant §12).
         let workspaces = find_cowork_workspaces();
@@ -851,17 +851,68 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
     } else {
         // Disable: uninstall from all workspaces and remove firewall rules.
         let workspaces = find_cowork_workspaces();
-        for ws in &workspaces {
-            if let Err(e) = uninstall_tandem_plugin_from_workspace(ws) {
-                log::warn!("[cowork] uninstall error for {}: {e}", ws.display());
+
+        let reports: Vec<_> = workspaces
+            .iter()
+            .map(|ws| uninstall_tandem_plugin_from_workspace(ws))
+            .collect();
+
+        let errors: Vec<_> = reports.iter().filter_map(|r| r.as_ref().err()).collect();
+        if !errors.is_empty() {
+            log::warn!("[cowork] disable: {} uninstall error(s): {:?}", errors.len(), errors);
+        }
+
+        let workspace_all_failed = if !workspaces.is_empty() {
+            let success_count = reports.iter().filter(|r| {
+                match r {
+                    Ok(report) => matches!(
+                        report.installed_plugins,
+                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+                    ),
+                    Err(_) => false,
+                }
+            }).count();
+
+            if success_count > 0 && success_count < workspaces.len() {
+                log::warn!(
+                    "[cowork] disable partial: {}/{} workspace(s) uninstalled cleanly",
+                    success_count, workspaces.len()
+                );
             }
-        }
-        if let Err(e) = firewall::remove_cowork_rules() {
-            log::warn!("[cowork] remove firewall rules error: {e}");
-        }
+            success_count == 0
+        } else {
+            false // No workspaces = nothing to uninstall = success (firewall still needs removing).
+        };
+
+        // Firewall removal: failure is a SECURITY regression — propagate as Err.
+        let firewall_err = firewall::remove_cowork_rules().err();
+
+        // Persist meta regardless of workspace/firewall outcome so the UI reflects
+        // "user requested disable." An Err return still signals failure to the caller.
         if let Err(e) = cowork_meta::update(|m| { m.enabled = false; }) {
             log::warn!("[cowork] failed to persist meta after disable: {e}");
         }
+
+        if let Some(fe) = firewall_err {
+            return Err(format!(
+                "Cowork disable: firewall rule removal failed ({fe}). \
+                 An allow rule may still permit traffic on port 3479. \
+                 Remove 'Tandem Cowork' rules manually in Windows Defender Firewall."
+            ));
+        }
+
+        if workspace_all_failed {
+            let failure_summary: Vec<String> = reports.iter().map(|r| match r {
+                Ok(report) => format!("{}/{}: {:?}", report.workspace_id, report.vm_id, report.installed_plugins),
+                Err(e) => e.to_string(),
+            }).collect();
+            return Err(format!(
+                "Cowork disable failed: all {} workspace(s) failed to uninstall. Failures: {}",
+                workspaces.len(),
+                failure_summary.join("; ")
+            ));
+        }
+
         Ok("Cowork disabled".to_string())
     }
 }
@@ -887,11 +938,42 @@ fn cowork_rescan() -> Result<String, String> {
     let tandem_url = resolve_tandem_url(&meta);
 
     let workspaces = find_cowork_workspaces();
-    let count = workspaces.len();
 
-    for ws in &workspaces {
-        if let Err(e) = install_tandem_plugin_into_workspace(ws, &token, &tandem_url) {
-            log::warn!("[cowork] rescan install error for {}: {e}", ws.display());
+    let reports: Vec<_> = workspaces
+        .iter()
+        .map(|ws| install_tandem_plugin_into_workspace(ws, &token, &tandem_url))
+        .collect();
+
+    let errors: Vec<_> = reports.iter().filter_map(|r| r.as_ref().err()).collect();
+    if !errors.is_empty() {
+        log::warn!("[cowork] rescan: {} install error(s): {:?}", errors.len(), errors);
+    }
+
+    if !workspaces.is_empty() {
+        let success_count = reports.iter().filter(|r| {
+            match r {
+                Ok(report) => matches!(
+                    report.installed_plugins,
+                    cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+                ),
+                Err(_) => false,
+            }
+        }).count();
+
+        if success_count == 0 {
+            let failure_summary: Vec<String> = reports.iter().map(|r| match r {
+                Ok(report) => format!("{}/{}: {:?}", report.workspace_id, report.vm_id, report.installed_plugins),
+                Err(e) => e.to_string(),
+            }).collect();
+            return Err(format!(
+                "Cowork rescan failed: all {} workspace(s) failed. Failures: {}",
+                workspaces.len(),
+                failure_summary.join("; ")
+            ));
+        }
+
+        if success_count < workspaces.len() {
+            log::warn!("[cowork] rescan partial: {}/{} workspace(s) succeeded", success_count, workspaces.len());
         }
     }
 
@@ -901,7 +983,7 @@ fn cowork_rescan() -> Result<String, String> {
         log::warn!("[cowork] rescan: failed to persist meta: {e}");
     }
 
-    Ok(format!("Rescan complete: {count} workspace(s)"))
+    Ok(format!("Rescan complete: {} workspace(s)", workspaces.len()))
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
@@ -1056,10 +1138,24 @@ fn cowork_detect_vethernet_subnet() -> Result<String, String> {
 #[tauri::command]
 fn cowork_apply_token(token: String) -> Result<String, String> {
     let reports = cowork_installer::apply_token_to_all_workspaces(&token);
-    let success = reports
-        .iter()
-        .filter(|r| r.installed_plugins == cowork_installer::WriteStatus::Ok)
-        .count();
+    let total = reports.len();
+    let success = reports.iter().filter(|r| matches!(
+        r.installed_plugins,
+        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+    )).count();
+
+    if total > 0 && success == 0 {
+        let failure_summary: Vec<String> = reports.iter().map(|r| {
+            format!("{}/{}: {:?}", r.workspace_id, r.vm_id, r.installed_plugins)
+        }).collect();
+        return Err(format!(
+            "Cowork apply-token failed: all {total} workspace(s) failed. Failures: {}",
+            failure_summary.join("; ")
+        ));
+    }
+    if success < total {
+        log::warn!("[cowork] apply-token partial: {success}/{total} workspace(s) succeeded");
+    }
     Ok(format!("Cowork: {success} workspace(s) re-walked with new token"))
 }
 #[cfg(not(target_os = "windows"))]
@@ -1106,7 +1202,7 @@ fn cowork_install_into_workspace(ws_path: String) -> Result<String, String> {
     let report = install_tandem_plugin_into_workspace(&canonical_supplied, &token, &tandem_url)
         .map_err(|e| e.to_string())?;
 
-    Ok(serde_json::to_string(&report).unwrap_or_default())
+    Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
@@ -1137,7 +1233,7 @@ fn cowork_uninstall_from_workspace(ws_path: String) -> Result<String, String> {
 
     let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&canonical_supplied)
         .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&report).unwrap_or_default())
+    Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
@@ -1160,9 +1256,43 @@ fn cowork_set_lan_ip_override(enabled: bool) -> Result<String, String> {
     if meta.enabled {
         let token = token_store::get_or_create_token()?;
         let tandem_url = resolve_tandem_url(&meta);
-        for ws in find_cowork_workspaces() {
-            if let Err(e) = install_tandem_plugin_into_workspace(&ws, &token, &tandem_url) {
-                log::warn!("[cowork] set_lan_ip_override re-walk error: {e}");
+        let workspaces = find_cowork_workspaces();
+
+        let reports: Vec<_> = workspaces
+            .iter()
+            .map(|ws| install_tandem_plugin_into_workspace(ws, &token, &tandem_url))
+            .collect();
+
+        let errors: Vec<_> = reports.iter().filter_map(|r| r.as_ref().err()).collect();
+        if !errors.is_empty() {
+            log::warn!("[cowork] set_lan_ip_override: {} re-walk error(s): {:?}", errors.len(), errors);
+        }
+
+        if !workspaces.is_empty() {
+            let success_count = reports.iter().filter(|r| {
+                match r {
+                    Ok(report) => matches!(
+                        report.installed_plugins,
+                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+                    ),
+                    Err(_) => false,
+                }
+            }).count();
+
+            if success_count == 0 {
+                let failure_summary: Vec<String> = reports.iter().map(|r| match r {
+                    Ok(report) => format!("{}/{}: {:?}", report.workspace_id, report.vm_id, report.installed_plugins),
+                    Err(e) => e.to_string(),
+                }).collect();
+                return Err(format!(
+                    "LAN IP override applied to meta but re-walk failed: all {} workspace(s) failed. Failures: {}",
+                    workspaces.len(),
+                    failure_summary.join("; ")
+                ));
+            }
+
+            if success_count < workspaces.len() {
+                log::warn!("[cowork] set_lan_ip_override partial: {}/{} workspace(s) succeeded", success_count, workspaces.len());
             }
         }
     }

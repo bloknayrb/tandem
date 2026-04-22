@@ -99,13 +99,17 @@ pub struct ReconcileReport {
 fn check_acl(path: &Path) -> Result<(), CoworkError> {
     // Honour the test override root: if the path is within the override, skip
     // the %LOCALAPPDATA% check (tests use std::env::temp_dir()).
-    if let Ok(override_root) = std::env::var("TANDEM_COWORK_ROOT_OVERRIDE") {
-        let override_path = PathBuf::from(&override_root);
-        if let (Ok(canon_override), Ok(canon_path)) =
-            (std::fs::canonicalize(&override_path), std::fs::canonicalize(path))
-        {
-            if canon_path.starts_with(&canon_override) {
-                return Ok(());
+    // Gated so production binaries cannot be redirected by env var.
+    #[cfg(any(test, feature = "cowork-test-hooks"))]
+    {
+        if let Ok(override_root) = std::env::var("TANDEM_COWORK_ROOT_OVERRIDE") {
+            let override_path = PathBuf::from(&override_root);
+            if let (Ok(canon_override), Ok(canon_path)) =
+                (std::fs::canonicalize(&override_path), std::fs::canonicalize(path))
+            {
+                if canon_path.starts_with(&canon_override) {
+                    return Ok(());
+                }
             }
         }
     }
@@ -117,12 +121,13 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
 
     // Canonicalize both for comparison.
     // Only fail-open for NotFound (path doesn't exist yet — that's fine for
-    // new workspace directories). All other errors fail closed: we can't verify
-    // the path is safe, so reject rather than silently allow.
+    // new workspace directories). All other I/O errors propagate as IoError
+    // (not InsecureAcl) so callers can distinguish a security rejection from
+    // a transient I/O failure.
     let canonical_path = match std::fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(CoworkError::InsecureAcl { path: path.to_path_buf() }),
+        Err(e) => return Err(e.into()),
     };
     let canonical_lad = match std::fs::canonicalize(&local_app_data) {
         Ok(p) => p,
@@ -196,31 +201,42 @@ pub fn install_tandem_plugin_into_workspace(
         })?;
     }
 
-    let installed_status = if let Err(ref e) = acl_result {
-        log::warn!("[cowork-install] InsecureAcl for installed_plugins.json: {e}");
-        WriteStatus::InsecureAcl
-    } else {
-        let path = plugins_dir.join("installed_plugins.json");
-        // Token must not appear in any log — pass it via closure capture only.
-        let token_owned = token.to_string();
-        let tandem_url_owned = tandem_url.to_string();
-        write_status_from(with_locked_json(&path, move |json| {
-            merge_installed_plugins(json, &token_owned, &tandem_url_owned)
-        }))
+    let installed_status = match &acl_result {
+        Ok(()) => {
+            let path = plugins_dir.join("installed_plugins.json");
+            // Token must not appear in any log — pass it via closure capture only.
+            let token_owned = token.to_string();
+            let tandem_url_owned = tandem_url.to_string();
+            write_status_from(with_locked_json(&path, move |json| {
+                merge_installed_plugins(json, &token_owned, &tandem_url_owned)
+            }))
+        }
+        Err(CoworkError::InsecureAcl { .. }) => {
+            log::warn!("[cowork-install] InsecureAcl for installed_plugins.json");
+            WriteStatus::InsecureAcl
+        }
+        Err(e) => {
+            log::warn!("[cowork-install] I/O error checking ACL for installed_plugins.json: {e}");
+            WriteStatus::Failed(e.to_string())
+        }
     };
 
-    let known_status = if acl_result.is_err() {
-        WriteStatus::InsecureAcl
-    } else {
-        let path = plugins_dir.join("known_marketplaces.json");
-        write_status_from(with_locked_json(&path, merge_known_marketplaces))
+    let known_status = match &acl_result {
+        Ok(()) => {
+            let path = plugins_dir.join("known_marketplaces.json");
+            write_status_from(with_locked_json(&path, merge_known_marketplaces))
+        }
+        Err(CoworkError::InsecureAcl { .. }) => WriteStatus::InsecureAcl,
+        Err(e) => WriteStatus::Failed(e.to_string()),
     };
 
-    let settings_status = if acl_result.is_err() {
-        WriteStatus::InsecureAcl
-    } else {
-        let path = plugins_dir.join("cowork_settings.json");
-        write_status_from(with_locked_json(&path, merge_cowork_settings))
+    let settings_status = match &acl_result {
+        Ok(()) => {
+            let path = plugins_dir.join("cowork_settings.json");
+            write_status_from(with_locked_json(&path, merge_cowork_settings))
+        }
+        Err(CoworkError::InsecureAcl { .. }) => WriteStatus::InsecureAcl,
+        Err(e) => WriteStatus::Failed(e.to_string()),
     };
 
     Ok(WorkspaceWriteReport {
@@ -392,9 +408,21 @@ pub fn reconcile_orphans(workspaces: &[PathBuf], current_token: &str) -> Reconci
                         .unwrap_or("");
                     stored != current_token
                 }
-                Err(_) => false,
+                Err(e) => {
+                    log::warn!(
+                        "[cowork-install] reconcile: corrupt JSON in {} ({e}) — forcing rewrite",
+                        path.display()
+                    );
+                    true // locked writer's schema guard will surface drift safely
+                }
             },
-            Err(_) => false,
+            Err(e) => {
+                log::warn!(
+                    "[cowork-install] reconcile: cannot read {} ({e}) — skipping",
+                    path.display()
+                );
+                false // can't read means can't write safely
+            }
         };
 
         if needs_update {
@@ -819,6 +847,58 @@ mod tests {
         let result = install_tandem_plugin_into_workspace(&ws_path, "token", DEFAULT_TANDEM_URL).unwrap();
         std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
         assert_eq!(result.installed_plugins, WriteStatus::SchemaDrift);
+    }
+
+    #[test]
+    fn test_check_acl_rejects_path_outside_override_and_lad() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        // Use %APPDATA% (Roaming) — a sibling of %LOCALAPPDATA% (Local), not a
+        // child. TempDir::new() uses %TEMP% which IS inside %LOCALAPPDATA% on
+        // Windows, so it cannot be used here.
+        let appdata = match std::env::var("APPDATA") {
+            Ok(v) => std::path::PathBuf::from(v),
+            Err(_) => return, // no APPDATA (non-Windows CI) — skip
+        };
+        let test_dir = appdata.join("tandem-test-acl-reject");
+        let ws = test_dir.join("ws").join("vm");
+        if fs::create_dir_all(&ws).is_err() {
+            return; // can't create test dir — skip
+        }
+
+        let result = check_acl(&ws);
+        let _ = fs::remove_dir_all(&test_dir);
+
+        assert!(
+            matches!(result, Err(CoworkError::InsecureAcl { .. })),
+            "expected InsecureAcl for path outside %%LOCALAPPDATA%%, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_check_acl_io_error_is_not_insecure_acl() {
+        // Trigger a non-NotFound canonicalize error: path whose parent is a regular
+        // file (not a directory). Canonicalize returns NotADirectory/Other, not NotFound.
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("regular_file");
+        fs::write(&file_path, b"not a dir").unwrap();
+        let bogus = file_path.join("child"); // parent is a file, not a dir
+
+        let result = check_acl(&bogus);
+        // Either IoError (preferred — Step 3's fix) or NotFound fail-open (Ok).
+        // MUST NOT be InsecureAcl (that would mean we're still conflating I/O with security).
+        match result {
+            Err(CoworkError::InsecureAcl { .. }) => {
+                panic!("I/O error should not map to InsecureAcl after Step 3 fix");
+            }
+            Err(CoworkError::IoError(_)) | Ok(()) => {} // either is acceptable
+            other => panic!("unexpected result: {:?}", other),
+        }
     }
 
     #[test]

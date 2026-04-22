@@ -6,9 +6,10 @@
 //!
 //! **Security invariant §3 — defense-in-depth path guard:**
 //! Every candidate path goes through four checks (in order):
-//!   a. `std::fs::canonicalize` on both the root and each candidate.
-//!   b. Reject any path whose canonical form is a UNC path.
-//!   c. Reject any path where any component has the reparse-point attribute set.
+//!   a. Reject any path where any ancestor has the reparse-point attribute set
+//!      (checked BEFORE canonicalize, which would resolve and hide them).
+//!   b. `std::fs::canonicalize` on the candidate (safe: reparse points already rejected).
+//!   c. Reject any path whose canonical form is a UNC path.
 //!   d. Component-wise comparison (NOT string-prefix) against the canonical root.
 //!
 //! Paths that fail any check are skipped with a `WARN` log; the walker never
@@ -82,7 +83,10 @@ pub fn find_cowork_workspaces() -> Vec<PathBuf> {
             // Walk vm-id level.
             let vm_entries = match std::fs::read_dir(&ws_path) {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(e) => {
+                    log::warn!("[cowork-scan] cannot read vm-level dir {}: {e}", ws_path.display());
+                    continue;
+                }
             };
 
             for vm_entry in vm_entries {
@@ -133,20 +137,22 @@ pub fn find_cowork_workspaces() -> Vec<PathBuf> {
 fn cowork_roots() -> Vec<PathBuf> {
     // Test hook: allow overriding the scan root for unit tests.
     //
-    // The override is authoritative when set — if it points at an absent
-    // directory we return an empty vec rather than falling back to the real
-    // %LOCALAPPDATA% scan. This prevents tests that expect "no workspaces"
-    // from accidentally picking up the developer's real Claude Desktop install.
-    if let Ok(override_root) = std::env::var("TANDEM_COWORK_ROOT_OVERRIDE") {
-        let p = PathBuf::from(&override_root);
-        if p.is_dir() {
-            log::debug!("[cowork-scan] using TANDEM_COWORK_ROOT_OVERRIDE: {override_root}");
-            return vec![p];
-        } else {
-            log::debug!(
-                "[cowork-scan] TANDEM_COWORK_ROOT_OVERRIDE={override_root} is not a dir — returning empty"
-            );
-            return vec![];
+    // Gated behind cfg(test) / the cowork-test-hooks feature so the env var
+    // cannot be used to redirect production builds. Production binaries compiled
+    // with `cargo build --release` (no features) skip this block entirely.
+    #[cfg(any(test, feature = "cowork-test-hooks"))]
+    {
+        if let Ok(override_root) = std::env::var("TANDEM_COWORK_ROOT_OVERRIDE") {
+            let p = PathBuf::from(&override_root);
+            if p.is_dir() {
+                log::debug!("[cowork-scan] using TANDEM_COWORK_ROOT_OVERRIDE: {override_root}");
+                return vec![p];
+            } else {
+                log::debug!(
+                    "[cowork-scan] TANDEM_COWORK_ROOT_OVERRIDE={override_root} is not a dir — returning empty"
+                );
+                return vec![];
+            }
         }
     }
 
@@ -206,22 +212,23 @@ fn cowork_roots() -> Vec<PathBuf> {
 /// Returns the canonicalized path on success, or a human-readable rejection
 /// reason string on failure.
 pub(crate) fn check_path_safe(candidate: &Path, canonical_root: &Path) -> Result<PathBuf, String> {
-    // (a) Canonicalize the candidate.
+    // (a) Fail-closed reparse check on candidate + ancestors via lstat.
+    //     MUST run before canonicalize — canonicalize resolves reparse points
+    //     on Windows and would hide junction/symlink components.
+    if has_reparse_point_in_chain(candidate) {
+        return Err("reparse point detected in candidate path chain".to_string());
+    }
+
+    // (b) Canonicalize (safe now — reparse points already rejected).
     let canonical = std::fs::canonicalize(candidate)
         .map_err(|e| format!("canonicalize failed: {e}"))?;
 
-    // (b) Reject UNC paths.
+    // (c) Reject UNC paths.
     if is_unc_path(&canonical) {
         return Err(format!(
             "UNC path rejected: {}",
             canonical.display()
         ));
-    }
-
-    // (c) Reject reparse points anywhere in the chain.
-    // Pass the canonical path so the check operates on the resolved form.
-    if has_reparse_point_in_chain(&canonical) {
-        return Err("reparse point detected in path chain".to_string());
     }
 
     // (d) Component-wise containment check (NOT string prefix).
@@ -360,5 +367,15 @@ mod tests {
 
         // Should find the vm-level directory.
         assert_eq!(results.len(), 1, "expected 1 workspace, got {:?}", results);
+    }
+
+    #[test]
+    fn test_reparse_check_fail_closed_on_nonexistent_path() {
+        // Fail-closed: lstat on a non-existent path returns Err → reject.
+        let bogus = Path::new(r"C:\Definitely\Does\Not\Exist\xyz_reparse_test");
+        assert!(
+            has_reparse_point_in_chain(bogus),
+            "has_reparse_point_in_chain must fail closed on lstat errors"
+        );
     }
 }
