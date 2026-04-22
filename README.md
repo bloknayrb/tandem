@@ -119,7 +119,7 @@ Or check the raw health endpoint:
 
 ```bash
 curl http://localhost:3479/health
-# → {"status":"ok","version":"0.4.0","transport":"http","hasSession":false}
+# → {"status":"ok","version":"0.7.1","transport":"http","hasSession":false}
 ```
 
 `hasSession` becomes `true` once Claude Code connects.
@@ -183,13 +183,19 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 - **Configurable display name** — set your name so Claude knows who's reviewing
 - **Atomic file saves** — write to temp, then rename, preventing partial writes
 - **E2E tested** — Playwright tests cover the annotation lifecycle end-to-end
+- **Authorship text coloring** — blue for your edits, orange for Claude's, toggled per-document
+- **Threaded annotation replies** — back-and-forth conversation on any annotation
+- **Auto-save** — documents save on change; Ctrl+S for manual trigger
+- **Settings popover** — Light/Dark/System theme, text size (S/M/L), reduce motion, display name (Ctrl+,)
+- **Auth tokens for LAN exposure** — bind to `0.0.0.0` with auto-generated tokens; `tandem rotate-token` for rotation
+- **Durable annotation persistence** — annotations survive server restarts independently of session files
+- **Claude Code plugin** — `tandem mcp-stdio` + `tandem channel` bridge Tandem into Cowork and Claude Desktop
 
 ## Where Tandem is headed
 
-Tandem v0.4.0 ships a native desktop app (macOS, Linux, Windows) alongside the existing npm CLI. A few directions on the radar for later releases:
+Since the v0.4.0 desktop app launch, Tandem has added auth tokens for LAN exposure (v0.7.0), a Claude Code plugin bridge for Cowork and Claude Desktop (v0.6.0+), durable annotation persistence, settings with Light/Dark/System theming, and authorship text coloring. A few directions on the radar for later releases:
 
-- **High-fidelity .docx round-trip** — current `.docx` support is review-only; LibreOffice-headless-based production export is planned so you can stay in Tandem through the final draft.
-- **Claude Desktop parity** — the MCP server already works with Claude Desktop; polish and documentation for a first-class experience there is in the works.
+- **High-fidelity .docx round-trip** — current `.docx` support is review-only; production export is planned so you can stay in Tandem through the final draft.
 - **Exportable annotated documents** — PDF (and eventually `.docx`) with annotations baked in, so you can share reviewed drafts outside Tandem.
 - **Code editing mode** — CodeMirror 6 surface for reviewing code the same way you review prose.
 - **Standalone mode** — direct Anthropic API connection so Tandem can run without Claude Code in the loop, for users who want a pure browser-based experience.
@@ -203,8 +209,8 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: text iteration, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-022
-- [Lessons Learned](docs/lessons-learned.md) — 37 implementation lessons
+- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-024
+- [Lessons Learned](docs/lessons-learned.md) — 44 implementation lessons
 
 ## CLI Commands
 
@@ -215,10 +221,14 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 | `tandem setup --force` | Register to default paths regardless of auto-detection |
 | `tandem --version` | Show installed version |
 | `tandem --help` | Show usage |
+| `tandem setup --with-channel-shim` | Also register the stdio channel shim |
+| `tandem rotate-token` | Rotate auth token (60-second grace window) |
+| `tandem mcp-stdio` | Run as stdio MCP server (proxy to local HTTP, for plugin bridge) |
+| `tandem channel` | Run the channel shim (stdio MCP for plugin's tandem-channel entry) |
 
 ## MCP Configuration
 
-Tandem registers two MCP connections: **HTTP** for document tools (30 tools including annotation editing — always on), and a **channel shim** for real-time push notifications. The channel shim is what enables the live-collaborator experience described in [Connect Claude Code](#connect-claude-code) and is recommended; it activates when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`. If you'd rather not pass that experimental flag, the entry sits idle and everything still works through polling on the HTTP connection — you just lose spontaneous reactions.
+Tandem registers two MCP connections: **HTTP** for document tools (31 tools including annotation editing — always on), and a **channel shim** for real-time push notifications. The channel shim is what enables the live-collaborator experience described in [Connect Claude Code](#connect-claude-code) and is recommended; it activates when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`. If you'd rather not pass that experimental flag, the entry sits idle and everything still works through polling on the HTTP connection — you just lose spontaneous reactions.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 
@@ -254,6 +264,13 @@ All optional — defaults work out of the box.
 | `TANDEM_TRANSPORT` | `http` | Transport mode (`http` or `stdio`) |
 | `TANDEM_NO_SAMPLE` | unset | Set to `1` to skip auto-opening `sample/welcome.md` |
 | `TANDEM_CLAUDE_CMD` | `claude` | Claude Code executable name (for `tandem setup` auto-detection) |
+| `TANDEM_BIND_HOST` | `127.0.0.1` | Bind address for MCP HTTP (`0.0.0.0` for LAN) |
+| `TANDEM_AUTH_TOKEN` | auto-generated | Override auth token (set by Tauri; manual use rare) |
+| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to skip token requirement on LAN bind |
+| `TANDEM_LAN_IP` | auto-detected | Explicit LAN IP for multi-homed machines |
+| `TANDEM_REQUEST_TIMEOUT_MS` | `30000` | Per-request timeout in stdio bridge (ms) |
+| `TANDEM_APP_DATA_DIR` | platform default | Override app-data root (sessions, auth-token, annotations) |
+| `TANDEM_ANNOTATION_STORE` | unset | Set to `off` to disable durable annotation persistence |
 
 See `.env.example` for a copy-paste template.
 
