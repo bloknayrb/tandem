@@ -15,8 +15,7 @@ export interface OpenTab extends DocListEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Cowork integration types (PR f — consumed from Rust invoke commands shipped
-// by PR e). Windows-only surface; non-Windows responses set `osSupported=false`.
+// Cowork integration types. Windows-only surface; non-Windows responses set osSupported=false.
 // ---------------------------------------------------------------------------
 
 /**
@@ -52,6 +51,7 @@ export interface CoworkStatus {
   workspaces: WorkspaceStatus[];
   uacDeclined: boolean;
   uacDeclinedAt: string | null;
+  workspacesLastScannedAt?: string | null;
 }
 
 /**
@@ -59,8 +59,8 @@ export interface CoworkStatus {
  * drives a distinct user-facing recovery hint — see `firewallErrorHint`.
  */
 export type FirewallErrorVariant =
-  | { kind: "AdminDeclined" }
-  | { kind: "NetshNotFound" }
-  | { kind: "NetshFailure"; exitCode: number; stderrTail: string }
-  | { kind: "SubnetDetectionFailed" }
-  | { kind: "AdapterEnumerationFailed" };
+  | { kind: "adminDeclined" }
+  | { kind: "netshNotFound" }
+  | { kind: "netshFailure"; exitCode: number; stderrTail: string; stdoutTail: string }
+  | { kind: "subnetDetectionFailed" }
+  | { kind: "adapterEnumerationFailed" };
