@@ -408,10 +408,10 @@ The probe produces a decision document filed as an ADR. The result determines th
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.8.0 | Token hygiene + annotation correctness | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369, #376, #377, #379 |
+| v0.8.0 | Token hygiene + annotation correctness | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369, #376, #377, #379, #381, #382 |
 | v0.9.0 | MCP API cleanup + distribution | #259, PR e, #316, #317, #322, #341, ADR-023 CI smoke test |
 
-**v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity. #369 (dark-mode scrollbars) is a standalone visual fix that lands here as a prerequisite, not part of the full dark theme release. #377 (annotation offset resolving to wrong text) is a position-related bug — if investigation reveals it's systemic rather than a one-off, #260 moves into scope per the deferral criterion. #376 (monitor not pushing events) is a usability bug in the event push pipeline. #379 (Tiptap markdown round-trip drops tables and mangles formatting) is a data integrity issue — opening a file with tables and saving it silently destroys content.
+**v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity. #369 (dark-mode scrollbars) is a standalone visual fix that lands here as a prerequisite, not part of the full dark theme release. #377 (annotation offset resolving to wrong text) is a position-related bug — if investigation reveals it's systemic rather than a one-off, #260 moves into scope per the deferral criterion. #376 (monitor not pushing events) is a usability bug in the event push pipeline. #379 (Tiptap markdown round-trip drops tables and mangles formatting) is a data integrity issue — opening a file with tables and saving it silently destroys content. #381 (remove Accept/Reject from user annotations) and #382 (remove Replace/@Claude checkboxes from user toolbar) simplify the annotation UX — settle this before any framework migration so the simpler UI is what gets ported.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
 
@@ -424,7 +424,7 @@ The probe produces a decision document filed as an ADR. The result determines th
 | v0.10.0 | Svelte core migration | #312 Phase 2 (Vite plugin, `useYjsSync` rune, core hooks, Editor, DocumentTabs) |
 | v0.11.0 | Svelte complete | #312 Phase 3-4 (remaining panels, React removal, `<svelte:boundary>` error recovery) |
 | v0.12.0 | Dark theme | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification |
-| v0.13.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319, #378 |
+| v0.13.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319, #378, #380 |
 | v0.14.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
 
@@ -439,7 +439,7 @@ The probe produces a decision document filed as an ADR. The result determines th
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.10.0 | Dark theme | #59, `editor.css` dark overrides, #311, ErrorBoundary audit, WCAG AA |
-| v0.11.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319, #378 |
+| v0.11.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319, #378, #380 |
 | v0.12.0 | First-run + desktop polish | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Same as Svelte Go path |
 
