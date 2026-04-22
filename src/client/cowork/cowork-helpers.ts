@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the Cowork Settings UI (PR f). Extracted from the React
+ * Pure helpers for the Cowork Settings UI. Extracted from the React
  * components so they can be unit-tested with vitest in the existing node
  * environment — no DOM / testing-library required.
  */
@@ -30,24 +30,26 @@ export function coworkSettingsVariant(status: CoworkStatus | null): CoworkSettin
 }
 
 /**
- * Render a distinct user-facing recovery hint per `FirewallError` variant
- * (security invariant §13). Kept pure so `tests/client/cowork-settings.test.ts`
+ * Render a distinct user-facing recovery hint per `FirewallError` variant.
+ * Kept pure so `tests/client/cowork-settings.test.ts`
  * can exhaustively cover the variant → hint mapping.
  */
 export function firewallErrorHint(variant: FirewallErrorVariant): string {
   switch (variant.kind) {
-    case "AdminDeclined":
+    case "adminDeclined":
       return "Admin permission was denied. Retry with admin, or disable Cowork integration.";
-    case "NetshNotFound":
+    case "netshNotFound":
       return "Windows Firewall command (netsh) was not found on PATH. Confirm your Windows install is intact.";
-    case "NetshFailure":
+    case "netshFailure":
       return `Windows Firewall command failed (exit ${variant.exitCode}). Details: ${truncateStderr(
         variant.stderrTail,
       )}`;
-    case "SubnetDetectionFailed":
+    case "subnetDetectionFailed":
       return "Could not detect the Hyper-V / Cowork VM subnet. Is Claude Desktop Cowork actually set up on this machine?";
-    case "AdapterEnumerationFailed":
+    case "adapterEnumerationFailed":
       return "Could not enumerate Hyper-V network adapters. Run Tandem as administrator or reboot to refresh the adapter list.";
+    default:
+      return `Unexpected firewall error (${(variant as { kind: string }).kind}). Please restart Tandem.`;
   }
 }
 
@@ -56,6 +58,28 @@ function truncateStderr(tail: string): string {
   if (s.length === 0) return "(no output)";
   if (s.length <= 200) return s;
   return `${s.slice(0, 197)}...`;
+}
+
+export function formatCoworkError(rawMsg: string): string {
+  try {
+    const parsed: unknown = JSON.parse(rawMsg);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "kind" in parsed &&
+      typeof (parsed as Record<string, unknown>).kind === "string"
+    ) {
+      try {
+        return firewallErrorHint(parsed as FirewallErrorVariant);
+      } catch (hintErr) {
+        console.error("[cowork] firewallErrorHint failed for:", parsed, hintErr);
+        return rawMsg;
+      }
+    }
+    return rawMsg;
+  } catch {
+    return rawMsg;
+  }
 }
 
 /**
