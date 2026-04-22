@@ -4,13 +4,14 @@ import {
   readCoworkOnboardingSkipped,
   shouldShowCoworkOnboarding,
 } from "../cowork/cowork-helpers";
-import { useCoworkStatus } from "../hooks/useCoworkStatus";
+import type { CoworkStatus } from "../types";
 import { CoworkOnboardingStep } from "./CoworkOnboardingStep";
 
 interface OnboardingTutorialProps {
   currentStep: number;
   onNext: () => void;
   onDismiss: () => void;
+  coworkStatus: CoworkStatus | null;
 }
 
 const BASE_STEPS = [
@@ -42,13 +43,15 @@ const BASE_STEPS = [
   },
 ] as const;
 
-export function OnboardingTutorial({ currentStep, onNext, onDismiss }: OnboardingTutorialProps) {
-  // Only poll for Cowork status when we're in Tauri — otherwise the hook
-  // settles into an inactive state and we skip the step entirely.
+export function OnboardingTutorial({
+  currentStep,
+  onNext,
+  onDismiss,
+  coworkStatus,
+}: OnboardingTutorialProps) {
   const tauri = isTauriRuntime();
-  const { status } = useCoworkStatus(tauri);
   const skipped = useMemo(readCoworkOnboardingSkipped, []);
-  const showCowork = tauri && shouldShowCoworkOnboarding(status, skipped);
+  const showCowork = tauri && shouldShowCoworkOnboarding(coworkStatus, skipped);
 
   // Filter out the cowork step when it's not applicable. The visible
   // currentStep indexes into this filtered list, so non-Tauri callers see
@@ -98,11 +101,11 @@ export function OnboardingTutorial({ currentStep, onNext, onDismiss }: Onboardin
         </div>
       )}
 
-      {isCoworkStep && status !== null ? (
+      {isCoworkStep && coworkStatus !== null ? (
         // The Cowork step owns its Enable / Skip / Learn-more buttons and
         // drives advancement via `onAdvance`, so we don't render the shared
         // Dismiss / Next footer here.
-        <CoworkOnboardingStep status={status} onAdvance={onNext} />
+        <CoworkOnboardingStep status={coworkStatus} onAdvance={onNext} />
       ) : (
         <>
           <div

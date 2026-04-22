@@ -8,6 +8,7 @@ import {
   readCoworkOnboardingSkipped,
   shouldShowCoworkOnboarding,
 } from "../cowork/cowork-helpers";
+import type { CoworkStatus } from "../types";
 import { useCoworkStatus } from "./useCoworkStatus";
 
 interface UseTutorialResult {
@@ -15,6 +16,7 @@ interface UseTutorialResult {
   currentStep: number;
   dismissTutorial: () => void;
   nextStep: () => void;
+  coworkStatus: CoworkStatus | null;
 }
 
 function readCompleted(): boolean {
@@ -60,10 +62,13 @@ export function useTutorial(
   // Cowork step eligibility — drives the step count so step 2 advances to
   // the right completion index (3 when no Cowork, 4 when Cowork is inserted).
   const tauri = isTauriRuntime();
-  const { status: coworkStatus } = useCoworkStatus(tauri && tutorialActive);
+  const { status: coworkStatus, error: coworkStatusError } = useCoworkStatus(
+    tauri && tutorialActive,
+  );
   const [coworkSkipped] = useState(readCoworkOnboardingSkipped);
+  const coworkStatusSettled = !tauri || coworkStatus !== null || coworkStatusError !== null;
   const includeCoworkStep = tauri && shouldShowCoworkOnboarding(coworkStatus, coworkSkipped);
-  const completionStep = includeCoworkStep ? 4 : 3;
+  const completionStep = coworkStatusSettled ? (includeCoworkStep ? 4 : 3) : Infinity;
 
   // Step 0: detect any tutorial annotation resolved, or auto-skip if none exist
   useEffect(() => {
@@ -94,7 +99,7 @@ export function useTutorial(
   // Uses editorRef.current identity — re-attaches listener on tab switch/remount
   const editor = editorRef.current;
   useEffect(() => {
-    if (!tutorialActive || currentStep !== 2) return;
+    if (!tutorialActive || currentStep !== 2 || !isFinite(completionStep)) return;
     if (!editor) return;
 
     const handler = () => {
@@ -110,18 +115,24 @@ export function useTutorial(
     return () => {
       editor.off("update", handler);
     };
-  }, [tutorialActive, currentStep, editor]);
+  }, [tutorialActive, currentStep, completionStep, editor]);
 
   // Completion step: auto-complete after 3 seconds. Completion index is 3
   // when no Cowork step is inserted, 4 when it is.
   useEffect(() => {
-    if (!tutorialActive || currentStep !== completionStep) return;
+    if (!tutorialActive || !isFinite(completionStep) || currentStep !== completionStep) return;
     const timer = setTimeout(() => {
       writeCompleted();
       setCompleted(true);
     }, 3000);
     return () => clearTimeout(timer);
   }, [tutorialActive, currentStep, completionStep]);
+
+  useEffect(() => {
+    if (isFinite(completionStep)) {
+      setCurrentStep((prev) => Math.min(prev, completionStep));
+    }
+  }, [completionStep]);
 
   const dismissTutorial = useCallback(() => {
     writeCompleted();
@@ -138,5 +149,6 @@ export function useTutorial(
     currentStep,
     dismissTutorial,
     nextStep,
+    coworkStatus,
   };
 }
