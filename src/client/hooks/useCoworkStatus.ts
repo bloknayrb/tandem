@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { COWORK_STATUS_POLL_MS } from "../../shared/constants";
-import { coworkGetStatus, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
+import {
+  coworkGetStatus,
+  type InvokeFn,
+  loadInvoke,
+  TAURI_NOT_AVAILABLE,
+} from "../cowork/cowork-invoke";
 import type { CoworkStatus } from "../types";
 
 export interface UseCoworkStatusResult {
@@ -14,8 +19,8 @@ export interface UseCoworkStatusResult {
  * Polls `cowork_get_status` every 30s while `active` is true. Stops polling
  * when `active` flips false or on unmount. On error, the error string is
  * surfaced via the returned `error` field and the previous `status` is kept
- * visible (silent-failure-hunter: don't blank the UI on a transient poll
- * failure). Runs as a no-op in non-Tauri environments (e.g. Vite dev).
+ * visible — avoid blanking the UI on a transient poll failure. Runs as a
+ * no-op in non-Tauri environments (e.g. Vite dev).
  */
 export function useCoworkStatus(active: boolean): UseCoworkStatusResult {
   const [status, setStatus] = useState<CoworkStatus | null>(null);
@@ -57,7 +62,7 @@ export function useCoworkStatus(active: boolean): UseCoworkStatusResult {
       const msg = err instanceof Error ? err.message : String(err);
       // The rejecting stub loadInvoke() returns when Tauri is absent produces
       // this sentinel. Stop polling silently — this is not an error condition.
-      if (msg === "Tauri runtime not available") {
+      if (msg === TAURI_NOT_AVAILABLE) {
         tauriMissingRef.current = true;
         if (intervalRef.current !== null) {
           clearInterval(intervalRef.current);
