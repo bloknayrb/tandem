@@ -20,8 +20,6 @@
 
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { TandemEvent } from "../shared/events/types.js";
-import { formatEventContent, parseTandemEvent } from "../shared/events/types.js";
 import { authFetch } from "../shared/cli-runtime.js";
 import {
   CHANNEL_MAX_RETRIES,
@@ -29,6 +27,8 @@ import {
   DEFAULT_MCP_PORT,
   TANDEM_MODE_DEFAULT,
 } from "../shared/constants.js";
+import type { TandemEvent } from "../shared/events/types.js";
+import { formatEventContent, parseTandemEvent } from "../shared/events/types.js";
 import { type TandemMode, TandemModeSchema } from "../shared/types.js";
 
 const IS_VITEST = process.env.VITEST === "true";
