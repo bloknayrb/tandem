@@ -1,6 +1,6 @@
+import envPaths from "env-paths";
 import fs from "fs";
 import path from "path";
-import envPaths from "env-paths";
 import { TOKEN_FILE_NAME } from "../constants.js";
 
 export function getTokenFilePath(): string {

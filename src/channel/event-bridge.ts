@@ -4,10 +4,10 @@
  */
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { TandemEvent } from "../shared/events/types.js";
-import { formatEventContent, formatEventMeta, parseTandemEvent } from "../shared/events/types.js";
 import { authFetch } from "../shared/cli-runtime.js";
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants.js";
+import type { TandemEvent } from "../shared/events/types.js";
+import { formatEventContent, formatEventMeta, parseTandemEvent } from "../shared/events/types.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
 const MODE_CACHE_TTL_MS = 2000;
