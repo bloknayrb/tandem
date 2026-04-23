@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as Y from "yjs";
+import { makeEmptyDoc } from "../helpers/ydoc-factory.js";
 
 // vi.mock factories are hoisted before module-level code, so outer `const`s
 // are not accessible inside them. All paths must be computed inline using
@@ -117,7 +117,7 @@ describe("session restore — empty fragment", () => {
     await fs.writeFile(filePath, "# Has real content");
 
     // Save a session from an empty Y.Doc — no content in the XmlFragment
-    const emptyDoc = new Y.Doc();
+    const emptyDoc = makeEmptyDoc();
     await saveSession(filePath, "md", emptyDoc);
 
     // Open — should detect fragment.length === 0 and fall back to source file
