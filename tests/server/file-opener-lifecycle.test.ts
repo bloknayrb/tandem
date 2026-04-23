@@ -2,7 +2,7 @@ import fsSync from "fs";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeEmptyDoc } from "../helpers/ydoc-factory.js";
 
 // vi.mock factories are hoisted before module-level code, so outer `const`s
@@ -60,6 +60,7 @@ afterEach(async () => {
 afterAll(async () => {
   const appDataDir = process.env.TANDEM_APP_DATA_DIR;
   if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
+  delete process.env.TANDEM_APP_DATA_DIR;
 });
 
 // ---------------------------------------------------------------------------

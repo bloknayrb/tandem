@@ -321,7 +321,9 @@ async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string):
  * set active, write metadata, init saved baseline, wire annotation store,
  * broadcast, start auto-save, and (for non-docx) set up the file watcher.
  *
- * NOTE: openFileFromContent has a similar finalization sequence — keep them in sync.
+ * NOTE: openFileFromContent follows a similar sequence but intentionally omits
+ * wireFileWatcher and calls initSavedBaseline without a path argument (upload
+ * path — no mtime tracking). These divergences are intentional, not drift.
  */
 async function finalizeDocOpen(
   id: string,
