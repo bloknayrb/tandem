@@ -62,9 +62,6 @@ export const CHARS_PER_PAGE = 3_000;
 export const LARGE_FILE_PAGE_THRESHOLD = 50;
 export const VERY_LARGE_FILE_PAGE_THRESHOLD = 100;
 
-export const CLAUDE_PRESENCE_COLOR = "#6366f1";
-export const CLAUDE_FOCUS_OPACITY = 0.1;
-
 export const CTRL_ROOM = "__tandem_ctrl__";
 
 /** Y.Map key constants — centralized to prevent silent bugs from string typos. */
