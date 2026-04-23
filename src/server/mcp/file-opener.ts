@@ -76,6 +76,15 @@ export interface OpenFileResult {
   warnings?: string[];
 }
 
+/** Resolved + validated path metadata for openFileByPath. stat is NOT included — only used for the size check. */
+interface ResolvedPath {
+  resolved: string;
+  format: string;
+  isDocx: boolean;
+  readOnly: boolean;
+  id: string;
+}
+
 /**
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
@@ -85,130 +94,46 @@ export async function openFileByPath(
   filePath: string,
   options?: { force?: boolean },
 ): Promise<OpenFileResult> {
-  let resolved = path.resolve(filePath);
-  try {
-    resolved = fsSync.realpathSync(resolved);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      console.error(
-        `[Tandem] realpathSync failed for ${filePath} (${code}), using path.resolve fallback`,
-      );
-    }
-    resolved = path.resolve(filePath);
-  }
-
-  if (process.platform === "win32" && (resolved.startsWith("\\\\") || resolved.startsWith("//"))) {
-    throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
-      code: "INVALID_PATH",
-    });
-  }
-
-  const ext = path.extname(resolved).toLowerCase();
-  if (!SUPPORTED_EXTENSIONS.has(ext)) {
-    throw Object.assign(
-      new Error(
-        `Unsupported file format: ${ext}. Supported: ${[...SUPPORTED_EXTENSIONS].join(", ")}`,
-      ),
-      { code: "UNSUPPORTED_FORMAT" },
-    );
-  }
-
-  const stat = await fs.stat(resolved);
-  if (stat.size > MAX_FILE_SIZE) {
-    throw Object.assign(new Error("File exceeds 50MB limit."), { code: "FILE_TOO_LARGE" });
-  }
-
-  const format = detectFormat(resolved);
-  const isDocx = format === "docx";
-  const readOnly = isDocx;
-  const id = docIdFromPath(resolved);
-  const openDocs = getOpenDocs();
-
-  // Already open — force-reload from disk or switch to it
-  const existing = openDocs.get(id);
-  const forceReload = existing && options?.force === true;
-  if (existing && !forceReload) {
-    setActiveDocId(id);
-    broadcastOpenDocs();
-    const doc = getOrCreateDocument(id);
-    return {
-      ...buildResult(doc, {
-        documentId: id,
-        filePath: resolved,
-        fileName: path.basename(resolved),
-        format,
-        readOnly,
-        source: "file",
-        restoredFromSession: false,
-      }),
-      alreadyOpen: true,
-    };
-  }
-
-  if (forceReload) {
-    const doc = getDocument(id) ?? getOrCreateDocument(id);
-    const fileName = path.basename(resolved);
-    await clearAndReload(id, doc, resolved, format, existing);
-
-    addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
-    setActiveDocId(id);
-    await wireAnnotationStore(id, doc, resolved);
-    broadcastOpenDocs();
-    ensureAutoSave();
-
-    return {
-      ...buildResult(doc, {
-        documentId: id,
-        filePath: resolved,
-        fileName,
-        format,
-        readOnly,
-        source: "file",
-        restoredFromSession: false,
-      }),
-      forceReloaded: true,
-    };
-  }
-
-  const doc = getOrCreateDocument(id);
+  const { resolved, format, readOnly, id } = await resolveAndValidatePath(filePath);
   const fileName = path.basename(resolved);
-  let restoredFromSession = false;
+  const openDocs = getOpenDocs();
+  const existing = openDocs.get(id);
 
-  const session = await loadSession(resolved);
-  if (session) {
-    const changed = await sourceFileChanged(session);
-    if (!changed) {
-      restoreYDoc(doc, session);
-      const fragment = doc.getXmlFragment("default");
-      if (fragment.length > 0) {
-        restoredFromSession = true;
-      } else {
-        console.error(
-          `[Tandem] Session restore yielded empty doc for ${fileName}, falling back to source file`,
-        );
-      }
+  // Already open — force-reload or switch to existing
+  if (existing) {
+    const forceReload = options?.force === true;
+    if (forceReload) {
+      // Force-reload stays inline — distinct lifecycle from normal open
+      const doc = getDocument(id) ?? getOrCreateDocument(id);
+      await clearAndReload(id, doc, resolved, format, existing);
+      addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
+      setActiveDocId(id);
+      await wireAnnotationStore(id, doc, resolved);
+      broadcastOpenDocs();
+      ensureAutoSave();
+      return {
+        ...buildResult(doc, {
+          documentId: id,
+          filePath: resolved,
+          fileName,
+          format,
+          readOnly,
+          source: "file",
+          restoredFromSession: false,
+        }),
+        forceReloaded: true,
+      };
     }
+    return handleAlreadyOpen(id, getOrCreateDocument(id), format, resolved, readOnly);
   }
 
+  // Normal open
+  const doc = getOrCreateDocument(id);
+  const restoredFromSession = await maybeRestoreSession(resolved, doc, fileName);
   if (!restoredFromSession) {
-    const adapter = getAdapter(format);
-    const fileContent = isDocx ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-    await adapter.load(doc, fileContent);
+    await loadContentIntoDoc(doc, format, resolved);
   }
-
-  addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
-  setActiveDocId(id);
-  writeDocMeta(doc, id, fileName, format, readOnly);
-  await initSavedBaseline(doc, resolved);
-  await wireAnnotationStore(id, doc, resolved);
-  broadcastOpenDocs();
-  ensureAutoSave();
-
-  // Watch for external file changes (skip .docx — binary format, no live reload)
-  if (format !== "docx") {
-    wireFileWatcher(id, resolved, format);
-  }
+  await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
 
   return {
     ...buildResult(doc, {
@@ -274,6 +199,151 @@ export async function openFileFromContent(
     source: "upload",
     restoredFromSession: false,
   });
+}
+
+// --- Extracted helpers for openFileByPath ---
+
+/**
+ * Resolve a raw file path to its canonical form, validate it (UNC check,
+ * extension check, size limit), derive format / readOnly / doc ID.
+ * stat is used only for the size check and is not returned.
+ */
+async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
+  let resolved = path.resolve(filePath);
+  try {
+    resolved = fsSync.realpathSync(resolved);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      console.error(
+        `[Tandem] realpathSync failed for ${filePath} (${code}), using path.resolve fallback`,
+      );
+    }
+    resolved = path.resolve(filePath);
+  }
+
+  if (process.platform === "win32" && (resolved.startsWith("\\\\") || resolved.startsWith("//"))) {
+    throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
+      code: "INVALID_PATH",
+    });
+  }
+
+  const ext = path.extname(resolved).toLowerCase();
+  if (!SUPPORTED_EXTENSIONS.has(ext)) {
+    throw Object.assign(
+      new Error(
+        `Unsupported file format: ${ext}. Supported: ${[...SUPPORTED_EXTENSIONS].join(", ")}`,
+      ),
+      { code: "UNSUPPORTED_FORMAT" },
+    );
+  }
+
+  const stat = await fs.stat(resolved);
+  if (stat.size > MAX_FILE_SIZE) {
+    throw Object.assign(new Error("File exceeds 50MB limit."), { code: "FILE_TOO_LARGE" });
+  }
+
+  const format = detectFormat(resolved);
+  const isDocx = format === "docx";
+  const readOnly = isDocx;
+  const id = docIdFromPath(resolved);
+
+  return { resolved, format, isDocx, readOnly, id };
+}
+
+/**
+ * Handle the non-force already-open branch: activate the doc and broadcast.
+ * This is the only place that sets alreadyOpen: true in the return value.
+ */
+function handleAlreadyOpen(
+  id: string,
+  doc: Y.Doc,
+  format: string,
+  resolved: string,
+  readOnly: boolean,
+): OpenFileResult {
+  setActiveDocId(id);
+  broadcastOpenDocs();
+  return {
+    ...buildResult(doc, {
+      documentId: id,
+      filePath: resolved,
+      fileName: path.basename(resolved),
+      format,
+      readOnly,
+      source: "file",
+      restoredFromSession: false,
+    }),
+    alreadyOpen: true,
+  };
+}
+
+/**
+ * Attempt to restore a Y.Doc from a saved session.
+ * Returns true ONLY if the session was restored AND the fragment is non-empty.
+ * Returns false if no session exists, the source file has changed, or the
+ * restored fragment is empty (falls back to loading from source file).
+ */
+async function maybeRestoreSession(
+  resolved: string,
+  doc: Y.Doc,
+  fileName: string,
+): Promise<boolean> {
+  const session = await loadSession(resolved);
+  if (session) {
+    const changed = await sourceFileChanged(session);
+    if (!changed) {
+      restoreYDoc(doc, session);
+      const fragment = doc.getXmlFragment("default");
+      if (fragment.length > 0) {
+        return true;
+      }
+      console.error(
+        `[Tandem] Session restore yielded empty doc for ${fileName}, falling back to source file`,
+      );
+    }
+  }
+  return false;
+}
+
+/**
+ * Load file content from disk into the Y.Doc using the appropriate adapter.
+ * Reads as Buffer for docx, utf-8 string for all other formats.
+ */
+async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string): Promise<void> {
+  const adapter = getAdapter(format);
+  const isDocx = format === "docx";
+  const fileContent = isDocx ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
+  await adapter.load(doc, fileContent);
+}
+
+/**
+ * Finalize a normal (non-force) document open: register in open-docs map,
+ * set active, write metadata, init saved baseline, wire annotation store,
+ * broadcast, start auto-save, and (for non-docx) set up the file watcher.
+ *
+ * NOTE: openFileFromContent has a similar finalization sequence — keep them in sync.
+ */
+async function finalizeDocOpen(
+  id: string,
+  doc: Y.Doc,
+  resolved: string,
+  fileName: string,
+  format: string,
+  readOnly: boolean,
+): Promise<void> {
+  addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
+  setActiveDocId(id);
+  writeDocMeta(doc, id, fileName, format, readOnly);
+  await initSavedBaseline(doc, resolved);
+  await wireAnnotationStore(id, doc, resolved);
+  broadcastOpenDocs();
+  ensureAutoSave();
+
+  // Watch for external file changes (skip .docx — binary format, no live reload)
+  if (format !== "docx") {
+    wireFileWatcher(id, resolved, format);
+  }
 }
 
 // --- Private helpers ---
