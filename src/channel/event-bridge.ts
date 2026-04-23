@@ -4,8 +4,8 @@
  */
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { TandemEvent } from "../server/events/types.js";
-import { formatEventContent, formatEventMeta, parseTandemEvent } from "../server/events/types.js";
+import type { TandemEvent } from "../shared/events/types.js";
+import { formatEventContent, formatEventMeta, parseTandemEvent } from "../shared/events/types.js";
 import { authFetch } from "../shared/cli-runtime.js";
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../shared/constants.js";
 

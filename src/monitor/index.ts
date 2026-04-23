@@ -20,8 +20,8 @@
 
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { TandemEvent } from "../server/events/types.js";
-import { formatEventContent, parseTandemEvent } from "../server/events/types.js";
+import type { TandemEvent } from "../shared/events/types.js";
+import { formatEventContent, parseTandemEvent } from "../shared/events/types.js";
 import { authFetch } from "../shared/cli-runtime.js";
 import {
   CHANNEL_MAX_RETRIES,
