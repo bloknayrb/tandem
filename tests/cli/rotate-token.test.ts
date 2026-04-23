@@ -36,9 +36,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/server/auth/token-store.js", () => ({
+vi.mock("../../src/shared/auth/token-file.js", () => ({
   readTokenFromFile: _readTokenSpy,
-  writeTokenToFile: vi.fn(),
   getTokenFilePath: _getTokenPathSpy,
 }));
 

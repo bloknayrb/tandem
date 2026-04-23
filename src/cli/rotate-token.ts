@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { getTokenFilePath, readTokenFromFile } from "../server/auth/token-store.js";
+import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
 import { DEFAULT_MCP_PORT } from "../shared/constants.js";
 import { applyConfigWithToken } from "./setup.js";
 
