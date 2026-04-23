@@ -100,10 +100,10 @@ export async function runSetupHandler(
 }
 
 export function makeSetupHandler(opts: { token?: string }): Handler {
-  return async (_req: Request, res: Response) => {
+  return async (req: Request, res: Response) => {
     try {
       const result = await runSetupHandler(
-        (_req.body ?? {}) as Record<string, unknown>,
+        (req.body ?? {}) as Record<string, unknown>,
         undefined,
         opts.token,
       );
