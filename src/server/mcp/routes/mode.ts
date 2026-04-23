@@ -7,7 +7,7 @@ import {
 } from "../../../shared/constants.js";
 import { TandemModeSchema } from "../../../shared/types.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
-import type { Handler } from "../api-routes.js";
+import type { Handler } from "./_shared.js";
 
 export function makeModeHandler(): Handler {
   return (_req: Request, res: Response) => {

@@ -1,4 +1,7 @@
-import type { Response } from "express";
+import type { NextFunction, Request, Response } from "express";
+
+/** Express middleware/handler function type (Express 5 compatible). */
+export type Handler = (req: Request, res: Response, next: NextFunction) => void;
 
 /** Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM hash leaks. */
 function hasUncPrefix(p: string): boolean {

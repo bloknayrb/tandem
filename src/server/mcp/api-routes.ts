@@ -1,6 +1,7 @@
 import type { Express, NextFunction, Request, Response } from "express";
 
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
+import type { Handler } from "./routes/_shared.js";
 import { makeAnnotationReplyHandler } from "./routes/annotation-reply.js";
 import { makeApplyChangesHandler } from "./routes/apply-changes.js";
 import { makeCloseHandler } from "./routes/close.js";
@@ -13,12 +14,10 @@ import { makeSaveHandler } from "./routes/save.js";
 import { makeSetupHandler } from "./routes/setup.js";
 import { makeUploadHandler } from "./routes/upload.js";
 
+export type { Handler } from "./routes/_shared.js";
 // Re-export shared utilities that tests and other modules import from here
 export { errorCodeToHttpStatus, isValidChannelPath, isValidNodeBinary } from "./routes/_shared.js";
 export { runSetupHandler } from "./routes/setup.js";
-
-/** Express middleware/handler function type (Express 5 compatible). */
-export type Handler = (req: Request, res: Response, next: NextFunction) => void;
 
 /**
  * Check if a Host header value is allowed (localhost + optional extra hosts).

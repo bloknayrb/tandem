@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import type { Handler } from "../api-routes.js";
 import { getActiveDocId, saveDocumentToDisk } from "../document-service.js";
+import type { Handler } from "./_shared.js";
 import { sendApiError } from "./_shared.js";
 
 export function makeSaveHandler(): Handler {

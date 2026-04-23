@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { setPreviousToken } from "../../auth/middleware.js";
 import { readTokenFromFile } from "../../auth/token-store.js";
-import type { Handler } from "../api-routes.js";
+import type { Handler } from "./_shared.js";
 
 export function makeRotateTokenHandler(deps: {
   setCurrentToken: (t: string) => void;

@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../../shared/constants.js";
 import type { TandemNotification } from "../../../shared/types.js";
 import { subscribe as subscribeNotifications } from "../../notifications.js";
-import type { Handler } from "../api-routes.js";
+import type { Handler } from "./_shared.js";
 
 export function makeNotifyStreamHandler(): Handler {
   return (req: Request, res: Response) => {

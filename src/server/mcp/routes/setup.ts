@@ -6,7 +6,7 @@ import {
   detectTargets,
   installSkill,
 } from "../../../cli/setup.js";
-import type { Handler } from "../api-routes.js";
+import type { Handler } from "./_shared.js";
 import { isValidChannelPath, isValidNodeBinary } from "./_shared.js";
 
 interface SetupResult {

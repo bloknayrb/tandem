@@ -4,8 +4,8 @@ import { generateNotificationId } from "../../../shared/utils.js";
 import { pushNotification } from "../../notifications.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 import { addReplyToAnnotation } from "../annotations.js";
-import type { Handler } from "../api-routes.js";
 import { getCurrentDoc } from "../document.js";
+import type { Handler } from "./_shared.js";
 
 export function makeAnnotationReplyHandler(): Handler {
   return (req: Request, res: Response) => {

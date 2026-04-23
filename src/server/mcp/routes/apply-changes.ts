@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import type { Handler } from "../api-routes.js";
 import { applyChangesCore } from "../docx-apply.js";
+import type { Handler } from "./_shared.js";
 import { sendApiError } from "./_shared.js";
 
 export function makeApplyChangesHandler(): Handler {
