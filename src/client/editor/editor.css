@@ -1,0 +1,118 @@
+.tandem-editor h1 { font-size: 2em; font-weight: 700; margin: 0.67em 0; }
+.tandem-editor h2 { font-size: 1.5em; font-weight: 600; margin: 0.75em 0; }
+.tandem-editor h3 { font-size: 1.17em; font-weight: 600; margin: 0.83em 0; }
+.tandem-editor p { margin: 0.5em 0; }
+.tandem-editor ul, .tandem-editor ol { padding-left: 1.5em; }
+.tandem-editor table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.tandem-editor td, .tandem-editor th { border: 1px solid var(--tandem-border); padding: 8px; }
+.tandem-editor th { background: var(--tandem-surface-muted); font-weight: 600; }
+.tandem-editor blockquote {
+  border-left: 3px solid var(--tandem-border-strong);
+  margin: 0.5em 0;
+  padding-left: 1em;
+  color: var(--tandem-fg-muted);
+}
+.collaboration-cursor__caret {
+  position: relative;
+  border-left: 2px solid;
+  border-right: none;
+  margin-left: -1px;
+}
+.collaboration-cursor__label {
+  position: absolute;
+  top: -1.4em;
+  left: -1px;
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 0 4px;
+  border-radius: 3px 3px 3px 0;
+  color: var(--tandem-accent-fg);
+}
+.ProseMirror-focused { outline: none; }
+.ProseMirror p.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--tandem-fg-subtle);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* Annotation decorations */
+.tandem-highlight { cursor: pointer; }
+.tandem-highlight:hover { filter: brightness(0.95); }
+.tandem-comment { cursor: pointer; }
+.tandem-comment:hover { border-bottom-style: solid; }
+.tandem-suggestion { cursor: pointer; }
+
+/* Review mode dimming — grays out text, keeps annotated spans readable */
+.tandem-review-dimmed .ProseMirror {
+  color: var(--tandem-fg-subtle);
+  transition: color 0.2s;
+}
+.tandem-review-dimmed .tandem-highlight,
+.tandem-review-dimmed .tandem-comment,
+.tandem-review-dimmed .tandem-suggestion {
+  color: var(--tandem-fg);
+}
+.tandem-review-dimmed .tandem-annotation-active {
+  outline: 2px solid var(--tandem-accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* Authorship decorations — user=blue, claude=orange */
+.tandem-authorship { transition: color 0.2s; }
+.tandem-authorship--user { color: var(--tandem-author-user); }
+.tandem-authorship--claude { color: var(--tandem-author-claude); }
+
+/* Claude focus paragraph */
+.tandem-claude-focus {
+  position: relative;
+}
+.tandem-claude-focus::before {
+  content: '';
+  position: absolute;
+  left: -24px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--tandem-accent);
+  border-radius: 2px;
+  animation: tandem-gutter-pulse 2s ease-in-out infinite;
+}
+@keyframes tandem-gutter-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* Claude character-level cursor */
+.tandem-claude-cursor {
+  position: relative;
+  display: inline;
+  border-left: 2px solid var(--tandem-author-claude);
+  margin-left: -1px;
+  z-index: 10;
+  animation: tandem-claude-blink 1.2s step-end infinite;
+}
+.tandem-claude-cursor-idle {
+  opacity: 0.3;
+  animation: none;
+}
+.tandem-claude-cursor-label {
+  position: absolute;
+  top: -1.4em;
+  left: -1px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  padding: 0 4px;
+  border-radius: 3px 3px 3px 0;
+  background: var(--tandem-author-claude);
+  color: var(--tandem-accent-fg);
+  pointer-events: none;
+  z-index: 11;
+}
+@keyframes tandem-claude-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
