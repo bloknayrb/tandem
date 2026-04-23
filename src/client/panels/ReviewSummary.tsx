@@ -1,5 +1,3 @@
-import React from "react";
-
 interface ReviewSummaryProps {
   accepted: number;
   dismissed: number;

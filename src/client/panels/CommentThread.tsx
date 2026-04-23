@@ -1,4 +1,3 @@
-import React from "react";
 import type { AnnotationReply } from "../../shared/types";
 
 interface CommentThreadProps {

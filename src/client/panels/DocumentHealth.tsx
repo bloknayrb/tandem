@@ -1,5 +1,3 @@
-import React from "react";
-
 export function DocumentHealth() {
   return (
     <div style={{ padding: "8px", color: "var(--tandem-fg)" }}>

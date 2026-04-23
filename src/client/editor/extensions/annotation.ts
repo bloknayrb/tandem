@@ -95,6 +95,7 @@ function buildDecorations(
         break;
       default: {
         const _exhaustive: never = ann;
+        void _exhaustive;
         console.warn("[annotation] Unhandled annotation type in buildDecorations, skipping");
         return;
       }
