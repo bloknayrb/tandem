@@ -57,6 +57,11 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });
 
+afterAll(async () => {
+  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
+  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
+});
+
 // ---------------------------------------------------------------------------
 // Test 1: Session restore hit
 // ---------------------------------------------------------------------------
