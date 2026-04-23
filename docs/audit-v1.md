@@ -79,38 +79,18 @@ Plan reviewed by three independent agents against actual source code. Correction
 
 ## Part 2: Proposed Phases
 
-### Phase 1: Shared / Foundation Cleanup
-**Why:** Fix layer violations, remove dead deps, tighten TypeScript config. Low risk, high value, builds momentum.
+### Phase 1: Shared / Foundation Cleanup — DONE
 
-**PR 1a — Wire-protocol types to shared (finding #9):**
-- Move `TandemEvent`, `TandemEventType`, `parseTandemEvent`, `formatEventContent`, `formatEventMeta`, `generateEventId` re-export from `src/server/events/types.ts` to `src/shared/events/types.ts`
-- `src/server/events/types.ts` re-exports from shared for backward compat
-- Update imports in `src/channel/event-bridge.ts` and `src/monitor/index.ts` to import from shared
+All 6 PRs merged 2026-04-22. Typecheck passes clean.
 
-**PR 1b — Token-store shared extraction (finding #10):**
-- Move `getTokenFilePath()` from `src/server/auth/token-store.ts` to `src/shared/auth/token-file-path.ts`
-- Update imports in `cli/rotate-token.ts` and `server/auth/token-store.ts`
-
-**PR 1c — awareness.ts semantic tokens (closes #355, finding #17):**
-- Replace `rgba(99,102,241,…)` in `src/client/editor/extensions/awareness.ts` with `color-mix(in srgb, var(--tandem-author-claude) 10%, transparent)` and `color-mix(in srgb, var(--tandem-author-claude) 40%, transparent)` (or dedicated `--tandem-claude-focus-*` alpha tokens)
-- Update CLAUDE.md exemption note
-
-**PR 1d — Editor CSS extraction (finding #18):**
-- Extract inline `<style>` from `src/client/editor/Editor.tsx` (~120 lines) to `src/client/editor/editor.css`
-- Import in Editor.tsx (Vite handles CSS imports natively)
-
-**PR 1e — TypeScript config tightening (findings #15, #16):**
-- Make `tsconfig.server.json` extend `tsconfig.json`, removing duplicated options
-- Add `noUnusedLocals: true` and `noUnusedParameters: true` to `tsconfig.json`
-- Fix any newly-flagged unused locals/params
-
-**PR 1f — Remove dead Tauri JS deps (finding #14):**
-- Remove `@tauri-apps/plugin-{dialog,fs,process,shell,window-state}` from `package.json` dependencies
-- Verify they have zero TypeScript imports (confirmed by review agent)
-- Keep `@tauri-apps/api` (used by `useWebViewZoom.ts`)
-
-**Effort:** ~2 days. All 6 PRs parallelizable via worktree agents.
-**Verification:** `npm run typecheck && npm test && npm run test:e2e`. `npm run build` to verify self-contained bundles still work.
+| PR | Finding | Branch |
+|----|---------|--------|
+| #384 | Wire-protocol types to shared (#9) | `refactor/wire-protocol-types-to-shared` |
+| #385 | Token-store shared extraction (#10) | `refactor/token-store-shared-extraction` |
+| #386 | awareness.ts semantic tokens, closes #355 (#17) | `refactor/awareness-semantic-tokens` |
+| #387 | Editor CSS extraction (#18) | `refactor/editor-css-extraction` |
+| #388 | tsconfig tightening (#15, #16) | `refactor/tsconfig-tightening` |
+| #389 | Remove dead Tauri JS deps (#14) | `refactor/remove-dead-tauri-deps` |
 
 ### Phase 2: Server Mechanical Splits
 **Why:** Break up server god-files while maintaining identical public interfaces.

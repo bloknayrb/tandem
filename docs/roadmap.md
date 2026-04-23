@@ -389,18 +389,18 @@ Guiding principle: "Code is cheap, so the only thing that matters is doing thing
 
 Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three independent review agents verified all findings against actual source code. Runs before v0.8.0 to ensure the foundation is clean before adding more features.
 
-**Summary:** 24,370 LOC source, 23,548 LOC tests. 8 god-files needing decomposition, 2 layer boundary violations, missing file-opener lifecycle tests, unused Tauri JS deps inflating bundles, tsconfig drift. Strengths: architecture is sound, security is thorough, durability layer is well-tested, position system uses branded types correctly.
+**Summary:** 24,370 LOC source, 23,548 LOC tests. 8 god-files needing decomposition, 2 layer boundary violations (now fixed), missing file-opener lifecycle tests, unused Tauri JS deps (now removed), tsconfig drift (now fixed). Strengths: architecture is sound, security is thorough, durability layer is well-tested, position system uses branded types correctly.
 
 **Phases (detail in audit doc):**
 
-| Phase | Scope | Effort | PRs |
-|-------|-------|--------|-----|
-| 1 | Foundation: wire-protocol types to shared, token-store extraction, awareness.ts #355, Editor CSS extraction, tsconfig tightening, dead Tauri deps | ~2 days | 6 |
-| 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | 2 |
-| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | 1-2 |
-| 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | 4 |
-| 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | 0-1 |
-| 6 | Polish: accessibility, E2E error recovery, Tauri integration tests (post-v1.0) | incremental | 5-7 |
+| Phase | Scope | Effort | Status |
+|-------|-------|--------|--------|
+| 1 | Foundation: wire-protocol types to shared, token-store extraction, awareness.ts #355, Editor CSS extraction, tsconfig tightening, dead Tauri deps | ~2 days | **DONE** (PRs #384–#389, merged 2026-04-22) |
+| 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | Next |
+| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | — |
+| 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | — |
+| 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | — |
+| 6 | Polish: accessibility, E2E error recovery, Tauri integration tests (post-v1.0) | incremental | — |
 
 **Deferrals (with rationale in audit doc):** useYjsSync.ts (350 LOC, tight coupling makes splitting fragile), mcp/server.ts (331 LOC, manageable), shared/types.ts (274 LOC, reasonable for barrel), React.memo (measure with Profiler first), Biome linter (conflicts with ESLint).
 
