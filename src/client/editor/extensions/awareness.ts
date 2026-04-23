@@ -35,7 +35,7 @@ export function buildAwarenessDecorations(
           Decoration.node(offset, offset + node.nodeSize, {
             class: "tandem-claude-focus",
             style:
-              "background: rgba(99, 102, 241, 0.1); border-left: 3px solid rgba(99, 102, 241, 0.4); padding-left: 8px; transition: background 0.3s ease, border-color 0.3s ease;",
+              "background: var(--tandem-claude-focus-bg); border-left: 3px solid var(--tandem-claude-focus-border); padding-left: 8px; transition: background 0.3s ease, border-color 0.3s ease;",
           }),
         );
       }
