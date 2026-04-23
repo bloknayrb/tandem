@@ -80,7 +80,6 @@ export interface OpenFileResult {
 interface ResolvedPath {
   resolved: string;
   format: string;
-  isDocx: boolean;
   readOnly: boolean;
   id: string;
 }
@@ -248,7 +247,7 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   const readOnly = isDocx;
   const id = docIdFromPath(resolved);
 
-  return { resolved, format, isDocx, readOnly, id };
+  return { resolved, format, readOnly, id };
 }
 
 /**
