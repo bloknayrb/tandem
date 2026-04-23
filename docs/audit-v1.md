@@ -73,7 +73,7 @@ Plan reviewed by three independent agents against actual source code. Correction
 - **CLI and Tauri layers are clean.** CLI is 1,177 LOC with good error handling. Tauri integration handles sidecar lifecycle, updates, and graceful degradation correctly.
 - **Documentation is excellent.** Architecture docs, ADRs, lessons learned, MCP tool reference — rare for a project this size.
 - **Test ratio is healthy.** 22k LOC of tests for 24k LOC of source (~1:1).
-- **Error handling is consistent.** Auto-save, mode cache, and annotation observer all have proper error logging (initially suspected as silent failures but confirmed to have logging at all three sites).
+- **Error handling is consistent.** Auto-save, mode cache, and annotation observer all have proper error logging (initially suspected as silent failures but confirmed to have logging at all three sites). _Update 2026-04-23:_ a later silent-failure scan during PR #391 review surfaced 5 observability gaps in the HTTP API route layer (outside the three sites sampled here) — tracked in #396 and scheduled for v0.8.0.
 
 ---
 
