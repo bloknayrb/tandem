@@ -9,11 +9,12 @@
  */
 
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupOrphanedAnnotationFiles } from "../../../src/server/session/manager.js";
 import { SESSION_MAX_AGE } from "../../../src/shared/constants.js";
+import { HASH_A, HASH_B } from "../../helpers/annotation-fixtures.js";
+import { useTmpAnnotationsEnv } from "../../helpers/annotation-store-env.js";
 
 // Hoist the mock so Vitest can intercept the module before any import resolves.
 // The factory spreads the real implementation so non-spy tests use real fs.
@@ -24,25 +25,12 @@ vi.mock("node:fs/promises", async (importActual) => {
   return { ...mod, default: mod };
 });
 
-const HASH_A = "a".repeat(64);
-const HASH_B = "b".repeat(64);
-
-let tmpRoot: string;
+const env = useTmpAnnotationsEnv("tandem-cleanup-test-");
 let annotationsDir: string;
-let prevAppDataDir: string | undefined;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-cleanup-test-"));
-  prevAppDataDir = process.env.TANDEM_APP_DATA_DIR;
-  process.env.TANDEM_APP_DATA_DIR = tmpRoot;
-  annotationsDir = path.join(tmpRoot, "annotations");
+  annotationsDir = path.join(env.tmpRoot, "annotations");
   await fs.mkdir(annotationsDir, { recursive: true });
-});
-
-afterEach(async () => {
-  if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-  else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
-  await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
 async function writeWithMtime(file: string, ageMs: number): Promise<void> {

@@ -22,11 +22,7 @@ vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
   };
 });
 
-import {
-  type AnnotationDocV1,
-  migrateToV1,
-  SCHEMA_VERSION,
-} from "../../../src/server/annotations/schema.js";
+import { SCHEMA_VERSION } from "../../../src/server/annotations/schema.js";
 import {
   acquireStoreLock,
   closeStore,
@@ -36,44 +32,24 @@ import {
   resetForTesting,
 } from "../../../src/server/annotations/store.js";
 import { pushNotification } from "../../../src/server/notifications.js";
+import {
+  FILE_A,
+  FILE_B,
+  HASH_A,
+  HASH_B,
+  makeAnnotationDoc,
+} from "../../helpers/annotation-fixtures.js";
+import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env.js";
 
-const HASH_A = "a".repeat(64);
-const HASH_B = "b".repeat(64);
-const FILE_A = "/virtual/doc-a.md";
-const FILE_B = "/virtual/doc-b.md";
+const env = useTmpAnnotationsEnvWithFlag("tandem-store-test-");
 
-function makeDoc(
-  docHash: string,
-  filePath: string,
-  overrides: Partial<AnnotationDocV1> = {},
-): AnnotationDocV1 {
-  const { doc } = migrateToV1({});
-  doc.docHash = docHash;
-  doc.meta = { filePath, lastUpdated: Date.now() };
-  return { ...doc, ...overrides };
-}
-
-let tmpRoot: string;
-let prevAppDataDir: string | undefined;
-let prevFeatureFlag: string | undefined;
-
-beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-store-test-"));
-  prevAppDataDir = process.env.TANDEM_APP_DATA_DIR;
-  prevFeatureFlag = process.env.TANDEM_ANNOTATION_STORE;
-  process.env.TANDEM_APP_DATA_DIR = tmpRoot;
-  delete process.env.TANDEM_ANNOTATION_STORE; // default = on
+beforeEach(() => {
   resetForTesting();
   vi.mocked(pushNotification).mockClear();
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetForTesting();
-  if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-  else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
-  if (prevFeatureFlag === undefined) delete process.env.TANDEM_ANNOTATION_STORE;
-  else process.env.TANDEM_ANNOTATION_STORE = prevFeatureFlag;
-  await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -100,7 +76,7 @@ describe("createStore + load", () => {
 describe("queueWrite + flush round-trip", () => {
   it("persists a written doc and round-trips through load", async () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
-    const doc = makeDoc(HASH_A, FILE_A, {
+    const doc = makeAnnotationDoc(HASH_A, FILE_A, {
       annotations: [
         {
           id: "ann_1",
@@ -118,7 +94,10 @@ describe("queueWrite + flush round-trip", () => {
     store.queueWrite(() => doc);
     await store.flush();
 
-    const onDisk = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const onDisk = await fs.readFile(
+      path.join(env.tmpRoot, "annotations", `${HASH_A}.json`),
+      "utf-8",
+    );
     expect(JSON.parse(onDisk)).toMatchObject({
       schemaVersion: 1,
       docHash: HASH_A,
@@ -140,9 +119,9 @@ describe("debounce coalescing", () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
     const writeSpy = vi.spyOn(fs, "writeFile");
 
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A, { annotations: [] }));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A, { annotations: [] }));
     store.queueWrite(() =>
-      makeDoc(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [
           {
             id: "ann_mid",
@@ -158,7 +137,7 @@ describe("debounce coalescing", () => {
       }),
     );
     store.queueWrite(() =>
-      makeDoc(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [
           {
             id: "ann_last",
@@ -197,12 +176,12 @@ describe("per-doc debounce", () => {
     const storeA = createStore(HASH_A, { filePath: FILE_A });
     const storeB = createStore(HASH_B, { filePath: FILE_B });
 
-    storeA.queueWrite(() => makeDoc(HASH_A, FILE_A));
-    storeB.queueWrite(() => makeDoc(HASH_B, FILE_B));
+    storeA.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
+    storeB.queueWrite(() => makeAnnotationDoc(HASH_B, FILE_B));
 
     await Promise.all([storeA.flush(), storeB.flush()]);
 
-    const files = await fs.readdir(path.join(tmpRoot, "annotations"));
+    const files = await fs.readdir(path.join(env.tmpRoot, "annotations"));
     expect(files).toContain(`${HASH_A}.json`);
     expect(files).toContain(`${HASH_B}.json`);
   });
@@ -271,7 +250,7 @@ describe("lock held by live PID", () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
     expect(store.isReadOnly()).toBe(true);
 
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await store.flush();
 
     // File should not have been created.
@@ -318,19 +297,19 @@ describe("write failure → throttled notify → disable after 3", () => {
     const notify = vi.mocked(pushNotification);
 
     // Attempt 1 — transient failure, 1 notification.
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await expect(store.flush()).rejects.toThrow();
     expect(store.isDisabled(HASH_A)).toBe(false);
     expect(notify).toHaveBeenCalledTimes(1);
 
     // Attempt 2 — within the 60s window, throttled (no new notification).
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await expect(store.flush()).rejects.toThrow();
     expect(store.isDisabled(HASH_A)).toBe(false);
     expect(notify).toHaveBeenCalledTimes(1); // throttled
 
     // Attempt 3 — third consecutive failure flips to "persistent" and disables.
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await expect(store.flush()).rejects.toThrow();
     expect(store.isDisabled(HASH_A)).toBe(true);
     // Persistent notification bypasses the throttle.
@@ -338,7 +317,7 @@ describe("write failure → throttled notify → disable after 3", () => {
 
     // Attempt 4 — disabled: queueWrite is a no-op; writeFile not called again.
     const prevWriteCount = writeSpy.mock.calls.length;
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await store.flush();
     expect(writeSpy.mock.calls.length).toBe(prevWriteCount);
     // Still exactly 2 notifications total (no extras once disabled).
@@ -362,12 +341,12 @@ describe("TANDEM_ANNOTATION_STORE=off", () => {
     expect(loaded.annotations).toEqual([]);
     expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
 
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await store.flush();
     await store.clear();
 
     // No annotations dir should have been created.
-    const annotationsDir = path.join(tmpRoot, "annotations");
+    const annotationsDir = path.join(env.tmpRoot, "annotations");
     await expect(fs.readdir(annotationsDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
@@ -379,10 +358,10 @@ describe("TANDEM_ANNOTATION_STORE=off", () => {
 describe("clear()", () => {
   it("deletes the file and is idempotent", async () => {
     const store = createStore(HASH_A, { filePath: FILE_A });
-    store.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await store.flush();
 
-    const target = path.join(tmpRoot, "annotations", `${HASH_A}.json`);
+    const target = path.join(env.tmpRoot, "annotations", `${HASH_A}.json`);
     await fs.access(target); // exists
 
     await store.clear();
@@ -414,10 +393,10 @@ describe("closeStore", () => {
     // First: a healthy doc that had a pending write. closeStore should flush it
     // and evict the (absent) failure state entry entirely.
     const storeA = createStore(HASH_A, { filePath: FILE_A });
-    storeA.queueWrite(() => makeDoc(HASH_A, FILE_A));
+    storeA.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await closeStore(HASH_A);
     // The pending write flushed as part of close.
-    const aFiles = await fs.readdir(path.join(tmpRoot, "annotations"));
+    const aFiles = await fs.readdir(path.join(env.tmpRoot, "annotations"));
     expect(aFiles).toContain(`${HASH_A}.json`);
 
     // Second: drive storeB into the disabled state via 3 consecutive failures,
@@ -428,7 +407,7 @@ describe("closeStore", () => {
       .mockRejectedValue(Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }));
     const storeB = createStore(HASH_B, { filePath: FILE_B });
     for (let i = 0; i < 3; i++) {
-      storeB.queueWrite(() => makeDoc(HASH_B, FILE_B));
+      storeB.queueWrite(() => makeAnnotationDoc(HASH_B, FILE_B));
       await expect(storeB.flush()).rejects.toThrow();
     }
     expect(storeB.isDisabled(HASH_B)).toBe(true);
@@ -470,7 +449,7 @@ describe("queueWrite thunk that throws", () => {
     expect(pushNotification).toHaveBeenCalled();
     // And no file should have landed on disk.
     await expect(
-      fs.access(path.join(tmpRoot, "annotations", `${HASH_A}.json`)),
+      fs.access(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`)),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
