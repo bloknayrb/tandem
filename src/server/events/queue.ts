@@ -22,7 +22,6 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
-import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { validateRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -32,6 +31,7 @@ import {
   reattachFileSyncObserver,
   setFileSyncContext,
 } from "./file-sync-registry.js";
+import { makeAnnotationsObserver } from "./observers/annotations.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
 import type { TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
@@ -170,68 +170,10 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   const cleanups: Array<() => void> = [];
 
   // 1. Annotations observer
-  const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
-  const annotationsObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
-
-    for (const [key, change] of event.changes.keys) {
-      const raw = annotationsMap.get(key) as Annotation | undefined;
-      if (!raw) continue;
-
-      let ann: Annotation;
-      try {
-        ann = sanitizeAnnotation(raw);
-      } catch (err) {
-        console.warn(`[EventQueue] sanitizeAnnotation failed for key=${key}:`, err);
-        continue;
-      }
-
-      if (change.action === "add" && ann.author === "user") {
-        pushEvent({
-          id: generateEventId(),
-          type: "annotation:created",
-          timestamp: Date.now(),
-          documentId: docName,
-          payload: {
-            annotationId: ann.id,
-            annotationType: ann.type,
-            content: ann.content,
-            textSnippet: ann.textSnapshot ?? "",
-            ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
-            ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
-          },
-        });
-      } else if (change.action === "update" && ann.author === "claude") {
-        if (ann.status === "accepted") {
-          pushEvent({
-            id: generateEventId(),
-            type: "annotation:accepted",
-            timestamp: Date.now(),
-            documentId: docName,
-            payload: {
-              annotationId: ann.id,
-              textSnippet: ann.textSnapshot ?? "",
-            },
-          });
-        } else if (ann.status === "dismissed") {
-          pushEvent({
-            id: generateEventId(),
-            type: "annotation:dismissed",
-            timestamp: Date.now(),
-            documentId: docName,
-            payload: {
-              annotationId: ann.id,
-              textSnippet: ann.textSnapshot ?? "",
-            },
-          });
-        }
-      }
-    }
-  };
-  annotationsMap.observe(annotationsObs);
-  cleanups.push(() => annotationsMap.unobserve(annotationsObs));
+  cleanups.push(makeAnnotationsObserver({ docName, doc, pushEvent }));
 
   // 2. Annotation replies observer
+  const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
   const repliesObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
     if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
