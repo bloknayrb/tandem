@@ -7,7 +7,6 @@
  */
 
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -22,10 +21,7 @@ vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
 });
 
 import {
-  type AnnotationDocV1,
   type AnnotationRecordV1,
-  type AnnotationReplyRecordV1,
-  migrateToV1,
   parseAnnotationDoc,
   SCHEMA_VERSION,
 } from "../../../src/server/annotations/schema.js";
@@ -45,48 +41,16 @@ import {
 } from "../../../src/server/annotations/sync.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/server/events/queue.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
-
-const HASH_A = "a".repeat(64);
-const FILE_A = "/virtual/doc-a.md";
-const HASH_B = "b".repeat(64);
-const FILE_B = "/virtual/doc-b.md";
-
-function annRecord(overrides: Partial<AnnotationRecordV1> = {}): AnnotationRecordV1 {
-  return {
-    id: "ann_1",
-    author: "claude",
-    type: "comment",
-    range: { from: 0, to: 5 },
-    content: "hello",
-    status: "pending",
-    timestamp: 1_700_000_000_000,
-    rev: 0,
-    ...overrides,
-  };
-}
-
-function replyRecord(overrides: Partial<AnnotationReplyRecordV1> = {}): AnnotationReplyRecordV1 {
-  return {
-    id: "rep_1",
-    annotationId: "ann_1",
-    author: "user",
-    text: "ack",
-    timestamp: 1_700_000_000_000,
-    rev: 0,
-    ...overrides,
-  };
-}
-
-function makeFile(
-  docHash: string,
-  filePath: string,
-  overrides: Partial<AnnotationDocV1> = {},
-): AnnotationDocV1 {
-  const { doc } = migrateToV1({});
-  doc.docHash = docHash;
-  doc.meta = { filePath, lastUpdated: Date.now() };
-  return { ...doc, ...overrides };
-}
+import {
+  annRecord,
+  FILE_A,
+  FILE_B,
+  HASH_A,
+  HASH_B,
+  makeAnnotationDoc,
+  replyRecord,
+} from "../../helpers/annotation-fixtures.js";
+import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env.js";
 
 function syncCtx(ydoc: Y.Doc, store: DocStore, overrides: Partial<SyncContext> = {}): SyncContext {
   return {
@@ -98,28 +62,16 @@ function syncCtx(ydoc: Y.Doc, store: DocStore, overrides: Partial<SyncContext> =
   };
 }
 
-let tmpRoot: string;
-let prevAppDataDir: string | undefined;
-let prevFeatureFlag: string | undefined;
+const env = useTmpAnnotationsEnvWithFlag("tandem-sync-test-");
 
-beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-sync-test-"));
-  prevAppDataDir = process.env.TANDEM_APP_DATA_DIR;
-  prevFeatureFlag = process.env.TANDEM_ANNOTATION_STORE;
-  process.env.TANDEM_APP_DATA_DIR = tmpRoot;
-  delete process.env.TANDEM_ANNOTATION_STORE;
+beforeEach(() => {
   resetForTesting();
   resetStoreForTesting();
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetForTesting();
   resetStoreForTesting();
-  if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-  else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
-  if (prevFeatureFlag === undefined) delete process.env.TANDEM_ANNOTATION_STORE;
-  else process.env.TANDEM_ANNOTATION_STORE = prevFeatureFlag;
-  await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -137,7 +89,7 @@ describe("registerAnnotationObserver", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.schemaVersion).toBe(SCHEMA_VERSION);
     expect(onDisk.annotations).toHaveLength(1);
@@ -157,7 +109,7 @@ describe("registerAnnotationObserver", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
     cleanup();
@@ -177,7 +129,7 @@ describe("registerAnnotationObserver", () => {
     expect(queueSpy).not.toHaveBeenCalled();
     // No file created.
     await expect(
-      fs.access(path.join(tmpRoot, "annotations", `${HASH_A}.json`)),
+      fs.access(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`)),
     ).rejects.toMatchObject({ code: "ENOENT" });
     cleanup();
   });
@@ -192,7 +144,7 @@ describe("registerAnnotationObserver", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations[0].rev).toBe(3);
     cleanup();
@@ -212,7 +164,7 @@ describe("registerAnnotationObserver", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].rev).toBe(0);
@@ -306,7 +258,7 @@ describe("legacy-type sanitize on write", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].type).toBe("comment");
@@ -340,7 +292,7 @@ describe("legacy-type sanitize on write", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations[0].type).toBe("comment");
     expect(onDisk.annotations[0].directedAt).toBe("claude");
@@ -449,7 +401,7 @@ describe("legacy-type sanitize on write", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations[0].rev).toBe(7);
 
@@ -513,7 +465,7 @@ describe("legacy-type sanitize on write", () => {
     // is the input to normalizeAnnotation at line ~438.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_legacy_merge", rev: 1 })],
       }),
     );
@@ -575,7 +527,7 @@ describe("loadAndMerge", () => {
     expect(queueSpy).toHaveBeenCalledTimes(1);
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].id).toBe("ann_legacy");
@@ -588,7 +540,7 @@ describe("loadAndMerge", () => {
     // Pre-write a file with one annotation.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, { annotations: [annRecord({ id: "ann_disk", rev: 5 })] }),
+      makeAnnotationDoc(HASH_A, FILE_A, { annotations: [annRecord({ id: "ann_disk", rev: 5 })] }),
     );
     await store0.flush();
     resetStoreForTesting();
@@ -608,7 +560,7 @@ describe("loadAndMerge", () => {
     // File has rev 5.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 5, content: "from-disk" })],
       }),
     );
@@ -633,7 +585,7 @@ describe("loadAndMerge", () => {
     // File has rev 1.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 1, content: "from-disk" })],
       }),
     );
@@ -657,7 +609,7 @@ describe("loadAndMerge", () => {
   it("#11 merge: rev tie, file has editedAt, Y.Map doesn't → file wins", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 2, content: "from-disk", editedAt: 111 })],
       }),
     );
@@ -682,7 +634,7 @@ describe("loadAndMerge", () => {
   it("#12 merge: rev tie, both have editedAt, higher editedAt wins", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 2, content: "from-disk", editedAt: 100 })],
       }),
     );
@@ -705,7 +657,7 @@ describe("loadAndMerge", () => {
   it("#13 merge: tombstone rev > Y.Map rev → annotation deleted from Y.Map", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [],
         tombstones: [{ id: "ann_1", rev: 5, deletedAt: 9999 }],
       }),
@@ -730,7 +682,7 @@ describe("loadAndMerge", () => {
   it("#14 merge: tombstone rev < Y.Map rev → Y.Map annotation preserved (resurrection)", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [],
         tombstones: [{ id: "ann_1", rev: 2, deletedAt: 1 }],
       }),
@@ -755,7 +707,7 @@ describe("loadAndMerge", () => {
   it("#15 merge: alive in Y.Map, absent from file, not tombstoned → kept + queueWrite fires", async () => {
     // File exists but empty.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
-    store0.queueWrite(() => makeFile(HASH_A, FILE_A, { annotations: [], replies: [] }));
+    store0.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A, { annotations: [], replies: [] }));
     await store0.flush();
     resetStoreForTesting();
 
@@ -773,7 +725,7 @@ describe("loadAndMerge", () => {
     expect(queueSpy).toHaveBeenCalled();
 
     await store.flush();
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].id).toBe("ann_new");
@@ -789,7 +741,7 @@ describe("loadAndMerge", () => {
     // suite (prior tombstone tests all use annotations: []).
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 2 })],
         tombstones: [{ id: "ann_1", rev: 5, deletedAt: 9999 }],
       }),
@@ -814,7 +766,7 @@ describe("loadAndMerge", () => {
     // someone changing > to >=.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_1", rev: 5 })],
         tombstones: [{ id: "ann_1", rev: 5, deletedAt: 9999 }],
       }),
@@ -840,7 +792,7 @@ describe("loadAndMerge", () => {
     // absent from file" pass would see it and set needsWrite → spurious write.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [],
         tombstones: [{ id: "ann_1", rev: 2, deletedAt: 1 }],
       }),
@@ -910,7 +862,7 @@ describe("recordTombstone + getTombstones", () => {
 
     await store.flush();
 
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.tombstones).toHaveLength(1);
     expect(onDisk.tombstones[0].id).toBe("ann_dead");
@@ -941,7 +893,7 @@ describe("replies merge", () => {
   it("#17 file reply rev > Y.Map reply rev → file wins", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         replies: [replyRecord({ id: "rep_1", rev: 5, text: "disk" })],
       }),
     );
@@ -970,7 +922,7 @@ describe("replies merge", () => {
     repMap.set("rep_1", replyRecord({ id: "rep_1" }));
 
     await store.flush();
-    const raw = await fs.readFile(path.join(tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.replies).toHaveLength(1);
     expect(onDisk.replies[0].id).toBe("rep_1");
@@ -980,7 +932,7 @@ describe("replies merge", () => {
   it("#20 reply: file has reply, Y.Map empty → reply inserted", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         replies: [replyRecord({ id: "rep_2", rev: 3, text: "from-disk" })],
       }),
     );
@@ -1006,7 +958,7 @@ describe("replies merge", () => {
     // a different reason without ever reaching the reply merge loop.
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         annotations: [annRecord({ id: "ann_other", rev: 1 })],
         replies: [],
       }),
@@ -1030,7 +982,7 @@ describe("replies merge", () => {
   it("#22 reply: Y.Map rev > file rev → Y.Map wins (unchanged)", async () => {
     const store0 = createStore(HASH_A, { filePath: FILE_A });
     store0.queueWrite(() =>
-      makeFile(HASH_A, FILE_A, {
+      makeAnnotationDoc(HASH_A, FILE_A, {
         replies: [replyRecord({ id: "rep_1", rev: 1, text: "from-disk" })],
       }),
     );

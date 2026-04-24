@@ -16,9 +16,6 @@
  * gated behind `vitest bench`.
  */
 
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -36,6 +33,8 @@ import {
   resetForTesting as resetSyncForTesting,
 } from "../../../src/server/annotations/sync.js";
 import { Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
+import { writeEnvelopeToDisk } from "../../helpers/annotation-fixtures.js";
+import { useTmpAnnotationsEnv } from "../../helpers/annotation-store-env.js";
 
 const HASH = "b".repeat(64);
 const FILE_PATH = "/virtual/perf-doc.md";
@@ -67,39 +66,21 @@ function makeEnvelope(count: number): AnnotationDocV1 {
   };
 }
 
-let tmpRoot = "";
-let prevAppDataDir: string | undefined;
+useTmpAnnotationsEnv("tandem-perf-test-");
 
-beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-perf-test-"));
-  prevAppDataDir = process.env.TANDEM_APP_DATA_DIR;
-  process.env.TANDEM_APP_DATA_DIR = tmpRoot;
+beforeEach(() => {
   resetStoreForTesting();
   resetSyncForTesting();
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetStoreForTesting();
   resetSyncForTesting();
-  if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-  else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
-  if (tmpRoot) await fs.rm(tmpRoot, { recursive: true, force: true });
-  tmpRoot = "";
 });
-
-async function writeEnvelope(envelope: AnnotationDocV1): Promise<void> {
-  const annotationsDir = path.join(tmpRoot, "annotations");
-  await fs.mkdir(annotationsDir, { recursive: true });
-  await fs.writeFile(
-    path.join(annotationsDir, `${envelope.docHash}.json`),
-    JSON.stringify(envelope),
-    "utf-8",
-  );
-}
 
 async function measureLoadAndMerge(count: number): Promise<number> {
   const envelope = makeEnvelope(count);
-  await writeEnvelope(envelope);
+  await writeEnvelopeToDisk(envelope);
 
   const ydoc = new Y.Doc();
   const store = createStore(HASH, { filePath: FILE_PATH });
@@ -120,7 +101,7 @@ async function measureLoadAndMerge(count: number): Promise<number> {
 
 async function measureLoadAndMergeWithConflicts(count: number): Promise<number> {
   const envelope = makeEnvelope(count);
-  await writeEnvelope(envelope);
+  await writeEnvelopeToDisk(envelope);
 
   const ydoc = new Y.Doc();
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
