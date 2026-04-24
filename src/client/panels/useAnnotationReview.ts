@@ -48,7 +48,7 @@ interface UseAnnotationReviewParams {
 
 export interface UseAnnotationReviewReturn {
   resolveAnnotation: (id: string, status: "accepted" | "dismissed") => void;
-  undoResolveAnnotation: (id: string) => void;
+  undoResolveAnnotation: (id: string) => boolean;
   handleAccept: (id: string) => void;
   handleDismiss: (id: string) => void;
   scrollToAnnotation: (ann: Annotation) => void;
@@ -75,18 +75,10 @@ export function useAnnotationReview({
   const reviewIndexRef = useRef(0);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
 
-  // Track recently resolved annotations for timed undo (10s window)
+  // Track recently resolved annotations for session-scoped undo (persists until page reload)
   const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
   // Track the last resolved annotation ID for keyboard undo (Z key)
   const lastResolvedRef = useRef<string | null>(null);
-  // Timer IDs for undo window expiry — cancel on undo or unmount
-  const undoTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  useEffect(() => {
-    const timers = undoTimersRef.current;
-    return () => {
-      for (const t of timers.values()) clearTimeout(t);
-    };
-  }, []);
 
   // Keyboard review targets only pending annotations (unfiltered)
   const reviewTargets = useMemo(
@@ -116,32 +108,19 @@ export function useAnnotationReview({
       }
     }
 
-    // Track for timed undo
+    // Track for session-scoped undo (IDs stay until page reload)
     lastResolvedRef.current = id;
     setRecentlyResolved((prev) => new Set(prev).add(id));
-    const existingTimer = undoTimersRef.current.get(id);
-    if (existingTimer) clearTimeout(existingTimer);
-    const timerId = setTimeout(() => {
-      undoTimersRef.current.delete(id);
-      setRecentlyResolved((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      if (lastResolvedRef.current === id) {
-        lastResolvedRef.current = null;
-      }
-    }, 10_000);
-    undoTimersRef.current.set(id, timerId);
   }
 
-  /** Revert a resolved annotation back to pending, undoing text changes for accepted suggestions */
-  function undoResolveAnnotation(id: string) {
+  /** Revert a resolved annotation back to pending, undoing text changes for accepted suggestions.
+   * Returns true on success, false when the text-changed guard fires (undo blocked). */
+  function undoResolveAnnotation(id: string): boolean {
     const y = ydocRef.current;
-    if (!y) return;
+    if (!y) return false;
     const map = y.getMap(Y_MAP_ANNOTATIONS);
     const raw = map.get(id) as Annotation | undefined;
-    if (!raw || raw.status === "pending") return;
+    if (!raw || raw.status === "pending") return false;
     const ann = sanitizeAnnotation(raw);
 
     // If it was an accepted annotation with suggestedText, revert the text edit first.
@@ -154,12 +133,12 @@ export function useAnnotationReview({
           const resolved = annotationToPmRange(ann, editorRef.current.state.doc, y);
           if (!resolved) {
             console.warn(`[undo] Cannot resolve range for annotation ${id}, skipping`);
-            return;
+            return false;
           }
           const currentText = editorRef.current.state.doc.textBetween(resolved.from, resolved.to);
           if (currentText !== newText) {
             console.warn(`[undo] Text changed since accept for annotation ${id}, skipping`);
-            return;
+            return false;
           }
           editorRef.current
             .chain()
@@ -170,19 +149,13 @@ export function useAnnotationReview({
         }
       } catch (err) {
         console.warn(`[undo] Failed to revert text for annotation ${id}:`, err);
-        return;
+        return false;
       }
     }
 
     // Revert status to pending
     map.set(id, { ...ann, status: "pending" as const });
 
-    // Clean up undo tracking
-    const timer = undoTimersRef.current.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      undoTimersRef.current.delete(id);
-    }
     setRecentlyResolved((prev) => {
       const next = new Set(prev);
       next.delete(id);
@@ -191,6 +164,7 @@ export function useAnnotationReview({
     if (lastResolvedRef.current === id) {
       lastResolvedRef.current = null;
     }
+    return true;
   }
 
   function handleAccept(id: string) {

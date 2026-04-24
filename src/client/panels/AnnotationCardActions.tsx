@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 export interface AnnotationCardActionsProps {
   annotationId: string;
   isPending: boolean;
@@ -5,7 +7,7 @@ export interface AnnotationCardActionsProps {
   undoable?: boolean;
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
-  onUndo?: (id: string) => void;
+  onUndo?: (id: string) => boolean;
 }
 
 export function AnnotationCardActions({
@@ -17,6 +19,8 @@ export function AnnotationCardActions({
   onDismiss,
   onUndo,
 }: AnnotationCardActionsProps) {
+  const [undoError, setUndoError] = useState(false);
+
   if (isPending && !isEditing && (onAccept || onDismiss)) {
     return (
       <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
@@ -66,12 +70,16 @@ export function AnnotationCardActions({
 
   if (!isPending && undoable && onUndo) {
     return (
-      <div style={{ marginTop: "4px", position: "relative" }}>
+      <div style={{ marginTop: "4px" }}>
         <button
           data-testid="undo-btn"
           onClick={(e) => {
             e.stopPropagation();
-            onUndo(annotationId);
+            const ok = onUndo(annotationId);
+            if (!ok) {
+              setUndoError(true);
+              setTimeout(() => setUndoError(false), 3000);
+            }
           }}
           style={{
             padding: "1px 6px",
@@ -85,22 +93,17 @@ export function AnnotationCardActions({
         >
           Undo
         </button>
-        <div
-          data-testid="undo-countdown"
-          style={{
-            height: "2px",
-            marginTop: "2px",
-            borderRadius: "1px",
-            backgroundColor: "var(--tandem-accent)",
-            animation: "undo-countdown-shrink 10s linear forwards",
-          }}
-        />
-        <style>
-          {`@keyframes undo-countdown-shrink {
-              from { width: 100%; }
-              to { width: 0%; }
-            }`}
-        </style>
+        {undoError && (
+          <div
+            style={{
+              fontSize: "11px",
+              color: "var(--tandem-error-fg)",
+              marginTop: "2px",
+            }}
+          >
+            Can't undo — text has changed.
+          </div>
+        )}
       </div>
     );
   }
