@@ -489,7 +489,7 @@ export function SidePanel({
       </div>
       <style>{`
         @keyframes tandem-annotation-flash {
-          0% { background-color: var(--tandem-accent-bg); }
+          0% { background-color: color-mix(in srgb, var(--tandem-accent) 20%, transparent); }
           100% { background-color: transparent; }
         }
         .tandem-annotation-flash {
