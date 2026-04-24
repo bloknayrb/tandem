@@ -1,5 +1,5 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import {
   DEFAULT_MCP_PORT,
@@ -7,13 +7,14 @@ import {
   Y_MAP_ANNOTATIONS,
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import type { Annotation, AnnotationReply, AnnotationType, TandemMode } from "../../shared/types";
+import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
-import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
-import { annotationToPmRange } from "../positions";
 import { warningStateColors } from "../utils/colors";
 import { AnnotationCard } from "./AnnotationCard";
-import { FilterSelect } from "./FilterSelect";
+import { BulkActions } from "./BulkActions";
+import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar";
+import { FilterBar } from "./FilterBar";
+import { useAnnotationReview } from "./useAnnotationReview";
 
 interface SidePanelProps {
   annotations: Annotation[];
@@ -30,44 +31,6 @@ interface SidePanelProps {
   activeAnnotationId: string | null;
   onActiveAnnotationChange: (id: string | null) => void;
   reduceMotion?: boolean;
-}
-
-const SMALL_BTN: React.CSSProperties = {
-  padding: "2px 8px",
-  fontSize: "11px",
-  border: "1px solid var(--tandem-border-strong)",
-  borderRadius: "3px",
-  cursor: "pointer",
-};
-
-type FilterType = AnnotationType | "all" | "with-replacement" | "for-claude";
-type FilterAuthor = "all" | "claude" | "user" | "import";
-type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
-
-/** Apply an annotation's replacement text in the editor */
-function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null): boolean {
-  if (ann.suggestedText === undefined) return false;
-
-  const newText = ann.suggestedText;
-
-  const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
-  if (!resolved) {
-    console.warn("[SidePanel] Could not resolve range for suggestion", ann.id);
-    return false;
-  }
-
-  try {
-    editor
-      .chain()
-      .focus()
-      .deleteRange({ from: resolved.from, to: resolved.to })
-      .insertContentAt(resolved.from, newText)
-      .run();
-  } catch (err) {
-    console.error("[SidePanel] Editor mutation failed for suggestion", ann.id, err);
-    return false;
-  }
-  return true;
 }
 
 export function SidePanel({
@@ -90,31 +53,34 @@ export function SidePanel({
   const [filterType, setFilterType] = useState<FilterType>("all");
   const [filterAuthor, setFilterAuthor] = useState<FilterAuthor>("all");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
-  const [reviewIndex, setReviewIndex] = useState(0);
-  const reviewIndexRef = useRef(0);
   const [bulkConfirm, setBulkConfirm] = useState<"accept" | "dismiss" | null>(null);
   const bulkConfirmRef = useRef(bulkConfirm);
   bulkConfirmRef.current = bulkConfirm;
-  const confirmRef = useRef<HTMLButtonElement>(null);
-
-  // Track recently resolved annotations for timed undo (10s window)
-  const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
-  // Track the last resolved annotation ID for keyboard undo (Z key)
-  const lastResolvedRef = useRef<string | null>(null);
-  // Timer IDs for undo window expiry — cancel on undo or unmount
-  const undoTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  useEffect(() => {
-    const timers = undoTimersRef.current;
-    return () => {
-      for (const t of timers.values()) clearTimeout(t);
-    };
-  }, []);
 
   // Stable refs for keyboard callbacks to avoid stale closures
   const ydocRef = useRef(ydoc);
   const editorRef = useRef(editor);
   ydocRef.current = ydoc;
   editorRef.current = editor;
+
+  const review = useAnnotationReview({
+    ydocRef,
+    editorRef,
+    annotations,
+    onActiveAnnotationChange,
+    reviewMode,
+    onToggleReviewMode,
+    onExitReviewMode,
+    bulkConfirmRef,
+    setBulkConfirm,
+    scrollBehavior,
+  });
+
+  // Focus confirm button when bulk confirmation appears.
+  // Depends on the state value (not the ref) so it fires on every toggle.
+  useEffect(() => {
+    if (bulkConfirm) review.confirmRef.current?.focus();
+  }, [bulkConfirm, review.confirmRef]);
 
   // Replies: observe the annotationReplies Y.Map
   const [repliesMap, setRepliesMap] = useState<Map<string, AnnotationReply[]>>(new Map());
@@ -172,120 +138,6 @@ export function SidePanel({
     return { filtered, pending, resolved, allPending };
   }, [annotations, filterType, filterAuthor, filterStatus]);
 
-  // Keyboard review targets only pending annotations (unfiltered)
-  const reviewTargets = allPending;
-  const reviewTargetsRef = useRef(reviewTargets);
-  reviewTargetsRef.current = reviewTargets;
-
-  function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
-    const y = ydocRef.current;
-    if (!y) return;
-    const map = y.getMap(Y_MAP_ANNOTATIONS);
-    const raw = map.get(id) as Annotation | undefined;
-    if (!raw) return;
-    const ann = sanitizeAnnotation(raw);
-    map.set(id, { ...ann, status });
-    // Only annotations with suggestedText trigger a text replacement when
-    // accepted. For plain comments/highlights/flags, accepting is just a
-    // status change.
-    if (status === "accepted" && ann.suggestedText !== undefined && editorRef.current) {
-      const applied = applySuggestion(ann, editorRef.current, ydocRef.current);
-      if (!applied) {
-        // Revert annotation status — text replacement failed
-        map.set(id, { ...ann, status: "pending" });
-        return;
-      }
-    }
-
-    // Track for timed undo
-    lastResolvedRef.current = id;
-    setRecentlyResolved((prev) => new Set(prev).add(id));
-    const existingTimer = undoTimersRef.current.get(id);
-    if (existingTimer) clearTimeout(existingTimer);
-    const timerId = setTimeout(() => {
-      undoTimersRef.current.delete(id);
-      setRecentlyResolved((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      if (lastResolvedRef.current === id) {
-        lastResolvedRef.current = null;
-      }
-    }, 10_000);
-    undoTimersRef.current.set(id, timerId);
-  }
-
-  /** Revert a resolved annotation back to pending, undoing text changes for accepted suggestions */
-  function undoResolveAnnotation(id: string) {
-    const y = ydocRef.current;
-    if (!y) return;
-    const map = y.getMap(Y_MAP_ANNOTATIONS);
-    const raw = map.get(id) as Annotation | undefined;
-    if (!raw || raw.status === "pending") return;
-    const ann = sanitizeAnnotation(raw);
-
-    // If it was an accepted annotation with suggestedText, revert the text edit first.
-    // If text revert fails, don't revert status — half-undo is worse than no undo.
-    if (ann.status === "accepted" && ann.suggestedText !== undefined && editorRef.current) {
-      try {
-        const newText = ann.suggestedText;
-        const oldText = ann.textSnapshot;
-        if (typeof newText === "string" && typeof oldText === "string") {
-          const resolved = annotationToPmRange(ann, editorRef.current.state.doc, y);
-          if (!resolved) {
-            console.warn(`[undo] Cannot resolve range for annotation ${id}, skipping`);
-            return;
-          }
-          const currentText = editorRef.current.state.doc.textBetween(resolved.from, resolved.to);
-          if (currentText !== newText) {
-            console.warn(`[undo] Text changed since accept for annotation ${id}, skipping`);
-            return;
-          }
-          editorRef.current
-            .chain()
-            .focus()
-            .deleteRange({ from: resolved.from, to: resolved.to })
-            .insertContentAt(resolved.from, oldText)
-            .run();
-        }
-      } catch (err) {
-        console.warn(`[undo] Failed to revert text for annotation ${id}:`, err);
-        return;
-      }
-    }
-
-    // Revert status to pending
-    map.set(id, { ...ann, status: "pending" as const });
-
-    // Clean up undo tracking
-    const timer = undoTimersRef.current.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      undoTimersRef.current.delete(id);
-    }
-    setRecentlyResolved((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    if (lastResolvedRef.current === id) {
-      lastResolvedRef.current = null;
-    }
-  }
-
-  function handleAccept(id: string) {
-    resolveAnnotation(id, "accepted");
-  }
-
-  function handleDismiss(id: string) {
-    resolveAnnotation(id, "dismissed");
-  }
-
-  function handleUndo(id: string) {
-    undoResolveAnnotation(id);
-  }
-
   function handleEdit(id: string, newContent: string) {
     const y = ydocRef.current;
     if (!y) return;
@@ -334,131 +186,10 @@ export function SidePanel({
     }
   }
 
-  function handleBulkAccept() {
-    for (const ann of pending) resolveAnnotation(ann.id, "accepted");
+  function handleBulk(status: "accepted" | "dismissed") {
+    for (const ann of pending) review.resolveAnnotation(ann.id, status);
     setBulkConfirm(null);
   }
-
-  function handleBulkDismiss() {
-    for (const ann of pending) resolveAnnotation(ann.id, "dismissed");
-    setBulkConfirm(null);
-  }
-
-  // Scroll editor to an annotation's range
-  const scrollToAnnotation = useCallback(
-    (ann: Annotation) => {
-      const ed = editorRef.current;
-      if (!ed) return;
-      const resolved = annotationToPmRange(ann, ed.state.doc, ydocRef.current);
-      if (!resolved) return;
-      ed.chain().focus().setTextSelection({ from: resolved.from, to: resolved.to }).run();
-      const domAtPos = ed.view.domAtPos(resolved.from);
-      const el = domAtPos.node instanceof HTMLElement ? domAtPos.node : domAtPos.node.parentElement;
-      el?.scrollIntoView({ behavior: scrollBehavior, block: "center" });
-    },
-    [scrollBehavior],
-  );
-
-  // Stable keyboard review callbacks (use refs to avoid dep cascade)
-  const navigateReview = useCallback(
-    (direction: "next" | "prev") => {
-      const targets = reviewTargetsRef.current;
-      if (targets.length === 0) return;
-      let idx = reviewIndexRef.current;
-      idx =
-        direction === "next"
-          ? (idx + 1) % targets.length
-          : (idx - 1 + targets.length) % targets.length;
-      reviewIndexRef.current = idx;
-      setReviewIndex(idx);
-      scrollToAnnotation(targets[idx]);
-    },
-    [scrollToAnnotation],
-  );
-
-  const acceptCurrent = useCallback(() => {
-    const targets = reviewTargetsRef.current;
-    if (targets.length === 0) return;
-    const ann = targets[reviewIndexRef.current];
-    if (ann) resolveAnnotation(ann.id, "accepted");
-  }, []);
-
-  const dismissCurrent = useCallback(() => {
-    const targets = reviewTargetsRef.current;
-    if (targets.length === 0) return;
-    const ann = targets[reviewIndexRef.current];
-    if (ann) resolveAnnotation(ann.id, "dismissed");
-  }, []);
-
-  // Reset review index and scroll to first annotation when entering review mode
-  const prevReviewModeRef = useRef(false);
-  useEffect(() => {
-    if (reviewMode && !prevReviewModeRef.current && reviewTargets.length > 0) {
-      reviewIndexRef.current = 0;
-      setReviewIndex(0);
-      scrollToAnnotation(reviewTargets[0]);
-    }
-    prevReviewModeRef.current = reviewMode;
-  }, [reviewMode, reviewTargets, scrollToAnnotation]);
-
-  // Sync activeAnnotationId when review index changes
-  useEffect(() => {
-    if (reviewMode && reviewTargets.length > 0) {
-      onActiveAnnotationChange(reviewTargets[reviewIndex]?.id ?? null);
-    } else {
-      onActiveAnnotationChange(null);
-    }
-  }, [reviewMode, reviewIndex, reviewTargets, onActiveAnnotationChange]);
-
-  const scrollToCurrentAndExit = useCallback(() => {
-    const targets = reviewTargetsRef.current;
-    const ann = targets[reviewIndexRef.current];
-    if (ann) scrollToAnnotation(ann);
-    onExitReviewMode();
-  }, [scrollToAnnotation, onExitReviewMode]);
-
-  const undoLast = useCallback(() => {
-    const id = lastResolvedRef.current;
-    if (id) undoResolveAnnotation(id);
-  }, []);
-
-  const cancelBulkOrExit = useCallback(() => {
-    if (bulkConfirmRef.current) {
-      setBulkConfirm(null);
-    } else {
-      onExitReviewMode();
-    }
-  }, [onExitReviewMode]);
-
-  const reviewCallbacks = useMemo(
-    () => ({
-      onToggleReviewMode,
-      onExitReviewMode,
-      navigateReview,
-      acceptCurrent,
-      dismissCurrent,
-      scrollToCurrentAndExit,
-      cancelBulkOrExit,
-      undoLast,
-    }),
-    [
-      onToggleReviewMode,
-      onExitReviewMode,
-      navigateReview,
-      acceptCurrent,
-      dismissCurrent,
-      scrollToCurrentAndExit,
-      cancelBulkOrExit,
-      undoLast,
-    ],
-  );
-
-  useReviewKeyboard(reviewMode, reviewCallbacks);
-
-  // Focus confirm button when bulk confirmation appears
-  useEffect(() => {
-    if (bulkConfirm) confirmRef.current?.focus();
-  }, [bulkConfirm]);
 
   // Reset confirmation when filters change (prevents stale Accept/Dismiss All)
   useEffect(() => {
@@ -503,22 +234,6 @@ export function SidePanel({
     scrollContainerRef.current?.scrollTo({ top: 0 });
   }, [filterType, filterAuthor, filterStatus]);
 
-  // Keep review index in bounds when annotations change
-  useEffect(() => {
-    if (reviewMode && reviewIndexRef.current >= reviewTargets.length) {
-      const newIdx = Math.max(0, reviewTargets.length - 1);
-      reviewIndexRef.current = newIdx;
-      setReviewIndex(newIdx);
-    }
-  }, [reviewMode, reviewTargets.length]);
-
-  // Auto-exit review mode when no pending left
-  useEffect(() => {
-    if (reviewMode && reviewTargets.length === 0) {
-      onExitReviewMode();
-    }
-  }, [reviewMode, reviewTargets.length, onExitReviewMode]);
-
   // Scroll to and flash the annotation card when activeAnnotationId changes externally
   useEffect(() => {
     if (!activeAnnotationId) return;
@@ -544,8 +259,6 @@ export function SidePanel({
   }, [activeAnnotationId, scrollBehavior]);
 
   const hasFilters = filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all";
-  const activeReviewAnn =
-    reviewMode && reviewTargets.length > 0 ? reviewTargets[reviewIndex] : null;
 
   return (
     <div
@@ -661,7 +374,7 @@ export function SidePanel({
       </div>
 
       {/* Review mode indicator */}
-      {reviewMode && reviewTargets.length > 0 && (
+      {reviewMode && review.reviewTargets.length > 0 && (
         <div
           style={{
             padding: "8px 16px",
@@ -672,7 +385,7 @@ export function SidePanel({
           }}
         >
           <div aria-live="polite" style={{ fontWeight: 600, marginBottom: "2px" }}>
-            Reviewing {reviewIndex + 1} / {reviewTargets.length}
+            Reviewing {review.reviewIndex + 1} / {review.reviewTargets.length}
           </div>
           <div style={{ color: "var(--tandem-accent)" }}>
             Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · Z: undo · E: examine · Esc: exit
@@ -681,75 +394,23 @@ export function SidePanel({
       )}
 
       {/* Filters */}
-      <div
-        style={{
-          padding: "8px 16px",
-          borderBottom: "1px solid var(--tandem-border)",
-          display: "flex",
-          gap: "4px",
-          flexWrap: "wrap",
-          alignItems: "center",
+      <FilterBar
+        filterType={filterType}
+        setFilterType={setFilterType}
+        filterAuthor={filterAuthor}
+        setFilterAuthor={setFilterAuthor}
+        filterStatus={filterStatus}
+        setFilterStatus={setFilterStatus}
+        hasFilters={hasFilters}
+        onClearFilters={() => {
+          setFilterType("all");
+          setFilterAuthor("all");
+          setFilterStatus("all");
+          // Scroll reset is handled centrally by the filter-change
+          // useEffect above — it also scrolls active review annotations
+          // into view instead of jumping to the top.
         }}
-      >
-        <FilterSelect
-          testId="filter-type"
-          value={filterType}
-          onChange={(v) => setFilterType(v as FilterType)}
-          options={[
-            { value: "all", label: "All types" },
-            { value: "highlight", label: "Highlights" },
-            { value: "comment", label: "Comments" },
-            { value: "with-replacement", label: "With replacement" },
-            { value: "for-claude", label: "For Claude" },
-            { value: "flag", label: "Flags" },
-          ]}
-        />
-        <FilterSelect
-          testId="filter-author"
-          value={filterAuthor}
-          onChange={(v) => setFilterAuthor(v as FilterAuthor)}
-          options={[
-            { value: "all", label: "Anyone" },
-            { value: "claude", label: "Claude" },
-            { value: "user", label: "You" },
-            { value: "import", label: "Imported" },
-          ]}
-        />
-        <FilterSelect
-          testId="filter-status"
-          value={filterStatus}
-          onChange={(v) => setFilterStatus(v as FilterStatus)}
-          options={[
-            { value: "all", label: "Any status" },
-            { value: "pending", label: "Pending" },
-            { value: "accepted", label: "Accepted" },
-            { value: "dismissed", label: "Dismissed" },
-          ]}
-        />
-        {hasFilters && (
-          <button
-            data-testid="clear-filters-btn"
-            onClick={() => {
-              setFilterType("all");
-              setFilterAuthor("all");
-              setFilterStatus("all");
-              // Scroll reset is handled centrally by the filter-change
-              // useEffect above — it also scrolls active review annotations
-              // into view instead of jumping to the top.
-            }}
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--tandem-accent)",
-              fontSize: "11px",
-              cursor: "pointer",
-              padding: "2px 4px",
-            }}
-          >
-            Clear
-          </button>
-        )}
-      </div>
+      />
 
       {/* Apply as tracked changes (docx only) */}
       <div style={{ padding: "4px 16px 0" }}>
@@ -761,84 +422,17 @@ export function SidePanel({
       </div>
 
       {/* Bulk actions */}
-      {pending.length > 1 && (
-        <div
-          style={{
-            padding: "6px 16px",
-            borderBottom: "1px solid var(--tandem-border)",
-            display: "flex",
-            gap: "6px",
-            alignItems: "center",
-          }}
-        >
-          {bulkConfirm ? (
-            (() => {
-              const isAccept = bulkConfirm === "accept";
-              return (
-                <>
-                  <span style={{ fontSize: "11px", color: "var(--tandem-fg)" }}>
-                    {isAccept ? "Accept" : "Reject"}{" "}
-                    {pending.length === allPending.length
-                      ? `${pending.length} annotations?`
-                      : `${pending.length} of ${allPending.length} pending?`}
-                  </span>
-                  <button
-                    ref={confirmRef}
-                    data-testid="bulk-confirm-btn"
-                    onClick={isAccept ? handleBulkAccept : handleBulkDismiss}
-                    style={{
-                      ...SMALL_BTN,
-                      background: isAccept ? "var(--tandem-success-bg)" : "var(--tandem-error-bg)",
-                      color: isAccept
-                        ? "var(--tandem-success-fg-strong)"
-                        : "var(--tandem-error-fg-strong)",
-                      fontWeight: 600,
-                    }}
-                  >
-                    Confirm
-                  </button>
-                  <button
-                    data-testid="bulk-cancel-btn"
-                    onClick={() => setBulkConfirm(null)}
-                    style={{
-                      ...SMALL_BTN,
-                      background: "var(--tandem-surface)",
-                      color: "var(--tandem-fg-muted)",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </>
-              );
-            })()
-          ) : (
-            <>
-              <button
-                data-testid="bulk-accept-btn"
-                onClick={() => setBulkConfirm("accept")}
-                style={{
-                  ...SMALL_BTN,
-                  background: "var(--tandem-success-bg)",
-                  color: "var(--tandem-success-fg-strong)",
-                }}
-              >
-                Accept All ({pending.length})
-              </button>
-              <button
-                data-testid="bulk-dismiss-btn"
-                onClick={() => setBulkConfirm("dismiss")}
-                style={{
-                  ...SMALL_BTN,
-                  background: "var(--tandem-error-bg)",
-                  color: "var(--tandem-error-fg-strong)",
-                }}
-              >
-                Reject All
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      <BulkActions
+        bulkConfirm={bulkConfirm}
+        pendingCount={pending.length}
+        allPendingCount={allPending.length}
+        confirmRef={review.confirmRef}
+        onConfirmAccept={() => handleBulk("accepted")}
+        onConfirmDismiss={() => handleBulk("dismissed")}
+        onCancel={() => setBulkConfirm(null)}
+        onRequestAccept={() => setBulkConfirm("accept")}
+        onRequestDismiss={() => setBulkConfirm("dismiss")}
+      />
 
       {/* Annotation list */}
       <div style={{ padding: "8px 16px", flex: 1 }} role="list" aria-label="Annotations">
@@ -854,18 +448,18 @@ export function SidePanel({
         ) : (
           <>
             {pending.map((ann) => {
-              const isTarget = activeReviewAnn?.id === ann.id;
+              const isTarget = review.activeReviewAnn?.id === ann.id;
               return (
                 <AnnotationCard
                   key={ann.id}
                   annotation={ann}
                   replies={repliesMap.get(ann.id) ?? []}
                   isReviewTarget={isTarget}
-                  onAccept={handleAccept}
-                  onDismiss={handleDismiss}
+                  onAccept={review.handleAccept}
+                  onDismiss={review.handleDismiss}
                   onEdit={handleEdit}
                   onReply={handleReply}
-                  onClick={() => scrollToAnnotation(ann)}
+                  onClick={() => review.scrollToAnnotation(ann)}
                 />
               );
             })}
@@ -882,9 +476,9 @@ export function SidePanel({
                       key={ann.id}
                       annotation={ann}
                       replies={repliesMap.get(ann.id) ?? []}
-                      onUndo={handleUndo}
-                      undoable={recentlyResolved.has(ann.id)}
-                      onClick={() => scrollToAnnotation(ann)}
+                      onUndo={review.undoResolveAnnotation}
+                      undoable={review.recentlyResolved.has(ann.id)}
+                      onClick={() => review.scrollToAnnotation(ann)}
                     />
                   ))}
                 </div>
