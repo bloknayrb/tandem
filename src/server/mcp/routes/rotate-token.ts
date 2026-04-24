@@ -23,7 +23,7 @@ export function makeRotateTokenHandler(deps: {
     try {
       newToken = await readTokenFromFile();
     } catch (err) {
-      console.error("[tandem] rotate-token: failed to read new token from disk:", err);
+      console.error("[Tandem] rotate-token: failed to read new token from disk:", err);
       res.status(500).json({ error: "INTERNAL", message: "Could not read new token from disk." });
       return;
     }
@@ -45,7 +45,7 @@ export function makeRotateTokenHandler(deps: {
 
     deps.setCurrentToken(newToken);
 
-    console.error("[tandem] auth token rotated; 60-second grace window active for old token");
+    console.error("[Tandem] auth token rotated; 60-second grace window active for old token");
     res.json({ ok: true });
   };
 }
