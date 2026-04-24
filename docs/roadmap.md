@@ -397,14 +397,14 @@ Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three indepe
 |-------|-------|--------|--------|
 | 1 | Foundation: wire-protocol types to shared, token-store extraction, awareness.ts #355, Editor CSS extraction, tsconfig tightening, dead Tauri deps | ~2 days | **DONE** (PRs #384–#389, merged 2026-04-22) |
 | 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | **DONE** (PRs #391, #392, merged 2026-04-23) |
-| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | **In review** (PR #398, plan: `docs/phase-3-plan.md`, follow-up tests: #399) |
-| 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | — |
+| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | **DONE** (PR #398, merged 2026-04-23; follow-up tests: #399 → PR #408, merged 2026-04-24) |
+| 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | **DONE** (PRs #409, #411, #412, #413, merged 2026-04-24; plans: `docs/phase-1-plan.md`, `docs/phase-2-plan.md`) |
 | 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | — |
 | 6 | Polish: accessibility, E2E error recovery, Tauri integration tests (post-v1.0) | incremental | — |
 
 **Deferrals (with rationale in audit doc):** useYjsSync.ts (350 LOC, tight coupling makes splitting fragile), mcp/server.ts (331 LOC, manageable), shared/types.ts (274 LOC, reasonable for barrel), React.memo (measure with Profiler first), Biome linter (conflicts with ESLint).
 
-**Phases 1-3 are the minimum viable audit remediation** (~5.5 days). Phases 4-5 improve client maintainability but don't affect correctness. Phase 6 is post-v1.0 polish.
+**Phases 1-4 are complete** (~8.5 days). Phase 5 (prop-drilling evaluation) is conditional on Phase 4 results — evaluate SidePanel prop count to decide if needed. Phase 6 is post-v1.0 polish.
 
 ### Decision Gate: Svelte Probe (#312)
 
@@ -429,7 +429,7 @@ The probe produces a decision document filed as an ADR. The result determines th
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.8.0 | Token hygiene + annotation correctness | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369, #376, #377, #379, #381, #382, #396 |
+| v0.8.0 | Token hygiene + annotation correctness | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369, #376, #377, #379, #381, #382, #396, #415 |
 | v0.9.0 | MCP API cleanup + distribution | #259, PR e, #316, #317, #322, #341, ADR-023 CI smoke test |
 
 **v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity. #369 (dark-mode scrollbars) is a standalone visual fix that lands here as a prerequisite, not part of the full dark theme release. #377 (annotation offset resolving to wrong text) is a position-related bug — if investigation reveals it's systemic rather than a one-off, #260 moves into scope per the deferral criterion. #376 (monitor not pushing events) is a usability bug in the event push pipeline. #379 (Tiptap markdown round-trip drops tables and mangles formatting) is a data integrity issue — opening a file with tables and saving it silently destroys content. #381 (remove Accept/Reject from user annotations) and #382 (remove Replace/@Claude checkboxes from user toolbar) simplify the annotation UX — settle this before any framework migration so the simpler UI is what gets ported. #396 (HTTP API silent-failure gaps) is pre-v1.0 observability hardening — continuation of v0.6.4's #336 work but for the HTTP route layer instead of the stdio bridge; 1-3 line fixes per site, lands as one small PR.
