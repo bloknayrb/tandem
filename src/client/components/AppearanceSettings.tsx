@@ -16,29 +16,31 @@ interface AppearanceSettingsProps {
   onUpdate: (partial: Partial<TandemSettings>) => void;
 }
 
-const cardStyle = (selected: boolean, disabled?: boolean): React.CSSProperties => ({
-  flex: 1,
-  padding: "8px",
-  minHeight: "24px",
-  border: `2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"}`,
-  borderRadius: "6px",
-  background: disabled
-    ? "var(--tandem-surface-muted)"
-    : selected
-      ? "var(--tandem-accent-bg)"
-      : "var(--tandem-surface)",
-  cursor: disabled ? "not-allowed" : "pointer",
-  textAlign: "center",
-  fontSize: "11px",
-  color: disabled
-    ? "var(--tandem-fg-subtle)"
-    : selected
-      ? "var(--tandem-accent-fg-strong)"
-      : "var(--tandem-fg-muted)",
-  fontWeight: selected ? 600 : 400,
-  opacity: disabled ? 0.6 : 1,
-  transition: "border-color 0.15s, background 0.15s",
-});
+function cardStyle(selected: boolean, disabled?: boolean): React.CSSProperties {
+  return {
+    flex: 1,
+    padding: "8px",
+    minHeight: "24px",
+    border: `2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"}`,
+    borderRadius: "6px",
+    background: disabled
+      ? "var(--tandem-surface-muted)"
+      : selected
+        ? "var(--tandem-accent-bg)"
+        : "var(--tandem-surface)",
+    cursor: disabled ? "not-allowed" : "pointer",
+    textAlign: "center",
+    fontSize: "11px",
+    color: disabled
+      ? "var(--tandem-fg-subtle)"
+      : selected
+        ? "var(--tandem-accent-fg-strong)"
+        : "var(--tandem-fg-muted)",
+    fontWeight: selected ? 600 : 400,
+    opacity: disabled ? 0.6 : 1,
+    transition: "border-color 0.15s, background 0.15s",
+  };
+}
 
 export function AppearanceSettings({ open, settings, onUpdate }: AppearanceSettingsProps) {
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
