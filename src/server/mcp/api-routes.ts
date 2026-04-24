@@ -2,17 +2,17 @@ import type { Express, NextFunction, Request, Response } from "express";
 
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
 import type { Handler } from "./routes/_shared.js";
-import { makeAnnotationReplyHandler } from "./routes/annotation-reply.js";
-import { makeApplyChangesHandler } from "./routes/apply-changes.js";
-import { makeCloseHandler } from "./routes/close.js";
-import { makeConvertHandler } from "./routes/convert.js";
-import { makeModeHandler } from "./routes/mode.js";
-import { makeNotifyStreamHandler } from "./routes/notify-stream.js";
-import { makeOpenHandler } from "./routes/open.js";
+import { handleAnnotationReply } from "./routes/annotation-reply.js";
+import { handleApplyChanges } from "./routes/apply-changes.js";
+import { handleClose } from "./routes/close.js";
+import { handleConvert } from "./routes/convert.js";
+import { handleMode } from "./routes/mode.js";
+import { handleNotifyStream } from "./routes/notify-stream.js";
+import { handleOpen } from "./routes/open.js";
 import { makeRotateTokenHandler } from "./routes/rotate-token.js";
-import { makeSaveHandler } from "./routes/save.js";
+import { handleSave } from "./routes/save.js";
 import { makeSetupHandler } from "./routes/setup.js";
-import { makeUploadHandler } from "./routes/upload.js";
+import { handleUpload } from "./routes/upload.js";
 
 export type { Handler } from "./routes/_shared.js";
 // Re-export shared utilities that tests and other modules import from here
@@ -97,35 +97,35 @@ export function registerApiRoutes(
   getCurrentToken: () => string | null = () => null,
 ): void {
   // SSE notification stream for browser toasts
-  app.get("/api/notify-stream", mw, makeNotifyStreamHandler());
+  app.get("/api/notify-stream", mw, handleNotifyStream);
 
   // NOTE: /api/mode is GET-only — no OPTIONS registration
-  app.get("/api/mode", mw, makeModeHandler());
+  app.get("/api/mode", mw, handleMode);
 
   app.options("/api/open", mw);
-  app.post("/api/open", mw, largeBody, makeOpenHandler());
+  app.post("/api/open", mw, largeBody, handleOpen);
 
   app.options("/api/close", mw);
-  app.post("/api/close", mw, largeBody, makeCloseHandler());
+  app.post("/api/close", mw, largeBody, handleClose);
 
   app.options("/api/save", mw);
-  app.post("/api/save", mw, largeBody, makeSaveHandler());
+  app.post("/api/save", mw, largeBody, handleSave);
 
   app.options("/api/upload", mw);
-  app.post("/api/upload", mw, largeBody, makeUploadHandler());
+  app.post("/api/upload", mw, largeBody, handleUpload);
 
   app.options("/api/convert", mw);
-  app.post("/api/convert", mw, largeBody, makeConvertHandler());
+  app.post("/api/convert", mw, largeBody, handleConvert);
 
   app.options("/api/apply-changes", mw);
-  app.post("/api/apply-changes", mw, largeBody, makeApplyChangesHandler());
+  app.post("/api/apply-changes", mw, largeBody, handleApplyChanges);
 
   app.options("/api/setup", mw);
   app.post("/api/setup", mw, largeBody, makeSetupHandler({ token }));
 
   // Annotation reply: browser user posts a reply to an annotation thread
   app.options("/api/annotation-reply", mw);
-  app.post("/api/annotation-reply", mw, largeBody, makeAnnotationReplyHandler());
+  app.post("/api/annotation-reply", mw, largeBody, handleAnnotationReply);
 
   // Token rotation: CLI calls this to activate the 60-second grace window and swap the
   // in-memory current token to the NEW token that was already written to disk.
