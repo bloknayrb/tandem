@@ -312,11 +312,6 @@ export function useAnnotationReview({
 
   useReviewKeyboard(reviewMode, reviewCallbacks);
 
-  // Focus confirm button when bulk confirmation appears
-  useEffect(() => {
-    if (bulkConfirmRef.current) confirmRef.current?.focus();
-  }, [bulkConfirmRef]);
-
   // Keep review index in bounds when annotations change
   useEffect(() => {
     if (reviewMode && reviewIndexRef.current >= reviewTargets.length) {

@@ -76,6 +76,12 @@ export function SidePanel({
     scrollBehavior,
   });
 
+  // Focus confirm button when bulk confirmation appears.
+  // Depends on the state value (not the ref) so it fires on every toggle.
+  useEffect(() => {
+    if (bulkConfirm) review.confirmRef.current?.focus();
+  }, [bulkConfirm, review.confirmRef]);
+
   // Replies: observe the annotationReplies Y.Map
   const [repliesMap, setRepliesMap] = useState<Map<string, AnnotationReply[]>>(new Map());
   useEffect(() => {
