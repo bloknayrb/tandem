@@ -30,9 +30,8 @@ export function useTandemModeBroadcast(
   const [tandemMode, setTandemMode] = useState<TandemMode>(() => {
     try {
       const saved = localStorage.getItem(TANDEM_MODE_KEY);
-      return TandemModeSchema.safeParse(saved).success
-        ? (saved as TandemMode)
-        : TANDEM_MODE_DEFAULT;
+      const parsed = TandemModeSchema.safeParse(saved);
+      return parsed.success ? parsed.data : TANDEM_MODE_DEFAULT;
     } catch (err) {
       console.warn(`[tandem] localStorage unavailable reading ${TANDEM_MODE_KEY}:`, err);
       return TANDEM_MODE_DEFAULT;
