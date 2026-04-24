@@ -32,19 +32,11 @@ import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { validateRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
 import type { TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
 
-/** Origin tag for all MCP-initiated Y.Map writes. Import and use this — never use raw "mcp" strings. */
-export const MCP_ORIGIN = "mcp";
-
-/**
- * Origin tag for Y.Map writes that originated from the annotation file-writer
- * (app-data JSON → Y.Map sync). Observers that emit channel events to external
- * consumers MUST skip transactions with this origin so a file-reload doesn't
- * fire spurious `annotation:*` SSE events.
- */
-export const FILE_SYNC_ORIGIN = "file-sync";
+export { FILE_SYNC_ORIGIN, MCP_ORIGIN };
 
 /**
  * Read the user's configured selection dwell time from CTRL_ROOM.

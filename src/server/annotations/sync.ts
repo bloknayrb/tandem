@@ -58,7 +58,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
-import { FILE_SYNC_ORIGIN } from "../events/queue.js";
+import { FILE_SYNC_ORIGIN } from "../events/origins.js";
 import {
   type AnnotationDocV1,
   type AnnotationRecordV1,
