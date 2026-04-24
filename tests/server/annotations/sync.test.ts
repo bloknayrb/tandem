@@ -217,6 +217,37 @@ describe("registerAnnotationObserver", () => {
     cleanup();
   });
 
+  it("snapshot logs console.error when normalizeAnnotation drops a non-object entry", async () => {
+    // Insert one valid annotation and one non-object value directly into the
+    // Y.Map, bypassing the normal mutation path. When the observer fires and
+    // snapshot() runs, it should drop the non-object entry and emit exactly one
+    // console.error with the drop count.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Use MCP_ORIGIN so the observer queues a snapshot.
+    ydoc.transact(() => {
+      annMap.set("ann_valid", annRecord({ id: "ann_valid" }));
+      // A non-object value — normalizeAnnotation returns null for these.
+      annMap.set("ann_bad", "not-an-object" as unknown as Record<string, unknown>);
+    }, MCP_ORIGIN);
+
+    await store.flush();
+
+    // Exactly one drop-count message, mentioning 1 annotation dropped.
+    const dropCalls = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("[ANNOTATION-STORE] snapshot: dropped"),
+    );
+    expect(dropCalls).toHaveLength(1);
+    expect(dropCalls[0][0]).toMatch(/dropped 1 annotation\(s\), 0 reply\(ies\)/);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
   it("cleanup unobserves both Y.Maps (further mutations don't write)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
