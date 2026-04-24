@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import {
+  type Dispatch,
+  type MouseEvent as ReactMouseEvent,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 import { PANEL_WIDTH_KEYS, type PanelSide } from "../../shared/constants";
 import {
   PANEL_DEFAULT_WIDTH,
@@ -9,11 +16,11 @@ import {
 
 interface DragResizeOptions {
   panelLayout: PanelLayout;
-  setPanelLayout: React.Dispatch<React.SetStateAction<PanelLayout>>;
+  setPanelLayout: Dispatch<SetStateAction<PanelLayout>>;
 }
 
 interface DragResizeResult {
-  handleResizeStart: (e: React.MouseEvent, side: PanelSide) => void;
+  handleResizeStart: (e: ReactMouseEvent, side: PanelSide) => void;
 }
 
 /**
@@ -50,18 +57,18 @@ export function useDragResize({
   }, []);
 
   const handleResizeStart = useCallback(
-    (e: React.MouseEvent, side: PanelSide) => {
+    (e: ReactMouseEvent, side: PanelSide) => {
       e.preventDefault();
       const startX = e.clientX;
       const current = panelLayoutRef.current;
       // `left` is only defined in three-panel; fall back to the default so a
       // stale mid-transition drag never reads undefined.
-      const startWidth =
-        side === "left"
-          ? current.kind === "three-panel"
-            ? current.left
-            : PANEL_DEFAULT_WIDTH
-          : current.right;
+      let startWidth: number;
+      if (side === "left") {
+        startWidth = current.kind === "three-panel" ? current.left : PANEL_DEFAULT_WIDTH;
+      } else {
+        startWidth = current.right;
+      }
       const storageKey = PANEL_WIDTH_KEYS[side];
       let latestWidth = startWidth;
 
