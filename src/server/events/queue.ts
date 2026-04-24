@@ -11,12 +11,7 @@ import {
   CHANNEL_EVENT_BUFFER_AGE_MS,
   CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
-  SELECTION_DWELL_DEFAULT_MS,
-  SELECTION_DWELL_MAX_MS,
-  SELECTION_DWELL_MIN_MS,
   Y_MAP_CHAT,
-  Y_MAP_DWELL_MS,
-  Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { ChatMessage, FlatOffset } from "../../shared/types.js";
 import { validateRange } from "../positions.js";
@@ -28,48 +23,21 @@ import {
   setFileSyncContext,
 } from "./file-sync-registry.js";
 import { makeAnnotationsObserver } from "./observers/annotations.js";
+import { makeAwarenessObserver } from "./observers/awareness.js";
 import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
-import type { TandemEvent } from "./types.js";
+import type { BufferedSelection, TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
 
 export { clearFileSyncContext, FILE_SYNC_ORIGIN, MCP_ORIGIN, setFileSyncContext };
-
-/**
- * Read the user's configured selection dwell time from CTRL_ROOM.
- *
- * Called at timer-schedule time (not fire time), so mid-dwell slider changes
- * don't affect an in-flight timer — the updated value takes effect on the
- * next selection change.
- *
- * Falls back to `SELECTION_DWELL_DEFAULT_MS` when:
- *   - CTRL_ROOM has no dwell key set (normal on cold startup, before the
- *     client's broadcast effect runs)
- *   - The stored value is the wrong type or outside [MIN, MAX] — the client
- *     clamps on write, so this branch indicates a bug or client/server
- *     constant drift. Logged as a warning so it can be diagnosed.
- */
-function getDwellMs(): number {
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-  const val = awareness.get(Y_MAP_DWELL_MS);
-  if (val === undefined) return SELECTION_DWELL_DEFAULT_MS;
-  if (typeof val === "number" && val >= SELECTION_DWELL_MIN_MS && val <= SELECTION_DWELL_MAX_MS) {
-    return val;
-  }
-  console.warn(
-    `[EventQueue] Invalid dwell time in CTRL_ROOM awareness (type=${typeof val}, value=${String(val)}); using default ${SELECTION_DWELL_DEFAULT_MS}ms`,
-  );
-  return SELECTION_DWELL_DEFAULT_MS;
-}
 
 type EventCallback = (event: TandemEvent) => void;
 
 const docObservers = new Map<string, Array<() => void>>();
 
 /** Per-document selection buffer. Selections are stored here instead of being pushed as events. They get attached to the next chat:message for the same document. */
-const selectionBuffer = new Map<string, { from: number; to: number; selectedText: string }>();
+const selectionBuffer = new Map<string, BufferedSelection>();
 
 /** O(1) dedup: ref-counted annotation/message IDs that have been pushed via channel. */
 const emittedPayloadIds = new Map<string, number>();
@@ -152,9 +120,7 @@ export function wasEmittedViaChannel(payloadId: string): boolean {
 }
 
 /** Read the buffered selection for a document. For tests and checkInbox. */
-export function getBufferedSelection(
-  docName: string,
-): { from: number; to: number; selectedText: string } | undefined {
+export function getBufferedSelection(docName: string): BufferedSelection | undefined {
   return selectionBuffer.get(docName);
 }
 
@@ -176,46 +142,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   // 3. User awareness observer (selection buffering)
   // Selections are buffered per-document and attached to the next chat:message,
   // rather than firing as standalone events (#188).
-  const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-  let selectionDwellTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const awarenessObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
-
-    if (event.keysChanged.has("selection")) {
-      const selection = userAwareness.get("selection") as
-        | { from: FlatOffset; to: FlatOffset; selectedText?: string }
-        | undefined;
-
-      // Cancel any pending dwell timer
-      if (selectionDwellTimer) {
-        clearTimeout(selectionDwellTimer);
-        selectionDwellTimer = null;
-      }
-
-      // Skip cleared selections — also clear the buffer
-      if (!selection || selection.from === selection.to) {
-        selectionBuffer.delete(docName);
-        return;
-      }
-
-      // Buffer after dwell to filter transient drag selections
-      selectionDwellTimer = setTimeout(() => {
-        selectionDwellTimer = null;
-        selectionBuffer.set(docName, {
-          from: selection.from,
-          to: selection.to,
-          selectedText: selection.selectedText ?? "",
-        });
-      }, getDwellMs());
-    }
-  };
-  userAwareness.observe(awarenessObs);
-  cleanups.push(() => {
-    userAwareness.unobserve(awarenessObs);
-    if (selectionDwellTimer) clearTimeout(selectionDwellTimer);
-    selectionBuffer.delete(docName);
-  });
+  cleanups.push(makeAwarenessObserver({ docName, doc, selectionBuffer }));
 
   docObservers.set(docName, cleanups);
   console.error(`[EventQueue] Attached observers for document: ${docName}`);
