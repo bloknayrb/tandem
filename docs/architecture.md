@@ -706,16 +706,34 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
 - Tiptap editor with collaboration extensions, connects to Hocuspocus via WebSocket (@hocuspocus/provider)
 - `App.tsx` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
+- `panel-layout.ts` -- Panel layout constants (default widths, min/max constraints) shared by `App.tsx` and `useDragResize`
 - `DocListEntry` and `OpenTab` types live in `src/client/types.ts`
 - `DocumentTabs` -- Tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
+- `hooks/useDragResize.ts` -- Drag-resize handler for the panel divider: pointer event listeners, layout state updates, cleanup
+- `hooks/useTandemModeBroadcast.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
+- `hooks/useConnectionBanner.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
 - `ToastContainer` (`src/client/components/`) -- Renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
 - `OnboardingTutorial` (`src/client/components/`) -- Floating card at bottom-left, 3-step progression (review → ask → edit). `useTutorial` hook detects step completion via annotation status, user annotation creation, and editor focus. localStorage persistence, suppressed after completion.
 - `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files
 - `FileOpenDialog` (`src/client/components/`) -- Path input and drag-and-drop upload for opening files without Claude
 - `HelpModal` (`src/client/components/`) -- Keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)
+- `components/EmptyState.tsx` -- "No document open" placeholder rendered when no tab is active
+- `components/ConnectionBanner.tsx` -- Prolonged-disconnect banner (>30s); auto-clears on reconnect
+- `components/PanelSlot.tsx` -- `ChatSlot`, `AnnotationSlot`, and `SlotWrapper` — deduplicated panel render sites used in App.tsx's three-column layout
+- `components/AppearanceSettings.tsx` -- Theme, text size, and panel order controls (extracted from SettingsPopover)
+- `components/EditorSettings.tsx` -- User name and dwell-time controls (extracted from SettingsPopover)
+- `components/AccessibilitySettings.tsx` -- Accessibility preference controls (extracted from SettingsPopover)
 - `AnnotationExtension` -- Renders highlights, comments, and flags as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
+- `editor/toolbar/HighlightColorPicker.tsx` -- Color swatch picker for highlight annotations (extracted from Toolbar)
+- `editor/toolbar/ModeToggle.tsx` -- Solo/Tandem mode toggle button (extracted from Toolbar)
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
+- `panels/FilterBar.tsx` -- Filter controls row: type/author/status FilterSelect dropdowns + Clear button (extracted from SidePanel)
+- `panels/BulkActions.tsx` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
+- `panels/useAnnotationReview.ts` -- Review-mode state: reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
+- `panels/AnnotationCardActions.tsx` -- Action buttons for an annotation card: accept, dismiss, edit, flag (extracted from AnnotationCard)
+- `panels/AnnotationEditForm.tsx` -- Inline edit form for pending annotations (extracted from AnnotationCard)
+- `panels/ReplyThread.tsx` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - `ChatPanel` -- Shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
 - `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the Toolbar (not StatusBar); client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
