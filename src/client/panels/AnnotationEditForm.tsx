@@ -1,4 +1,5 @@
 import React from "react";
+import { TEXTAREA_STYLE } from "./AnnotationCard";
 
 export interface AnnotationEditFormProps {
   annotationId: string;
@@ -6,7 +7,6 @@ export interface AnnotationEditFormProps {
   editText: string;
   editNewText: string;
   editReason: string;
-  textareaStyle: React.CSSProperties;
   onChangeEditText: (value: string) => void;
   onChangeEditNewText: (value: string) => void;
   onChangeEditReason: (value: string) => void;
@@ -21,7 +21,6 @@ export function AnnotationEditForm({
   editText,
   editNewText,
   editReason,
-  textareaStyle,
   onChangeEditText,
   onChangeEditNewText,
   onChangeEditReason,
@@ -48,7 +47,7 @@ export function AnnotationEditForm({
             value={editNewText}
             onChange={(e) => onChangeEditNewText(e.target.value)}
             onKeyDown={onKeyDown}
-            style={textareaStyle}
+            style={TEXTAREA_STYLE}
             autoFocus
           />
           <label
@@ -67,7 +66,7 @@ export function AnnotationEditForm({
             value={editReason}
             onChange={(e) => onChangeEditReason(e.target.value)}
             onKeyDown={onKeyDown}
-            style={textareaStyle}
+            style={TEXTAREA_STYLE}
           />
         </>
       ) : (
@@ -76,7 +75,7 @@ export function AnnotationEditForm({
           value={editText}
           onChange={(e) => onChangeEditText(e.target.value)}
           onKeyDown={onKeyDown}
-          style={textareaStyle}
+          style={TEXTAREA_STYLE}
           autoFocus
         />
       )}

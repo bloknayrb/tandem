@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import type { AnnotationReply } from "../../shared/types";
+import { TEXTAREA_STYLE } from "./AnnotationCard";
 import { CommentThread } from "./CommentThread";
 
 export interface ReplyThreadProps {
@@ -7,7 +8,6 @@ export interface ReplyThreadProps {
   replies: AnnotationReply[];
   isPending: boolean;
   isEditing: boolean;
-  textareaStyle: React.CSSProperties;
   onReply?: (id: string, text: string) => Promise<boolean>;
 }
 
@@ -16,12 +16,13 @@ export function ReplyThread({
   replies,
   isPending,
   isEditing,
-  textareaStyle,
   onReply,
 }: ReplyThreadProps) {
   const [isReplying, setIsReplying] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [isSendingReply, setIsSendingReply] = useState(false);
+
+  const hasText = Boolean(replyText.trim());
 
   function handleReplyKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
@@ -61,26 +62,22 @@ export function ReplyThread({
                 onChange={(e) => setReplyText(e.target.value)}
                 onKeyDown={handleReplyKeyDown}
                 placeholder="Write a reply..."
-                style={textareaStyle}
+                style={TEXTAREA_STYLE}
                 autoFocus
               />
               <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
                 <button
                   data-testid={`reply-send-btn-${annotationId}`}
                   onClick={handleSendReply}
-                  disabled={!replyText.trim() || isSendingReply}
+                  disabled={!hasText || isSendingReply}
                   style={{
                     padding: "2px 8px",
                     fontSize: "11px",
                     border: "1px solid var(--tandem-border-strong)",
                     borderRadius: "3px",
-                    background: replyText.trim()
-                      ? "var(--tandem-accent-bg)"
-                      : "var(--tandem-surface-muted)",
-                    color: replyText.trim()
-                      ? "var(--tandem-accent-fg-strong)"
-                      : "var(--tandem-fg-subtle)",
-                    cursor: replyText.trim() ? "pointer" : "default",
+                    background: hasText ? "var(--tandem-accent-bg)" : "var(--tandem-surface-muted)",
+                    color: hasText ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-subtle)",
+                    cursor: hasText ? "pointer" : "default",
                   }}
                 >
                   Send
