@@ -15,12 +15,10 @@ import {
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
   Y_MAP_CHAT,
-  Y_MAP_DOCUMENT_META,
   Y_MAP_DWELL_MS,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import type { ChatMessage, FlatOffset } from "../../shared/types.js";
-import { getOpenDocs } from "../mcp/document-service.js";
 import { validateRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -30,6 +28,7 @@ import {
   setFileSyncContext,
 } from "./file-sync-registry.js";
 import { makeAnnotationsObserver } from "./observers/annotations.js";
+import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
 import type { TandemEvent } from "./types.js";
@@ -319,74 +318,7 @@ export function attachCtrlObservers(): void {
   ctrlCleanups.push(() => chatMap.unobserve(chatObs));
 
   // Document meta observer (open/close/switch)
-  const metaMap = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-  let lastActiveDocId: string | null = null;
-  let lastOpenDocIds = new Set<string>();
-
-  const metaObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
-
-    // Check for activeDocumentId change (tab switch)
-    if (event.keysChanged.has("activeDocumentId")) {
-      const activeId = metaMap.get("activeDocumentId") as string | undefined;
-      if (activeId && activeId !== lastActiveDocId) {
-        const openDoc = getOpenDocs().get(activeId);
-        pushEvent({
-          id: generateEventId(),
-          type: "document:switched",
-          timestamp: Date.now(),
-          documentId: activeId,
-          payload: {
-            fileName: openDoc?.filePath?.split(/[/\\]/).pop() ?? activeId,
-          },
-        });
-        lastActiveDocId = activeId;
-      }
-    }
-
-    // Check for openDocuments change (doc open/close)
-    if (event.keysChanged.has("openDocuments")) {
-      const docList =
-        (metaMap.get("openDocuments") as Array<{ id: string; fileName?: string }>) ?? [];
-      const currentIds = new Set(docList.map((d) => d.id));
-
-      // Newly opened
-      for (const doc of docList) {
-        if (!lastOpenDocIds.has(doc.id)) {
-          const openDoc = getOpenDocs().get(doc.id);
-          pushEvent({
-            id: generateEventId(),
-            type: "document:opened",
-            timestamp: Date.now(),
-            documentId: doc.id,
-            payload: {
-              fileName: doc.fileName ?? openDoc?.filePath?.split(/[/\\]/).pop() ?? doc.id,
-              format: openDoc?.format ?? "unknown",
-            },
-          });
-        }
-      }
-
-      // Closed
-      for (const oldId of lastOpenDocIds) {
-        if (!currentIds.has(oldId)) {
-          pushEvent({
-            id: generateEventId(),
-            type: "document:closed",
-            timestamp: Date.now(),
-            documentId: oldId,
-            payload: {
-              fileName: oldId,
-            },
-          });
-        }
-      }
-
-      lastOpenDocIds = currentIds;
-    }
-  };
-  metaMap.observe(metaObs);
-  ctrlCleanups.push(() => metaMap.unobserve(metaObs));
+  ctrlCleanups.push(makeCtrlMetaObserver({ ctrlDoc, pushEvent }));
 
   console.error("[EventQueue] Attached CTRL_ROOM observers (chat + documentMeta)");
 }
