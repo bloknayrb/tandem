@@ -396,8 +396,8 @@ Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three indepe
 | Phase | Scope | Effort | Status |
 |-------|-------|--------|--------|
 | 1 | Foundation: wire-protocol types to shared, token-store extraction, awareness.ts #355, Editor CSS extraction, tsconfig tightening, dead Tauri deps | ~2 days | **DONE** (PRs #384–#389, merged 2026-04-22) |
-| 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | Next |
-| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | — |
+| 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | **DONE** (PRs #391, #392, merged 2026-04-23) |
+| 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | **In review** (PR #398, plan: `docs/phase-3-plan.md`, follow-up tests: #399) |
 | 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | — |
 | 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | — |
 | 6 | Polish: accessibility, E2E error recovery, Tauri integration tests (post-v1.0) | incremental | — |
