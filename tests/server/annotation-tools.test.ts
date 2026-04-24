@@ -6,29 +6,14 @@ import {
   createAnnotation,
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
-import { extractText, populateYDoc, verifyAndResolveRange } from "../../src/server/mcp/document.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { extractText, verifyAndResolveRange } from "../../src/server/mcp/document.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
-function setupDoc(id: string, text: string) {
-  const ydoc = getOrCreateDocument(id);
-  populateYDoc(ydoc, text);
-  addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
-  setActiveDocId(id);
-  return ydoc;
-}
-
 beforeEach(() => {
-  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
-  setActiveDocId(null);
+  clearOpenDocs();
 });
 
 describe("tandem_highlight tool logic", () => {
