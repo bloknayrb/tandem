@@ -175,7 +175,6 @@ describe("Phase 1: Fresh Y.Doc annotation on roadmap.md", () => {
     // Expected: "Alpha\nBeta\nGamma" (or similar with separators)
     // Actual (Bug C): "AlphaBetaGamma" — no separators between list items
     expect(flat).not.toContain("\n"); // documents Bug C — list items run together
-    console.log(`[issue-377 Bug C] list flat text: ${JSON.stringify(flat)}`);
   });
 });
 
@@ -354,24 +353,6 @@ describe("Phase 1b: Stale relRange after content replacement", () => {
     // refreshRange should strip the dead relRange (deleted Y.items → null resolution)
     // and attempt re-anchor from flat offsets. Both the strip and the fallback
     // re-anchor will succeed or fail depending on CRDT tombstone state.
-    const newFlat = extractText(doc);
-    console.log(`[issue-377 diagnostic] post-replacement flat: "${newFlat}"`);
-    console.log(
-      `[issue-377 diagnostic] refreshed range: [${refreshed.range.from}, ${refreshed.range.to}]`,
-    );
-    console.log(
-      `[issue-377 diagnostic] refreshed relRange: ${refreshed.relRange !== undefined ? "defined" : "undefined"}`,
-    );
-
-    if (refreshed.range.to <= newFlat.length) {
-      const resolvedText = newFlat.slice(refreshed.range.from, refreshed.range.to);
-      console.log(`[issue-377 diagnostic] resolved text: "${resolvedText}"`);
-      // If offsets are stale, the resolved text will not match the original target
-      if (resolvedText !== oldTarget) {
-        console.log("[issue-377 diagnostic] CONFIRMED stale offset: wrong text after refresh");
-      }
-    }
-
     // Annotation should not crash
     expect(refreshed).toBeDefined();
     expect(refreshed.id).toBe("ann_test_stale");
@@ -402,13 +383,9 @@ describe("Phase 1b: Stale relRange after content replacement", () => {
       const resolvedInNew = newFlat.slice(oldFrom, oldTo);
       // The stale offsets resolve to wrong text — not "MARKER"
       expect(resolvedInNew).not.toBe("MARKER");
-      console.log(
-        `[issue-377 diagnostic] stale [${oldFrom}, ${oldTo}] → "${resolvedInNew}" in new doc`,
-      );
     } else {
-      console.log(
-        `[issue-377 diagnostic] stale [${oldFrom}, ${oldTo}] out of bounds in new doc (len ${newFlat.length})`,
-      );
+      // Stale offsets are out of bounds in the new doc — also demonstrates staleness
+      expect(oldTo).toBeGreaterThan(newFlat.length);
     }
 
     oldDoc.destroy();
