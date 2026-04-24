@@ -91,10 +91,10 @@ export const apiMiddleware: Handler = createApiMiddleware();
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
-  token?: string,
-  mw: Handler = apiMiddleware,
-  setCurrentToken: (t: string) => void = () => {},
-  getCurrentToken: () => string | null = () => null,
+  token: string | undefined,
+  mw: Handler,
+  setCurrentToken: (t: string) => void,
+  getCurrentToken: () => string | null,
 ): void {
   // SSE notification stream for browser toasts
   app.get("/api/notify-stream", mw, makeNotifyStreamHandler());
