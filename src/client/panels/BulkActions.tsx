@@ -33,6 +33,12 @@ export function BulkActions({
 }: BulkActionsProps) {
   if (pendingCount <= 1) return null;
 
+  const isAccept = bulkConfirm === "accept";
+  const countLabel =
+    pendingCount === allPendingCount
+      ? `${pendingCount} annotations?`
+      : `${pendingCount} of ${allPendingCount} pending?`;
+
   return (
     <div
       style={{
@@ -44,45 +50,35 @@ export function BulkActions({
       }}
     >
       {bulkConfirm ? (
-        (() => {
-          const isAccept = bulkConfirm === "accept";
-          return (
-            <>
-              <span style={{ fontSize: "11px", color: "var(--tandem-fg)" }}>
-                {isAccept ? "Accept" : "Reject"}{" "}
-                {pendingCount === allPendingCount
-                  ? `${pendingCount} annotations?`
-                  : `${pendingCount} of ${allPendingCount} pending?`}
-              </span>
-              <button
-                ref={confirmRef}
-                data-testid="bulk-confirm-btn"
-                onClick={isAccept ? onConfirmAccept : onConfirmDismiss}
-                style={{
-                  ...SMALL_BTN,
-                  background: isAccept ? "var(--tandem-success-bg)" : "var(--tandem-error-bg)",
-                  color: isAccept
-                    ? "var(--tandem-success-fg-strong)"
-                    : "var(--tandem-error-fg-strong)",
-                  fontWeight: 600,
-                }}
-              >
-                Confirm
-              </button>
-              <button
-                data-testid="bulk-cancel-btn"
-                onClick={onCancel}
-                style={{
-                  ...SMALL_BTN,
-                  background: "var(--tandem-surface)",
-                  color: "var(--tandem-fg-muted)",
-                }}
-              >
-                Cancel
-              </button>
-            </>
-          );
-        })()
+        <>
+          <span style={{ fontSize: "11px", color: "var(--tandem-fg)" }}>
+            {isAccept ? "Accept" : "Reject"} {countLabel}
+          </span>
+          <button
+            ref={confirmRef}
+            data-testid="bulk-confirm-btn"
+            onClick={isAccept ? onConfirmAccept : onConfirmDismiss}
+            style={{
+              ...SMALL_BTN,
+              background: isAccept ? "var(--tandem-success-bg)" : "var(--tandem-error-bg)",
+              color: isAccept ? "var(--tandem-success-fg-strong)" : "var(--tandem-error-fg-strong)",
+              fontWeight: 600,
+            }}
+          >
+            Confirm
+          </button>
+          <button
+            data-testid="bulk-cancel-btn"
+            onClick={onCancel}
+            style={{
+              ...SMALL_BTN,
+              background: "var(--tandem-surface)",
+              color: "var(--tandem-fg-muted)",
+            }}
+          >
+            Cancel
+          </button>
+        </>
       ) : (
         <>
           <button

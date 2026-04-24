@@ -180,13 +180,8 @@ export function SidePanel({
     }
   }
 
-  function handleBulkAccept() {
-    for (const ann of pending) review.resolveAnnotation(ann.id, "accepted");
-    setBulkConfirm(null);
-  }
-
-  function handleBulkDismiss() {
-    for (const ann of pending) review.resolveAnnotation(ann.id, "dismissed");
+  function handleBulk(status: "accepted" | "dismissed") {
+    for (const ann of pending) review.resolveAnnotation(ann.id, status);
     setBulkConfirm(null);
   }
 
@@ -426,8 +421,8 @@ export function SidePanel({
         pendingCount={pending.length}
         allPendingCount={allPending.length}
         confirmRef={review.confirmRef}
-        onConfirmAccept={handleBulkAccept}
-        onConfirmDismiss={handleBulkDismiss}
+        onConfirmAccept={() => handleBulk("accepted")}
+        onConfirmDismiss={() => handleBulk("dismissed")}
         onCancel={() => setBulkConfirm(null)}
         onRequestAccept={() => setBulkConfirm("accept")}
         onRequestDismiss={() => setBulkConfirm("dismiss")}
@@ -475,7 +470,7 @@ export function SidePanel({
                       key={ann.id}
                       annotation={ann}
                       replies={repliesMap.get(ann.id) ?? []}
-                      onUndo={review.handleUndo}
+                      onUndo={review.undoResolveAnnotation}
                       undoable={review.recentlyResolved.has(ann.id)}
                       onClick={() => review.scrollToAnnotation(ann)}
                     />

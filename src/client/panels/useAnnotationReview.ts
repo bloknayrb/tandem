@@ -51,7 +51,6 @@ export interface UseAnnotationReviewReturn {
   undoResolveAnnotation: (id: string) => void;
   handleAccept: (id: string) => void;
   handleDismiss: (id: string) => void;
-  handleUndo: (id: string) => void;
   scrollToAnnotation: (ann: Annotation) => void;
   recentlyResolved: Set<string>;
   reviewIndex: number;
@@ -202,10 +201,6 @@ export function useAnnotationReview({
     resolveAnnotation(id, "dismissed");
   }
 
-  function handleUndo(id: string) {
-    undoResolveAnnotation(id);
-  }
-
   // Scroll editor to an annotation's range
   const scrollToAnnotation = useCallback(
     (ann: Annotation) => {
@@ -346,7 +341,6 @@ export function useAnnotationReview({
     undoResolveAnnotation,
     handleAccept,
     handleDismiss,
-    handleUndo,
     scrollToAnnotation,
     recentlyResolved,
     reviewIndex,
