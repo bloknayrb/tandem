@@ -11,6 +11,9 @@ export async function handleClose(req: Request, res: Response): Promise<void> {
   try {
     const result = await closeDocumentById(documentId);
     if (!result.success) {
+      console.warn(
+        `[Tandem] API error (404): close failed for documentId=${documentId}: ${result.error}`,
+      );
       res.status(404).json({ error: "NOT_FOUND", message: result.error });
       return;
     }
