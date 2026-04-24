@@ -141,7 +141,17 @@ src/server/events/
 **Effort:** ~1.5 days. Sequential (single agent, high risk).
 **Verification:** Existing event-queue tests (44 cases) as regression suite. Manual smoke: open .md, MCP-mutate, user-edit, save, external file edit reload, force-reload, close.
 
-### Phase 4: Client Component Splits
+### Phase 4: Client Component Splits — DONE
+
+All 4 PRs merged 2026-04-24. Typecheck passes clean.
+
+| PR | Issue | Finding | Description |
+|----|-------|---------|-------------|
+| #412 | #400 | #1 (App.tsx) | Extract `EmptyState`, `ConnectionBanner`, `PanelSlot` components; `useDragResize`, `useTandemModeBroadcast`, `useConnectionBanner` hooks; `panel-layout.ts` constants |
+| #413 | #401 | #2 (SidePanel) | Extract `useAnnotationReview`, `FilterBar`, `BulkActions`; SidePanel drops from 911 → ~400-450 LOC |
+| #411 | #402 | #6, #7 (Toolbar, SettingsPopover) | Extract `HighlightColorPicker`, `ModeToggle`; extract `AppearanceSettings`, `EditorSettings`, `AccessibilitySettings` |
+| #409 | #403 | #8 (AnnotationCard) | Extract `AnnotationCardActions`, `AnnotationEditForm`, `ReplyThread` |
+
 **Why:** Break up client god-components into focused hooks and sub-components.
 
 **PR 4a — App.tsx extractions (finding #1):**
@@ -167,6 +177,19 @@ src/server/events/
 
 **Effort:** ~3 days. All 4 PRs parallelizable via worktree agents.
 **Verification:** `npm run typecheck && npm test && npm run test:e2e`. Visual check in editor for layout/interaction regressions.
+
+### v0.8.0 Foundation Follow-ups — DONE
+
+Six additional issues shipped as part of the Phase 4 / v0.8.0 Foundation pipeline (merged 2026-04-24):
+
+| PR | Issue | Description |
+|----|-------|-------------|
+| #405 | #292 | Setup API mixed-partial 207 test |
+| #407 | #344 | Extract annotation test fixtures |
+| #404 | #369 | Dark mode scrollbar styling |
+| #406 | #393 | Simplify zero-arg handler factories |
+| #410 | #396 | Surface HTTP API silent failures |
+| #408 | #399 | Event-queue observer regression tests |
 
 ### Phase 5: Prop-Drilling Evaluation (Conditional)
 **Why:** After Phase 4, re-evaluate SidePanel's prop count. Currently 14 props; post-Phase 4b, likely 8-10. If still >8, introduce `DocumentContext` (editor, ydoc, documentId, format) and `ReviewContext` (reviewMode, toggleReviewMode, exitReviewMode, activeAnnotationId).
