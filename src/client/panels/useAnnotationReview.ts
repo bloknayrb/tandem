@@ -75,9 +75,7 @@ export function useAnnotationReview({
   const reviewIndexRef = useRef(0);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
 
-  // Track recently resolved annotations for session-scoped undo (persists until page reload)
   const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
-  // Track the last resolved annotation ID for keyboard undo (Z key)
   const lastResolvedRef = useRef<string | null>(null);
 
   // Keyboard review targets only pending annotations (unfiltered)
@@ -108,7 +106,6 @@ export function useAnnotationReview({
       }
     }
 
-    // Track for session-scoped undo (IDs stay until page reload)
     lastResolvedRef.current = id;
     setRecentlyResolved((prev) => new Set(prev).add(id));
   }

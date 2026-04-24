@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface AnnotationCardActionsProps {
   annotationId: string;
@@ -20,6 +20,8 @@ export function AnnotationCardActions({
   onUndo,
 }: AnnotationCardActionsProps) {
   const [undoError, setUndoError] = useState(false);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (undoTimerRef.current) clearTimeout(undoTimerRef.current); }, []);
 
   if (isPending && !isEditing && (onAccept || onDismiss)) {
     return (
@@ -78,7 +80,8 @@ export function AnnotationCardActions({
             const ok = onUndo(annotationId);
             if (!ok) {
               setUndoError(true);
-              setTimeout(() => setUndoError(false), 3000);
+              if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+              undoTimerRef.current = setTimeout(() => setUndoError(false), 3000);
             }
           }}
           style={{
