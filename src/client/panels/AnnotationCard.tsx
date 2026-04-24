@@ -5,6 +5,30 @@ import { AnnotationCardActions } from "./AnnotationCardActions";
 import { AnnotationEditForm } from "./AnnotationEditForm";
 import { ReplyThread } from "./ReplyThread";
 
+export const TEXTAREA_STYLE: React.CSSProperties = {
+  width: "100%",
+  padding: "4px 6px",
+  fontSize: "12px",
+  border: "1px solid var(--tandem-border-strong)",
+  borderRadius: "3px",
+  resize: "vertical",
+  fontFamily: "inherit",
+  minHeight: "40px",
+  boxSizing: "border-box",
+  background: "var(--tandem-surface)",
+  color: "var(--tandem-fg)",
+};
+
+const EDIT_BTN_STYLE: React.CSSProperties = {
+  padding: "1px 4px",
+  fontSize: "11px",
+  border: "none",
+  background: "none",
+  color: "var(--tandem-fg-subtle)",
+  cursor: "pointer",
+  lineHeight: 1,
+};
+
 export interface AnnotationCardProps {
   annotation: Annotation;
   replies?: AnnotationReply[];
@@ -17,6 +41,18 @@ export interface AnnotationCardProps {
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
+}
+
+function getDisplayType(annotation: Annotation): string {
+  if (annotation.suggestedText !== undefined) return "replacement";
+  if (annotation.directedAt === "claude") return "question";
+  return annotation.type;
+}
+
+function getAuthorLabel(author: Annotation["author"]): string {
+  if (author === "claude") return "Claude";
+  if (author === "import") return "Imported";
+  return "You";
 }
 
 function getBorderColor(annotation: Annotation): string {
@@ -50,6 +86,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   const [editReason, setEditReason] = useState("");
 
   const hasSuggestedText = annotation.suggestedText !== undefined;
+  const displayType = getDisplayType(annotation);
 
   function enterEditMode() {
     if (hasSuggestedText) {
@@ -84,40 +121,11 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     }
   }
 
-  const textareaStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "4px 6px",
-    fontSize: "12px",
-    border: "1px solid var(--tandem-border-strong)",
-    borderRadius: "3px",
-    resize: "vertical",
-    fontFamily: "inherit",
-    minHeight: "40px",
-    boxSizing: "border-box",
-    background: "var(--tandem-surface)",
-    color: "var(--tandem-fg)",
-  };
-
-  const editBtnStyle: React.CSSProperties = {
-    padding: "1px 4px",
-    fontSize: "11px",
-    border: "none",
-    background: "none",
-    color: "var(--tandem-fg-subtle)",
-    cursor: "pointer",
-    lineHeight: 1,
-  };
-
   const truncatedContent = annotation.content
     ? annotation.content.length > 60
       ? annotation.content.slice(0, 57) + "..."
       : annotation.content
     : "";
-  const displayType = hasSuggestedText
-    ? "replacement"
-    : annotation.directedAt === "claude"
-      ? "question"
-      : annotation.type;
   const cardLabel = `${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
 
   return (
@@ -173,7 +181,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 e.stopPropagation();
                 enterEditMode();
               }}
-              style={editBtnStyle}
+              style={EDIT_BTN_STYLE}
               title="Edit this annotation's content"
             >
               ✎ Edit
@@ -196,11 +204,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               (edited)
             </span>
           )}
-          {annotation.author === "claude"
-            ? "Claude"
-            : annotation.author === "import"
-              ? "Imported"
-              : "You"}
+          {getAuthorLabel(annotation.author)}
         </span>
       </div>
       {annotation.textSnapshot && (
@@ -229,7 +233,6 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           editText={editText}
           editNewText={editNewText}
           editReason={editReason}
-          textareaStyle={textareaStyle}
           onChangeEditText={setEditText}
           onChangeEditNewText={setEditNewText}
           onChangeEditReason={setEditReason}
@@ -302,7 +305,6 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         replies={replies}
         isPending={isPending}
         isEditing={isEditing}
-        textareaStyle={textareaStyle}
         onReply={onReply}
       />
     </div>
