@@ -4,16 +4,12 @@ import {
   SELECTION_DWELL_MIN_MS,
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
-import { useRadioGroup } from "../hooks/useRadioGroup";
-import type {
-  LayoutMode,
-  PanelOrder,
-  PrimaryTab,
-  TandemSettings,
-  TextSize,
-  ThemePreference,
-} from "../hooks/useTandemSettings";
+import type { TandemSettings } from "../hooks/useTandemSettings";
 import { useUserName } from "../hooks/useUserName";
+import { AccessibilitySettings } from "./AccessibilitySettings";
+import { AppearanceSettings } from "./AppearanceSettings";
+import { EditorSettings } from "./EditorSettings";
+import { sectionLabelStyle } from "./settingsStyles";
 
 interface SettingsPopoverProps {
   open: boolean;
@@ -46,8 +42,6 @@ export function SettingsPopover({
 }: SettingsPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
-  const threePanelDisabled = viewportWidth < 768;
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
 
@@ -60,40 +54,6 @@ export function SettingsPopover({
       setNameInput(userName);
     }
   }, [userName, nameInput]);
-
-  const themeRg = useRadioGroup<ThemePreference>(
-    settings.theme,
-    ["light", "dark", "system"] as const,
-    (t) => onUpdate({ theme: t }),
-  );
-  const layoutRg = useRadioGroup<LayoutMode>(
-    settings.layout,
-    ["tabbed", "three-panel"] as const,
-    (l) => onUpdate({ layout: l }),
-    (l) => l === "three-panel" && threePanelDisabled,
-  );
-  const primaryTabRg = useRadioGroup<PrimaryTab>(
-    settings.primaryTab,
-    ["chat", "annotations"] as const,
-    (p) => onUpdate({ primaryTab: p }),
-  );
-  const panelOrderRg = useRadioGroup<PanelOrder>(
-    settings.panelOrder,
-    ["chat-editor-annotations", "annotations-editor-chat"] as const,
-    (p) => onUpdate({ panelOrder: p }),
-  );
-  const textSizeRg = useRadioGroup<TextSize>(settings.textSize, ["s", "m", "l"] as const, (t) =>
-    onUpdate({ textSize: t }),
-  );
-
-  // Track viewport width for three-panel availability (only while open)
-  useEffect(() => {
-    if (!open) return;
-    setViewportWidth(window.innerWidth);
-    const handler = () => setViewportWidth(window.innerWidth);
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, [open]);
 
   // Initial focus + focus return on close
   useEffect(() => {
@@ -161,39 +121,6 @@ export function SettingsPopover({
 
   if (!open) return null;
 
-  const sectionLabelStyle: React.CSSProperties = {
-    fontSize: "11px",
-    fontWeight: 600,
-    color: "var(--tandem-fg)",
-    marginBottom: "6px",
-    textTransform: "uppercase",
-    letterSpacing: "0.5px",
-  };
-
-  const cardStyle = (selected: boolean, disabled?: boolean): React.CSSProperties => ({
-    flex: 1,
-    padding: "8px",
-    minHeight: "24px",
-    border: `2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"}`,
-    borderRadius: "6px",
-    background: disabled
-      ? "var(--tandem-surface-muted)"
-      : selected
-        ? "var(--tandem-accent-bg)"
-        : "var(--tandem-surface)",
-    cursor: disabled ? "not-allowed" : "pointer",
-    textAlign: "center",
-    fontSize: "11px",
-    color: disabled
-      ? "var(--tandem-fg-subtle)"
-      : selected
-        ? "var(--tandem-accent-fg-strong)"
-        : "var(--tandem-fg-muted)",
-    fontWeight: selected ? 600 : 400,
-    opacity: disabled ? 0.6 : 1,
-    transition: "border-color 0.15s, background 0.15s",
-  });
-
   return (
     <div
       ref={popoverRef}
@@ -252,10 +179,11 @@ export function SettingsPopover({
           }}
           aria-label="Close settings"
         >
-          {"\u00d7"}
+          {"×"}
         </button>
       </div>
 
+      {/* Display Name */}
       <div>
         <label htmlFor="settings-display-name" style={sectionLabelStyle}>
           Display Name
@@ -289,267 +217,14 @@ export function SettingsPopover({
         />
       </div>
 
-      <div>
-        <div id="settings-theme-label" style={sectionLabelStyle}>
-          Theme
-        </div>
-        <div
-          role="radiogroup"
-          aria-labelledby="settings-theme-label"
-          onKeyDown={themeRg.handleKeyDown}
-          style={{ display: "flex", gap: "8px" }}
-        >
-          {(["light", "dark", "system"] as const).map((t) => (
-            <button
-              key={t}
-              data-testid={`theme-${t}-btn`}
-              role="radio"
-              aria-checked={settings.theme === t}
-              tabIndex={themeRg.tabIndexFor(t)}
-              onClick={() => onUpdate({ theme: t })}
-              style={cardStyle(settings.theme === t)}
-            >
-              {t === "light" ? "Light" : t === "dark" ? "Dark" : "System"}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Appearance: Theme, Layout, Primary Tab/Panel Order, Text Size, Reduce Motion */}
+      <AppearanceSettings open={open} settings={settings} onUpdate={onUpdate} />
 
-      {/* Layout mode */}
-      <div>
-        <div id="settings-layout-label" style={sectionLabelStyle}>
-          Layout
-        </div>
-        <div
-          role="radiogroup"
-          aria-labelledby="settings-layout-label"
-          onKeyDown={layoutRg.handleKeyDown}
-          style={{ display: "flex", gap: "8px" }}
-        >
-          <button
-            data-testid="layout-tabbed-btn"
-            role="radio"
-            aria-checked={settings.layout === "tabbed"}
-            tabIndex={layoutRg.tabIndexFor("tabbed")}
-            onClick={() => onUpdate({ layout: "tabbed" })}
-            style={cardStyle(settings.layout === "tabbed")}
-          >
-            <div style={{ fontSize: "18px", marginBottom: "2px" }}>{"[=|]"}</div>
-            Tabbed
-          </button>
-          <button
-            data-testid="layout-three-panel-btn"
-            role="radio"
-            aria-checked={settings.layout === "three-panel"}
-            aria-disabled={threePanelDisabled || undefined}
-            tabIndex={layoutRg.tabIndexFor("three-panel")}
-            onClick={() => {
-              if (!threePanelDisabled) onUpdate({ layout: "three-panel" });
-            }}
-            style={cardStyle(settings.layout === "three-panel", threePanelDisabled)}
-            title={threePanelDisabled ? "Requires viewport wider than 768px" : undefined}
-          >
-            <div style={{ fontSize: "18px", marginBottom: "2px" }}>{"[|||]"}</div>
-            Three-Panel
-          </button>
-        </div>
-        {threePanelDisabled && (
-          <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
-            Three-panel requires a wider viewport
-          </div>
-        )}
-      </div>
+      {/* Editor Width */}
+      <EditorSettings settings={settings} onUpdate={onUpdate} />
 
-      {/* Primary tab (tabbed mode only) */}
-      {settings.layout === "tabbed" && (
-        <div>
-          <div id="settings-default-tab-label" style={sectionLabelStyle}>
-            Default Tab
-          </div>
-          <div
-            role="radiogroup"
-            aria-labelledby="settings-default-tab-label"
-            onKeyDown={primaryTabRg.handleKeyDown}
-            style={{ display: "flex", gap: "8px" }}
-          >
-            <button
-              data-testid="default-tab-chat-btn"
-              role="radio"
-              aria-checked={settings.primaryTab === "chat"}
-              tabIndex={primaryTabRg.tabIndexFor("chat")}
-              onClick={() => onUpdate({ primaryTab: "chat" })}
-              style={cardStyle(settings.primaryTab === "chat")}
-            >
-              Chat
-            </button>
-            <button
-              data-testid="default-tab-annotations-btn"
-              role="radio"
-              aria-checked={settings.primaryTab === "annotations"}
-              tabIndex={primaryTabRg.tabIndexFor("annotations")}
-              onClick={() => onUpdate({ primaryTab: "annotations" })}
-              style={cardStyle(settings.primaryTab === "annotations")}
-            >
-              Annotations
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Panel order (three-panel mode only) */}
-      {settings.layout === "three-panel" && (
-        <div>
-          <div id="settings-panel-order-label" style={sectionLabelStyle}>
-            Panel Order
-          </div>
-          <div
-            role="radiogroup"
-            aria-labelledby="settings-panel-order-label"
-            onKeyDown={panelOrderRg.handleKeyDown}
-            style={{ display: "flex", gap: "8px" }}
-          >
-            <button
-              data-testid="panel-order-cea-btn"
-              role="radio"
-              aria-checked={settings.panelOrder === "chat-editor-annotations"}
-              tabIndex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
-              onClick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
-              style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
-            >
-              Chat | Editor | Ann.
-            </button>
-            <button
-              data-testid="panel-order-aec-btn"
-              role="radio"
-              aria-checked={settings.panelOrder === "annotations-editor-chat"}
-              tabIndex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
-              onClick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
-              style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
-            >
-              Ann. | Editor | Chat
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Editor width */}
-      <div>
-        <div style={sectionLabelStyle}>
-          Editor Width:{" "}
-          <span style={{ fontWeight: 400, textTransform: "none" }}>
-            {settings.editorWidthPercent}%
-          </span>
-        </div>
-        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginBottom: "6px" }}>
-          How much of the available space the editor text fills
-        </div>
-        <input
-          data-testid="editor-width-slider"
-          type="range"
-          min={50}
-          max={100}
-          step={5}
-          value={settings.editorWidthPercent}
-          onChange={(e) => onUpdate({ editorWidthPercent: Number(e.target.value) })}
-          style={{ width: "100%", accentColor: "var(--tandem-accent)" }}
-          aria-label="Editor width"
-        />
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: "10px",
-            color: "var(--tandem-fg-subtle)",
-          }}
-        >
-          <span>50%</span>
-          <span>100%</span>
-        </div>
-      </div>
-
-      {/* Authorship tracking toggle */}
-      <div>
-        <div style={sectionLabelStyle}>Authorship</div>
-        <label
-          data-testid="authorship-toggle"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            cursor: "pointer",
-            fontSize: "12px",
-            color: "var(--tandem-fg)",
-            minHeight: "24px",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={settings.showAuthorship}
-            onChange={(e) => onUpdate({ showAuthorship: e.target.checked })}
-            style={{ accentColor: "var(--tandem-accent)" }}
-          />
-          <span>Show who wrote what</span>
-        </label>
-        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
-          Highlights text by author: <span style={{ color: "var(--tandem-author-user)" }}>you</span>{" "}
-          / <span style={{ color: "var(--tandem-author-claude)" }}>Claude</span>
-        </div>
-      </div>
-
-      <div>
-        <div id="settings-text-size-label" style={sectionLabelStyle}>
-          Text Size
-        </div>
-        <div
-          role="radiogroup"
-          aria-labelledby="settings-text-size-label"
-          onKeyDown={textSizeRg.handleKeyDown}
-          style={{ display: "flex", gap: "8px" }}
-        >
-          {(["s", "m", "l"] as const).map((size) => (
-            <button
-              key={size}
-              data-testid={`text-size-${size}-btn`}
-              role="radio"
-              aria-checked={settings.textSize === size}
-              tabIndex={textSizeRg.tabIndexFor(size)}
-              onClick={() => onUpdate({ textSize: size })}
-              style={cardStyle(settings.textSize === size)}
-            >
-              {size === "s" ? "Small" : size === "m" ? "Medium" : "Large"}
-            </button>
-          ))}
-        </div>
-        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
-          Reading density only — use browser zoom (Ctrl + =/−) to scale the whole UI.
-        </div>
-      </div>
-
-      <div>
-        <label
-          data-testid="reduce-motion-toggle"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            cursor: "pointer",
-            fontSize: "12px",
-            color: "var(--tandem-fg)",
-            minHeight: "24px",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={settings.reduceMotion}
-            onChange={(e) => onUpdate({ reduceMotion: e.target.checked })}
-            style={{ accentColor: "var(--tandem-accent)" }}
-          />
-          <span>Reduce motion</span>
-        </label>
-        <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
-          Disables smooth autoscroll and the annotation flash animation.
-        </div>
-      </div>
+      {/* Authorship */}
+      <AccessibilitySettings settings={settings} onUpdate={onUpdate} />
 
       {/* Selection sensitivity (dwell time) */}
       <div>
