@@ -1,7 +1,33 @@
 import React, { useState } from "react";
 import { HIGHLIGHT_COLORS } from "../../shared/constants";
 import type { Annotation, AnnotationReply } from "../../shared/types";
-import { CommentThread } from "./CommentThread";
+import { AnnotationCardActions } from "./AnnotationCardActions";
+import { AnnotationEditForm } from "./AnnotationEditForm";
+import { ReplyThread } from "./ReplyThread";
+
+export const TEXTAREA_STYLE: React.CSSProperties = {
+  width: "100%",
+  padding: "4px 6px",
+  fontSize: "12px",
+  border: "1px solid var(--tandem-border-strong)",
+  borderRadius: "3px",
+  resize: "vertical",
+  fontFamily: "inherit",
+  minHeight: "40px",
+  boxSizing: "border-box",
+  background: "var(--tandem-surface)",
+  color: "var(--tandem-fg)",
+};
+
+const EDIT_BTN_STYLE: React.CSSProperties = {
+  padding: "1px 4px",
+  fontSize: "11px",
+  border: "none",
+  background: "none",
+  color: "var(--tandem-fg-subtle)",
+  cursor: "pointer",
+  lineHeight: 1,
+};
 
 export interface AnnotationCardProps {
   annotation: Annotation;
@@ -15,6 +41,18 @@ export interface AnnotationCardProps {
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
+}
+
+function getDisplayType(annotation: Annotation): string {
+  if (annotation.suggestedText !== undefined) return "replacement";
+  if (annotation.directedAt === "claude") return "question";
+  return annotation.type;
+}
+
+function getAuthorLabel(author: Annotation["author"]): string {
+  if (author === "claude") return "Claude";
+  if (author === "import") return "Imported";
+  return "You";
 }
 
 function getBorderColor(annotation: Annotation): string {
@@ -46,11 +84,9 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   const [editText, setEditText] = useState("");
   const [editNewText, setEditNewText] = useState("");
   const [editReason, setEditReason] = useState("");
-  const [isReplying, setIsReplying] = useState(false);
-  const [replyText, setReplyText] = useState("");
-  const [isSendingReply, setIsSendingReply] = useState(false);
 
   const hasSuggestedText = annotation.suggestedText !== undefined;
+  const displayType = getDisplayType(annotation);
 
   function enterEditMode() {
     if (hasSuggestedText) {
@@ -85,63 +121,11 @@ export const AnnotationCard = React.memo(function AnnotationCard({
     }
   }
 
-  function handleReplyKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      setIsReplying(false);
-      setReplyText("");
-    }
-  }
-
-  async function handleSendReply() {
-    const trimmed = replyText.trim();
-    if (!trimmed || isSendingReply) return;
-    setIsSendingReply(true);
-    try {
-      const ok = await onReply?.(annotation.id, trimmed);
-      if (ok !== false) {
-        setReplyText("");
-        setIsReplying(false);
-      }
-    } finally {
-      setIsSendingReply(false);
-    }
-  }
-
-  const textareaStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "4px 6px",
-    fontSize: "12px",
-    border: "1px solid var(--tandem-border-strong)",
-    borderRadius: "3px",
-    resize: "vertical",
-    fontFamily: "inherit",
-    minHeight: "40px",
-    boxSizing: "border-box",
-    background: "var(--tandem-surface)",
-    color: "var(--tandem-fg)",
-  };
-
-  const editBtnStyle: React.CSSProperties = {
-    padding: "1px 4px",
-    fontSize: "11px",
-    border: "none",
-    background: "none",
-    color: "var(--tandem-fg-subtle)",
-    cursor: "pointer",
-    lineHeight: 1,
-  };
-
   const truncatedContent = annotation.content
     ? annotation.content.length > 60
       ? annotation.content.slice(0, 57) + "..."
       : annotation.content
     : "";
-  const displayType = hasSuggestedText
-    ? "replacement"
-    : annotation.directedAt === "claude"
-      ? "question"
-      : annotation.type;
   const cardLabel = `${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
 
   return (
@@ -197,7 +181,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
                 e.stopPropagation();
                 enterEditMode();
               }}
-              style={editBtnStyle}
+              style={EDIT_BTN_STYLE}
               title="Edit this annotation's content"
             >
               ✎ Edit
@@ -220,11 +204,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
               (edited)
             </span>
           )}
-          {annotation.author === "claude"
-            ? "Claude"
-            : annotation.author === "import"
-              ? "Imported"
-              : "You"}
+          {getAuthorLabel(annotation.author)}
         </span>
       </div>
       {annotation.textSnapshot && (
@@ -247,95 +227,19 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         </div>
       )}
       {isEditing ? (
-        <div style={{ marginTop: "4px" }} onClick={(e) => e.stopPropagation()}>
-          {hasSuggestedText ? (
-            <>
-              <label
-                style={{
-                  fontSize: "11px",
-                  color: "var(--tandem-fg-muted)",
-                  display: "block",
-                  marginBottom: "2px",
-                }}
-              >
-                Replacement text
-              </label>
-              <textarea
-                data-testid={`edit-newtext-${annotation.id}`}
-                value={editNewText}
-                onChange={(e) => setEditNewText(e.target.value)}
-                onKeyDown={handleKeyDown}
-                style={textareaStyle}
-                autoFocus
-              />
-              <label
-                style={{
-                  fontSize: "11px",
-                  color: "var(--tandem-fg-muted)",
-                  display: "block",
-                  marginTop: "4px",
-                  marginBottom: "2px",
-                }}
-              >
-                Reason
-              </label>
-              <textarea
-                data-testid={`edit-reason-${annotation.id}`}
-                value={editReason}
-                onChange={(e) => setEditReason(e.target.value)}
-                onKeyDown={handleKeyDown}
-                style={textareaStyle}
-              />
-            </>
-          ) : (
-            <textarea
-              data-testid={`edit-text-${annotation.id}`}
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              style={textareaStyle}
-              autoFocus
-            />
-          )}
-          <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
-            <button
-              data-testid={`edit-save-btn-${annotation.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSave();
-              }}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: "1px solid var(--tandem-border-strong)",
-                borderRadius: "3px",
-                background: "var(--tandem-success-bg)",
-                color: "var(--tandem-success-fg-strong)",
-                cursor: "pointer",
-              }}
-            >
-              Save
-            </button>
-            <button
-              data-testid={`edit-cancel-btn-${annotation.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCancel();
-              }}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: "1px solid var(--tandem-border-strong)",
-                borderRadius: "3px",
-                background: "var(--tandem-surface)",
-                color: "var(--tandem-fg-muted)",
-                cursor: "pointer",
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <AnnotationEditForm
+          annotationId={annotation.id}
+          hasSuggestedText={hasSuggestedText}
+          editText={editText}
+          editNewText={editNewText}
+          editReason={editReason}
+          onChangeEditText={setEditText}
+          onChangeEditNewText={setEditNewText}
+          onChangeEditReason={setEditReason}
+          onKeyDown={handleKeyDown}
+          onSave={handleSave}
+          onCancel={handleCancel}
+        />
       ) : (
         <div style={{ margin: 0, color: "var(--tandem-fg)", lineHeight: "1.4" }}>
           {hasSuggestedText ? (
@@ -387,169 +291,22 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           )}
         </div>
       )}
-      {isPending && !isEditing && (onAccept || onDismiss) && (
-        <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
-          {onAccept && (
-            <button
-              data-testid={`accept-btn-${annotation.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onAccept(annotation.id);
-              }}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: "1px solid var(--tandem-border-strong)",
-                borderRadius: "3px",
-                background: "var(--tandem-success-bg)",
-                color: "var(--tandem-success-fg-strong)",
-                cursor: "pointer",
-              }}
-            >
-              Accept
-            </button>
-          )}
-          {onDismiss && (
-            <button
-              data-testid={`dismiss-btn-${annotation.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onDismiss(annotation.id);
-              }}
-              style={{
-                padding: "2px 8px",
-                fontSize: "11px",
-                border: "1px solid var(--tandem-border-strong)",
-                borderRadius: "3px",
-                background: "var(--tandem-error-bg)",
-                color: "var(--tandem-error-fg-strong)",
-                cursor: "pointer",
-              }}
-            >
-              Reject
-            </button>
-          )}
-        </div>
-      )}
-      {!isPending && undoable && onUndo && (
-        <div style={{ marginTop: "4px", position: "relative" }}>
-          <button
-            data-testid="undo-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onUndo(annotation.id);
-            }}
-            style={{
-              padding: "1px 6px",
-              fontSize: "11px",
-              border: "none",
-              background: "none",
-              color: "var(--tandem-accent)",
-              cursor: "pointer",
-              textDecoration: "underline",
-            }}
-          >
-            Undo
-          </button>
-          <div
-            data-testid="undo-countdown"
-            style={{
-              height: "2px",
-              marginTop: "2px",
-              borderRadius: "1px",
-              backgroundColor: "var(--tandem-accent)",
-              animation: "undo-countdown-shrink 10s linear forwards",
-            }}
-          />
-          <style>
-            {`@keyframes undo-countdown-shrink {
-              from { width: 100%; }
-              to { width: 0%; }
-            }`}
-          </style>
-        </div>
-      )}
-      {/* Reply thread */}
-      <CommentThread replies={replies} />
-      {/* Reply input — only on pending annotations with a reply handler */}
-      {isPending && onReply && !isEditing && (
-        <div style={{ marginTop: "6px" }} onClick={(e) => e.stopPropagation()}>
-          {isReplying ? (
-            <div>
-              <textarea
-                data-testid={`reply-input-${annotation.id}`}
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                onKeyDown={handleReplyKeyDown}
-                placeholder="Write a reply..."
-                style={textareaStyle}
-                autoFocus
-              />
-              <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
-                <button
-                  data-testid={`reply-send-btn-${annotation.id}`}
-                  onClick={handleSendReply}
-                  disabled={!replyText.trim() || isSendingReply}
-                  style={{
-                    padding: "2px 8px",
-                    fontSize: "11px",
-                    border: "1px solid var(--tandem-border-strong)",
-                    borderRadius: "3px",
-                    background: replyText.trim()
-                      ? "var(--tandem-accent-bg)"
-                      : "var(--tandem-surface-muted)",
-                    color: replyText.trim()
-                      ? "var(--tandem-accent-fg-strong)"
-                      : "var(--tandem-fg-subtle)",
-                    cursor: replyText.trim() ? "pointer" : "default",
-                  }}
-                >
-                  Send
-                </button>
-                <button
-                  data-testid={`reply-cancel-btn-${annotation.id}`}
-                  onClick={() => {
-                    setIsReplying(false);
-                    setReplyText("");
-                  }}
-                  style={{
-                    padding: "2px 8px",
-                    fontSize: "11px",
-                    border: "1px solid var(--tandem-border-strong)",
-                    borderRadius: "3px",
-                    background: "var(--tandem-surface)",
-                    color: "var(--tandem-fg-muted)",
-                    cursor: "pointer",
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              data-testid={`reply-btn-${annotation.id}`}
-              onClick={() => setIsReplying(true)}
-              style={{
-                padding: "1px 4px",
-                fontSize: "11px",
-                border: "none",
-                background: "none",
-                color: "var(--tandem-fg-subtle)",
-                cursor: "pointer",
-              }}
-            >
-              Reply{replies.length > 0 ? ` (${replies.length})` : ""}
-            </button>
-          )}
-        </div>
-      )}
-      {/* Read-only reply count for resolved annotations */}
-      {!isPending && replies.length > 0 && !onReply && (
-        <div style={{ marginTop: "4px", fontSize: "11px", color: "var(--tandem-fg-subtle)" }}>
-          {replies.length} {replies.length === 1 ? "reply" : "replies"}
-        </div>
-      )}
+      <AnnotationCardActions
+        annotationId={annotation.id}
+        isPending={isPending}
+        isEditing={isEditing}
+        undoable={undoable}
+        onAccept={onAccept}
+        onDismiss={onDismiss}
+        onUndo={onUndo}
+      />
+      <ReplyThread
+        annotationId={annotation.id}
+        replies={replies}
+        isPending={isPending}
+        isEditing={isEditing}
+        onReply={onReply}
+      />
     </div>
   );
 });
