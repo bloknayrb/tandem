@@ -34,7 +34,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   watchFile: vi.fn(),
 }));
 
-import * as queueModule from "../../src/server/events/queue.js";
+import * as fileSyncRegistryModule from "../../src/server/events/file-sync-registry.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
 import { openFileByPath } from "../../src/server/mcp/file-opener.js";
@@ -139,7 +139,7 @@ describe("session restore — empty fragment", () => {
 // ---------------------------------------------------------------------------
 describe("annotation wiring", () => {
   it("calls setFileSyncContext with the document id on open", async () => {
-    const spy = vi.spyOn(queueModule, "setFileSyncContext");
+    const spy = vi.spyOn(fileSyncRegistryModule, "setFileSyncContext");
 
     const filePath = path.join(tmpDir, "annotation-wire.md");
     await fs.writeFile(filePath, "# Annotation wiring test");
