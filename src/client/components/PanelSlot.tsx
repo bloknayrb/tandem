@@ -39,7 +39,7 @@ type SideSlotProps = ComponentProps<typeof SidePanel> & { visible?: boolean };
 export function ChatSlot({ visible, ...props }: ChatSlotProps) {
   return (
     <SlotWrapper visible={visible}>
-      <ChatPanel {...props} />
+      <ChatPanel {...props} visible={visible} />
     </SlotWrapper>
   );
 }
