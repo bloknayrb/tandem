@@ -54,6 +54,8 @@
         --tandem-info-bg: #eff6ff;
         --tandem-info-border: #bfdbfe;
         --tandem-accent-border: #c7d2fe;
+        --tandem-scrollbar-track: #f1f5f9;
+        --tandem-scrollbar-thumb: #cbd5e1;
       }
 
       [data-theme="dark"] {
@@ -94,6 +96,8 @@
         --tandem-info-bg: #0c4a6e;
         --tandem-info-border: #0369a1;
         --tandem-accent-border: #4338ca;
+        --tandem-scrollbar-track: #1e293b;
+        --tandem-scrollbar-thumb: #475569;
       }
 
       /* Windows High Contrast — let the OS drive everything. */
@@ -115,12 +119,39 @@
           --tandem-author-claude: CanvasText;
           --tandem-claude-focus-bg: Canvas;
           --tandem-claude-focus-border: Highlight;
+          --tandem-scrollbar-track: Canvas;
+          --tandem-scrollbar-thumb: ButtonText;
         }
 
         /* Held-count badge uses warning-bg only (no border) — add one so it stays visible. */
         [data-testid="held-badge"] {
           border: 1px solid ButtonText;
         }
+      }
+
+      /* Themed scrollbars — WebKit (Chrome/Safari/Tauri) */
+      *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      *::-webkit-scrollbar-track {
+        background: var(--tandem-scrollbar-track);
+      }
+      *::-webkit-scrollbar-thumb {
+        background: var(--tandem-scrollbar-thumb);
+        border-radius: 4px;
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background: color-mix(in srgb, var(--tandem-scrollbar-thumb) 80%, var(--tandem-fg));
+      }
+      *::-webkit-scrollbar-corner {
+        background: var(--tandem-scrollbar-track);
+      }
+
+      /* Themed scrollbars — Firefox */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--tandem-scrollbar-thumb) var(--tandem-scrollbar-track);
       }
     </style>
   </head>
