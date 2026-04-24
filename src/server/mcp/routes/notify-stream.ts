@@ -21,10 +21,7 @@ export function handleNotifyStream(req: Request, res: Response): void {
     try {
       res.write(`data: ${JSON.stringify(notification)}\n\n`);
     } catch (err) {
-      console.error(
-        "[NotifyStream] Write failed, cleaning up:",
-        err instanceof Error ? err.message : err,
-      );
+      console.error("[NotifyStream] Write failed, cleaning up:", err);
       cleanup();
     }
   });
@@ -33,10 +30,7 @@ export function handleNotifyStream(req: Request, res: Response): void {
     try {
       if (!res.writableEnded) res.write(": keepalive\n\n");
     } catch (err) {
-      console.error(
-        "[NotifyStream] Keepalive write failed, cleaning up:",
-        err instanceof Error ? err.message : err,
-      );
+      console.error("[NotifyStream] Keepalive write failed, cleaning up:", err);
       cleanup();
     }
   }, CHANNEL_SSE_KEEPALIVE_MS);

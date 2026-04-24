@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { setPreviousToken } from "../../auth/middleware.js";
-import { readTokenFromFile } from "../../auth/token-store.js";
+import { getTokenFilePath, readTokenFromFile } from "../../auth/token-store.js";
 import type { Handler } from "./_shared.js";
 
 export function makeRotateTokenHandler(deps: {
@@ -29,6 +29,10 @@ export function makeRotateTokenHandler(deps: {
     }
 
     if (!newToken) {
+      console.error(
+        "[Tandem] rotate-token: no token found on disk after rotation at:",
+        getTokenFilePath(),
+      );
       res
         .status(500)
         .json({ error: "INTERNAL", message: "No token found on disk after rotation." });

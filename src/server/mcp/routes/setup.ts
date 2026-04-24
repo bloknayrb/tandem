@@ -69,7 +69,7 @@ export async function runSetupHandler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${target.label}: ${msg}`);
-      console.error(`[Setup] target=${target.label} failed: ${msg}`);
+      console.error(`[Setup] target=${target.label} failed:`, err);
     }
   }
 
@@ -80,7 +80,7 @@ export async function runSetupHandler(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Skill install: ${msg}`);
-    console.error(`[Setup] skill install failed: ${msg}`);
+    console.error("[Setup] skill install failed:", err);
   }
 
   // HTTP status reflects outcome:

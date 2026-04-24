@@ -91,6 +91,7 @@ export function sendApiError(res: Response, err: unknown): void {
   const label = errorCodeToLabel(code);
   const msg =
     label === "FILE_LOCKED" ? "File is locked by another program." : (e.message ?? String(err));
-  if (status === 500) console.error("[Tandem] Unhandled API error:", err);
+  if (status >= 500) console.error("[Tandem] Unhandled API error:", err);
+  else if (status >= 400) console.warn(`[Tandem] API error (${status}): ${msg}`);
   res.status(status).json({ error: label, message: msg });
 }

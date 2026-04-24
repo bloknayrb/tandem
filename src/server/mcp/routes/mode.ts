@@ -11,6 +11,13 @@ import { getOrCreateDocument } from "../../yjs/provider.js";
 export function handleMode(_req: Request, res: Response): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-  const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
+  const raw = awareness.get(Y_MAP_MODE);
+  const parsed = TandemModeSchema.safeParse(raw);
+  if (raw !== undefined && !parsed.success) {
+    console.warn(
+      `[Tandem] Invalid mode value in awareness, falling back to default. raw=${JSON.stringify(raw)}`,
+    );
+  }
+  const mode = parsed.success ? parsed.data : TANDEM_MODE_DEFAULT;
   res.json({ mode });
 }
