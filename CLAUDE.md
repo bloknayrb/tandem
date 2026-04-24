@@ -56,7 +56,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Key Patterns
 - All document mutations go through the server's Y.Doc -> changes sync to editor via Hocuspocus
-- Annotations stored in Y.Map('annotations'), not in document content. `author` field: `"user" | "claude" | "import"` (import = Word comments from .docx files)
+- Annotations stored in Y.Map('annotations'), not in document content. `author` field: `"user" | "claude" | "import"` (import = Word comments from .docx files). User annotations are plain notes to Claude — `suggestedText` and `directedAt: "claude"` are Claude-only features created via MCP tools (`tandem_suggest`, `tandem_comment`), not the UI.
 - Three coordinate systems: flat text offsets (server, includes heading prefixes), ProseMirror positions (client, structural), Yjs RelativePositions (CRDT-anchored, survive edits). Modules: `src/server/positions.ts`, `src/client/positions.ts`, shared types in `src/shared/positions/`
 - Multi-document: each file gets a documentId (hash of path) = Hocuspocus room name. All MCP tools accept optional `documentId`, defaulting to active document. `CTRL_ROOM` is reserved -- never use as a document ID. Server broadcasts `openDocuments` via Y.Map('documentMeta')
 - Communication: `tandem_checkInbox` (poll for user actions + chat) and `tandem_reply` (Claude's chat responses). **Call `tandem_checkInbox` between tasks.** `tandem_status` and `tandem_checkInbox` return `mode: "solo" | "tandem"` — adapt behavior accordingly (in Solo mode, hold annotations)
