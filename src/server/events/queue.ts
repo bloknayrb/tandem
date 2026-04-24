@@ -14,14 +14,12 @@ import {
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
-  Y_MAP_ANNOTATION_REPLIES,
-  Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_DOCUMENT_META,
   Y_MAP_DWELL_MS,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
+import type { ChatMessage, FlatOffset } from "../../shared/types.js";
 import { getOpenDocs } from "../mcp/document-service.js";
 import { validateRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -32,6 +30,7 @@ import {
   setFileSyncContext,
 } from "./file-sync-registry.js";
 import { makeAnnotationsObserver } from "./observers/annotations.js";
+import { makeRepliesObserver } from "./observers/replies.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
 import type { TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
@@ -173,37 +172,7 @@ export function attachObservers(docName: string, doc: Y.Doc): void {
   cleanups.push(makeAnnotationsObserver({ docName, doc, pushEvent }));
 
   // 2. Annotation replies observer
-  const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
-  const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
-  const repliesObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
-
-    for (const [key, change] of event.changes.keys) {
-      if (change.action !== "add") continue;
-      const reply = repliesMap.get(key) as AnnotationReply | undefined;
-      if (!reply || reply.author !== "user") continue;
-
-      // Look up the parent annotation for the text snippet
-      const parentAnn = annotationsMap.get(reply.annotationId) as Annotation | undefined;
-      const textSnippet = parentAnn?.textSnapshot ?? "";
-
-      pushEvent({
-        id: generateEventId(),
-        type: "annotation:reply",
-        timestamp: Date.now(),
-        documentId: docName,
-        payload: {
-          annotationId: reply.annotationId,
-          replyId: reply.id,
-          replyText: reply.text,
-          replyAuthor: reply.author,
-          textSnippet,
-        },
-      });
-    }
-  };
-  repliesMap.observe(repliesObs);
-  cleanups.push(() => repliesMap.unobserve(repliesObs));
+  cleanups.push(makeRepliesObserver({ docName, doc, pushEvent }));
 
   // 3. User awareness observer (selection buffering)
   // Selections are buffered per-document and attached to the next chat:message,
