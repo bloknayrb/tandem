@@ -1,28 +1,21 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  DISCONNECT_DEBOUNCE_MS,
-  PANEL_WIDTH_KEYS,
-  type PanelSide,
-  PROLONGED_DISCONNECT_MS,
-  TANDEM_MODE_DEFAULT,
-  TANDEM_MODE_KEY,
-  Y_MAP_DWELL_MS,
-  Y_MAP_MODE,
-  Y_MAP_USER_AWARENESS,
-} from "../shared/constants";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { CapturedAnchor, TandemMode } from "../shared/types";
-import { TandemModeSchema } from "../shared/types";
+import type { CapturedAnchor } from "../shared/types";
+import { ConnectionBanner } from "./components/ConnectionBanner";
+import { EmptyState } from "./components/EmptyState";
 import { HelpModal } from "./components/HelpModal";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
+import { ChatSlot, SideSlot } from "./components/PanelSlot";
 import { ReviewOnlyBanner } from "./components/ReviewOnlyBanner";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { ToastContainer } from "./components/ToastContainer";
 import { Editor } from "./editor/Editor";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { Toolbar } from "./editor/toolbar/Toolbar";
+import { useConnectionBanner } from "./hooks/useConnectionBanner";
+import { useDragResize } from "./hooks/useDragResize";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useModeGate } from "./hooks/useModeGate";
 import { useNotifications } from "./hooks/useNotifications";
@@ -31,15 +24,14 @@ import { useSaveShortcut } from "./hooks/useSaveShortcut";
 import { useSettingsShortcut } from "./hooks/useSettingsShortcut";
 import { useTabCycleKeyboard } from "./hooks/useTabCycleKeyboard";
 import { useTabOrder } from "./hooks/useTabOrder";
+import { useTandemModeBroadcast } from "./hooks/useTandemModeBroadcast";
 import { TEXT_SIZE_PX, useTandemSettings } from "./hooks/useTandemSettings";
 import { useTheme } from "./hooks/useTheme";
 import { useTutorial } from "./hooks/useTutorial";
 import { useWebViewZoom } from "./hooks/useWebViewZoom";
 import { useYjsSync } from "./hooks/useYjsSync";
-import type { PanelLayout } from "./panel-layout";
-import { ChatPanel } from "./panels/ChatPanel";
+import { loadPanelWidth, type PanelLayout } from "./panel-layout";
 import { ReviewSummary } from "./panels/ReviewSummary";
-import { SidePanel } from "./panels/SidePanel";
 import { pmSelectionToFlat } from "./positions";
 import { StatusBar } from "./status/StatusBar";
 import { DocumentTabs } from "./tabs/DocumentTabs";
@@ -47,107 +39,6 @@ import type { DocListEntry, OpenTab } from "./types";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 export type { DocListEntry, OpenTab };
-
-/** Connection-aware empty state shown when no document is open. */
-function EmptyState({ connected, claudeActive }: { connected: boolean; claudeActive: boolean }) {
-  const [showDisconnected, setShowDisconnected] = useState(false);
-
-  useEffect(() => {
-    if (connected) {
-      setShowDisconnected(false);
-      return;
-    }
-    const timer = setTimeout(() => setShowDisconnected(true), DISCONNECT_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [connected]);
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "100%",
-        color: "var(--tandem-fg-subtle)",
-        gap: "8px",
-      }}
-    >
-      {showDisconnected ? (
-        <span>Cannot reach the Tandem server. Is it running?</span>
-      ) : (
-        <>
-          <span>No document open. Click + in the tab bar or drop a file here.</span>
-          {connected && !claudeActive && (
-            <span style={{ fontSize: "0.85em", color: "var(--tandem-fg-subtle)" }}>
-              Tip: open Claude Code in this directory to start collaborating
-            </span>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Red banner shown after prolonged disconnect (>30s). Dismissible. */
-function ConnectionBanner({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <div
-      style={{
-        padding: "8px 16px",
-        background: "var(--tandem-error-bg)",
-        borderBottom: "1px solid var(--tandem-error-border)",
-        fontSize: "13px",
-        color: "var(--tandem-error-fg-strong)",
-        textAlign: "center",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        gap: "12px",
-      }}
-    >
-      <span>Connection to the Tandem server has been lost. Ensure the server is running.</span>
-      <button
-        onClick={onDismiss}
-        style={{
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          color: "var(--tandem-error-fg-strong)",
-          fontSize: "16px",
-          lineHeight: 1,
-          padding: "0 4px",
-        }}
-        aria-label="Dismiss connection banner"
-      >
-        \u00d7
-      </button>
-    </div>
-  );
-}
-
-const PANEL_MIN_WIDTH = 200;
-const PANEL_MAX_WIDTH = 600;
-const PANEL_DEFAULT_WIDTH = 300;
-
-function loadPanelWidth(side: PanelSide): number {
-  const key = PANEL_WIDTH_KEYS[side];
-  try {
-    const saved = localStorage.getItem(key);
-    if (saved) {
-      const parsed = parseInt(saved, 10);
-      if (Number.isFinite(parsed)) {
-        return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, parsed));
-      }
-      // Non-finite saved value — fall through and warn so corrupt storage
-      // is diagnosable instead of silently reverting to the default.
-      console.warn(`[tandem] ignoring non-numeric panel width for ${key}: ${saved}`);
-    }
-  } catch (err) {
-    console.warn(`[tandem] localStorage unavailable reading ${key}:`, err);
-  }
-  return PANEL_DEFAULT_WIDTH;
-}
 
 export default function App() {
   useWebViewZoom();
@@ -194,53 +85,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs.length]);
 
-  // Tandem mode — persisted to localStorage
-  const [tandemMode, setTandemMode] = useState<TandemMode>(() => {
-    try {
-      const saved = localStorage.getItem(TANDEM_MODE_KEY);
-      return TandemModeSchema.safeParse(saved).success
-        ? (saved as TandemMode)
-        : TANDEM_MODE_DEFAULT;
-    } catch (err) {
-      console.warn(`[tandem] localStorage unavailable reading ${TANDEM_MODE_KEY}:`, err);
-      return TANDEM_MODE_DEFAULT;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(TANDEM_MODE_KEY, tandemMode);
-    } catch (err) {
-      console.warn(`[tandem] failed to persist ${TANDEM_MODE_KEY}:`, err);
-    }
-  }, [tandemMode]);
+  const { settings, updateSettings } = useTandemSettings();
 
-  // Broadcast tandem mode to CTRL_ROOM Y.Map so the server (and Claude) can see it
-  useEffect(() => {
-    if (!bootstrapYdoc) return;
-    const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
-    awareness.set(Y_MAP_MODE, tandemMode);
-  }, [tandemMode, bootstrapYdoc]);
-
-  // Prolonged disconnect banner — shown after PROLONGED_DISCONNECT_MS of being disconnected
-  const [showDisconnectBanner, setShowDisconnectBanner] = useState(false);
-  const [disconnectBannerDismissed, setDisconnectBannerDismissed] = useState(false);
-  useEffect(() => {
-    if (disconnectedSince == null) {
-      setShowDisconnectBanner(false);
-      setDisconnectBannerDismissed(false);
-      return;
-    }
-    const elapsed = Date.now() - disconnectedSince;
-    const remaining = PROLONGED_DISCONNECT_MS - elapsed;
-    if (remaining <= 0) {
-      setShowDisconnectBanner(true);
-      return;
-    }
-    const timer = setTimeout(() => setShowDisconnectBanner(true), remaining);
-    return () => clearTimeout(timer);
-  }, [disconnectedSince]);
+  // Tandem mode — persisted to localStorage, broadcasts to CTRL_ROOM Y.Map
+  const { tandemMode, setTandemMode } = useTandemModeBroadcast(
+    bootstrapYdoc,
+    settings.selectionDwellMs,
+  );
 
   const { visibleAnnotations, heldCount } = useModeGate(annotations, tandemMode);
+
+  const { showBanner: showDisconnectBanner, dismiss: dismissConnectionBanner } =
+    useConnectionBanner(disconnectedSince);
+
   const openDocs = useMemo(() => tabs.map((t) => ({ id: t.id, fileName: t.fileName })), [tabs]);
 
   const { saving } = useSaveShortcut(activeTabId);
@@ -250,7 +107,6 @@ export default function App() {
   const { showReviewSummary, reviewSummaryData, dismissReviewSummary } =
     useReviewCompletion(annotations);
 
-  const { settings, updateSettings } = useTandemSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
@@ -267,13 +123,6 @@ export default function App() {
     openSettings();
   }, [openSettings]);
   useSettingsShortcut(toggleSettings);
-
-  // Broadcast selection dwell time to CTRL_ROOM so the server uses the user's setting
-  useEffect(() => {
-    if (!bootstrapYdoc) return;
-    const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
-    awareness.set(Y_MAP_DWELL_MS, settings.selectionDwellMs);
-  }, [settings.selectionDwellMs, bootstrapYdoc]);
 
   // Dispatch authorship toggle to the ProseMirror plugin when the setting changes
   useEffect(() => {
@@ -353,78 +202,7 @@ export default function App() {
     settings.editorWidthPercent < 100 ? `${settings.editorWidthPercent}%` : undefined;
   const editorMargin = settings.editorWidthPercent < 100 ? "0 auto" : undefined;
 
-  const panelLayoutRef = useRef(panelLayout);
-  panelLayoutRef.current = panelLayout;
-  const dragListenersRef = useRef<{
-    move: (e: MouseEvent) => void;
-    up: () => void;
-  } | null>(null);
-
-  // Clean up drag listeners if the component unmounts mid-drag
-  useEffect(() => {
-    return () => {
-      if (dragListenersRef.current) {
-        document.removeEventListener("mousemove", dragListenersRef.current.move);
-        document.removeEventListener("mouseup", dragListenersRef.current.up);
-        document.body.style.userSelect = "";
-        document.body.style.cursor = "";
-      }
-    };
-  }, []);
-
-  const handleResizeStart = useCallback((e: React.MouseEvent, side: PanelSide) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const current = panelLayoutRef.current;
-    // `left` is only defined in three-panel; fall back to the default so a
-    // stale mid-transition drag never reads undefined.
-    const startWidth =
-      side === "left"
-        ? current.kind === "three-panel"
-          ? current.left
-          : PANEL_DEFAULT_WIDTH
-        : current.right;
-    const storageKey = PANEL_WIDTH_KEYS[side];
-    let latestWidth = startWidth;
-
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-
-    const onMouseMove = (ev: MouseEvent) => {
-      const delta = ev.clientX - startX;
-      // The left panel's handle sits on its right edge (drag right = wider).
-      // The right panel's handle sits on its left edge (drag right = narrower).
-      const next = side === "left" ? startWidth + delta : startWidth - delta;
-      latestWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, next));
-      setPanelLayout((prev) => {
-        if (side === "right") {
-          return prev.kind === "three-panel"
-            ? { ...prev, right: latestWidth }
-            : { kind: "tabbed", right: latestWidth };
-        }
-        // Left handle is only rendered in three-panel, but guard anyway.
-        if (prev.kind !== "three-panel") return prev;
-        return { ...prev, left: latestWidth };
-      });
-    };
-
-    const onMouseUp = () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      dragListenersRef.current = null;
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-      try {
-        localStorage.setItem(storageKey, String(latestWidth));
-      } catch (err) {
-        console.warn(`[tandem] failed to persist ${storageKey}:`, err);
-      }
-    };
-
-    dragListenersRef.current = { move: onMouseMove, up: onMouseUp };
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  }, []);
+  const { handleResizeStart } = useDragResize({ panelLayout, setPanelLayout });
 
   const toggleReviewMode = useCallback(() => {
     setReviewMode((prev) => !prev);
@@ -469,6 +247,38 @@ export default function App() {
     activeTab?.fileName,
   );
 
+  // Shared props for SidePanel across all layout render sites
+  const sidePanelProps = {
+    annotations: visibleAnnotations,
+    editor: editorRef.current,
+    ydoc: activeTab?.ydoc ?? null,
+    heldCount,
+    tandemMode,
+    onModeChange: setTandemMode,
+    activeDocFormat: activeTab?.format,
+    documentId: activeTab?.id,
+    reviewMode,
+    onToggleReviewMode: toggleReviewMode,
+    onExitReviewMode: exitReviewMode,
+    activeAnnotationId,
+    onActiveAnnotationChange: setActiveAnnotationId,
+    reduceMotion: settings.reduceMotion,
+  } as const;
+
+  // Shared props for ChatPanel across all layout render sites
+  const chatPanelProps = {
+    ctrlYdoc: bootstrapYdoc,
+    editor: editorRef.current,
+    activeDocId: activeTabId,
+    openDocs,
+    claudeActive,
+    claudeStatus,
+    capturedAnchor,
+    onCapturedAnchorChange: setCapturedAnchor,
+    inputRef: chatInputRef,
+    reduceMotion: settings.reduceMotion,
+  } as const;
+
   if (!ready) {
     return (
       <div
@@ -501,9 +311,7 @@ export default function App() {
           Server restarted — refreshing documents
         </div>
       )}
-      {showDisconnectBanner && !disconnectBannerDismissed && (
-        <ConnectionBanner onDismiss={() => setDisconnectBannerDismissed(true)} />
-      )}
+      {showDisconnectBanner && <ConnectionBanner onDismiss={dismissConnectionBanner} />}
       <Toolbar
         editor={editorRef.current}
         ydoc={activeTab?.ydoc ?? null}
@@ -549,36 +357,9 @@ export default function App() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
               {settings.panelOrder === "chat-editor-annotations" ? (
-                <ChatPanel
-                  ctrlYdoc={bootstrapYdoc}
-                  editor={editorRef.current}
-                  activeDocId={activeTabId}
-                  openDocs={openDocs}
-                  claudeActive={claudeActive}
-                  claudeStatus={claudeStatus}
-                  visible={true}
-                  capturedAnchor={capturedAnchor}
-                  onCapturedAnchorChange={setCapturedAnchor}
-                  inputRef={chatInputRef}
-                  reduceMotion={settings.reduceMotion}
-                />
+                <ChatSlot {...chatPanelProps} visible={true} />
               ) : (
-                <SidePanel
-                  annotations={visibleAnnotations}
-                  editor={editorRef.current}
-                  ydoc={activeTab?.ydoc ?? null}
-                  heldCount={heldCount}
-                  tandemMode={tandemMode}
-                  onModeChange={setTandemMode}
-                  activeDocFormat={activeTab?.format}
-                  documentId={activeTab?.id}
-                  reviewMode={reviewMode}
-                  onToggleReviewMode={toggleReviewMode}
-                  onExitReviewMode={exitReviewMode}
-                  activeAnnotationId={activeAnnotationId}
-                  onActiveAnnotationChange={setActiveAnnotationId}
-                  reduceMotion={settings.reduceMotion}
-                />
+                <SideSlot {...sidePanelProps} />
               )}
             </div>
           </div>
@@ -691,36 +472,9 @@ export default function App() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
               {settings.panelOrder === "chat-editor-annotations" ? (
-                <SidePanel
-                  annotations={visibleAnnotations}
-                  editor={editorRef.current}
-                  ydoc={activeTab?.ydoc ?? null}
-                  heldCount={heldCount}
-                  tandemMode={tandemMode}
-                  onModeChange={setTandemMode}
-                  activeDocFormat={activeTab?.format}
-                  documentId={activeTab?.id}
-                  reviewMode={reviewMode}
-                  onToggleReviewMode={toggleReviewMode}
-                  onExitReviewMode={exitReviewMode}
-                  activeAnnotationId={activeAnnotationId}
-                  onActiveAnnotationChange={setActiveAnnotationId}
-                  reduceMotion={settings.reduceMotion}
-                />
+                <SideSlot {...sidePanelProps} />
               ) : (
-                <ChatPanel
-                  ctrlYdoc={bootstrapYdoc}
-                  editor={editorRef.current}
-                  activeDocId={activeTabId}
-                  openDocs={openDocs}
-                  claudeActive={claudeActive}
-                  claudeStatus={claudeStatus}
-                  visible={true}
-                  capturedAnchor={capturedAnchor}
-                  onCapturedAnchorChange={setCapturedAnchor}
-                  inputRef={chatInputRef}
-                  reduceMotion={settings.reduceMotion}
-                />
+                <ChatSlot {...chatPanelProps} visible={true} />
               )}
             </div>
           </div>
@@ -865,53 +619,8 @@ export default function App() {
               </button>
             </div>
             {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
-            <div
-              style={{
-                display: showChat ? "flex" : "none",
-                flexDirection: "column",
-                flex: 1,
-                minHeight: 0,
-              }}
-            >
-              <ChatPanel
-                ctrlYdoc={bootstrapYdoc}
-                editor={editorRef.current}
-                activeDocId={activeTabId}
-                openDocs={openDocs}
-                claudeActive={claudeActive}
-                claudeStatus={claudeStatus}
-                visible={showChat}
-                capturedAnchor={capturedAnchor}
-                onCapturedAnchorChange={setCapturedAnchor}
-                inputRef={chatInputRef}
-                reduceMotion={settings.reduceMotion}
-              />
-            </div>
-            <div
-              style={{
-                display: showChat ? "none" : "flex",
-                flexDirection: "column",
-                flex: 1,
-                minHeight: 0,
-              }}
-            >
-              <SidePanel
-                annotations={visibleAnnotations}
-                editor={editorRef.current}
-                ydoc={activeTab?.ydoc ?? null}
-                heldCount={heldCount}
-                tandemMode={tandemMode}
-                onModeChange={setTandemMode}
-                activeDocFormat={activeTab?.format}
-                documentId={activeTab?.id}
-                reviewMode={reviewMode}
-                onToggleReviewMode={toggleReviewMode}
-                onExitReviewMode={exitReviewMode}
-                activeAnnotationId={activeAnnotationId}
-                onActiveAnnotationChange={setActiveAnnotationId}
-                reduceMotion={settings.reduceMotion}
-              />
-            </div>
+            <ChatSlot {...chatPanelProps} visible={showChat} />
+            <SideSlot {...sidePanelProps} visible={!showChat} />
           </div>
         </div>
       )}
