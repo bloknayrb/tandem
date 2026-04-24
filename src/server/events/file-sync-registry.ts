@@ -16,12 +16,6 @@ import {
   type SyncContext,
 } from "../annotations/sync.js";
 
-/**
- * Track per-doc SyncContext so `reattachObservers` can re-register the
- * annotation file-writer observer against the new Y.Doc after a Hocuspocus
- * doc swap. Stored alongside the cleanup handle from the prior
- * `registerAnnotationObserver` call so we can dispose it deterministically.
- */
 const fileSyncContexts = new Map<
   string,
   { ctx: SyncContext; cleanup: (phase?: ObserverCleanupPhase) => void }
@@ -111,12 +105,8 @@ export function reattachFileSyncObserver(docName: string, newDoc: Y.Doc): void {
 
 /** Reset all registry state. For tests only — do not call in production. */
 export function resetForTesting(): void {
-  for (const entry of fileSyncContexts.values()) {
-    try {
-      entry.cleanup("close");
-    } catch {
-      /* swallow, matches queue.ts:596-599 defensive pattern */
-    }
+  for (const [docName, entry] of fileSyncContexts) {
+    safeCleanup(docName, entry.cleanup, "close", "resetForTesting");
   }
   fileSyncContexts.clear();
 }

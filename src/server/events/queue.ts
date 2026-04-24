@@ -125,21 +125,15 @@ export function getBufferedSelection(docName: string): BufferedSelection | undef
 
 /** Attach observers to a document's Y.Maps. Call after doc swap in onLoadDocument. */
 export function attachObservers(docName: string, doc: Y.Doc): void {
-  // Detach existing observers first (idempotent)
   detachObservers(docName);
 
-  const cleanups: Array<() => void> = [];
-
-  // 1. Annotations observer
-  cleanups.push(makeAnnotationsObserver({ docName, doc, pushEvent }));
-
-  // 2. Annotation replies observer
-  cleanups.push(makeRepliesObserver({ docName, doc, pushEvent }));
-
-  // 3. User awareness observer (selection buffering)
   // Selections are buffered per-document and attached to the next chat:message,
   // rather than firing as standalone events (#188).
-  cleanups.push(makeAwarenessObserver({ docName, doc, selectionBuffer }));
+  const cleanups: Array<() => void> = [
+    makeAnnotationsObserver({ docName, doc, pushEvent }),
+    makeRepliesObserver({ docName, doc, pushEvent }),
+    makeAwarenessObserver({ docName, doc, selectionBuffer }),
+  ];
 
   docObservers.set(docName, cleanups);
   console.error(`[EventQueue] Attached observers for document: ${docName}`);
@@ -158,13 +152,6 @@ export function detachObservers(docName: string): void {
 /** Reattach observers after Hocuspocus replaces a Y.Doc instance. */
 export function reattachObservers(docName: string, newDoc: Y.Doc): void {
   attachObservers(docName, newDoc);
-
-  // Annotation file-writer observer: if this doc has an active file-sync
-  // context (registered by the file-opener after loadAndMerge), re-register
-  // it against the NEW Y.Doc so disk persistence keeps flowing after the
-  // Hocuspocus doc swap. The previous observer was attached to the old
-  // Y.Doc and is no longer reachable (Hocuspocus destroyed the old doc
-  // in onLoadDocument); the cleanup we stashed would be a no-op anyway.
   reattachFileSyncObserver(docName, newDoc);
 }
 
@@ -174,17 +161,13 @@ let ctrlCleanups: Array<() => void> = [];
 
 /** Attach observers to the CTRL_ROOM Y.Doc for chat messages and document meta changes. */
 export function attachCtrlObservers(): void {
-  // Detach existing first
   for (const cleanup of ctrlCleanups) cleanup();
-  ctrlCleanups = [];
 
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-
-  // Chat message observer
-  ctrlCleanups.push(makeCtrlChatObserver({ ctrlDoc, pushEvent, selectionBuffer }));
-
-  // Document meta observer (open/close/switch)
-  ctrlCleanups.push(makeCtrlMetaObserver({ ctrlDoc, pushEvent }));
+  ctrlCleanups = [
+    makeCtrlChatObserver({ ctrlDoc, pushEvent, selectionBuffer }),
+    makeCtrlMetaObserver({ ctrlDoc, pushEvent }),
+  ];
 
   console.error("[EventQueue] Attached CTRL_ROOM observers (chat + documentMeta)");
 }

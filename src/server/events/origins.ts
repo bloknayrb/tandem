@@ -6,7 +6,7 @@
  * `queue.ts`.
  */
 
-/** Origin tag for all MCP-initiated Y.Map writes. Import and use this — never use raw "mcp" strings. */
+/** Origin tag for all MCP-initiated Y.Map writes. */
 export const MCP_ORIGIN = "mcp";
 
 /**
