@@ -1,22 +1,16 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import { FormattingToolbar } from "./FormattingToolbar";
+import { HighlightColorPicker } from "./HighlightColorPicker";
 import { InputGroup } from "./InputGroup";
+import { ModeToggle } from "./ModeToggle";
 import { ToolbarButton } from "./ToolbarButton";
-
-const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
-  { value: "yellow", label: "Yellow" },
-  { value: "red", label: "Red" },
-  { value: "green", label: "Green" },
-  { value: "blue", label: "Blue" },
-  { value: "purple", label: "Purple" },
-];
 
 type ToolbarMode = "idle" | "comment";
 
@@ -42,8 +36,6 @@ export function Toolbar({
   heldCount,
 }: ToolbarProps) {
   const [hasSelection, setHasSelection] = useState(false);
-  const [highlightColor, setHighlightColor] = useState<HighlightColor>("yellow");
-  const [showColorPicker, setShowColorPicker] = useState(false);
   const [mode, setMode] = useState<ToolbarMode>("idle");
   const [modeText, setModeText] = useState("");
   const [showReplacement, setShowReplacement] = useState(false);
@@ -51,7 +43,6 @@ export function Toolbar({
   const [sendToClaude, setSendToClaude] = useState(false);
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
-  const colorPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!editor) return;
@@ -74,20 +65,6 @@ export function Toolbar({
       commentInputRef.current.focus();
     }
   }, [mode]);
-
-  // Close color picker when clicking outside
-  useEffect(() => {
-    if (!showColorPicker) return;
-
-    function handleClickOutside(e: MouseEvent) {
-      if (colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
-        setShowColorPicker(false);
-      }
-    }
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showColorPicker]);
 
   function createAnnotation(
     type: AnnotationType,
@@ -136,19 +113,8 @@ export function Toolbar({
 
   // -- Highlight --
 
-  function handleHighlight(e: React.MouseEvent) {
-    e.preventDefault();
-    createAnnotation("highlight", "", { color: highlightColor });
-  }
-
-  function handleColorPickerToggle(e: React.MouseEvent) {
-    e.preventDefault();
-    setShowColorPicker((prev) => !prev);
-  }
-
-  function handleColorSelect(color: HighlightColor) {
-    setHighlightColor(color);
-    setShowColorPicker(false);
+  function handleHighlight(color: HighlightColor) {
+    createAnnotation("highlight", "", { color });
   }
 
   // -- Consolidated mode handlers --
@@ -267,102 +233,7 @@ export function Toolbar({
       />
 
       {/* Highlight with color picker */}
-      <div style={{ display: "flex", alignItems: "center", gap: "2px", position: "relative" }}>
-        <ToolbarButton
-          label="Highlight"
-          disabled={!canAnnotate || inInputMode}
-          disabledTitle="Select text first"
-          onMouseDown={handleHighlight}
-          style={{ borderRadius: "4px 0 0 4px", borderRight: "none" }}
-        />
-        <button
-          disabled={!canAnnotate || inInputMode}
-          onMouseDown={handleColorPickerToggle}
-          title="Choose highlight color"
-          style={{
-            padding: "4px 6px",
-            fontSize: "13px",
-            border: "1px solid var(--tandem-border)",
-            borderRadius: "0 4px 4px 0",
-            background:
-              !canAnnotate || inInputMode ? "var(--tandem-surface-muted)" : "var(--tandem-surface)",
-            cursor: !canAnnotate || inInputMode ? "not-allowed" : "pointer",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          <span
-            style={{
-              display: "inline-block",
-              width: "12px",
-              height: "12px",
-              borderRadius: "2px",
-              background: HIGHLIGHT_COLORS[highlightColor],
-              border: "1px solid rgba(0,0,0,0.15)",
-            }}
-          />
-        </button>
-        {showColorPicker && (
-          <div
-            ref={colorPickerRef}
-            style={{
-              position: "absolute",
-              top: "100%",
-              left: 0,
-              marginTop: "4px",
-              background: "var(--tandem-surface)",
-              border: "1px solid var(--tandem-border)",
-              borderRadius: "6px",
-              padding: "6px",
-              display: "flex",
-              gap: "4px",
-              zIndex: 10,
-              boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-            }}
-          >
-            {HIGHLIGHT_COLOR_OPTIONS.map(({ value, label }) => (
-              <button
-                key={value}
-                title={label}
-                onClick={() => handleColorSelect(value)}
-                style={{
-                  width: "24px",
-                  height: "24px",
-                  borderRadius: "4px",
-                  border:
-                    value === highlightColor
-                      ? "2px solid var(--tandem-fg)"
-                      : "1px solid rgba(0,0,0,0.15)",
-                  background: HIGHLIGHT_COLORS[value],
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-              />
-            ))}
-            <button
-              data-testid="color-picker-close"
-              title="Close"
-              onClick={() => setShowColorPicker(false)}
-              style={{
-                width: "24px",
-                height: "24px",
-                borderRadius: "4px",
-                border: "1px solid var(--tandem-border)",
-                background: "var(--tandem-surface-muted)",
-                cursor: "pointer",
-                padding: 0,
-                fontSize: "13px",
-                color: "var(--tandem-fg-muted)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-      </div>
+      <HighlightColorPicker disabled={!canAnnotate || inInputMode} onHighlight={handleHighlight} />
 
       <ToolbarButton
         label="Comment"
@@ -480,82 +351,7 @@ export function Toolbar({
         )}
         {/* Solo/Tandem mode toggle */}
         {tandemMode && onModeChange && (
-          <div
-            data-testid="mode-toggle"
-            role="group"
-            aria-label="Claude collaboration mode"
-            style={{
-              display: "flex",
-              border: "1px solid var(--tandem-border-strong)",
-              borderRadius: "4px",
-              overflow: "hidden",
-            }}
-          >
-            <button
-              data-testid="mode-solo-btn"
-              title="Write undisturbed — Claude only responds when you message"
-              aria-pressed={tandemMode === "solo"}
-              onClick={() => onModeChange("solo")}
-              style={{
-                padding: "3px 10px",
-                fontSize: "12px",
-                border: "none",
-                cursor: "pointer",
-                background: tandemMode === "solo" ? "var(--tandem-accent)" : "transparent",
-                color: tandemMode === "solo" ? "var(--tandem-accent-fg)" : "var(--tandem-fg-muted)",
-                fontWeight: tandemMode === "solo" ? 600 : 400,
-                borderRight: "1px solid var(--tandem-border-strong)",
-                display: "flex",
-                alignItems: "center",
-                gap: "5px",
-              }}
-            >
-              {tandemMode === "solo" && (
-                <span
-                  style={{
-                    width: "6px",
-                    height: "6px",
-                    borderRadius: "50%",
-                    background: "var(--tandem-fg-subtle)",
-                    display: "inline-block",
-                  }}
-                />
-              )}
-              Solo
-            </button>
-            <button
-              data-testid="mode-tandem-btn"
-              title="Full collaboration — Claude reacts to selections and document changes"
-              aria-pressed={tandemMode === "tandem"}
-              onClick={() => onModeChange("tandem")}
-              style={{
-                padding: "3px 10px",
-                fontSize: "12px",
-                border: "none",
-                cursor: "pointer",
-                background: tandemMode === "tandem" ? "var(--tandem-accent)" : "transparent",
-                color:
-                  tandemMode === "tandem" ? "var(--tandem-accent-fg)" : "var(--tandem-fg-muted)",
-                fontWeight: tandemMode === "tandem" ? 600 : 400,
-                display: "flex",
-                alignItems: "center",
-                gap: "5px",
-              }}
-            >
-              {tandemMode === "tandem" && (
-                <span
-                  style={{
-                    width: "6px",
-                    height: "6px",
-                    borderRadius: "50%",
-                    background: "var(--tandem-success)",
-                    display: "inline-block",
-                  }}
-                />
-              )}
-              Tandem
-            </button>
-          </div>
+          <ModeToggle tandemMode={tandemMode} onModeChange={onModeChange} />
         )}
         {onSettingsOpen && (
           <button
