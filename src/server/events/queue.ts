@@ -11,10 +11,7 @@ import {
   CHANNEL_EVENT_BUFFER_AGE_MS,
   CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
-  Y_MAP_CHAT,
 } from "../../shared/constants.js";
-import type { ChatMessage, FlatOffset } from "../../shared/types.js";
-import { validateRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   clearFileSyncContext,
@@ -24,11 +21,11 @@ import {
 } from "./file-sync-registry.js";
 import { makeAnnotationsObserver } from "./observers/annotations.js";
 import { makeAwarenessObserver } from "./observers/awareness.js";
+import { makeCtrlChatObserver } from "./observers/ctrl-chat.js";
 import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
-import { generateEventId } from "./types.js";
 
 export { clearFileSyncContext, FILE_SYNC_ORIGIN, MCP_ORIGIN, setFileSyncContext };
 
@@ -184,65 +181,7 @@ export function attachCtrlObservers(): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
 
   // Chat message observer
-  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-  const chatObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
-
-    for (const [key, change] of event.changes.keys) {
-      if (change.action !== "add") continue;
-      const msg = chatMap.get(key) as ChatMessage | undefined;
-      if (!msg || msg.author !== "user") continue;
-
-      // Attach buffered selection context if available for this document
-      let selection:
-        | { from: number; to: number; selectedText: string }
-        | { selectedText: string }
-        | undefined;
-      if (msg.documentId) {
-        const buffered = selectionBuffer.get(msg.documentId);
-        if (buffered) {
-          selectionBuffer.delete(msg.documentId);
-          // Validate range is still valid before attaching offsets
-          try {
-            const doc = getOrCreateDocument(msg.documentId);
-            const validation = validateRange(
-              doc,
-              buffered.from as FlatOffset,
-              buffered.to as FlatOffset,
-            );
-            if (validation.ok) {
-              selection = buffered;
-            } else {
-              // Range went stale — attach text only (no offsets)
-              selection = { selectedText: buffered.selectedText };
-            }
-          } catch (err) {
-            console.warn(
-              `[EventQueue] Failed to validate buffered selection for doc=${msg.documentId}:`,
-              err,
-            );
-            selection = { selectedText: buffered.selectedText };
-          }
-        }
-      }
-
-      pushEvent({
-        id: generateEventId(),
-        type: "chat:message",
-        timestamp: Date.now(),
-        documentId: msg.documentId,
-        payload: {
-          messageId: msg.id,
-          text: msg.text,
-          replyTo: msg.replyTo ?? null,
-          anchor: msg.anchor ?? null,
-          ...(selection ? { selection } : {}),
-        },
-      });
-    }
-  };
-  chatMap.observe(chatObs);
-  ctrlCleanups.push(() => chatMap.unobserve(chatObs));
+  ctrlCleanups.push(makeCtrlChatObserver({ ctrlDoc, pushEvent, selectionBuffer }));
 
   // Document meta observer (open/close/switch)
   ctrlCleanups.push(makeCtrlMetaObserver({ ctrlDoc, pushEvent }));
