@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   isValidChannelPath,
@@ -200,6 +200,36 @@ describe("runSetupHandler", () => {
     expect(data.errors.some((e) => e.includes("Claude Code"))).toBe(true);
     expect(result.status).toBe(207);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "returns 207 with Claude Desktop configured and Claude Code errored (mixed-partial)",
+    async () => {
+      // Set up a valid Claude Desktop config file so that target succeeds.
+      // On macOS the path is Library/Application Support/Claude/...; on Linux it's .config/claude/...
+      const desktopPath =
+        process.platform === "darwin"
+          ? join(tmpDir, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+          : join(tmpDir, ".config", "claude", "claude_desktop_config.json");
+      mkdirSync(dirname(desktopPath), { recursive: true });
+      writeFileSync(desktopPath, "{}");
+
+      // Place a directory at .claude.json so applyConfig throws EISDIR for Claude Code.
+      const claudeCodeConfigPath = join(tmpDir, ".claude.json");
+      mkdirSync(claudeCodeConfigPath, { recursive: true });
+
+      const result = await runSetupHandler(
+        { nodeBinary: "node", channelPath: "/fake/dist/channel/index.js" },
+        tmpDir,
+      );
+
+      expect(result.status).toBe(207);
+      const data = result.body.data!;
+      expect(data.configured).toContain("Claude Desktop");
+      expect(data.configured).not.toContain("Claude Code");
+      expect(data.errors.some((e) => e.includes("Claude Code"))).toBe(true);
+      expect(data.skillInstalled).toBe(true);
+    },
+  );
 
   it("does not write tandem-channel entry (channel shim is Claude Code-only)", async () => {
     const result = await runSetupHandler(
