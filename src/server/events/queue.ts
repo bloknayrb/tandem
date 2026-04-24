@@ -1,9 +1,10 @@
 /**
  * Event queue that observes Y.Map changes and emits TandemEvents.
  *
- * Observers filter by transaction origin — only browser-originated changes
- * (origin !== 'mcp') generate events. This prevents Claude from seeing its
- * own actions echoed back via the channel.
+ * Observers filter by transaction origin — MCP-origin writes are skipped so
+ * Claude doesn't see its own actions echoed back, and file-sync-origin writes
+ * are skipped so disk reloads don't fire spurious SSE events. Only
+ * browser-originated changes generate channel events.
  */
 
 import * as Y from "yjs";
@@ -111,7 +112,7 @@ export function replaySince(lastEventId: string): TandemEvent[] {
   return buffer.slice(idx + 1);
 }
 
-/** O(1) check if an annotation/message was already pushed via channel. Intended for checkInbox dedup (not yet wired). */
+/** O(1) check if an annotation/message was already pushed via channel. Used for checkInbox dedup. */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
 }
@@ -179,22 +180,20 @@ export function reattachCtrlObservers(): void {
 
 /** Reset all module state. For tests only — do not call in production. */
 export function resetForTesting(): void {
-  // 1. Clear data-only collections (observer cleanups don't touch these)
   buffer.length = 0;
   subscribers.clear();
   emittedPayloadIds.clear();
   selectionBuffer.clear();
 
-  // 2. Run per-doc observer cleanups, then clear the map that holds them
   for (const cleanups of docObservers.values()) {
     for (const cleanup of cleanups) cleanup();
   }
   docObservers.clear();
 
-  // 3. Run CTRL cleanups, then reset the array that holds them
   for (const cleanup of ctrlCleanups) cleanup();
   ctrlCleanups = [];
 
-  // 4. Delegate registry reset (CRITICAL — do not forget)
+  // Delegate to registry — its cleanup loop is the only way to dispose
+  // in-flight tombstone debounces across tests.
   fileSyncResetForTesting();
 }

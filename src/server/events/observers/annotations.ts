@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
+import { sanitizeAnnotation } from "../../../shared/sanitize.js";
 import type { Annotation } from "../../../shared/types.js";
-import { sanitizeAnnotation } from "../../mcp/annotations.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../origins.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
