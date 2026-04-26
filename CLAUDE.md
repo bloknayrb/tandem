@@ -77,7 +77,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). Used in `awareness.ts` for the paragraph gutter decoration.
 - **Light mode:** `--tandem-success-bg`, `--tandem-warning-bg`, and `--tandem-error-bg` are derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` (`#eef2ff`) and `--tandem-info-bg` (`#eff6ff`) use hand-picked hex. `--tandem-suggestion-bg` uses `color-mix` like the other status families.
 - **Dark mode:** all `*-bg` tokens use hand-coded saturated hex (e.g. `#052e16`, `#451a03`, `#450a0a`). `color-mix` produces washed-out surfaces against the dark neutral; hand-picked values read as intentionally colored.
-- **`src/client/utils/colors.ts`** exports `errorStateColors`, `successStateColors`, `warningStateColors` — import these instead of inlining all three CSS vars when you need the full set (e.g. `SidePanel.tsx` held-banner).
+- **`src/client/utils/colors.ts`** exports `errorStateColors`, `successStateColors`, `warningStateColors`, `suggestionStateColors` — import these instead of inlining all three CSS vars when you need the full set (e.g. `SidePanel.tsx` held-banner).
 - Raw hex in client code is a regression; lint rule tracked in #356.
 
 ## Desktop App (Tauri)
