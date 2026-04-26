@@ -13,6 +13,7 @@
 - `npm test` -- Run vitest (unit tests)
 - `npm run test:e2e` -- Run Playwright E2E tests (auto-starts servers via webServer config)
 - `npm run test:e2e:ui` -- Playwright UI mode for interactive E2E debugging
+- `npm run check:tokens` -- Scan `src/client/` for raw hex/rgba violations (also runs on pre-commit via lint-staged)
 - **Start the server before connecting Claude Code.** `npm run dev:standalone` runs both. Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
 
 ## Documentation
@@ -138,7 +139,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.7.1). See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.7.1). Run B (v0.8.0) complete: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 
