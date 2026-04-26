@@ -185,6 +185,8 @@ Remaining:
 - ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
 - ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, HTML5 drag-and-drop reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
 - ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
+- Version indicator in the UI (#435) — About dialog or settings footer showing current version
+- "View Changelog" button in Settings panel (#437) — opens bundled `CHANGELOG.md` as a read-only document tab
 - Highlight color picker (5 colors available server-side, UI picker not yet built)
 
 ### Verification
@@ -326,14 +328,14 @@ GitHub Actions workflow (`.github/workflows/tauri-release.yml`) — builds on Wi
 
 Future hardening (not blocking release):
 - Verify end-to-end update flow (download → install → restart) on all three platforms
-- Code-sign macOS `.app` (requires Apple Developer certificate)
+- Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate.
 - Windows MSIX / NSIS installer smoke test
+- Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026
 
 ### Future Tauri Enhancements
 
 - **File association**: Register `.md`/`.docx`/`.txt` file extensions so double-clicking opens in Tandem
 - **Deep link / open-with**: Pass file path from second-instance launch into the running server via `POST /api/open`
-- **macOS notarization**: Required for Gatekeeper-clean distribution outside the App Store
 - **Linux tray fallback**: Improve UX when `libappindicator3-dev` is absent (currently logs and continues)
 
 ---
@@ -366,7 +368,7 @@ Each release targets **one coherent concern** so that a bad PR is bisectable and
 - **PR b (DONE)** — Auth middleware + OAuth protected-resource metadata. Loopback-exempt, `crypto.timingSafeEqual`, SHA-256 length oracle elimination, rate-limit (5/min) with LRU eviction.
 - **PR c (DONE)** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`, Cowork mode binds `0.0.0.0`. Hocuspocus stays loopback-only. Fail-closed on LAN bind without token.
 - **PR d (DONE)** — `tandem rotate-token` CLI subcommand with 60s grace window; re-runs setup across detected MCP configs.
-- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup. Implementation done (draft PR #370, reviewed); merge targeting v0.9.0.
+- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup (includes #436 PREUNINSTALL binary-name fix). Implementation done (draft PR #370, reviewed); merge targeting v0.9.0.
 - **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Implementation done in React (draft PR #371); merge timing depends on Svelte probe outcome — if Svelte Go, rebuild in Svelte for v0.13.0.
 
 ### Cowork integration status
@@ -429,10 +431,10 @@ The probe produces a decision document filed as an ADR. The result determines th
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.8.0 | Token hygiene + annotation correctness (Run B complete 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415 |
-| v0.9.0 | MCP API cleanup + distribution | #259, PR e, #316, #317, #322, #341, ADR-023 CI smoke test |
+| v0.8.0 | Token hygiene + annotation correctness + installer fix (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434 |
+| v0.9.0 | MCP API cleanup + distribution + UX polish | #259, PR e (includes #436), #316, #317, #322, #341, #435, #437, ADR-023 CI smoke test |
 
-**v0.8.0 — COMPLETE (2026-04-26).** Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). All PRs merged to master. Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), and event push gap closed.
+**v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), and event push gap closed. The initial release build failed on Windows due to a missing `tokio` feature flag; #434 (NSIS pre-install sidecar kill) was bundled into the re-release to fix upgrade installs where the sidecar process locks its own executable.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
 
@@ -483,7 +485,7 @@ Net result: ~28 tools (down from 31).
 ### v1.0.0 Exit Criteria
 
 - **Windows:** Fresh profile → install Tauri → Claude Desktop Cowork workspace → `tandem_*` tools surface, no terminal
-- **macOS:** Same flow, notarized `.app`, Gatekeeper-clean
+- **macOS:** Same flow, notarized `.app`, Gatekeeper-clean (#428)
 - **Linux:** Same flow (Cowork if available, CLI otherwise)
 - **Claude Code CLI:** Loopback-exempt, zero-config, tools work unchanged
 - **Tauri update flow:** Download → install → restart verified on all three platforms
