@@ -187,7 +187,7 @@ Remaining:
 - ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
 - Version indicator in the UI (#435) — About dialog or settings footer showing current version
 - "View Changelog" button in Settings panel (#437) — opens bundled `CHANGELOG.md` as a read-only document tab
-- Highlight color picker (5 colors available server-side, UI picker not yet built)
+- Highlight color picker (switching from 5 to 4 colors in v0.9.0 per ADR-026; UI picker not yet built)
 
 ### Verification
 - First launch shows sample document with annotations
@@ -437,6 +437,16 @@ The probe produces a decision document filed as an ADR. The result determines th
 **v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), and event push gap closed. The initial release build failed on Windows due to a missing `tokio` feature flag; #434 (NSIS pre-install sidecar kill) was bundled into the re-release to fix upgrade installs where the sidecar process locks its own executable.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
+
+**Redesign gap audit (#439):** Product decisions resolved, design response prompt drafted (`docs/claude-design-response-prompt.md`). [Claude Design handoff](https://api.anthropic.com/v1/design/h/YkiJv2qQa82QG0GHUxce-g?open_file=Tandem+Redesign.html). Code-side work for v0.9.0:
+- #440 — `heldInSolo` schema field on `AnnotationBase` (BLOCKER for redesign)
+- #441 — `/api/info` endpoint for About panel dynamic values (BLOCKER, prerequisite for #435)
+- #442 — New settings data model fields (8 fields + `showAuthorship` default → `true`). UI deferred to Svelte.
+- #443 — Authorship decorations switch from CSS classes to `data-tandem-author` attributes
+- #444 — Editor width minimum lowered from 50% to 40%
+- #445 — `tabbed-left` layout variant (new `LayoutMode` with own render branch)
+
+Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink, migration strategy pending from Claude Design), density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale.
 
 **Distribution coordination:** v0.9.0 is the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Document rollback strategy per surface.
 

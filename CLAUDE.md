@@ -22,7 +22,7 @@
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-024)
+- [Design Decisions](docs/decisions.md) -- ADRs (001-026)
 - [Lessons Learned](docs/lessons-learned.md) -- 48 lessons including E2E testing gotchas
 
 ## Critical Rules
@@ -74,7 +74,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **`--tandem-info-*`** — blue. Informational banners, review-only mode. `--tandem-info`, `-fg`, `-fg-strong`, `-bg`, `-border`.
 - **`--tandem-suggestion-*`** — violet. Replacement/suggestion annotations. `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`. Visually distinct from indigo accent.
 - **`--tandem-accent-border`** — single token for accent-family bordered elements.
-- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark.
+- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark. Authorship decorations use `data-tandem-author` attributes (not CSS classes) per ADR-026.
 - **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). Used in `awareness.ts` for the paragraph gutter decoration.
 - **Light mode:** `--tandem-success-bg`, `--tandem-warning-bg`, and `--tandem-error-bg` are derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` (`#eef2ff`) and `--tandem-info-bg` (`#eff6ff`) use hand-picked hex. `--tandem-suggestion-bg` uses `color-mix` like the other status families.
 - **Dark mode:** all `*-bg` tokens use hand-coded saturated hex (e.g. `#052e16`, `#451a03`, `#450a0a`). `color-mix` produces washed-out surfaces against the dark neutral; hand-picked values read as intentionally colored.
@@ -139,7 +139,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. Redesign gap audit (#439) resolved: 7 product decisions in [ADR-026](docs/decisions.md#adr-026-redesign-gap-audit-decisions-439), 6 issues filed (#440–#445), design response prompt at `docs/claude-design-response-prompt.md`. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 

@@ -221,3 +221,67 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 - The code comment at `server.ts:200` ("Newer Claude Code versions probe this before connecting to MCP") overstates current behavior — Claude Code only hits `/.well-known/*` after a 401. Update the comment in PR b.
 - The `claude mcp list` "✗ Failed to connect" behavior when an `Authorization` header is configured is a separate finding, filed as a follow-up investigation. It does not block Phase 2 work — the header reaches the server correctly; the CLI's health check is the only thing misreporting. May be a SDK-level timeout around `listTools` post-initialize.
 - Spike branch `spike/5b-bearer-probe` is preserved for reference but not merged. PR b will re-land the identical one-line edits plus the conditional logic and middleware.
+
+## ADR-025: Svelte 5 Migration Decision (Probe #312)
+
+**Status:** Go | **Date:** 2026-04-26 | **Branch:** `probe/svelte` (preserved 90 days)
+
+**Context:** Tandem's hardest client bugs (Lessons 5, 10, 14, 34, 44) stem from React's lifecycle model interacting with Y.js's imperative observer API. The hook `useYjsSync.ts` (350 LOC) requires 9 `useRef` calls, 3 cleanup callsite layers, 4 functional `setState` patterns, and 2 render-phase ref-sync patterns. This probe evaluated whether Svelte 5's rune-based reactivity genuinely simplifies this lifecycle management.
+
+**Roadmap deviation:** `@tiptap/core` direct instantiation used instead of `svelte-tiptap`. The community wrapper provides only wrappers (EditorContent, BubbleMenu, NodeViewRenderer) that Tandem doesn't use. Vanilla approach is simpler with no wrapper dependency.
+
+**Evaluation metrics (actual counts):**
+
+| Metric | React | Svelte | Delta |
+|--------|-------|--------|-------|
+| LOC (lifecycle hook) | 350 | 370 | +6% |
+| `useState` → `$state` | 12 | 12 | 0 |
+| `useRef` → plain `let` | 10 | 8 | −2 |
+| `useCallback` | 2 | 0 | −2 |
+| `useEffect` → `$effect` | 3 | 4 | +1 |
+| Cleanup callsite layers | 3 | 3 | 0 (Y.js-inherent) |
+| Functional `setState(prev => ...)` | 6 | 0 | **−6** |
+| Render-phase ref-sync | 2 | 0 | **−2** |
+
+**Gate results:** All four passed. (1) Tiptap + Yjs + 3 custom extensions render and sync in Svelte 5, two-tab collab verified. (2) `yjsSync.svelte.ts` port complete, 6 functional setState + 2 render-phase syncs eliminated. (3) 200 open/close cycles with zero Y.Doc leaks. (4) RelativePosition resolves correctly; bridge pattern is 8 LOC in both frameworks.
+
+**Per-lesson assessment:**
+- **Lesson 5** (StrictMode double-mount): Structurally impossible in Svelte — no StrictMode equivalent.
+- **Lesson 10** (allocation in state updaters): Structurally impossible — no functional `setState(prev => ...)`.
+- **Lesson 14** (observer map cleanup): Same ceremony — imperative `observe`/`unobserve` with cleanup Map. Y.js-inherent.
+- **Lesson 34** (Y.Doc swap severing observers): `$effect` auto-rewires on `$state` reassignment. Tab switch correctly unobserves old, observes new.
+- **Lesson 44** (swap-vs-close phase): Same ceremony — explicit phase param required. Y.js-inherent.
+
+**Svelte 5 constraints (migration requirements):**
+1. `$state` does not proxy-track external mutable objects (Y.Doc, Y.Map). Bridge pattern (version counter in observer) required for reactive reads.
+2. `$effect` cleanup ordering is unspecified across multiple effects. Each effect must be self-contained.
+3. `state_unsafe_mutation` in `$derived` — stricter than React's `useMemo` (throws, not warns).
+4. Reading + writing same `$state` in `$effect` creates infinite loop. Use plain `let` for accumulators.
+
+**Decision:** Go. Migrate Tandem's client from React to Svelte 5, starting with v0.10.0. The probe eliminates two entire categories of recurring bug (Lessons 5, 10) and simplifies a third (Lesson 34). Y.js observer lifecycle (Lessons 14, 44) is acknowledged-neutral — identical ceremony in both frameworks.
+
+**Migration sketch:** Incremental, one component at a time. `Editor.svelte` first (proven in Gate 1). Dual-framework ceiling at v0.11.0. E2E tests survive unchanged. Vite `resolve.dedupe` for prosemirror-*/yjs/@tiptap/* required. Tauri WebView validation before v0.10.0 merge.
+
+**Consequences:**
+- Full ADR draft with detailed evidence at `probe/svelte-spike/docs/adr-025-draft.md`.
+- PR f (Cowork Settings UI) rebuilds in Svelte before v0.13.0.
+- `useYjsSync.ts` (350 LOC, deferred in audit) is replaced rather than decomposed.
+- Tiptap extensions remain unchanged (framework-agnostic, confirmed in Gate 1).
+
+## ADR-026: Redesign Gap Audit Decisions (#439)
+
+**Context:** Claude Design handoff bundle audited against v0.8.0 codebase. 11 gaps found between design and implementation. Full analysis in `docs/redesign-review.md`; response prompt in `docs/claude-design-response-prompt.md`.
+
+**Decisions (2026-04-26):**
+
+1. **`showAuthorship` default → `true`.** Match design. Existing users will see accumulated authorship history on upgrade. Tracked in #442.
+2. **Highlight palette → 4 colors** (yellow/green/blue/pink, dropping red/purple). Migration strategy for existing `red`/`purple` annotation color keys delegated to Claude Design response. Risk: `HighlightColorSchema` is a strict Zod enum; removed keys cause annotation drops in `migrateToV1` unless migration logic is added.
+3. **Layout → build `tabbed-left`** as a real `LayoutMode` variant in v0.9.0. The design's 3 swatches (tabbed-right, tabbed-left, three) are confirmed. `panelOrder` is currently ignored in tabbed mode; `tabbed-left` gets its own render branch. Tracked in #445.
+4. **Density → spacing only.** No font-size collision with `textSize`. Design removes `--editor-size` font-size override from density levels.
+5. **Authorship decorations → `data-tandem-author` attributes** (replacing `.tandem-authorship--*` CSS classes). Design CSS targets `[data-tandem-author="user"]` / `[data-tandem-author="claude"]`. Tracked in #443.
+6. **Editor width minimum → 40%.** Applies as `maxWidth` on the editor flex child after panel subtraction. Tracked in #444.
+7. **`imported` field → keep `author: "import"` enum value.** Design updates to match codebase. No code change.
+
+**Blocking issues:** #440 (`heldInSolo` schema field), #441 (`/api/info` endpoint for About panel).
+
+**Versioning:** All code-side work targets v0.9.0 (last breaking-change window). New settings UI deferred to Svelte rebuild (v0.10.0+) per ADR-025. Only the data model + `loadSettings()` parser changes land in v0.9.0.
