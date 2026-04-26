@@ -51,6 +51,36 @@ function getRepliesMap(ydoc: Y.Doc): Y.Map<unknown> {
   return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 }
 
+/** Remove an annotation and its orphaned replies in a single transaction. */
+export function removeAnnotationById(
+  ydoc: Y.Doc,
+  annotationsMap: Y.Map<unknown>,
+  filePath: string,
+  annotationId: string,
+): { ok: true; id: string } | { ok: false; code: string; error: string } {
+  const existing = annotationsMap.get(annotationId) as Annotation | undefined;
+  if (!existing) {
+    return { ok: false, code: "NOT_FOUND", error: `Annotation ${annotationId} not found` };
+  }
+
+  // Record tombstone BEFORE delete so the sync observer's lazy snapshot already
+  // carries the entry (order is load-bearing — see sync.ts `recordTombstone`).
+  recordTombstone(docHash(filePath), annotationId, existing.rev ?? 0);
+
+  ydoc.transact(() => {
+    annotationsMap.delete(annotationId);
+    const repliesMap = getRepliesMap(ydoc);
+    const toDelete: string[] = [];
+    repliesMap.forEach((value, key) => {
+      const reply = value as { annotationId?: string };
+      if (reply && reply.annotationId === annotationId) toDelete.push(key);
+    });
+    for (const key of toDelete) repliesMap.delete(key);
+  }, MCP_ORIGIN);
+
+  return { ok: true, id: annotationId };
+}
+
 /** Collect all replies for a given annotation from the replies Y.Map. */
 export function collectRepliesForAnnotation(
   repliesMap: Y.Map<unknown>,
@@ -501,25 +531,8 @@ export function registerAnnotationTools(server: McpServer): void {
     withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
-      const existing = da.map.get(id) as Annotation | undefined;
-      if (!existing) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
-
-      // Record the tombstone BEFORE the Y.Map delete so the sync observer's
-      // lazy snapshot (fired from the delete transaction) already carries the
-      // tombstone entry. Order is load-bearing — see sync.ts `recordTombstone`.
-      recordTombstone(docHash(da.filePath), id, existing.rev ?? 0);
-
-      da.ydoc.transact(() => {
-        da.map.delete(id);
-        // Clean up orphaned replies for the deleted annotation
-        const repliesMap = getRepliesMap(da.ydoc);
-        const toDelete: string[] = [];
-        repliesMap.forEach((value, key) => {
-          const reply = value as { annotationId?: string };
-          if (reply && reply.annotationId === id) toDelete.push(key);
-        });
-        for (const key of toDelete) repliesMap.delete(key);
-      }, MCP_ORIGIN);
+      const result = removeAnnotationById(da.ydoc, da.map, da.filePath, id);
+      if (!result.ok) return mcpError("INVALID_RANGE", result.error);
       return mcpSuccess({ removed: true, id });
     }),
   );

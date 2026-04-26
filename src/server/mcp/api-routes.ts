@@ -9,6 +9,7 @@ import { handleConvert } from "./routes/convert.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
+import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
 import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { makeSetupHandler } from "./routes/setup.js";
@@ -126,6 +127,9 @@ export function registerApiRoutes(
   // Annotation reply: browser user posts a reply to an annotation thread
   app.options("/api/annotation-reply", mw);
   app.post("/api/annotation-reply", mw, largeBody, handleAnnotationReply);
+
+  app.options("/api/remove-annotation", mw);
+  app.post("/api/remove-annotation", mw, largeBody, handleRemoveAnnotation);
 
   // Token rotation: CLI calls this to activate the 60-second grace window and swap the
   // in-memory current token to the NEW token that was already written to disk.

@@ -1,15 +1,12 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import {
-  DEFAULT_MCP_PORT,
-  Y_MAP_ANNOTATION_REPLIES,
-  Y_MAP_ANNOTATIONS,
-} from "../../shared/constants";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
 import { ApplyChangesButton } from "../components/ApplyChangesButton";
 import { warningStateColors } from "../utils/colors";
+import { API_BASE } from "../utils/fileUpload";
 import { AnnotationCard } from "./AnnotationCard";
 import { BulkActions } from "./BulkActions";
 import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar";
@@ -165,9 +162,25 @@ export function SidePanel({
     map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
   }
 
+  async function handleRemove(annotationId: string): Promise<void> {
+    try {
+      const resp = await fetch(`${API_BASE}/remove-annotation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ annotationId, documentId }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ message: "Unknown error" }));
+        console.error("[Tandem] Remove annotation failed:", err);
+      }
+    } catch (e) {
+      console.error("[Tandem] Remove annotation failed:", e);
+    }
+  }
+
   async function handleReply(annotationId: string, text: string): Promise<boolean> {
     try {
-      const res = await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/annotation-reply`, {
+      const res = await fetch(`${API_BASE}/annotation-reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ annotationId, text, documentId }),
@@ -455,8 +468,9 @@ export function SidePanel({
                   annotation={ann}
                   replies={repliesMap.get(ann.id) ?? []}
                   isReviewTarget={isTarget}
-                  onAccept={review.handleAccept}
-                  onDismiss={review.handleDismiss}
+                  onAccept={ann.author !== "user" ? review.handleAccept : undefined}
+                  onDismiss={ann.author !== "user" ? review.handleDismiss : undefined}
+                  onRemove={ann.author === "user" ? handleRemove : undefined}
                   onEdit={handleEdit}
                   onReply={handleReply}
                   onClick={() => review.scrollToAnnotation(ann)}
