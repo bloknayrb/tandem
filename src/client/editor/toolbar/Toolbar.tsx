@@ -38,9 +38,6 @@ export function Toolbar({
   const [hasSelection, setHasSelection] = useState(false);
   const [mode, setMode] = useState<ToolbarMode>("idle");
   const [modeText, setModeText] = useState("");
-  const [showReplacement, setShowReplacement] = useState(false);
-  const [replacementText, setReplacementText] = useState("");
-  const [sendToClaude, setSendToClaude] = useState(false);
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,7 +66,7 @@ export function Toolbar({
   function createAnnotation(
     type: AnnotationType,
     content: string,
-    extras?: { color?: HighlightColor; suggestedText?: string; directedAt?: "claude" },
+    extras?: { color?: HighlightColor },
   ) {
     if (!editor || !ydoc) return;
 
@@ -90,8 +87,6 @@ export function Toolbar({
       status: "pending" as const,
       timestamp: Date.now(),
       ...(extras?.color ? { color: extras.color } : {}),
-      ...(extras?.suggestedText !== undefined ? { suggestedText: extras.suggestedText } : {}),
-      ...(extras?.directedAt !== undefined ? { directedAt: extras.directedAt } : {}),
     } as Annotation;
 
     ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
@@ -126,9 +121,6 @@ export function Toolbar({
         captureSelectionRange();
         setMode(targetMode);
         setModeText("");
-        setReplacementText("");
-        setShowReplacement(false);
-        setSendToClaude(false);
       };
     },
     [editor],
@@ -139,33 +131,19 @@ export function Toolbar({
   function handleModeCancel() {
     setMode("idle");
     setModeText("");
-    setReplacementText("");
-    setShowReplacement(false);
-    setSendToClaude(false);
     resetAndFocusEditor();
   }
 
   function handleModeSubmit() {
-    if (!modeText.trim() && !replacementText.trim()) {
+    if (!modeText.trim()) {
       handleModeCancel();
       return;
     }
 
-    const extras: { suggestedText?: string; directedAt?: "claude" } = {};
-    if (showReplacement && replacementText.trim()) {
-      extras.suggestedText = replacementText.trim();
-    }
-    if (sendToClaude) {
-      extras.directedAt = "claude";
-    }
-
-    createAnnotation("comment", modeText.trim(), extras);
+    createAnnotation("comment", modeText.trim());
 
     setMode("idle");
     setModeText("");
-    setReplacementText("");
-    setShowReplacement(false);
-    setSendToClaude(false);
     editor?.chain().focus().run();
   }
 
@@ -249,83 +227,10 @@ export function Toolbar({
           onKeyDown={handleModeKeyDown}
           onSubmit={handleModeSubmit}
           onCancel={handleModeCancel}
-          placeholder={sendToClaude ? "Ask about this text..." : "Add a comment..."}
-          submitLabel={showReplacement ? "Suggest" : sendToClaude ? "Ask" : "Add"}
-          borderColor={
-            showReplacement
-              ? "var(--tandem-author-user)"
-              : sendToClaude
-                ? "var(--tandem-accent)"
-                : "var(--tandem-author-user)"
-          }
-          canSubmit={!!modeText.trim() || (showReplacement && !!replacementText.trim())}
-          secondaryInput={
-            <>
-              {showReplacement && (
-                <input
-                  type="text"
-                  value={replacementText}
-                  onChange={(e) => setReplacementText(e.target.value)}
-                  onKeyDown={handleModeKeyDown}
-                  placeholder="Replacement text..."
-                  style={{
-                    padding: "3px 8px",
-                    fontSize: "13px",
-                    border: "1px solid var(--tandem-border-strong)",
-                    borderRadius: "4px",
-                    outline: "none",
-                    minWidth: "100px",
-                    flex: "1 1 140px",
-                    background: "var(--tandem-surface)",
-                    color: "var(--tandem-fg)",
-                  }}
-                />
-              )}
-              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <label
-                  style={{
-                    fontSize: "11px",
-                    color: showReplacement ? "var(--tandem-accent)" : "var(--tandem-fg-subtle)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "3px",
-                    userSelect: "none",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={showReplacement}
-                    onChange={(e) => {
-                      setShowReplacement(e.target.checked);
-                      if (!e.target.checked) setReplacementText("");
-                    }}
-                    style={{ margin: 0 }}
-                  />
-                  Replace
-                </label>
-                <label
-                  style={{
-                    fontSize: "11px",
-                    color: sendToClaude ? "var(--tandem-accent)" : "var(--tandem-fg-subtle)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "3px",
-                    userSelect: "none",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={sendToClaude}
-                    onChange={(e) => setSendToClaude(e.target.checked)}
-                    style={{ margin: 0 }}
-                  />
-                  @Claude
-                </label>
-              </div>
-            </>
-          }
+          placeholder="Add a comment..."
+          submitLabel="Add"
+          borderColor="var(--tandem-author-user)"
+          canSubmit={!!modeText.trim()}
         />
       )}
 
