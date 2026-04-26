@@ -16,6 +16,15 @@
 ; removing Tandem itself must always succeed even if workspace scrub partially
 ; fails (the user can re-scrub manually).
 
+; Kill the sidecar before file replacement — Tauri's CheckIfAppIsRunning
+; (which runs immediately after this hook) handles the main binary with a
+; user-facing dialog, but does not know about the sidecar.
+!macro NSIS_HOOK_PREINSTALL
+    nsis_tauri_utils::KillProcessCurrentUser "node-sidecar.exe"
+    Pop $R0
+    Sleep 2000
+!macroend
+
 !macro NSIS_HOOK_PREUNINSTALL
     DetailPrint "Running Tandem Cowork uninstall scrub..."
     ExecWait '"$INSTDIR\tandem.exe" --uninstall-scrub' $0
