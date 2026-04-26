@@ -1,6 +1,6 @@
 {
   "name": "tandem",
-  "version": "0.6.2",
+  "version": "0.7.1",
   "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
   "author": {
     "name": "Tandem"
@@ -23,5 +23,12 @@
         "TANDEM_URL": "http://localhost:3479"
       }
     }
-  }
+  },
+  "monitors": [
+    {
+      "name": "tandem-events",
+      "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js",
+      "description": "Tandem real-time document events (annotations, chat, selections)"
+    }
+  ]
 }
