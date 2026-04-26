@@ -30,3 +30,12 @@ export const warningStateColors = {
   border: "var(--tandem-warning-border)",
   color: "var(--tandem-warning-fg-strong)",
 } as const;
+
+/**
+ * Suggestion state colors (replacement annotations, violet UI surfaces).
+ */
+export const suggestionStateColors = {
+  background: "var(--tandem-suggestion-bg)",
+  border: "var(--tandem-suggestion-border)",
+  color: "var(--tandem-suggestion-fg-strong)",
+} as const;
