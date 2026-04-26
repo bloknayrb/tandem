@@ -35,7 +35,7 @@ export interface AnnotationCardProps {
   isReviewTarget?: boolean;
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
-  onUndo?: (id: string) => void;
+  onUndo?: (id: string) => boolean;
   onEdit?: (id: string, newContent: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   /** Whether this annotation was recently resolved and can be undone */
