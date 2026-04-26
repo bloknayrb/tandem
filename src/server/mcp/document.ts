@@ -61,12 +61,15 @@ export {
 export type { RangeVerifyResult, ResolvedOffset } from "./document-model.js";
 // Re-export for backward compatibility with existing consumers.
 export {
+  collectXmlTexts,
   detectFormat,
   docIdFromPath,
   extractMarkdown,
   extractText,
   findXmlText,
+  findXmlTextAtOffset,
   getElementText,
+  getElementTextLength,
   getHeadingPrefixLength,
   getOrCreateXmlText,
   populateYDoc,

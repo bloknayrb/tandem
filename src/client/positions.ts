@@ -27,6 +27,62 @@ import type { Annotation } from "../shared/types";
 // ---------------------------------------------------------------------------
 
 /**
+ * Compute the flat text length of a PM textblock node.
+ * Counts text runs and hardBreak embeds (each embed = 1 flat char, matching
+ * the server's Y.XmlText embed → "\n" convention).
+ */
+function textblockFlatLength(node: PmNode): number {
+  let len = 0;
+  node.forEach((child) => {
+    if (child.isText) {
+      len += child.text!.length;
+    } else if (child.type.name === "hardBreak") {
+      len += 1;
+    }
+  });
+  return len;
+}
+
+/**
+ * Compute the flat text length of a PM node (recursive for container nodes).
+ * Container nodes get FLAT_SEPARATOR ("\n") between their block children,
+ * matching the server's getElementText() separator convention.
+ */
+function pmNodeFlatTextLength(node: PmNode): number {
+  if (node.isTextblock) return textblockFlatLength(node);
+  let len = 0;
+  for (let i = 0; i < node.childCount; i++) {
+    if (i > 0) len += 1; // FLAT_SEPARATOR between block children
+    len += pmNodeFlatTextLength(node.child(i));
+  }
+  return len;
+}
+
+/**
+ * Resolve a flat text offset to a PM position within a single PM node.
+ * pmStart is the PM position of the node's opening token.
+ */
+function resolveWithinNode(node: PmNode, textOffset: number, pmStart: number): PmPos {
+  if (node.isTextblock) {
+    return toPmPos(pmStart + Math.min(textOffset, textblockFlatLength(node)));
+  }
+  let accumulated = 0;
+  let pmOffset = pmStart;
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    const childStart = pmOffset + 1;
+    if (i > 0) accumulated += 1;
+    const childLen = pmNodeFlatTextLength(child);
+    if (accumulated + childLen > textOffset) {
+      return resolveWithinNode(child, textOffset - accumulated, childStart);
+    }
+    accumulated += childLen;
+    pmOffset += child.nodeSize;
+  }
+  return toPmPos(pmStart + node.content.size);
+}
+
+/**
  * Convert a flat character offset (from the server's extractText format) to a
  * ProseMirror document position.
  *
@@ -45,13 +101,13 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: FlatOffset): PmPos {
     const prefixLen =
       child.type.name === "heading" ? headingPrefixLength((child.attrs.level as number) || 1) : 0;
 
-    const textLen = child.textContent.length;
+    const textLen = pmNodeFlatTextLength(child);
     const fullFlatLen = prefixLen + textLen;
 
     if (accumulated + fullFlatLen > flatOffset) {
       const offsetInFlat = flatOffset - accumulated;
       const textOffset = Math.max(0, offsetInFlat - prefixLen);
-      return toPmPos(childStart + Math.min(textOffset, textLen));
+      return resolveWithinNode(child, textOffset, childStart);
     }
 
     accumulated += fullFlatLen;
@@ -60,12 +116,37 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: FlatOffset): PmPos {
     if (i < nodeCount - 1) {
       accumulated += 1; // \n separator
       if (accumulated > flatOffset) {
-        return toPmPos(childStart + textLen);
+        return toPmPos(childStart + child.content.size);
       }
     }
   }
 
   return toPmPos(doc.content.size);
+}
+
+/**
+ * Compute the flat offset within a single PM node at a given PM position.
+ * pmStart is the PM position of the node's opening token.
+ */
+function flatOffsetWithinNode(node: PmNode, pmPos: PmPos, pmStart: number): number {
+  if (node.isTextblock) {
+    return Math.min(pmPos - pmStart, textblockFlatLength(node));
+  }
+  let flatAccum = 0;
+  let pmOffset = pmStart;
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    const childStart = pmOffset + 1;
+    if (i > 0) flatAccum += 1;
+    const childEnd = pmOffset + child.nodeSize;
+    if (pmPos < childEnd) {
+      if (pmPos <= childStart) return flatAccum;
+      return flatAccum + flatOffsetWithinNode(child, pmPos, childStart);
+    }
+    flatAccum += pmNodeFlatTextLength(child);
+    pmOffset += child.nodeSize;
+  }
+  return flatAccum;
 }
 
 /**
@@ -84,15 +165,14 @@ export function pmPosToFlatOffset(doc: PmNode, pmPos: PmPos): FlatOffset {
     const prefixLen =
       child.type.name === "heading" ? headingPrefixLength((child.attrs.level as number) || 1) : 0;
 
-    const textLen = child.textContent.length;
-    const nodeEnd = nodeStart + textLen;
+    const textLen = pmNodeFlatTextLength(child);
+    const nodeEnd = pmOffset + child.nodeSize;
 
-    if (pmPos <= nodeEnd) {
+    if (pmPos < nodeEnd) {
       if (pmPos <= nodeStart) {
         return toFlatOffset(flatOffset + prefixLen);
       }
-      const offsetInNode = pmPos - nodeStart;
-      return toFlatOffset(flatOffset + prefixLen + Math.min(offsetInNode, textLen));
+      return toFlatOffset(flatOffset + prefixLen + flatOffsetWithinNode(child, pmPos, nodeStart));
     }
 
     flatOffset += prefixLen + textLen;
@@ -111,8 +191,47 @@ export function pmPosToFlatOffset(doc: PmNode, pmPos: PmPos): FlatOffset {
 // ---------------------------------------------------------------------------
 
 /**
+ * Recursively search a Y.XmlElement / PM node pair for the XmlText matching
+ * absPos.type, and return the corresponding PM position.
+ */
+function findXmlTextInParallel(
+  yEl: Y.XmlElement,
+  pmNode: PmNode,
+  pmStart: number,
+  absPos: { type: Y.AbstractType<unknown>; index: number },
+): PmPos | null {
+  if (pmNode.isTextblock) {
+    let charAccum = 0;
+    for (let j = 0; j < yEl.length; j++) {
+      const child = yEl.get(j);
+      if (child instanceof Y.XmlText) {
+        if (child === absPos.type) {
+          return toPmPos(pmStart + Math.min(charAccum + absPos.index, textblockFlatLength(pmNode)));
+        }
+        charAccum += child.length;
+      }
+    }
+    return null;
+  }
+  let pmOffset = pmStart;
+  const count = Math.min(yEl.length, pmNode.childCount);
+  for (let j = 0; j < count; j++) {
+    const yChild = yEl.get(j);
+    const pmChild = pmNode.child(j);
+    const childStart = pmOffset + 1;
+    if (yChild instanceof Y.XmlElement) {
+      const result = findXmlTextInParallel(yChild, pmChild, childStart, absPos);
+      if (result !== null) return result;
+    }
+    pmOffset += pmChild.nodeSize;
+  }
+  return null;
+}
+
+/**
  * Resolve a Y.AbsolutePosition to a ProseMirror position by walking the
  * Y.XmlFragment and PM doc in parallel, matching by XmlText identity.
+ * Handles nested structures (lists, blockquotes) via recursive parallel walk.
  */
 function xmlTextIndexToPmPos(
   pmDoc: PmNode,
@@ -126,22 +245,10 @@ function xmlTextIndexToPmPos(
     const yNode = fragment.get(i);
     const pmChild = pmDoc.child(i);
     const childStart = pmOffset + 1;
-
     if (yNode instanceof Y.XmlElement) {
-      let charAccum = 0;
-      for (let j = 0; j < yNode.length; j++) {
-        const child = yNode.get(j);
-        if (child instanceof Y.XmlText) {
-          if (child === absPos.type) {
-            return toPmPos(
-              childStart + Math.min(charAccum + absPos.index, pmChild.textContent.length),
-            );
-          }
-          charAccum += child.length;
-        }
-      }
+      const result = findXmlTextInParallel(yNode, pmChild, childStart, absPos);
+      if (result !== null) return result;
     }
-
     pmOffset += pmChild.nodeSize;
   }
 

@@ -57,27 +57,47 @@ vi.mock("@tiptap/core", () => ({
 const { buildAwarenessDecorations } = await import("../../src/client/editor/extensions/awareness");
 
 // --- Mock doc helper (same shape as coordinate-conversion.test.ts) ---
+// isTextblock=true so textblockFlatLength() uses forEach() for flat length.
 
 type MockBlock = {
   type: { name: string };
   attrs: { level: number };
   textContent: string;
   nodeSize: number;
+  isTextblock: boolean;
+  childCount: number;
+  child: (i: number) => any;
+  forEach: (cb: (child: any) => void) => void;
+  content: { size: number };
 };
 
 function makeMockDoc(
   blocks: Array<{ type: "heading" | "paragraph"; level?: number; text: string }>,
 ) {
-  const children: MockBlock[] = blocks.map((b) => ({
-    type: { name: b.type },
-    attrs: { level: b.level ?? 0 },
-    textContent: b.text,
-    nodeSize: 2 + b.text.length,
-  }));
+  const children: MockBlock[] = blocks.map((b) => {
+    const textChild = {
+      isText: true as const,
+      text: b.text,
+      type: { name: "text" },
+      nodeSize: b.text.length,
+    };
+    return {
+      type: { name: b.type },
+      attrs: { level: b.level ?? 0 },
+      textContent: b.text,
+      nodeSize: 2 + b.text.length,
+      isTextblock: true,
+      childCount: 1,
+      child: () => textChild,
+      forEach: (cb: (child: any) => void) => cb(textChild),
+      content: { size: b.text.length },
+    };
+  });
   return {
     childCount: children.length,
     child: (i: number) => children[i],
     content: { size: children.reduce((s, c) => s + c.nodeSize, 0) },
+    isTextblock: false,
     forEach(cb: (node: MockBlock, offset: number) => void) {
       let offset = 0;
       for (const child of children) {

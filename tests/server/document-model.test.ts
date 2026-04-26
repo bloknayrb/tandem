@@ -10,7 +10,13 @@ import type { Root } from "mdast";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { mdastToYDoc } from "../../src/server/file-io/mdast-ydoc.js";
-import { extractText, getElementText } from "../../src/server/mcp/document.js";
+import {
+  collectXmlTexts,
+  extractText,
+  findXmlTextAtOffset,
+  getElementText,
+  getElementTextLength,
+} from "../../src/server/mcp/document.js";
 import { validateRange } from "../../src/server/positions.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
 import { getFragment, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
@@ -195,5 +201,102 @@ describe("getElementText — hardBreak embed emits \\n", () => {
     if (result.ok) {
       expect(flat.slice(result.range.from, result.range.to)).toBe(target);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B: list content — separator, getElementTextLength, findXmlTextAtOffset, collectXmlTexts
+// ---------------------------------------------------------------------------
+
+describe("list content (Phase B)", () => {
+  it("extractText includes \\n between list items", () => {
+    // loadMarkdown (remark) produces real bulletList > listItem > paragraph > XmlText
+    doc = makeMarkdownDoc("- Alpha\n- Beta");
+    const text = extractText(doc);
+    expect(text).toContain("Alpha");
+    expect(text).toContain("Beta");
+    // List items must be separated by \n (Bug C fix)
+    expect(text).toMatch(/Alpha\nBeta/);
+  });
+
+  it("extractText handles nested lists", () => {
+    doc = makeMarkdownDoc("- Outer\n  - Inner1\n  - Inner2\n- Outer2");
+    const text = extractText(doc);
+    expect(text).toContain("Outer");
+    expect(text).toContain("Inner1");
+    expect(text).toContain("Inner2");
+    expect(text).toContain("Outer2");
+  });
+
+  it("getElementTextLength matches getElementText().length for list elements", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta\n- Gamma");
+    const fragment = doc.getXmlFragment("default");
+    for (let i = 0; i < fragment.length; i++) {
+      const node = fragment.get(i);
+      if (node instanceof Y.XmlElement) {
+        expect(getElementTextLength(node)).toBe(getElementText(node).length);
+      }
+    }
+  });
+
+  it("findXmlTextAtOffset returns non-null for list item content", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta");
+    const fragment = doc.getXmlFragment("default");
+    // Find the bulletList element (first fragment child)
+    let bulletList: Y.XmlElement | null = null;
+    for (let i = 0; i < fragment.length; i++) {
+      const node = fragment.get(i);
+      if (node instanceof Y.XmlElement && node.nodeName === "bulletList") {
+        bulletList = node;
+        break;
+      }
+    }
+    expect(bulletList).not.toBeNull();
+
+    // "Alpha\nBeta" — offset 0 is in "Alpha"
+    const foundAlpha = findXmlTextAtOffset(bulletList!, 0);
+    expect(foundAlpha).not.toBeNull();
+    expect(foundAlpha!.offsetInXmlText).toBe(0);
+
+    // The key invariant: offset 6 ("B" in "Beta") must resolve — offset 5 is the separator
+    const foundBeta = findXmlTextAtOffset(bulletList!, 6);
+    expect(foundBeta).not.toBeNull();
+    expect(foundBeta!.offsetInXmlText).toBe(0); // "B" is start of "Beta" XmlText
+  });
+
+  it("collectXmlTexts returns all XmlTexts with correct offsets", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta");
+    const fragment = doc.getXmlFragment("default");
+    let bulletList: Y.XmlElement | null = null;
+    for (let i = 0; i < fragment.length; i++) {
+      const node = fragment.get(i);
+      if (node instanceof Y.XmlElement && node.nodeName === "bulletList") {
+        bulletList = node;
+        break;
+      }
+    }
+    expect(bulletList).not.toBeNull();
+    const collected = collectXmlTexts(bulletList!);
+    // Must have at least one XmlText per list item
+    expect(collected.length).toBeGreaterThanOrEqual(2);
+    // Offsets must be monotonically increasing
+    for (let i = 1; i < collected.length; i++) {
+      expect(collected[i].offsetFromStart).toBeGreaterThan(collected[i - 1].offsetFromStart);
+    }
+  });
+
+  it("round-trips flat offsets for list items via extractText", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta\n- Gamma");
+    const flat = extractText(doc);
+    // "Alpha\nBeta\nGamma" — verify slices
+    const alphaIdx = flat.indexOf("Alpha");
+    const betaIdx = flat.indexOf("Beta");
+    const gammaIdx = flat.indexOf("Gamma");
+    expect(alphaIdx).toBeGreaterThanOrEqual(0);
+    expect(betaIdx).toBeGreaterThan(alphaIdx);
+    expect(gammaIdx).toBeGreaterThan(betaIdx);
+    // Items are separated by \n
+    expect(flat[alphaIdx + 5]).toBe("\n");
+    expect(flat[betaIdx + 4]).toBe("\n");
   });
 });

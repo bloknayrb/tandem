@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { getOrCreateXmlText } from "../../src/server/mcp/document.js";
+import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import {
   anchoredRange,
   flatOffsetToRelPos,
@@ -16,6 +16,7 @@ import {
   getFragment,
   makeAnnotation,
   makeDoc,
+  makeMarkdownDoc,
 } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -345,5 +346,65 @@ describe("refreshAllRanges", () => {
     const refreshed = refreshAllRanges([ann1, ann2], doc, map);
     expect(refreshed[0].range).toEqual({ from: 2, to: 7 });
     expect(refreshed[1].range).toEqual({ from: 8, to: 13 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B: list content position tests
+// ---------------------------------------------------------------------------
+
+describe("list content positions (Phase B)", () => {
+  it("flatOffsetToRelPos returns non-null for list item content", () => {
+    doc = makeMarkdownDoc("- Item in a list\n- Second item");
+    const flat = extractText(doc);
+    const itemIdx = flat.indexOf("Item in a list");
+    expect(itemIdx).toBeGreaterThanOrEqual(0);
+
+    const relPos = flatOffsetToRelPos(doc, itemIdx, 0);
+    expect(relPos).not.toBeNull();
+  });
+
+  it("flatOffsetToRelPos / relPosToFlatOffset round-trips for list item content", () => {
+    doc = makeMarkdownDoc("- First item\n- Second item\n- Third item");
+    const flat = extractText(doc);
+
+    const secondIdx = flat.indexOf("Second item");
+    expect(secondIdx).toBeGreaterThanOrEqual(0);
+
+    const relPos = flatOffsetToRelPos(doc, secondIdx, 0);
+    expect(relPos).not.toBeNull();
+
+    const resolved = relPosToFlatOffset(doc, relPos!);
+    expect(resolved).toBe(secondIdx);
+  });
+
+  it("anchoredRange produces fullyAnchored: true for list content", () => {
+    doc = makeMarkdownDoc("- Alpha item\n- Beta item");
+    const flat = extractText(doc);
+
+    const target = "Alpha item";
+    const idx = flat.indexOf(target);
+    expect(idx).toBeGreaterThanOrEqual(0);
+
+    const result = anchoredRange(doc, idx, idx + target.length, target);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fullyAnchored).toBe(true);
+      expect(result.relRange).toBeDefined();
+    }
+  });
+
+  it("flatOffsetToRelPos / relPosToFlatOffset round-trips across all list item offsets", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta");
+    const flat = extractText(doc);
+    // Test every offset in the flat text
+    for (let offset = 0; offset < flat.length; offset++) {
+      if (flat[offset] === "\n") continue; // separators are gaps, skip
+      const relPos = flatOffsetToRelPos(doc, offset, 0);
+      if (relPos !== null) {
+        const resolved = relPosToFlatOffset(doc, relPos);
+        expect(resolved).toBe(offset);
+      }
+    }
   });
 });

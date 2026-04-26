@@ -89,9 +89,12 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
 
 /**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
+ * Inserts FLAT_SEPARATOR between nested XmlElement children so offsets are consistent
+ * with the document-level separator convention (e.g., list items get \n between them).
  */
 export function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
+  let hasPriorContent = false;
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
@@ -104,11 +107,117 @@ export function getElementText(element: Y.XmlElement): string {
           parts.push("\n");
         }
       }
+      hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) parts.push(FLAT_SEPARATOR);
       parts.push(getElementText(child));
+      hasPriorContent = true;
     }
   }
   return parts.join("");
+}
+
+/**
+ * Compute the flat text length of a Y.XmlElement without building the string.
+ * Uses the same separator predicate as getElementText() so lengths are consistent.
+ */
+export function getElementTextLength(element: Y.XmlElement): number {
+  let len = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      len += child.length;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) len += 1;
+      len += getElementTextLength(child);
+      hasPriorContent = true;
+    }
+  }
+  return len;
+}
+
+/**
+ * Find the Y.XmlText that contains a given flat text offset within a Y.XmlElement.
+ * Returns the XmlText and the offset within it, or null if the offset falls on a
+ * separator character or cannot be resolved.
+ */
+export function findXmlTextAtOffset(
+  element: Y.XmlElement,
+  textOffset: number,
+): { xmlText: Y.XmlText; offsetInXmlText: number } | null {
+  let accumulated = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      const len = child.length;
+      if (accumulated + len > textOffset) {
+        return { xmlText: child, offsetInXmlText: textOffset - accumulated };
+      }
+      accumulated += len;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) {
+        if (textOffset === accumulated) {
+          // Offset lands ON the separator — return null (between-element gap)
+          return null;
+        }
+        accumulated += 1;
+      }
+      const childTextLen = getElementTextLength(child);
+      if (accumulated + childTextLen > textOffset) {
+        return findXmlTextAtOffset(child, textOffset - accumulated);
+      }
+      accumulated += childTextLen;
+      hasPriorContent = true;
+    }
+  }
+  // Handle end-of-element: offset equals total length
+  if (textOffset === accumulated) {
+    // Walk backwards to find the last XmlText
+    for (let i = element.length - 1; i >= 0; i--) {
+      const child = element.get(i);
+      if (child instanceof Y.XmlText) {
+        return { xmlText: child, offsetInXmlText: child.length };
+      } else if (child instanceof Y.XmlElement) {
+        return findXmlTextAtOffset(child, getElementTextLength(child));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect all Y.XmlText nodes in a Y.XmlElement with their flat offsets from the
+ * element's start. Uses the same separator predicate as getElementText().
+ */
+export function collectXmlTexts(
+  element: Y.XmlElement,
+): Array<{ xmlText: Y.XmlText; offsetFromStart: number }> {
+  const results: Array<{ xmlText: Y.XmlText; offsetFromStart: number }> = [];
+  let accumulated = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      results.push({ xmlText: child, offsetFromStart: accumulated });
+      accumulated += child.length;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) accumulated += 1;
+      for (const nested of collectXmlTexts(child)) {
+        results.push({
+          xmlText: nested.xmlText,
+          offsetFromStart: accumulated + nested.offsetFromStart,
+        });
+      }
+      accumulated += getElementTextLength(child);
+      hasPriorContent = true;
+    }
+  }
+  return results;
 }
 
 /** Extract plain text from a Y.Doc's XmlFragment */

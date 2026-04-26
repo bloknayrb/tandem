@@ -8,28 +8,54 @@ import {
 import { flatOffsetToRelPos } from "../../src/server/positions";
 import { getFragment, makeAnnotation, makeDoc } from "../helpers/ydoc-factory";
 
-// Minimal ProseMirror-compatible mock. Assumes single flat text run per block
-// (no inline marks). nodeSize = 1 (open) + text.length + 1 (close).
+// Minimal ProseMirror-compatible mock.
+// nodeSize = 1 (open) + content + 1 (close).
+// isTextblock=true for paragraph/heading so textblockFlatLength() uses forEach().
 type MockBlock = {
   type: { name: string };
   attrs: { level: number };
   textContent: string;
   nodeSize: number;
+  isTextblock: boolean;
+  childCount: number;
+  child: (i: number) => any;
+  forEach: (cb: (child: any) => void) => void;
+  content: { size: number };
 };
 
-function makeMockDoc(
-  blocks: Array<{ type: "heading" | "paragraph"; level?: number; text: string }>,
-) {
-  const children: MockBlock[] = blocks.map((b) => ({
+function makeTextBlock(b: {
+  type: "heading" | "paragraph";
+  level?: number;
+  text: string;
+}): MockBlock {
+  const textChild = {
+    isText: true as const,
+    text: b.text,
+    type: { name: "text" },
+    nodeSize: b.text.length,
+  };
+  return {
     type: { name: b.type },
     attrs: { level: b.level ?? 0 },
     textContent: b.text,
     nodeSize: 2 + b.text.length,
-  }));
+    isTextblock: true,
+    childCount: 1,
+    child: () => textChild,
+    forEach: (cb) => cb(textChild),
+    content: { size: b.text.length },
+  };
+}
+
+function makeMockDoc(
+  blocks: Array<{ type: "heading" | "paragraph"; level?: number; text: string }>,
+) {
+  const children: MockBlock[] = blocks.map((b) => makeTextBlock(b));
   return {
     childCount: children.length,
     child: (i: number) => children[i],
     content: { size: children.reduce((s, c) => s + c.nodeSize, 0) },
+    isTextblock: false,
   };
 }
 

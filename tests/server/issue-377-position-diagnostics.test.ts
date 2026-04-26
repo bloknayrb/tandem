@@ -129,9 +129,9 @@ describe("Phase 1: Fresh Y.Doc annotation on roadmap.md", () => {
     expect(result.ok).toBe(true);
 
     if (result.ok) {
-      // BUG A: list item content cannot get CRDT anchors — findXmlText is single-level
-      expect(result.fullyAnchored).toBe(false); // documents Bug A — should become true after fix
-      expect(result.relRange).toBeUndefined(); // no CRDT anchor
+      // Bug A fixed: list item content can now get CRDT anchors — findXmlTextAtOffset recurses
+      expect(result.fullyAnchored).toBe(true);
+      expect(result.relRange).toBeDefined();
     }
   });
 
@@ -144,9 +144,9 @@ describe("Phase 1: Fresh Y.Doc annotation on roadmap.md", () => {
     const itemIdx = flat.indexOf("Item in a list");
     expect(itemIdx).toBeGreaterThan(-1);
 
-    // This returns null because findXmlText(bulletList) finds no direct XmlText child
+    // Bug A fixed: findXmlTextAtOffset recurses into nested list structures
     const relPos = flatOffsetToRelPos(doc, toFlatOffset(itemIdx), 0);
-    expect(relPos).toBeNull(); // documents Bug A — should become non-null after fix
+    expect(relPos).not.toBeNull();
   });
 
   it("Bug B fixed: extractText returns clean flat text (no inline markup tags)", () => {
@@ -166,9 +166,9 @@ describe("Phase 1: Fresh Y.Doc annotation on roadmap.md", () => {
     loadMarkdown(doc, "- Alpha\n- Beta\n- Gamma");
 
     const flat = extractText(doc);
-    // Expected: "Alpha\nBeta\nGamma" (or similar with separators)
-    // Actual (Bug C): "AlphaBetaGamma" — no separators between list items
-    expect(flat).not.toContain("\n"); // documents Bug C — list items run together
+    // Bug C fixed: list items are now separated by \n
+    expect(flat).toContain("\n");
+    expect(flat).toMatch(/Alpha\nBeta/);
   });
 });
 
