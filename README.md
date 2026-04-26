@@ -119,7 +119,7 @@ Or check the raw health endpoint:
 
 ```bash
 curl http://localhost:3479/health
-# → {"status":"ok","version":"0.7.1","transport":"http","hasSession":false}
+# → {"status":"ok","version":"0.8.0","transport":"http","hasSession":false}
 ```
 
 `hasSession` becomes `true` once Claude Code connects.

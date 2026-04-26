@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+## \[0.8.0] - 2026-04-26
+
+### Added
+
+- **Semantic token lint enforcement (#356)** — `npm run check:tokens` scans `src/client/` for raw hex and non-neutral `rgba()` violations. Runs on pre-commit via lint-staged, blocking merges that introduce unsanctioned color literals.
+- **`--tandem-suggestion-*` token family (#340)** — violet semantic tokens for replacement/suggestion annotations (`--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`), visually distinct from the indigo accent family.
+- **Annotation drop count surfacing (#351)** — `normalizeAnnotation` now returns drop counts in snapshot metadata so callers can detect lossy session migrations.
+- **Plugin monitor declaration (#376)** — `plugin.json` now declares the `monitor` entry, closing the event push gap where Claude Code plugin installs didn't receive real-time notifications.
+- **Persistent annotation undo (#415)** — undo state survives panel switches and scrolling; persists until page reload instead of clearing on the next render cycle.
+- **Diagnostic position tests (#377)** — regression test suite for flat-offset resolution across headings, inline marks, nested lists, and blockquotes.
+
+### Fixed
+
+- **Three compounding coordinate system bugs (#260)** — inline markup (bold, italic, code) inflated character offsets; nested block structures (list items, blockquotes) lacked separators; and list item text extraction omitted `\n` between siblings. All three bugs compounded silently — a bold word inside a nested list could shift annotation placement by 10+ characters. Fixed in `getElementText()` and `extractText()` with full encapsulation of the position module behind `resolveToElement()`.
+- **Flash animation alpha wash (#308)** — accept/dismiss flash used opaque background that hid annotation text; now uses `color-mix` with translucent blend against the surface.
+- **Dark mode scrollbar styling (#369)** — scrollbars in the editor and side panel now respect the active theme.
+- **Biome format check (#424)** — expanded a single-expression `useEffect` arrow that Biome 2.x reformatted differently than the original.
+
+### Changed
+
+- **User annotations simplified (#381)** — user-authored annotations show Edit and Remove only; Accept/Reject reserved for Claude and imported annotations. Reduces cognitive load — user notes are notes, not proposals.
+- **Toolbar streamlined (#382)** — removed Replace and @Claude checkboxes from the annotation creation toolbar. These features remain available via MCP tools (`tandem_suggest`, `tandem_comment` with `directedAt`).
+
+### Refactored
+
+- **Codebase audit remediation (Phases 1–4)** — 8 god-files decomposed across 4 phases:
+  - **Phase 1** (PRs #384–#389): wire-protocol types to `shared/`, token-store extraction, `awareness.ts` semantic tokens, Editor CSS extraction, tsconfig tightening, dead Tauri JS deps removed.
+  - **Phase 2** (PRs #391, #392): `api-routes.ts` split into per-route handler modules; `file-opener.ts` decomposed into phased helpers with lifecycle tests.
+  - **Phase 3** (PR #398, tests #399/408): event queue observer split — monolithic `queue.ts` broken into focused observer modules per Y.Map.
+  - **Phase 4** (PRs #409–#413): `App.tsx` hooks extracted, `SidePanel.tsx` decomposed, `Toolbar.tsx`/`SettingsPopover.tsx` split, `AnnotationCard.tsx` broken into 3 sub-components.
+- **Zero-arg handler factory simplification (#393)** — reduced boilerplate in MCP handler registrations.
+- **Shared annotation test fixtures (#344)** — extracted reusable test helpers for annotation creation.
+- **HTTP API silent failure surfacing (#396)** — API routes that swallowed errors now return proper status codes.
+
+### Internal
+
+- Mixed-partial `/api/setup` 207 test (#292).
+- `@xmldom/xmldom` dependency bump (#390).
+- CI: typecheck/lint/test gates on all PR base branches.
+
 ## \[0.7.1] - 2026-04-20
 
 ### Fixed

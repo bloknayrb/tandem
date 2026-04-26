@@ -1,6 +1,6 @@
 {
   "name": "tandem-editor",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
   "repository": {
     "type": "git",
