@@ -21,7 +21,12 @@ export function AnnotationCardActions({
 }: AnnotationCardActionsProps) {
   const [undoError, setUndoError] = useState(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (undoTimerRef.current) clearTimeout(undoTimerRef.current); }, []);
+  useEffect(
+    () => () => {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    },
+    [],
+  );
 
   if (isPending && !isEditing && (onAccept || onDismiss)) {
     return (
