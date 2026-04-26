@@ -61,17 +61,16 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { extractText, resolveOffset } from "../../src/server/mcp/document-model.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
+import { extractText, resolveOffset } from "../../src/server/mcp/document-model.js";
 import {
   anchoredRange,
   flatOffsetToRelPos,
   refreshRange,
-  relPosToFlatOffset,
   resolveToElement,
 } from "../../src/server/positions.js";
-import type { Annotation } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
+import type { Annotation } from "../../src/shared/types.js";
 import { makeDoc, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -102,22 +101,18 @@ describe("Phase 1: Fresh Y.Doc annotation on roadmap.md", () => {
     expect(flat).toContain("Progressive Web App");
   });
 
-  it("BUG A+B: PWA annotation cannot get CRDT anchors (list item + bold markup)", () => {
-    // This test DOCUMENTS THE BUG. It should fail when #377 is fixed.
-    // When the fix is applied:
-    //   - flatOffsetToRelPos should return non-null for list item content
-    //   - fullyAnchored should be true
-    //   - flat text should NOT contain "<bold>" tags
+  it("BUG A (only): PWA annotation cannot get CRDT anchors (list item)", () => {
+    // Bug B (inline markup in flat text) is fixed by Phase A of #260.
+    // Bug A (findXmlText single-level) remains open until a later phase.
     const rawMarkdown = fs.readFileSync(roadmapPath, "utf8");
     doc = new Y.Doc();
     loadMarkdown(doc, rawMarkdown);
 
     const flat = extractText(doc);
 
-    // BUG B: flat text contains inline markup tags
-    // Check that the flat text has the markup-polluted version
+    // Bug B fixed: flat text must NOT contain inline markup tags
     const hasBoldTag = flat.includes("<bold>");
-    expect(hasBoldTag).toBe(true); // documents Bug B — should become false after fix
+    expect(hasBoldTag).toBe(false); // Bug B fixed by Phase A of #260
 
     const target = "Progressive Web App (PWA)";
     const idx = flat.indexOf(target);
@@ -154,16 +149,15 @@ describe("Phase 1: Fresh Y.Doc annotation on roadmap.md", () => {
     expect(relPos).toBeNull(); // documents Bug A — should become non-null after fix
   });
 
-  it("BUG B: extractText emits inline markup tags that pollute flat offsets", () => {
-    // Direct demonstration of Bug B: bold formatting leaks into flat text as "<bold>...</bold>"
+  it("Bug B fixed: extractText returns clean flat text (no inline markup tags)", () => {
+    // Phase A of #260 fixes Bug B by using toDelta() instead of toString().
     doc = new Y.Doc();
     loadMarkdown(doc, "Some **bold text** here.");
 
     const flat = extractText(doc);
-    // The flat text should be "Some bold text here." (no markup)
-    // but Bug B makes it "Some <bold>bold text</bold> here."
-    expect(flat).toContain("<bold>"); // documents Bug B — should fail after fix
-    expect(flat).not.toBe("Some bold text here."); // expected clean output — fails until fix
+    // Bug B fixed: flat text should be clean with no markup tags
+    expect(flat).not.toContain("<bold>");
+    expect(flat).toBe("Some bold text here.");
   });
 
   it("BUG C: extractText omits separators between list items", () => {

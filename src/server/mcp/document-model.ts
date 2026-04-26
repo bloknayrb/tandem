@@ -95,7 +95,15 @@ export function getElementText(element: Y.XmlElement): string {
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
-      parts.push(child.toString());
+      for (const op of child.toDelta()) {
+        if (typeof op.insert === "string") {
+          parts.push(op.insert);
+        } else {
+          // Embed (hardBreak, etc.) — emit \n to keep flat offset aligned
+          // with Y.XmlText internal index (embeds count as 1 in xmlText.length)
+          parts.push("\n");
+        }
+      }
     } else if (child instanceof Y.XmlElement) {
       parts.push(getElementText(child));
     }
