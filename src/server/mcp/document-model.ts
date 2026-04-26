@@ -243,7 +243,7 @@ export function extractText(doc: Y.Doc): string {
 
 /**
  * Extract readable markdown from a Y.Doc via remark serialization.
- * NOT used by resolveOffset or tandem_edit (those use extractText).
+ * NOT used by resolveToElement or tandem_edit (those use extractText).
  */
 export function extractMarkdown(doc: Y.Doc): string {
   return saveMarkdown(doc).trimEnd();
@@ -292,58 +292,6 @@ export function verifyAndResolveRange(
   if (candidates.length === 0) return { valid: false, gone: true };
   const best = candidates.reduce((a, b) => (Math.abs(a - from) <= Math.abs(b - from) ? a : b));
   return { valid: false, gone: false, resolvedFrom: best, resolvedTo: best + textSnapshot.length };
-}
-
-export interface ResolvedOffset {
-  elementIndex: number;
-  textOffset: number;
-  /** True if the original offset fell inside a heading prefix and was clamped to 0 */
-  clampedFromPrefix: boolean;
-}
-
-/**
- * Resolve a flat character offset (from extractText) to a Y.Doc element position.
- */
-export function resolveOffset(fragment: Y.XmlFragment, charOffset: number): ResolvedOffset | null {
-  let accumulated = 0;
-
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (!(node instanceof Y.XmlElement)) continue;
-
-    const prefixLen = getHeadingPrefixLength(node);
-    const text = getElementText(node);
-    const fullLen = prefixLen + text.length;
-
-    if (accumulated + fullLen > charOffset) {
-      const offsetInFull = charOffset - accumulated;
-      const clampedFromPrefix = offsetInFull < prefixLen && prefixLen > 0;
-      const textOffset = Math.max(0, offsetInFull - prefixLen);
-      return { elementIndex: i, textOffset, clampedFromPrefix };
-    }
-
-    accumulated += fullLen;
-
-    if (i < fragment.length - 1) {
-      accumulated += 1;
-      if (accumulated > charOffset) {
-        return { elementIndex: i, textOffset: text.length, clampedFromPrefix: false };
-      }
-    }
-  }
-
-  if (fragment.length > 0) {
-    const lastNode = fragment.get(fragment.length - 1);
-    if (lastNode instanceof Y.XmlElement) {
-      return {
-        elementIndex: fragment.length - 1,
-        textOffset: getElementText(lastNode).length,
-        clampedFromPrefix: false,
-      };
-    }
-  }
-
-  return null;
 }
 
 /**

@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
-import { extractText, resolveOffset } from "../../src/server/mcp/document-model.js";
+import { extractText, resolveOffset } from "../../src/server/mcp/document.js";
 import { flatOffsetToRelPos, resolveToElement } from "../../src/server/positions.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
 

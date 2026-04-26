@@ -46,6 +46,7 @@ import {
 export type {
   AnchoredRangeResult,
   ElementPosition,
+  ElementPosition as ResolvedOffset,
   RangeValidation,
 } from "../../shared/positions/index.js";
 // Position system re-exports
@@ -56,9 +57,10 @@ export {
   refreshRange,
   relPosToFlatOffset,
   resolveToElement,
+  resolveToElement as resolveOffset,
   validateRange,
 } from "../positions.js";
-export type { RangeVerifyResult, ResolvedOffset } from "./document-model.js";
+export type { RangeVerifyResult } from "./document-model.js";
 // Re-export for backward compatibility with existing consumers.
 export {
   collectXmlTexts,
@@ -73,7 +75,6 @@ export {
   getHeadingPrefixLength,
   getOrCreateXmlText,
   populateYDoc,
-  resolveOffset,
   verifyAndResolveRange,
 } from "./document-model.js";
 export type { OpenDoc } from "./document-service.js";
