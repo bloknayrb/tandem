@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 const toSlash = (p: string) => p.replace(/\\/g, "/");
 
@@ -7,6 +7,7 @@ const ROOT = join(import.meta.dirname, "..");
 const CLIENT_DIR = join(ROOT, "src/client");
 const SKIP_FILE_NORM = toSlash(join(ROOT, "src/client/utils/colors.ts"));
 
+const INLINE_BLOCK_COMMENT_RE = /\/\*.*?\*\//g;
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
 const RGBA_RE = /\brgba?\s*\(/g;
 const NEUTRAL_RE = /(?:0\s*,\s*0\s*,\s*0|255\s*,\s*255\s*,\s*255)/;
@@ -54,13 +55,15 @@ function checkFile(filePath: string): string[] {
     if (trimmed.startsWith("/*")) {
       if (!line.includes("*/")) {
         inBlockComment = true;
+        continue;
       }
-      continue;
     }
+
+    const scanLine = line.replace(INLINE_BLOCK_COMMENT_RE, (m) => " ".repeat(m.length));
 
     HEX_RE.lastIndex = 0;
     let hexMatch: RegExpExecArray | null;
-    while ((hexMatch = HEX_RE.exec(line)) !== null) {
+    while ((hexMatch = HEX_RE.exec(scanLine)) !== null) {
       if (hasCssIndicator(line)) {
         violations.push(`${rel}:${i + 1}: ${hexMatch[0]}`);
       }
@@ -68,8 +71,8 @@ function checkFile(filePath: string): string[] {
 
     RGBA_RE.lastIndex = 0;
     let rgbaMatch: RegExpExecArray | null;
-    while ((rgbaMatch = RGBA_RE.exec(line)) !== null) {
-      if (!isNeutralRgba(line, rgbaMatch.index)) {
+    while ((rgbaMatch = RGBA_RE.exec(scanLine)) !== null) {
+      if (!isNeutralRgba(scanLine, rgbaMatch.index)) {
         violations.push(`${rel}:${i + 1}: ${rgbaMatch[0]}`);
       }
     }
@@ -78,7 +81,11 @@ function checkFile(filePath: string): string[] {
   return violations;
 }
 
-const files = collectFiles(CLIENT_DIR);
+const explicitFiles = process.argv.slice(2);
+const files =
+  explicitFiles.length > 0
+    ? explicitFiles.map((f) => toSlash(resolve(f)))
+    : collectFiles(CLIENT_DIR);
 const allViolations: string[] = [];
 
 for (const file of files) {
