@@ -77,6 +77,14 @@ export function useAnnotationReview({
 
   const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
   const lastResolvedRef = useRef<string | null>(null);
+  const pendingRemovalTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(
+    () => () => {
+      for (const timer of pendingRemovalTimers.current.values()) clearTimeout(timer);
+    },
+    [],
+  );
 
   // Keyboard review targets only pending annotations (unfiltered)
   const reviewTargets = useMemo(
@@ -110,6 +118,35 @@ export function useAnnotationReview({
     setRecentlyResolved((prev) => new Set(prev).add(id));
   }
 
+  function scheduleRemoval(id: string) {
+    const existing = pendingRemovalTimers.current.get(id);
+    if (existing) clearTimeout(existing);
+    pendingRemovalTimers.current.set(
+      id,
+      setTimeout(() => {
+        pendingRemovalTimers.current.delete(id);
+        setRecentlyResolved((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }, 3000),
+    );
+  }
+
+  function removeFromResolved(id: string) {
+    const timer = pendingRemovalTimers.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      pendingRemovalTimers.current.delete(id);
+    }
+    setRecentlyResolved((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
   /** Revert a resolved annotation back to pending, undoing text changes for accepted suggestions.
    * Returns true on success, false when the text-changed guard fires (undo blocked). */
   function undoResolveAnnotation(id: string): boolean {
@@ -117,11 +154,12 @@ export function useAnnotationReview({
     if (!y) return false;
     const map = y.getMap(Y_MAP_ANNOTATIONS);
     const raw = map.get(id) as Annotation | undefined;
-    if (!raw || raw.status === "pending") return false;
+    if (!raw || raw.status === "pending") {
+      removeFromResolved(id);
+      return false;
+    }
     const ann = sanitizeAnnotation(raw);
 
-    // If it was an accepted annotation with suggestedText, revert the text edit first.
-    // If text revert fails, don't revert status — half-undo is worse than no undo.
     if (ann.status === "accepted" && ann.suggestedText !== undefined && editorRef.current) {
       try {
         const newText = ann.suggestedText;
@@ -130,11 +168,13 @@ export function useAnnotationReview({
           const resolved = annotationToPmRange(ann, editorRef.current.state.doc, y);
           if (!resolved) {
             console.warn(`[undo] Cannot resolve range for annotation ${id}, skipping`);
+            scheduleRemoval(id);
             return false;
           }
           const currentText = editorRef.current.state.doc.textBetween(resolved.from, resolved.to);
           if (currentText !== newText) {
             console.warn(`[undo] Text changed since accept for annotation ${id}, skipping`);
+            scheduleRemoval(id);
             return false;
           }
           editorRef.current
@@ -146,18 +186,13 @@ export function useAnnotationReview({
         }
       } catch (err) {
         console.warn(`[undo] Failed to revert text for annotation ${id}:`, err);
+        scheduleRemoval(id);
         return false;
       }
     }
 
-    // Revert status to pending
     map.set(id, { ...ann, status: "pending" as const });
-
-    setRecentlyResolved((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+    removeFromResolved(id);
     if (lastResolvedRef.current === id) {
       lastResolvedRef.current = null;
     }
