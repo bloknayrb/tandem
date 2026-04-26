@@ -51,7 +51,7 @@ function getRepliesMap(ydoc: Y.Doc): Y.Map<unknown> {
   return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 }
 
-/** Remove an annotation and its orphaned replies in a single transaction. */
+/** Records a tombstone (sync module side effect) then removes the annotation and its orphaned replies. */
 export function removeAnnotationById(
   ydoc: Y.Doc,
   annotationsMap: Y.Map<unknown>,

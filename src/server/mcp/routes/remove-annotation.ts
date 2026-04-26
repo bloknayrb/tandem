@@ -1,5 +1,7 @@
 import type { Request, Response } from "express";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
+import { generateNotificationId } from "../../../shared/utils.js";
+import { pushNotification } from "../../notifications.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 import { removeAnnotationById } from "../annotations.js";
 import { getCurrentDoc } from "../document.js";
@@ -22,6 +24,15 @@ export function handleRemoveAnnotation(req: Request, res: Response): void {
   const result = removeAnnotationById(ydoc, annotationsMap, doc.filePath, annotationId);
   if (!result.ok) {
     const status = result.code === "NOT_FOUND" ? 404 : 400;
+    console.warn(`[Tandem] API error (${status}): remove annotation failed: ${result.error}`);
+    pushNotification({
+      id: generateNotificationId(),
+      type: "annotation-error",
+      severity: "error",
+      message: `Remove failed: ${result.error}`,
+      dedupKey: `remove-error:${annotationId}`,
+      timestamp: Date.now(),
+    });
     res.status(status).json({ error: result.code, message: result.error });
     return;
   }
