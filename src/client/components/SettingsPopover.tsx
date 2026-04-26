@@ -5,15 +5,7 @@ import {
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
-import { useRadioGroup } from "../hooks/useRadioGroup";
-import type {
-  LayoutMode,
-  PanelOrder,
-  PrimaryTab,
-  TandemSettings,
-  TextSize,
-  ThemePreference,
-} from "../hooks/useTandemSettings";
+import type { TandemSettings } from "../hooks/useTandemSettings";
 import { useUserName } from "../hooks/useUserName";
 import { AccessibilitySettings } from "./AccessibilitySettings";
 import { AppearanceSettings } from "./AppearanceSettings";
