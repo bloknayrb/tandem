@@ -217,6 +217,55 @@ describe("registerAnnotationObserver", () => {
     cleanup();
   });
 
+  it("snapshot logs console.error when normalizeAnnotation drops a non-object entry", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(() => {
+      annMap.set("ann_valid", annRecord({ id: "ann_valid" }));
+      annMap.set("ann_bad", "not-an-object" as unknown as Record<string, unknown>);
+    }, MCP_ORIGIN);
+
+    await store.flush();
+
+    const dropCalls = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("[ANNOTATION-STORE] snapshot: dropped"),
+    );
+    expect(dropCalls).toHaveLength(1);
+    expect(dropCalls[0][0]).toMatch(/dropped 1 annotation\(s\), 0 reply\(ies\)/);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
+  it("snapshot logs console.error when normalizeReply drops a non-object entry", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    ydoc.transact(() => {
+      annMap.set("ann_valid", annRecord({ id: "ann_valid" }));
+      repMap.set("rep_bad", "not-an-object" as unknown as Record<string, unknown>);
+    }, MCP_ORIGIN);
+
+    await store.flush();
+
+    const dropCalls = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("[ANNOTATION-STORE] snapshot: dropped"),
+    );
+    expect(dropCalls).toHaveLength(1);
+    expect(dropCalls[0][0]).toMatch(/dropped 0 annotation\(s\), 1 reply\(ies\)/);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
   it("cleanup unobserves both Y.Maps (further mutations don't write)", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });

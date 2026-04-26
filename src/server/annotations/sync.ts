@@ -154,16 +154,27 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
+  let annDrops = 0;
+  let replyDrops = 0;
+
   const annotations: AnnotationRecordV1[] = [];
   for (const value of annMap.values()) {
     const rec = normalizeAnnotation(value, docHash);
     if (rec) annotations.push(rec);
+    else annDrops++;
   }
 
   const replies: AnnotationReplyRecordV1[] = [];
   for (const value of repMap.values()) {
     const rec = normalizeReply(value);
     if (rec) replies.push(rec);
+    else replyDrops++;
+  }
+
+  if (annDrops > 0 || replyDrops > 0) {
+    console.error(
+      `[ANNOTATION-STORE] snapshot: dropped ${annDrops} annotation(s), ${replyDrops} reply(ies) in ${docHash}`,
+    );
   }
 
   const tombstones = [...(tombstonesByDoc.get(docHash) ?? [])];
