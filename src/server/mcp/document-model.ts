@@ -89,18 +89,135 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
 
 /**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
+ * Inserts FLAT_SEPARATOR between nested XmlElement children so offsets are consistent
+ * with the document-level separator convention (e.g., list items get \n between them).
  */
 export function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
+  let hasPriorContent = false;
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
-      parts.push(child.toString());
+      for (const op of child.toDelta()) {
+        if (typeof op.insert === "string") {
+          parts.push(op.insert);
+        } else {
+          // Embed (hardBreak, etc.) — emit \n to keep flat offset aligned
+          // with Y.XmlText internal index (embeds count as 1 in xmlText.length)
+          parts.push("\n");
+        }
+      }
+      hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) parts.push(FLAT_SEPARATOR);
       parts.push(getElementText(child));
+      hasPriorContent = true;
     }
   }
   return parts.join("");
+}
+
+/**
+ * Compute the flat text length of a Y.XmlElement without building the string.
+ * Uses the same separator predicate as getElementText() so lengths are consistent.
+ */
+export function getElementTextLength(element: Y.XmlElement): number {
+  let len = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      len += child.length;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) len += 1;
+      len += getElementTextLength(child);
+      hasPriorContent = true;
+    }
+  }
+  return len;
+}
+
+/**
+ * Find the Y.XmlText that contains a given flat text offset within a Y.XmlElement.
+ * Returns the XmlText and the offset within it, or null if the offset falls on a
+ * separator character or cannot be resolved.
+ */
+export function findXmlTextAtOffset(
+  element: Y.XmlElement,
+  textOffset: number,
+): { xmlText: Y.XmlText; offsetInXmlText: number } | null {
+  let accumulated = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      const len = child.length;
+      if (accumulated + len > textOffset) {
+        return { xmlText: child, offsetInXmlText: textOffset - accumulated };
+      }
+      accumulated += len;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) {
+        if (textOffset === accumulated) {
+          // Offset lands ON the separator — return null (between-element gap)
+          return null;
+        }
+        accumulated += 1;
+      }
+      const childTextLen = getElementTextLength(child);
+      if (accumulated + childTextLen > textOffset) {
+        return findXmlTextAtOffset(child, textOffset - accumulated);
+      }
+      accumulated += childTextLen;
+      hasPriorContent = true;
+    }
+  }
+  // Handle end-of-element: offset equals total length
+  if (textOffset === accumulated) {
+    // Walk backwards to find the last XmlText
+    for (let i = element.length - 1; i >= 0; i--) {
+      const child = element.get(i);
+      if (child instanceof Y.XmlText) {
+        return { xmlText: child, offsetInXmlText: child.length };
+      } else if (child instanceof Y.XmlElement) {
+        return findXmlTextAtOffset(child, getElementTextLength(child));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect all Y.XmlText nodes in a Y.XmlElement with their flat offsets from the
+ * element's start. Uses the same separator predicate as getElementText().
+ */
+export function collectXmlTexts(
+  element: Y.XmlElement,
+): Array<{ xmlText: Y.XmlText; offsetFromStart: number }> {
+  const results: Array<{ xmlText: Y.XmlText; offsetFromStart: number }> = [];
+  let accumulated = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      results.push({ xmlText: child, offsetFromStart: accumulated });
+      accumulated += child.length;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (hasPriorContent) accumulated += 1;
+      for (const nested of collectXmlTexts(child)) {
+        results.push({
+          xmlText: nested.xmlText,
+          offsetFromStart: accumulated + nested.offsetFromStart,
+        });
+      }
+      accumulated += getElementTextLength(child);
+      hasPriorContent = true;
+    }
+  }
+  return results;
 }
 
 /** Extract plain text from a Y.Doc's XmlFragment */
@@ -126,7 +243,7 @@ export function extractText(doc: Y.Doc): string {
 
 /**
  * Extract readable markdown from a Y.Doc via remark serialization.
- * NOT used by resolveOffset or tandem_edit (those use extractText).
+ * NOT used by resolveToElement or tandem_edit (those use extractText).
  */
 export function extractMarkdown(doc: Y.Doc): string {
   return saveMarkdown(doc).trimEnd();
@@ -175,58 +292,6 @@ export function verifyAndResolveRange(
   if (candidates.length === 0) return { valid: false, gone: true };
   const best = candidates.reduce((a, b) => (Math.abs(a - from) <= Math.abs(b - from) ? a : b));
   return { valid: false, gone: false, resolvedFrom: best, resolvedTo: best + textSnapshot.length };
-}
-
-export interface ResolvedOffset {
-  elementIndex: number;
-  textOffset: number;
-  /** True if the original offset fell inside a heading prefix and was clamped to 0 */
-  clampedFromPrefix: boolean;
-}
-
-/**
- * Resolve a flat character offset (from extractText) to a Y.Doc element position.
- */
-export function resolveOffset(fragment: Y.XmlFragment, charOffset: number): ResolvedOffset | null {
-  let accumulated = 0;
-
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (!(node instanceof Y.XmlElement)) continue;
-
-    const prefixLen = getHeadingPrefixLength(node);
-    const text = getElementText(node);
-    const fullLen = prefixLen + text.length;
-
-    if (accumulated + fullLen > charOffset) {
-      const offsetInFull = charOffset - accumulated;
-      const clampedFromPrefix = offsetInFull < prefixLen && prefixLen > 0;
-      const textOffset = Math.max(0, offsetInFull - prefixLen);
-      return { elementIndex: i, textOffset, clampedFromPrefix };
-    }
-
-    accumulated += fullLen;
-
-    if (i < fragment.length - 1) {
-      accumulated += 1;
-      if (accumulated > charOffset) {
-        return { elementIndex: i, textOffset: text.length, clampedFromPrefix: false };
-      }
-    }
-  }
-
-  if (fragment.length > 0) {
-    const lastNode = fragment.get(fragment.length - 1);
-    if (lastNode instanceof Y.XmlElement) {
-      return {
-        elementIndex: fragment.length - 1,
-        textOffset: getElementText(lastNode).length,
-        clampedFromPrefix: false,
-      };
-    }
-  }
-
-  return null;
 }
 
 /**

@@ -2,10 +2,10 @@
  * Structure probe for Issue #377 — understanding Y.Doc shapes for list items
  * and the separator boundary behavior with loadMarkdown (remark-based).
  */
-import { describe, expect, it, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
-import { extractText, getElementText, resolveOffset } from "../../src/server/mcp/document-model.js";
+import { extractText, resolveOffset } from "../../src/server/mcp/document.js";
 import { flatOffsetToRelPos, resolveToElement } from "../../src/server/positions.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
 
@@ -63,13 +63,11 @@ describe("Y.Doc structure probe for list items", () => {
     }
   });
 
-  it("resolveOffset handles nested list items (does NOT return null but finds wrong XmlText)", () => {
-    // The critical question: when the Y.Doc element is a bulletList > listItem > paragraph,
-    // getElementText() and findXmlText() need to recurse. If they don't,
-    // flatOffsetToRelPos returns null for list item content.
+  it("resolveOffset handles nested list items (Bug A fixed: returns non-null for list content)", () => {
+    // Bug A fixed: findXmlTextAtOffset() recurses into bulletList > listItem > paragraph > XmlText,
+    // so flatOffsetToRelPos now returns a valid RelativePosition for list item content.
     doc = new Y.Doc();
     loadMarkdown(doc, "- Item one\n- Item two");
-    const frag = doc.getXmlFragment("default");
 
     const flat = extractText(doc);
     expect(flat.length).toBeGreaterThan(0);
@@ -79,9 +77,9 @@ describe("Y.Doc structure probe for list items", () => {
     expect(itemTwoIdx).toBeGreaterThanOrEqual(-1);
 
     if (itemTwoIdx >= 0) {
-      // flatOffsetToRelPos returns null for list item content due to Bug A
+      // Bug A fixed: flatOffsetToRelPos now returns non-null for list item content
       const relPos = flatOffsetToRelPos(doc, toFlatOffset(itemTwoIdx), 0);
-      expect(relPos).toBeNull(); // documents Bug A — should become non-null after fix
+      expect(relPos).not.toBeNull();
     }
   });
 });

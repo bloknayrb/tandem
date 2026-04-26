@@ -30,9 +30,10 @@ import { toFlatOffset, toSerializedRelPos } from "../shared/positions/index.js";
 import type { Annotation } from "../shared/types.js";
 import { MCP_ORIGIN } from "./events/queue.js";
 import {
+  collectXmlTexts,
   extractText,
-  findXmlText,
-  getElementText,
+  findXmlTextAtOffset,
+  getElementTextLength,
   getHeadingPrefixLength,
 } from "./mcp/document-model.js";
 
@@ -55,8 +56,8 @@ export function resolveToElement(
     if (!(node instanceof Y.XmlElement)) continue;
 
     const prefixLen = getHeadingPrefixLength(node);
-    const text = getElementText(node);
-    const fullLen = prefixLen + text.length;
+    const textLen = getElementTextLength(node);
+    const fullLen = prefixLen + textLen;
 
     if (accumulated + fullLen > charOffset) {
       const offsetInFull = charOffset - accumulated;
@@ -70,7 +71,7 @@ export function resolveToElement(
     if (i < fragment.length - 1) {
       accumulated += 1; // \n separator
       if (accumulated > charOffset) {
-        return { elementIndex: i, textOffset: text.length, clampedFromPrefix: false };
+        return { elementIndex: i, textOffset: textLen, clampedFromPrefix: false };
       }
     }
   }
@@ -80,7 +81,7 @@ export function resolveToElement(
     if (lastNode instanceof Y.XmlElement) {
       return {
         elementIndex: fragment.length - 1,
-        textOffset: getElementText(lastNode).length,
+        textOffset: getElementTextLength(lastNode),
         clampedFromPrefix: false,
       };
     }
@@ -109,9 +110,23 @@ export function flatOffsetToRelPos(
   const node = fragment.get(resolved.elementIndex);
   if (!(node instanceof Y.XmlElement)) return null;
 
-  const xmlText = findXmlText(node);
-  if (!xmlText) return null;
-  const rpos = Y.createRelativePositionFromTypeIndex(xmlText, resolved.textOffset, assoc);
+  let found = findXmlTextAtOffset(node, resolved.textOffset);
+  // If the offset lands exactly on an intra-element separator (between nested block children),
+  // fall back based on assoc: -1 (stick left) → try offset-1; 0 (stick right) → try offset+1.
+  if (!found && assoc === -1 && resolved.textOffset > 0) {
+    found = findXmlTextAtOffset(node, resolved.textOffset - 1);
+    if (found) {
+      // Advance offsetInXmlText to end of this XmlText to stick to the left boundary
+      found = { xmlText: found.xmlText, offsetInXmlText: found.xmlText.length };
+    }
+  } else if (!found && assoc === 0) {
+    const nodeLen = getElementTextLength(node);
+    if (resolved.textOffset + 1 <= nodeLen) {
+      found = findXmlTextAtOffset(node, resolved.textOffset + 1);
+    }
+  }
+  if (!found) return null;
+  const rpos = Y.createRelativePositionFromTypeIndex(found.xmlText, found.offsetInXmlText, assoc);
   return toSerializedRelPos(Y.relativePositionToJSON(rpos));
 }
 
@@ -140,19 +155,23 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: SerializedRelPos): Fl
     if (!(node instanceof Y.XmlElement)) continue;
 
     const prefixLen = getHeadingPrefixLength(node);
-    const text = getElementText(node);
 
-    const xmlText = findXmlText(node);
-    if (xmlText && xmlText === absPos.type) {
-      return toFlatOffset(accumulated + prefixLen + absPos.index);
+    const xmlTexts = collectXmlTexts(node);
+    for (const { xmlText, offsetFromStart } of xmlTexts) {
+      if (xmlText === absPos.type) {
+        return toFlatOffset(accumulated + prefixLen + offsetFromStart + absPos.index);
+      }
     }
 
-    accumulated += prefixLen + text.length;
+    accumulated += prefixLen + getElementTextLength(node);
     if (i < fragment.length - 1) {
       accumulated += 1;
     }
   }
 
+  console.error(
+    "[positions] relPosToFlatOffset: absPos resolved but no matching XmlText found in traversal",
+  );
   return null;
 }
 
