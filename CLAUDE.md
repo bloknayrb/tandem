@@ -23,7 +23,7 @@
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-024)
-- [Lessons Learned](docs/lessons-learned.md) -- 46 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 48 lessons including E2E testing gotchas
 
 ## Critical Rules
 
@@ -139,7 +139,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.7.1). Run B (v0.8.0) complete: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 31 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 

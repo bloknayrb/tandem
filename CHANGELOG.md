@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **NSIS pre-install sidecar kill (#434)** — the NSIS installer now kills the running `node-sidecar.exe` process before file replacement, preventing "Error opening file for writing" failures during upgrade installs. Uses `nsis_tauri_utils::KillProcessCurrentUser` for user-scoped process termination. Tauri's built-in `CheckIfAppIsRunning` already handles the main binary.
+
 - **Semantic token lint enforcement (#356)** — `npm run check:tokens` scans `src/client/` for raw hex and non-neutral `rgba()` violations. Runs on pre-commit via lint-staged, blocking merges that introduce unsanctioned color literals.
 - **`--tandem-suggestion-*` token family (#340)** — violet semantic tokens for replacement/suggestion annotations (`--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`), visually distinct from the indigo accent family.
 - **Annotation drop count surfacing (#351)** — `normalizeAnnotation` now returns drop counts in snapshot metadata so callers can detect lossy session migrations.

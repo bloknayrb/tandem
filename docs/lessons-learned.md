@@ -468,3 +468,19 @@ The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `
 **Investigation (pending, #377):** Likely cause is that the editor's ProseMirror-to-flat-offset conversion and the server's `extractText()` disagree on character positions — possibly because the file was recently edited (PR #375) and the editor had a stale or differently-formatted Y.Doc. The CRDT RelativePosition anchors should handle this, but if they resolve against a different Y.Doc state than the flat offsets, the mismatch manifests as "correct in editor, wrong on server."
 
 **Key insight:** The three-coordinate-system design (flat offsets, ProseMirror positions, CRDT RelativePositions) means any divergence between what the editor sees and what the server has produces silent misbehavior — Claude responds to the wrong text. This class of bug is invisible to unit tests that only exercise one coordinate system at a time. End-to-end testing must verify that annotations placed in the editor resolve to the same text on the server.
+
+## 47. Tag Release Commits Only After All Fixes Are Merged
+
+**Problem:** The v0.8.0 tag was pushed at the version-bump commit (`c096ab5`) before the `tokio` `macros` feature fix (`1ced4ba`) was merged. The Windows build failed because `tokio::join!` requires the `macros` feature flag. The draft release had Linux + macOS assets but no Windows installers.
+
+**Fix:** Deleted the broken draft release, deleted the tag (both remote and local), merged the remaining fixes, and re-tagged at the correct commit. Order matters: the draft release MUST be deleted before pushing a new tag, because `tauri-apps/tauri-action@v0` searches for existing drafts by tag name and appends assets — creating name collisions with the partial artifacts.
+
+**Key insight:** A version-bump commit is not a release-ready commit. The tag should go on the commit where CI is green and all release-scoped fixes are merged — not on the commit that changes the version number. For Tauri releases specifically: delete draft + remote tag + local tag, then re-tag. The `tauri-action` draft-reuse behavior means stale drafts are toxic to re-releases.
+
+## 48. NSIS Installer Hooks Only Cover the Sidecar — Tauri Handles the Main Binary
+
+**Problem:** During v0.8.0 upgrade installs, the NSIS installer failed to replace `node-sidecar.exe` with "Error opening file for writing" because the sidecar process was locked. The initial fix proposal used `taskkill /F /IM` to kill both `Tandem.exe` and `node-sidecar.exe`, but code review revealed two problems: (1) the main binary name is `tandem-desktop.exe` not `Tandem.exe`, and (2) Tauri already runs `CheckIfAppIsRunning` immediately after `NSIS_HOOK_PREINSTALL` with a user-facing dialog and graceful shutdown.
+
+**Fix:** The `NSIS_HOOK_PREINSTALL` macro should ONLY kill the sidecar process. Use `nsis_tauri_utils::KillProcessCurrentUser` (not raw `taskkill`) for user-scoped kill that's consistent with how Tauri handles the main binary. Allow 2 seconds for file handles to release — the Rust side uses a 5-second polling loop for the same reason (`TerminateProcess` returns before Windows releases the exe file handle).
+
+**Key insight:** Read the generated NSIS template (`src-tauri/target/release/nsis/x64/installer.nsi`) before writing installer hooks. It shows exactly which macros Tauri calls, in what order, and what utilities are available (`nsis_tauri_utils`). The binary name comes from `Cargo.toml [package].name`, not `tauri.conf.json productName`.

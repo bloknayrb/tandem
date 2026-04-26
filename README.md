@@ -6,8 +6,6 @@ Have you ever been working on a piece of writing with an LLM and caught yourself
 
 And because Tandem hooks into Claude as an MCP server, you're not stuck in some stripped-down document-editing silo. It's the full Claude — with all its knowledge, your conversation context, and every tool it has access to — just now it can also see and edit your document.
 
-![Tandem editor showing a document with annotations, side panel, and Claude's presence](docs/screenshots/01-editor-overview.png)
-
 ## Why Tandem?
 
 - **No more copy-paste ping-pong.** Select text in the editor, and Claude reads your selection directly. Ask "what do you think of this?" or "make this more concise" — Claude knows exactly which text you mean.
@@ -154,19 +152,13 @@ Everything in Tandem is built around one idea: you work in the document, Claude 
 
 ### Chat
 
-![Chat sidebar showing messages, typing indicator, and panel toggle](docs/screenshots/02-chat-sidebar.png)
-
 Send messages to Claude alongside your document. Select text before sending to attach it as context — Claude sees exactly what you mean. Clicking an anchored selection later scrolls back to that passage.
 
 ### Annotations
 
-![Side panel showing annotation cards with filtering, bulk actions, and text previews](docs/screenshots/03-side-panel.png)
-
 This is how Claude's feedback shows up in the document. Claude adds highlights, comments, suggestions, and flags directly on the text. Suggestion cards show a visual diff — original text in red strikethrough, replacement in green. The side panel lists all annotations with filtering by type, author, and status. Accept, dismiss, or edit each one individually — or use bulk actions to process them in batches.
 
 ### Review Mode
-
-![Review mode with dimmed editor and active annotation highlighted](docs/screenshots/05-review-mode.png)
 
 Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, accept with **Y**, dismiss with **N**, examine with **E**. A 10-second undo window with a visual countdown lets you reverse accidental accepts. Shortcut hints appear below the Review button.
 
@@ -193,7 +185,7 @@ Press **Ctrl+Shift+R** to enter keyboard review mode. Navigate with **Tab**, acc
 
 ## Where Tandem is headed
 
-Since the v0.4.0 desktop app launch, Tandem has added auth tokens for LAN exposure (v0.7.0), a Claude Code plugin bridge for Cowork and Claude Desktop (v0.6.0+), durable annotation persistence, settings with Light/Dark/System theming, and authorship text coloring. A few directions on the radar for later releases:
+Since the v0.4.0 desktop app launch, Tandem has added auth tokens for LAN exposure (v0.7.0), a Claude Code plugin bridge for Cowork and Claude Desktop (v0.6.0+), durable annotation persistence, settings with Light/Dark/System theming, authorship text coloring, and coordinate system correctness fixes with semantic token enforcement (v0.8.0). A few directions on the radar for later releases:
 
 - **High-fidelity .docx round-trip** — current `.docx` support is review-only; production export is planned so you can stay in Tandem through the final draft.
 - **Exportable annotated documents** — PDF (and eventually `.docx`) with annotations baked in, so you can share reviewed drafts outside Tandem.
@@ -210,7 +202,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: text iteration, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
 - [Design Decisions](docs/decisions.md) — ADR-001 through ADR-024
-- [Lessons Learned](docs/lessons-learned.md) — 44 implementation lessons
+- [Lessons Learned](docs/lessons-learned.md) — 48 implementation lessons
 
 ## CLI Commands
 
