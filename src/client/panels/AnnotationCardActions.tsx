@@ -8,6 +8,7 @@ export interface AnnotationCardActionsProps {
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
   onUndo?: (id: string) => boolean;
+  onRemove?: (id: string) => void;
 }
 
 export function AnnotationCardActions({
@@ -18,6 +19,7 @@ export function AnnotationCardActions({
   onAccept,
   onDismiss,
   onUndo,
+  onRemove,
 }: AnnotationCardActionsProps) {
   const [undoError, setUndoError] = useState(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,6 +74,30 @@ export function AnnotationCardActions({
           </button>
         )}
       </div>
+    );
+  }
+
+  if (isPending && !isEditing && onRemove) {
+    return (
+      <button
+        data-testid={`remove-btn-${annotationId}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove(annotationId);
+        }}
+        style={{
+          marginTop: "6px",
+          padding: "2px 8px",
+          fontSize: "11px",
+          border: "1px solid var(--tandem-border-strong)",
+          borderRadius: "3px",
+          background: "var(--tandem-surface-muted)",
+          color: "var(--tandem-fg-muted)",
+          cursor: "pointer",
+        }}
+      >
+        Remove
+      </button>
     );
   }
 

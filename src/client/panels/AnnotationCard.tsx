@@ -38,6 +38,7 @@ export interface AnnotationCardProps {
   onUndo?: (id: string) => boolean;
   onEdit?: (id: string, newContent: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
+  onRemove?: (id: string) => void;
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
@@ -74,6 +75,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
   onUndo,
   onEdit,
   onReply,
+  onRemove,
   undoable,
   onClick,
 }: AnnotationCardProps) {
@@ -299,6 +301,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         onAccept={onAccept}
         onDismiss={onDismiss}
         onUndo={onUndo}
+        onRemove={onRemove}
       />
       <ReplyThread
         annotationId={annotation.id}

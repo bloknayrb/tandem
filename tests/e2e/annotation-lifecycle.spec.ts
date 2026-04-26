@@ -157,6 +157,22 @@ test("tab switching shows different documents", async ({ page }) => {
   await expect(editor).toContainText(SECOND_DOC_TITLE, { timeout: 15_000 });
 });
 
+test("claude annotation shows Accept/Reject but not Remove", async ({ page }) => {
+  await openWithComment(tmpDir, "Review this");
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const acceptBtn = page.locator("[data-testid^='accept-btn-']");
+  await expect(acceptBtn.first()).toBeVisible({ timeout: 10_000 });
+
+  const dismissBtn = page.locator("[data-testid^='dismiss-btn-']");
+  await expect(dismissBtn.first()).toBeVisible({ timeout: 2_000 });
+
+  // Claude annotations must not show a Remove button
+  const removeBtn = page.locator("[data-testid^='remove-btn-']");
+  await expect(removeBtn).not.toBeVisible({ timeout: 2_000 });
+});
+
 test("review mode navigates with keyboard", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
