@@ -120,7 +120,10 @@ export function flatOffsetToRelPos(
       found = { xmlText: found.xmlText, offsetInXmlText: found.xmlText.length };
     }
   } else if (!found && assoc === 0) {
-    found = findXmlTextAtOffset(node, resolved.textOffset + 1);
+    const nodeLen = getElementTextLength(node);
+    if (resolved.textOffset + 1 <= nodeLen) {
+      found = findXmlTextAtOffset(node, resolved.textOffset + 1);
+    }
   }
   if (!found) return null;
   const rpos = Y.createRelativePositionFromTypeIndex(found.xmlText, found.offsetInXmlText, assoc);
@@ -166,6 +169,9 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: SerializedRelPos): Fl
     }
   }
 
+  console.error(
+    "[positions] relPosToFlatOffset: absPos resolved but no matching XmlText found in traversal",
+  );
   return null;
 }
 

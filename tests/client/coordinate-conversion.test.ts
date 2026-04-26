@@ -59,6 +59,36 @@ function makeMockDoc(
   };
 }
 
+function makeContainerBlock(children: MockBlock[]): MockBlock & { childCount: number } {
+  const contentSize = children.reduce((s, c) => s + c.nodeSize, 0);
+  return {
+    type: { name: "bulletList" },
+    attrs: { level: 0 },
+    textContent: children.map((c) => c.textContent).join(""),
+    nodeSize: 2 + contentSize,
+    isTextblock: false,
+    childCount: children.length,
+    child: (i: number) => children[i],
+    forEach: (cb: (child: any) => void) => children.forEach(cb),
+    content: { size: contentSize },
+  };
+}
+
+function makeListItem(text: string): MockBlock {
+  const para = makeTextBlock({ type: "paragraph", text });
+  return {
+    type: { name: "listItem" },
+    attrs: { level: 0 },
+    textContent: text,
+    nodeSize: 2 + para.nodeSize,
+    isTextblock: false,
+    childCount: 1,
+    child: () => para,
+    forEach: (cb) => cb(para),
+    content: { size: para.nodeSize },
+  };
+}
+
 describe("flatOffsetToPmPos", () => {
   it("single paragraph", () => {
     const doc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
@@ -170,6 +200,70 @@ describe("round-trip: pmPosToFlatOffset(flatOffsetToPmPos(offset)) === offset", 
       const pm = flatOffsetToPmPos(doc as any, prefixOffset);
       expect(pm).toBe(1);
       expect(pmPosToFlatOffset(doc as any, pm)).toBe(3);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// container node (list) support
+// ---------------------------------------------------------------------------
+
+describe("container node (list) support", () => {
+  it("flatOffsetToPmPos resolves into list item content", () => {
+    // Structure: bulletList > [listItem > paragraph > "Alpha", listItem > paragraph > "Beta"]
+    const item1 = makeListItem("Alpha");
+    const item2 = makeListItem("Beta");
+    const list = makeContainerBlock([item1, item2]);
+    const doc = {
+      childCount: 1,
+      child: () => list,
+      content: { size: list.nodeSize },
+      isTextblock: false,
+    };
+    // Flat text: "Alpha\nBeta" (5 + 1 + 4 = 10 chars)
+    // PM structure: list(open=1) > item1(open=2) > para(open=3) > "Alpha" > para(close=8) > item1(close=9) > item2(open=10) > para(open=11) > "Beta" > para(close=15) > item2(close=16) > list(close=17)
+    // Offset 0 ("A") → should resolve inside first paragraph
+    const pos0 = flatOffsetToPmPos(doc as any, 0);
+    expect(pos0).toBeGreaterThanOrEqual(3); // inside first paragraph content
+
+    // Offset 6 ("B" in "Beta") → should resolve inside second paragraph
+    const pos6 = flatOffsetToPmPos(doc as any, 6);
+    expect(pos6).toBeGreaterThan(pos0); // must be after first item
+  });
+
+  it("pmNodeFlatTextLength computes correct length for list", () => {
+    const item1 = makeListItem("Alpha");
+    const item2 = makeListItem("Beta");
+    const list = makeContainerBlock([item1, item2]);
+    // "Alpha" + separator + "Beta" = 5 + 1 + 4 = 10
+    // We can't import pmNodeFlatTextLength directly (it's not exported),
+    // but we can verify via round-trip: flatOffset at last char should resolve
+    const doc = {
+      childCount: 1,
+      child: () => list,
+      content: { size: list.nodeSize },
+      isTextblock: false,
+    };
+    // If length calculation is wrong, offset 9 ("a" in Beta) would throw or resolve incorrectly
+    const pos9 = flatOffsetToPmPos(doc as any, 9);
+    expect(pos9).toBeGreaterThan(0);
+  });
+
+  it("round-trip through container node", () => {
+    const item1 = makeListItem("Hello");
+    const item2 = makeListItem("World");
+    const list = makeContainerBlock([item1, item2]);
+    const doc = {
+      childCount: 1,
+      child: () => list,
+      content: { size: list.nodeSize },
+      isTextblock: false,
+    };
+    // Test offsets within text content (skip separator at offset 5)
+    for (const offset of [0, 1, 2, 3, 4, 6, 7, 8, 9, 10]) {
+      const pm = flatOffsetToPmPos(doc as any, offset);
+      const back = pmPosToFlatOffset(doc as any, pm);
+      expect(back).toBe(offset);
     }
   });
 });

@@ -60,7 +60,7 @@ function pmNodeFlatTextLength(node: PmNode): number {
 
 /**
  * Resolve a flat text offset to a PM position within a single PM node.
- * pmStart is the PM position of the node's opening token.
+ * pmStart is the PM position at the start of the node's content (one past the opening token).
  */
 function resolveWithinNode(node: PmNode, textOffset: number, pmStart: number): PmPos {
   if (node.isTextblock) {
@@ -126,7 +126,7 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: FlatOffset): PmPos {
 
 /**
  * Compute the flat offset within a single PM node at a given PM position.
- * pmStart is the PM position of the node's opening token.
+ * pmStart is the PM position at the start of the node's content (one past the opening token).
  */
 function flatOffsetWithinNode(node: PmNode, pmPos: PmPos, pmStart: number): number {
   if (node.isTextblock) {
@@ -214,6 +214,11 @@ function findXmlTextInParallel(
     return null;
   }
   let pmOffset = pmStart;
+  if (yEl.length !== pmNode.childCount) {
+    console.warn(
+      `[positions] Y.js/PM child count mismatch: yEl(${yEl.nodeName}).length=${yEl.length} vs pmNode(${pmNode.type.name}).childCount=${pmNode.childCount}`,
+    );
+  }
   const count = Math.min(yEl.length, pmNode.childCount);
   for (let j = 0; j < count; j++) {
     const yChild = yEl.get(j);

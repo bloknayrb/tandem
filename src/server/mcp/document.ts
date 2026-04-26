@@ -19,7 +19,7 @@ import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
-import { extractText, getElementText, getOrCreateXmlText } from "./document-model.js";
+import { extractText, findXmlText, getElementText, getOrCreateXmlText } from "./document-model.js";
 // Document service (state management)
 import {
   broadcastOpenDocs,
@@ -43,6 +43,7 @@ import {
   withErrorBoundary,
 } from "./response.js";
 
+// ElementPosition re-exported as ResolvedOffset for backward compatibility — prefer ElementPosition.
 export type {
   AnchoredRangeResult,
   ElementPosition,
@@ -50,6 +51,7 @@ export type {
   RangeValidation,
 } from "../../shared/positions/index.js";
 // Position system re-exports
+// resolveToElement re-exported as resolveOffset for backward compatibility — prefer resolveToElement.
 export {
   anchoredRange,
   flatOffsetToRelPos,
@@ -345,6 +347,25 @@ export function registerDocumentTools(server: McpServer): void {
             "INVALID_RANGE",
             `Cannot resolve offset range [${from}, ${to}] in document.`,
           );
+        }
+
+        // Guard: container elements (bulletList, blockquote, etc.) have no direct
+        // XmlText child — editing them would corrupt the CRDT structure.
+        const startNode = fragment.get(startPos.elementIndex);
+        if (startNode instanceof Y.XmlElement && !findXmlText(startNode)) {
+          return mcpError(
+            "INVALID_RANGE",
+            `Target element is a container (${startNode.nodeName}) — edit a specific paragraph or list item instead.`,
+          );
+        }
+        if (startPos.elementIndex !== endPos.elementIndex) {
+          const endNode = fragment.get(endPos.elementIndex);
+          if (endNode instanceof Y.XmlElement && !findXmlText(endNode)) {
+            return mcpError(
+              "INVALID_RANGE",
+              `Target end element is a container (${endNode.nodeName}) — edit a specific paragraph or list item instead.`,
+            );
+          }
         }
 
         if (startPos.elementIndex !== endPos.elementIndex) {

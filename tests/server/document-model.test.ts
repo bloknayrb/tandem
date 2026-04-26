@@ -299,4 +299,60 @@ describe("list content (Phase B)", () => {
     expect(flat[alphaIdx + 5]).toBe("\n");
     expect(flat[betaIdx + 4]).toBe("\n");
   });
+
+  it("findXmlTextAtOffset returns null on separator boundary", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta");
+    const fragment = doc.getXmlFragment("default");
+    let bulletList: Y.XmlElement | null = null;
+    for (let i = 0; i < fragment.length; i++) {
+      const node = fragment.get(i);
+      if (node instanceof Y.XmlElement && node.nodeName === "bulletList") {
+        bulletList = node;
+        break;
+      }
+    }
+    expect(bulletList).not.toBeNull();
+
+    // "Alpha\nBeta" — offset 5 is the separator between items
+    const found = findXmlTextAtOffset(bulletList!, 5);
+    expect(found).toBeNull();
+  });
+
+  it("findXmlTextAtOffset returns result at end of element text", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta");
+    const fragment = doc.getXmlFragment("default");
+    let bulletList: Y.XmlElement | null = null;
+    for (let i = 0; i < fragment.length; i++) {
+      const node = fragment.get(i);
+      if (node instanceof Y.XmlElement && node.nodeName === "bulletList") {
+        bulletList = node;
+        break;
+      }
+    }
+    expect(bulletList).not.toBeNull();
+
+    // "Alpha" is 5 chars, "Beta" is 4 chars
+    // Offset 4 should be last char of "Alpha" → valid
+    const foundEnd = findXmlTextAtOffset(bulletList!, 4);
+    expect(foundEnd).not.toBeNull();
+    expect(foundEnd!.offsetInXmlText).toBe(4);
+  });
+
+  it("getElementTextLength matches getElementText().length for lists", () => {
+    doc = makeMarkdownDoc("- Alpha\n- Beta\n- Gamma");
+    const fragment = doc.getXmlFragment("default");
+    let bulletList: Y.XmlElement | null = null;
+    for (let i = 0; i < fragment.length; i++) {
+      const node = fragment.get(i);
+      if (node instanceof Y.XmlElement && node.nodeName === "bulletList") {
+        bulletList = node;
+        break;
+      }
+    }
+    expect(bulletList).not.toBeNull();
+
+    const textLen = getElementText(bulletList!).length;
+    const computedLen = getElementTextLength(bulletList!);
+    expect(computedLen).toBe(textLen);
+  });
 });
