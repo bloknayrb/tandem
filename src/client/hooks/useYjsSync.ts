@@ -120,7 +120,8 @@ export function useYjsSync(): YjsSyncResult {
 
     const documentMetaMap = ydoc.getMap(Y_MAP_DOCUMENT_META);
     let prevReadOnly = false;
-    const documentMetaObserver = () => {
+    const documentMetaObserver = (event: Y.YMapEvent<unknown>) => {
+      if (!event.keysChanged.has("readOnly")) return;
       const ro = (documentMetaMap.get("readOnly") as boolean | undefined) === true;
       if (ro !== prevReadOnly) {
         prevReadOnly = ro;
@@ -128,7 +129,11 @@ export function useYjsSync(): YjsSyncResult {
       }
     };
     documentMetaMap.observe(documentMetaObserver);
-    documentMetaObserver();
+    const initRo = (documentMetaMap.get("readOnly") as boolean | undefined) === true;
+    if (initRo !== prevReadOnly) {
+      prevReadOnly = initRo;
+      setReadOnly(initRo);
+    }
 
     return () => {
       annotationsMap.unobserve(annotationObserver);
@@ -170,7 +175,9 @@ export function useYjsSync(): YjsSyncResult {
       pendingProvidersRef.current.set(doc.id, { ydoc, provider });
 
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
-      const metaObserver = () => {
+      const metaObserver = (event: Y.YMapEvent<unknown>) => {
+        if (!event.keysChanged.has("openDocuments") && !event.keysChanged.has("activeDocumentId"))
+          return;
         const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
         const active = meta.get("activeDocumentId") as string | null | undefined;
         if (docs) handleDocumentListRef.current?.(docs, active ?? null);
@@ -260,23 +267,32 @@ export function useYjsSync(): YjsSyncResult {
   useEffect(() => {
     if (!bootstrapRef.current) return;
     const meta = bootstrapRef.current.ydoc.getMap(Y_MAP_DOCUMENT_META);
-    const observer = () => {
-      // Detect server restart via generationId change
-      const newGenId = meta.get("generationId") as string | undefined;
-      if (newGenId && generationIdRef.current && newGenId !== generationIdRef.current) {
-        console.warn("[Tandem] Server restarted — refreshing documents");
-        setServerRestarted(true);
-        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => setServerRestarted(false), 5000);
+    const observer = (event: Y.YMapEvent<unknown>) => {
+      if (event.keysChanged.has("generationId")) {
+        const newGenId = meta.get("generationId") as string | undefined;
+        if (newGenId && generationIdRef.current && newGenId !== generationIdRef.current) {
+          console.warn("[Tandem] Server restarted — refreshing documents");
+          setServerRestarted(true);
+          if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+          restartTimerRef.current = setTimeout(() => setServerRestarted(false), 5000);
+        }
+        if (newGenId) generationIdRef.current = newGenId;
       }
-      if (newGenId) generationIdRef.current = newGenId;
 
-      const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
-      const active = meta.get("activeDocumentId") as string | null | undefined;
-      if (docs) handleDocumentListRef.current?.(docs, active ?? null);
+      if (event.keysChanged.has("openDocuments") || event.keysChanged.has("activeDocumentId")) {
+        const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
+        const active = meta.get("activeDocumentId") as string | null | undefined;
+        if (docs) handleDocumentListRef.current?.(docs, active ?? null);
+      }
     };
     meta.observe(observer);
-    observer();
+
+    // Initial read — process state that synced before observer was wired
+    const initGenId = meta.get("generationId") as string | undefined;
+    if (initGenId) generationIdRef.current = initGenId;
+    const initDocs = meta.get("openDocuments") as DocListEntry[] | undefined;
+    const initActive = meta.get("activeDocumentId") as string | null | undefined;
+    if (initDocs) handleDocumentListRef.current?.(initDocs, initActive ?? null);
     return () => {
       meta.unobserve(observer);
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
