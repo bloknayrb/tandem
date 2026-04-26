@@ -61,7 +61,7 @@ function buildDecorations(
           attrs = {
             class: "tandem-suggestion",
             style:
-              "background: var(--tandem-accent-bg); text-decoration: underline wavy var(--tandem-accent); text-underline-offset: 3px;",
+              "background: var(--tandem-suggestion-bg); text-decoration: underline wavy var(--tandem-suggestion); text-underline-offset: 3px;",
             "data-annotation-id": ann.id,
             "aria-label": "Replacement annotation",
           };

@@ -59,7 +59,7 @@ function getBorderColor(annotation: Annotation): string {
   if (annotation.color) {
     return HIGHLIGHT_COLORS[annotation.color] || "var(--tandem-border)";
   }
-  if (annotation.suggestedText !== undefined) return "var(--tandem-accent)"; // replacement
+  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)"; // replacement
   if (annotation.directedAt === "claude") return "var(--tandem-accent)"; // question for Claude
   if (annotation.type === "flag") return "var(--tandem-error)";
   return "var(--tandem-author-user)"; // plain comment

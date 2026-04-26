@@ -429,7 +429,7 @@ The probe produces a decision document filed as an ADR. The result determines th
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.8.0 | Token hygiene + annotation correctness | #313, #318, #340, #355, #356, #308, #344, #351, #364, #369, #376, #377, #379, #381, #382, #396, #415 |
+| v0.8.0 | Token hygiene + annotation correctness | #260, #313, #318, #340, #355, #356, #308, #344, #351, #364, #369, #376, #377, #379, #381, #382, #396, #415 |
 | v0.9.0 | MCP API cleanup + distribution | #259, PR e, #316, #317, #322, #341, ADR-023 CI smoke test |
 
 **v0.8.0** — Token hygiene (#340, #355, #356) is a quality gate for dark theme: dark mode CAN function without them, but shipping with hardcoded rgba decorations and no lint enforcement means regressions. Annotation correctness (#313, #318) is data integrity. #369 (dark-mode scrollbars) is a standalone visual fix that lands here as a prerequisite, not part of the full dark theme release. #377 (annotation offset resolving to wrong text) is a position-related bug — if investigation reveals it's systemic rather than a one-off, #260 moves into scope per the deferral criterion. #376 (monitor not pushing events) is a usability bug in the event push pipeline. #379 (Tiptap markdown round-trip drops tables and mangles formatting) is a data integrity issue — opening a file with tables and saving it silently destroys content. #381 (remove Accept/Reject from user annotations) and #382 (remove Replace/@Claude checkboxes from user toolbar) simplify the annotation UX — settle this before any framework migration so the simpler UI is what gets ported. #396 (HTTP API silent-failure gaps) is pre-v1.0 observability hardening — continuation of v0.6.4's #336 work but for the HTTP route layer instead of the stdio bridge; 1-3 line fixes per site, lands as one small PR.
@@ -493,13 +493,13 @@ Net result: ~28 tools (down from 31).
 - **Observer soak test:** 6 concurrent documents, rapid tab switching, Y.Doc swaps, reconnect after network drop — no leaks
 - **Uninstaller:** Strips all integration entries cleanly
 - **npm tarball:** `npm pack` → install → `npx -y tandem-editor --version` on Linux + Windows
-- **Zero open position-related bugs** (#260 deferral criterion)
+- **Zero open position-related bugs** (#260 completed in v0.8.0; residual issues #425, #426 are non-blocking)
 
 ### Deferred to Post-v1.0
 
 | Item | Reason |
 |------|--------|
-| #260 — Coordinate system refactoring | All known position bugs fixed, tests solid, abstraction stable. Refactoring pre-1.0 risks regression. **Deferral criterion:** zero open position-related bugs at v1.0 branch cut. If any surface, #260 moves into scope. |
+| ~~#260 — Coordinate system refactoring~~ | **Completed in v0.8.0** (PR #423). Pulled into scope after #377 investigation revealed three compounding bugs. Pre-existing issues filed as #425, #426. |
 | #24 — Tailwind CSS 4 | Token system is correct. Tailwind is a code-style question, not correctness. |
 | #153 — Inline images | Nice-to-have |
 | #244 — Windows Playwright deadlock | CI workaround exists |
