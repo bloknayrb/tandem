@@ -53,6 +53,7 @@
     "doctor": "node scripts/doctor.mjs",
     "dev:tauri": "node scripts/download-node-sidecar.mjs && cargo tauri dev",
     "build:tauri": "cargo tauri build",
+    "check:tokens": "tsx scripts/check-semantic-tokens.ts",
     "prepare": "husky",
     "prepublishOnly": "npm run build"
   },
@@ -63,6 +64,9 @@
     "*.{ts,tsx}": [
       "eslint --fix",
       "biome check --write"
+    ],
+    "src/client/**/*.{ts,tsx}": [
+      "tsx scripts/check-semantic-tokens.ts"
     ],
     "*.mjs": [
       "eslint --fix",
