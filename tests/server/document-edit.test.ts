@@ -30,7 +30,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
     doc.transact(() => {
       const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
       const startText = getOrCreateXmlText(startNode);
-      const startLen = startText.toString().length;
+      const startLen = startText.length;
       if (startPos.textOffset < startLen) {
         startText.delete(startPos.textOffset, startLen - startPos.textOffset);
       }
@@ -45,9 +45,17 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
       if (endPos.textOffset > 0) {
         endText.delete(0, endPos.textOffset);
       }
-      const remainingText = endText.toString();
-      if (remainingText.length > 0) {
-        startText.insert(startPos.textOffset, remainingText);
+      const remaining = endText.toDelta();
+      let mergeOffset = startPos.textOffset;
+      for (const seg of remaining) {
+        if (typeof seg.insert === "string") {
+          startText.insert(mergeOffset, seg.insert, seg.attributes);
+          mergeOffset += seg.insert.length;
+        } else {
+          const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
+          startText.insertEmbed(mergeOffset, embed, seg.attributes);
+          mergeOffset += 1;
+        }
       }
       fragment.delete(startPos.elementIndex + 1, 1);
 
@@ -172,6 +180,50 @@ describe("heading prefix rejection", () => {
     // offset 2 is still inside "## " prefix
     const err = applyEdit(doc, 2, 5, "X");
     expect(err).toContain("heading markup");
+  });
+});
+
+describe("formatted cross-element edits (regression #425)", () => {
+  it("preserves bold formatting when merging across paragraphs", () => {
+    // Build a doc with two paragraphs where the second has bold text:
+    //   "First paragraph"  (plain)
+    //   "Bold second"      (bold)
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const p1 = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p1]);
+    const t1 = new Y.XmlText();
+    p1.insert(0, [t1]);
+    t1.insert(0, "First paragraph");
+
+    const p2 = new Y.XmlElement("paragraph");
+    fragment.insert(1, [p2]);
+    const t2 = new Y.XmlText();
+    p2.insert(0, [t2]);
+    t2.insert(0, "Bold second");
+    t2.format(0, 11, { bold: true });
+
+    // Verify setup: "First paragraph\nBold second"
+    expect(extractText(doc)).toBe("First paragraph\nBold second");
+
+    // Cross-element edit: replace " paragraph\nBold " with " and "
+    // offsets: "First" = 0..4, " paragraph" = 5..14, \n = 15, "Bold " = 16..20, "second" = 21..26
+    const err = applyEdit(doc, 5, 21, " and ");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("First and second");
+
+    // The surviving "second" text should retain bold formatting
+    const merged = fragment.get(0) as Y.XmlElement;
+    const mergedText = merged.get(0) as Y.XmlText;
+    const delta = mergedText.toDelta();
+
+    // Delta should be: [{insert: "First and "}, {insert: "second", attributes: {bold: true}}]
+    expect(delta.length).toBe(2);
+    expect(delta[0].insert).toBe("First and ");
+    expect(delta[0].attributes).toBeUndefined();
+    expect(delta[1].insert).toBe("second");
+    expect(delta[1].attributes).toEqual({ bold: true });
   });
 });
 
