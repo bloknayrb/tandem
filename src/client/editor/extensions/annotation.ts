@@ -130,6 +130,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
     // Y.Map.size is O(n) — avoid calling it on every transaction.
     let hasAnnotations = annotationsMap.size > 0;
+    let recoveryAttempted = false;
 
     return [
       new Plugin({
@@ -146,9 +147,12 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
             if (tr.docChanged) {
               // Y.Map observer can fire before y-prosemirror populates the doc,
               // leaving decorationSet empty despite annotations in the map.
-              // Rebuild when doc content arrives and annotations are un-rendered.
-              if (decorationSet === DecorationSet.empty && hasAnnotations) {
-                return buildDecorations(newState.doc, annotationsMap, ydoc);
+              // Gate retries so degraded state (all annotations fail range
+              // validation) doesn't rebuild O(n) on every keystroke.
+              if (!recoveryAttempted && decorationSet === DecorationSet.empty && hasAnnotations) {
+                const rebuilt = buildDecorations(newState.doc, annotationsMap, ydoc);
+                if (rebuilt !== DecorationSet.empty) recoveryAttempted = true;
+                return rebuilt;
               }
               return decorationSet.map(tr.mapping, tr.doc);
             }
@@ -165,6 +169,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         view(editorView) {
           const observer = () => {
             hasAnnotations = annotationsMap.size > 0;
+            recoveryAttempted = false;
             const tr = editorView.state.tr.setMeta(annotationPluginKey, true);
             editorView.dispatch(tr);
           };
