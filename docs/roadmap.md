@@ -187,7 +187,7 @@ Remaining:
 - ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
 - Version indicator in the UI (#435) — About dialog or settings footer showing current version
 - "View Changelog" button in Settings panel (#437) — opens bundled `CHANGELOG.md` as a read-only document tab
-- Highlight color picker (switching from 5 to 4 colors in v0.9.0 per ADR-026; UI picker not yet built)
+- Highlight color picker (palette switched to 4 colors in PR #451; UI picker not yet built)
 
 ### Verification
 - First launch shows sample document with annotations
@@ -430,21 +430,21 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.8.0 | Token hygiene + annotation correctness + installer fix + Cowork PRs e–f (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434, #436, PR #370, PR #371 |
-| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259, #316, #317, #322, #435, #437, #440–#445, highlight palette migration, ADR-023 CI smoke test |
+| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259 ✅, #316, #317, #322, #435, #437, #440 ✅, #441, #442 ✅, #443, #444 ✅, #445, #450 ✅, ADR-023 CI smoke test |
 
 **v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Bundled into the same release: Cowork installer + onboarding (PRs #370, #371) and installer fixes (#434, #436). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), event push gap closed.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
 
 **Redesign gap audit (#439):** Product decisions resolved, design response prompt drafted (`docs/claude-design-response-prompt.md`). [Claude Design handoff](https://api.anthropic.com/v1/design/h/YkiJv2qQa82QG0GHUxce-g?open_file=Tandem+Redesign.html). Code-side work for v0.9.0:
-- #440 — `heldInSolo` schema field on `AnnotationBase` (BLOCKER for redesign)
+- #440 — `heldInSolo` schema field on `AnnotationBase` — **SHIPPED** (PR #451, 2026-04-27)
 - #441 — `/api/info` endpoint for About panel dynamic values (BLOCKER, prerequisite for #435)
-- #442 — New settings data model fields (8 fields + `showAuthorship` default → `true`). UI deferred to Svelte.
+- #442 — New settings data model fields (7 fields + `showAuthorship` default → `true`) — **SHIPPED** (PR #451, 2026-04-27). UI deferred to Svelte.
 - #443 — Authorship decorations switch from CSS classes to `data-tandem-author` attributes
-- #444 — Editor width minimum lowered from 50% to 40%
-- #445 — `tabbed-left` layout variant (new `LayoutMode` with own render branch)
+- #444 — Editor width minimum lowered from 50% to 40% — **SHIPPED** (PR #451, 2026-04-27)
+- #445 — `tabbed-left` layout variant (type + `PanelLayout` union added in PR #451; render branch deferred to PR 7)
 
-Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink; migration: `red` → `yellow`, `purple` → `blue`), density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale and `docs/v090-plan.md` for migration details.
+Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink; migration: `red` → `yellow`, `purple` → `blue`) — **SHIPPED** as #450 (PR #451, 2026-04-27). Density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale and `docs/v090-plan.md` for migration details.
 
 > **Note:** #341 event-type work is complete (8-variant discriminated union + branded position types already shipped). The remaining #341 scope is only the ADR-023 CI smoke test.
 

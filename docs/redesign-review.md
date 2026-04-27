@@ -87,7 +87,7 @@ These are significantly different hues. The design's coral reads as more sophist
 ### 2b. Highlight swatch palette
 
 **Design mini-toolbar:** 4 colors — yellow, green, blue, pink
-**Codebase&#x20;****HIGHLIGHT\_COLORS****:** 5 colors — yellow, red, green, blue, purple (`src/shared/constants.ts:16-22`)
+**Codebase&#x20;****HIGHLIGHT\_COLORS****:** ~~5 colors — yellow, red, green, blue, purple~~ → 4 colors: yellow, green, blue, pink (updated in PR #451, 2026-04-27; `src/shared/constants.ts:16-22`)
 
 Differences: design drops red and purple, adds pink. The codebase colors are referenced in `AnnotationCard.tsx`, `annotation.ts` (decorations), and `HighlightColorPicker.tsx`.
 
@@ -379,7 +379,7 @@ Add a warning: "ProseMirror positions are client-only. Server-side annotation da
 
 10. **showAuthorship default.** The design defaults this to `true`. The codebase defaults to `false`. Note in HANDOFF.md which is intended — changing to `true` would show authorship decorations to all users on upgrade.
 
-11. **Highlight colors.** Note in HANDOFF.md that the codebase palette is yellow/red/green/blue/purple (5 colors, stored by name as keys), while the design shows yellow/green/blue/pink (4 colors). Changing colors requires migrating existing annotations. Flag which palette is intended.
+11. **Highlight colors.** ~~Note in HANDOFF.md that the codebase palette is yellow/red/green/blue/purple (5 colors, stored by name as keys), while the design shows yellow/green/blue/pink (4 colors).~~ **Resolved:** Codebase palette updated to yellow/green/blue/pink (4 colors) in PR #451 (2026-04-27). Migration: `red` → `yellow`, `purple` → `blue` via `LEGACY_COLOR_MAP` in `schema.ts`.
 ```
 
 ---
@@ -391,7 +391,7 @@ Add a warning: "ProseMirror positions are client-only. Server-side annotation da
 - UI creates annotations via client Y.Map path, not MCP tools (MCP tools are called by Claude)
 - No oklch usage in current `src/` — net-new color space introduction
 - `useDragResize` confirmed with two independent resize handles in three-panel mode
-- `HIGHLIGHT_COLORS`: 5 entries (yellow/red/green/blue/purple) in `src/shared/constants.ts:16-22`
+- `HIGHLIGHT_COLORS`: ~~5 entries (yellow/red/green/blue/purple)~~ → 4 entries (yellow/green/blue/pink) as of PR #451 (2026-04-27) in `src/shared/constants.ts:16-22`
 - `ReplyThread.tsx` and `CommentThread.tsx` exist; `AnnotationCard.tsx:306` renders `ReplyThread`
 - Authorship tokens: `--tandem-author-user: #3b82f6`, `--tandem-author-claude: #ea8a1e` in `index.html`
 - Authorship decoration exists via `authorshipPluginKey` (`App.tsx:17, 132-138`) — translation task, not new build

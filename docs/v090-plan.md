@@ -28,17 +28,17 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 ## What's Unfinished (v0.9.0 Items — None Started)
 
 ### Blockers
-- **#440** — `heldInSolo` field on `AnnotationBase` (`src/shared/types.ts:71`, no field exists yet)
+- **#440** — `heldInSolo` field on `AnnotationBase` — **DONE** (PR #451, merged 2026-04-27)
 - **#441** — `/api/info` endpoint (prerequisite for #435; no route exists in `src/server/mcp/routes/`)
 
 ### Redesign Data Model (#439/ADR-026)
-- **#442** — 7 new `TandemSettings` fields + `showAuthorship` default `false` → `true` (per GH issue body, which enumerates exactly 7 fields; roadmap says "8" counting the default flip)
+- **#442** — 7 new `TandemSettings` fields + `showAuthorship` default `false` → `true` — **DONE** (PR #451, merged 2026-04-27)
 - **#443** — Authorship decorations: CSS classes → `data-tandem-author` attributes (current: `src/client/editor/extensions/authorship.ts:61`, CSS in `src/client/editor/editor.css:64-66`)
-- **#444** — Editor width minimum 50% → 40% (two clamp sites in `useTandemSettings.ts:83,127` + slider `min={50}` in `EditorSettings.tsx:24`)
-- **#445** — `tabbed-left` layout variant (needs: `LayoutMode` type, `PanelLayout` union in `panel-layout.ts:13-15`, `App.tsx:184-201` init + transition)
+- **#444** — Editor width minimum 50% → 40% — **DONE** (PR #451, merged 2026-04-27)
+- **#445** — `tabbed-left` layout variant (needs render branch in `App.tsx`; type + `PanelLayout` union added in PR #451, render logic deferred to PR 7)
 
 ### Highlight Palette Migration (ADR-026)
-- **Not tracked as an issue yet.** ADR-026 says palette switches from 5 colors to 4: yellow/green/blue/pink. Current `HighlightColorSchema` in `src/shared/types.ts:19` is `z.enum(["yellow", "red", "green", "blue", "purple"])`. Removing `red` and `purple` is a **data-loss risk** — existing annotations with those colors will fail Zod validation in `migrateToV1()`. Migration: `red` → `yellow`, `purple` → `blue`. **File a GH issue before implementation.**
+- **#450** — Palette switched from 5 colors to 4 (yellow/green/blue/pink). `LEGACY_COLOR_MAP` in `schema.ts` migrates `red` → `yellow`, `purple` → `blue`. `parseAnnotationDoc()` runs migration before Zod validation. — **DONE** (PR #451, merged 2026-04-27)
 
 ### MCP Tool Consolidation (#259) — CRITICAL: Last Breaking Window
 - Deprecate `tandem_suggest` (error stub + updated description string)
@@ -75,7 +75,7 @@ The 5 commits (checkpoint fix, decoration sync race, fatal diagnostics, roadmap 
 
 ### Wave 2 — All parallel, all branch from master after PR 1
 
-#### PR 2: Schema Foundations (#440 + #442 + #444 + highlight palette)
+#### PR 2: Schema Foundations (#440 + #442 + #444 + highlight palette) — **DONE** (merged as PR #451, 2026-04-27)
 - Add `heldInSolo?: boolean` to `AnnotationBase` in `src/shared/types.ts:71`
 - Add 7 new fields to `TandemSettings` interface + `DEFAULTS` in `src/client/hooks/useTandemSettings.ts`:
   - `accentHue: number` (default 239)
@@ -104,7 +104,7 @@ The 5 commits (checkpoint fix, decoration sync race, fatal diagnostics, roadmap 
   - Add test: `loadSettings()` parses `"tabbed-left"` as valid layout
   - Add test for each new field: valid value, invalid/unknown value, absent value
 - **No UI rendering changes** — settings UI deferred to Svelte (v0.10.0+)
-- **Closes:** #440, #442, #444 (clamp + slider)
+- **Closed:** #440, #442, #444, #450
 - **Key files:** `src/shared/types.ts`, `src/client/hooks/useTandemSettings.ts`, `src/client/components/EditorSettings.tsx`, `skills/tandem/SKILL.md` (color list), `tests/client/useTandemSettings.test.ts`
 - **Effort:** ~1 day
 
@@ -204,7 +204,7 @@ fix/audit-findings-batch → merge to master
                          PR 1 (docs)
                               ↓
         ┌──────────┬──────────┼──────────┬──────────┐
-       PR 2       PR 3       PR 4       PR 5       PR 6
+      ✅PR 2     PR 3       PR 4       PR 5       PR 6
     (schema+    (/api/info) (MCP#259)  (CI test)  (distro)
      palette)
         ↓          ↓
