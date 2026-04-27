@@ -309,10 +309,29 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
 }
 
 /**
+ * Textblock element types that are allowed to have direct XmlText children.
+ * Container nodes (bulletList, blockquote, orderedList, table, etc.) must NOT
+ * have XmlText created on them — their children are other XmlElements.
+ */
+const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
+
+/**
  * Find the first Y.XmlText child of a Y.XmlElement.
  * Creates one if the element is empty.
+ *
+ * Defense-in-depth: throws on non-textblock elements (containers like
+ * bulletList, blockquote, etc.) to prevent phantom XmlText corruption.
+ * The primary guard is the pre-transaction check in tandem_edit — this
+ * catch exists for any future code path that bypasses that guard.
  */
 export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+  if (!TEXTBLOCK_NODES.has(element.nodeName)) {
+    throw new Error(
+      `Cannot create XmlText on "${element.nodeName}" — only textblock elements ` +
+        `(paragraph, heading, codeBlock) should have direct XmlText children. ` +
+        `Edit a specific paragraph or list item instead.`,
+    );
+  }
   return (
     findXmlText(element) ??
     (() => {

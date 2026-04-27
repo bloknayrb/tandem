@@ -227,6 +227,63 @@ describe("formatted cross-element edits (regression #425)", () => {
   });
 });
 
+describe("getOrCreateXmlText container guard", () => {
+  it("throws on container element types", () => {
+    const containers = [
+      "bulletList",
+      "orderedList",
+      "blockquote",
+      "table",
+      "tableRow",
+      "tableCell",
+      "tableHeader",
+      "listItem",
+    ];
+    for (const name of containers) {
+      const d = new Y.Doc();
+      const fragment = d.getXmlFragment("content");
+      const el = new Y.XmlElement(name);
+      fragment.insert(0, [el]);
+
+      expect(() => getOrCreateXmlText(el), `should throw for ${name}`).toThrow(
+        /Cannot create XmlText/,
+      );
+      d.destroy();
+    }
+  });
+
+  it("allows paragraph elements", () => {
+    const d = new Y.Doc();
+    const fragment = d.getXmlFragment("content");
+    const para = new Y.XmlElement("paragraph");
+    fragment.insert(0, [para]);
+
+    expect(() => getOrCreateXmlText(para)).not.toThrow();
+    d.destroy();
+  });
+
+  it("allows heading elements", () => {
+    const d = new Y.Doc();
+    const fragment = d.getXmlFragment("content");
+    const heading = new Y.XmlElement("heading");
+    heading.setAttribute("level", 2 as any);
+    fragment.insert(0, [heading]);
+
+    expect(() => getOrCreateXmlText(heading)).not.toThrow();
+    d.destroy();
+  });
+
+  it("allows codeBlock elements", () => {
+    const d = new Y.Doc();
+    const fragment = d.getXmlFragment("content");
+    const codeBlock = new Y.XmlElement("codeBlock");
+    fragment.insert(0, [codeBlock]);
+
+    expect(() => getOrCreateXmlText(codeBlock)).not.toThrow();
+    d.destroy();
+  });
+});
+
 describe("validation", () => {
   it("from > to returns error", () => {
     doc = makeDoc("Hello");
