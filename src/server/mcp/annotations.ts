@@ -377,20 +377,21 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_suggest",
-    "DEPRECATED — use tandem_comment with suggestedText instead. This tool returns an error stub.",
+    "DEPRECATED — use tandem_comment with suggestedText instead. Always returns an error.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
-      newText: z.string().describe("Suggested replacement text"),
-      reason: z.string().optional().describe("Reason for the suggestion"),
-      documentId: z.string().optional().describe("Target document ID"),
-      textSnapshot: z.string().optional().describe("Expected text at [from, to]"),
+      from: z.number(),
+      to: z.number(),
+      newText: z.string(),
+      reason: z.string().optional(),
+      documentId: z.string().optional(),
+      textSnapshot: z.string().optional(),
     },
-    async () =>
+    withErrorBoundary("tandem_suggest", async () =>
       mcpError(
         "DEPRECATED",
         "tandem_suggest is deprecated. Use tandem_comment with suggestedText instead.",
       ),
+    ),
   );
 
   server.tool(

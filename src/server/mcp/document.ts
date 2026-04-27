@@ -490,7 +490,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_status",
-    'Check editor status, or set Claude\'s status text. Read-only when called with no params. Pass "text" to update the status shown to the user (e.g., "Reviewing cost figures...").',
+    "Check editor status (no params), or set Claude's visible status text (pass text).",
     {
       text: z.string().optional().describe("Status text to display — omit for read-only"),
       focusParagraph: z
@@ -509,6 +509,7 @@ export function registerDocumentTools(server: McpServer): void {
     withErrorBoundary(
       "tandem_status",
       async ({ text, focusParagraph, focusOffset, documentId }) => {
+        // Write mode — update Claude's status shown in the editor
         if (text !== undefined) {
           const current = getCurrentDoc(documentId);
           if (!current) {
@@ -533,6 +534,7 @@ export function registerDocumentTools(server: McpServer): void {
           return mcpSuccess({ status: text });
         }
 
+        // Read mode — return editor status summary
         const activeId = getActiveDocId();
         const active = activeId ? openDocs.get(activeId) : null;
 
