@@ -40,10 +40,10 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 ### Highlight Palette Migration (ADR-026)
 - **#450** — Palette switched from 5 colors to 4 (yellow/green/blue/pink). `LEGACY_COLOR_MAP` in `schema.ts` migrates `red` → `yellow`, `purple` → `blue`. `parseAnnotationDoc()` runs migration before Zod validation. — **DONE** (PR #451, merged 2026-04-27)
 
-### MCP Tool Consolidation (#259) — CRITICAL: Last Breaking Window
-- Deprecate `tandem_suggest` (error stub + updated description string)
-- Hard-remove `tandem_getContent` and `tandem_getSelections`
-- Merge `tandem_setStatus` into `tandem_status` (read/write with optional params)
+### MCP Tool Consolidation (#259) — **DONE** (PR #449, merged 2026-04-27)
+- ~~Deprecate `tandem_suggest` (error stub + updated description string)~~ Done
+- ~~Hard-remove `tandem_getContent` and `tandem_getSelections`~~ Done
+- ~~Merge `tandem_setStatus` into `tandem_status` (read/write with optional params)~~ Done
 - Update **all** docs and skill files referencing removed tools (see full list under PR 4)
 - Net result: ~28 tools (down from 31)
 
@@ -117,7 +117,7 @@ The 5 commits (checkpoint fix, decoration sync race, fatal diagnostics, roadmap 
 - **Key files:** `src/server/mcp/routes/info.ts` (new), `src/server/mcp/api-routes.ts`
 - **Effort:** ~0.5 day
 
-#### PR 4: MCP Tool Consolidation (#259) — HIGHEST PRIORITY
+#### PR 4: MCP Tool Consolidation (#259) — **DONE** (merged as PR #449, 2026-04-27)
 This is the last breaking-change window before semver lock. If it slips, removals wait until v2.0.
 
 **Tool changes:**
@@ -204,7 +204,7 @@ fix/audit-findings-batch → merge to master
                          PR 1 (docs)
                               ↓
         ┌──────────┬──────────┼──────────┬──────────┐
-      ✅PR 2     PR 3       PR 4       PR 5       PR 6
+      ✅PR 2     PR 3      ✅PR 4     PR 5       PR 6
     (schema+    (/api/info) (MCP#259)  (CI test)  (distro)
      palette)
         ↓          ↓
@@ -213,10 +213,10 @@ fix/audit-findings-batch → merge to master
     layout)     changelog)
 ```
 
-PRs 2–6 are fully independent and run in parallel.
+PRs 2–6 are fully independent and run in parallel. PRs 2 and 4 are complete.
 PRs 7 and 8 each have one dependency.
 
-**Critical path:** PR 4 (#259) is highest priority — last breaking-change window.
+**Critical path:** PR 4 (#259) was highest priority (last breaking-change window) — now complete.
 
 ---
 
