@@ -402,7 +402,7 @@ Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three indepe
 | 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | **DONE** (PR #398, merged 2026-04-23; follow-up tests: #399 → PR #408, merged 2026-04-24) |
 | 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | **DONE** (PRs #409, #411, #412, #413, merged 2026-04-24; plans: `docs/phase-1-plan.md`, `docs/phase-2-plan.md`) |
 | 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | — |
-| 6 | Polish: accessibility, E2E error recovery, Tauri integration tests (post-v1.0) | incremental | — |
+| 6 | Polish: E2E error recovery, extended Tauri integration tests (post-v1.0) | incremental | — |
 
 **Deferrals (with rationale in audit doc):** useYjsSync.ts (350 LOC, tight coupling makes splitting fragile), mcp/server.ts (331 LOC, manageable), shared/types.ts (274 LOC, reasonable for barrel), React.memo (measure with Profiler first), Biome linter (conflicts with ESLint).
 
@@ -504,8 +504,9 @@ Net result: ~28 tools (down from 31).
 - **Accessibility:** ARIA verified with Windows Narrator + macOS VoiceOver, forced-colors mode, WCAG AA contrast
 - **Observer soak test:** 6 concurrent documents, rapid tab switching, Y.Doc swaps, reconnect after network drop — no leaks
 - **Uninstaller:** Strips all integration entries cleanly
-- **npm tarball:** `npm pack` → install → `npx -y tandem-editor --version` on Linux + Windows
+- **npm tarball:** `npm pack` → install → `npx -y tandem-editor --version` on Linux + Windows (E2E already covers the built server bundle via `dist/server/index.js`; this criterion covers the npm packaging path and Tauri sidecar)
 - **Zero open position-related bugs** (#260 completed in v0.8.0; residual issues #425, #426 are non-blocking)
+- **Inline annotation decorations:** `[data-annotation-id]` decorations visible on pending annotations after MCP creates them — verified in both browser and Tauri builds
 
 ### Deferred to Post-v1.0
 
