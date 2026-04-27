@@ -12,11 +12,16 @@ import { PANEL_WIDTH_KEYS, type PanelSide } from "../shared/constants";
  */
 export type PanelLayout =
   | { kind: "tabbed"; right: number }
-  | { kind: "three-panel"; left: number; right: number };
+  | { kind: "three-panel"; left: number; right: number }
+  | { kind: "tabbed-left"; left: number };
 
 export const PANEL_MIN_WIDTH = 200;
 export const PANEL_MAX_WIDTH = 600;
 export const PANEL_DEFAULT_WIDTH = 300;
+
+export function getRightWidth(layout: PanelLayout): number {
+  return "right" in layout ? layout.right : PANEL_DEFAULT_WIDTH;
+}
 
 export function loadPanelWidth(side: PanelSide): number {
   const key = PANEL_WIDTH_KEYS[side];

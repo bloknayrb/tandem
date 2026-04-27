@@ -38,7 +38,7 @@ Standard workflow:
 
 Choose the right type for each finding:
 
-- **`tandem_highlight`** — Visual marker with a short note. Colors (full set): `green` (verified/good), `red` (problem), `yellow` (needs attention), `blue` (informational), `purple` (style/tone). Prefer the first three for review work; `blue`/`purple` are available when a fourth/fifth category is meaningful. Use when the finding is self-evident from the color and a brief note.
+- **`tandem_highlight`** — Visual marker with a short note. Colors: `green` (verified/good), `yellow` (needs attention), `blue` (informational), `pink` (style/tone). Use when the finding is self-evident from the color and a brief note.
 - **`tandem_comment`** — Observation requiring explanation. Use when you need more than one sentence to convey reasoning.
 - **`tandem_suggest`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
 - **`tandem_flag`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.

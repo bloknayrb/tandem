@@ -18,6 +18,7 @@ import {
   AnnotationStatusSchema,
   AnnotationTypeSchema,
   AuthorSchema,
+  type HighlightColor,
   HighlightColorSchema,
   ReplyAuthorSchema,
 } from "../../shared/types.js";
@@ -165,6 +166,18 @@ export type AnnotationReplyRecordV1 = z.infer<typeof AnnotationReplyRecordSchema
 export type TombstoneRecordV1 = z.infer<typeof TombstoneRecordSchemaV1>;
 
 // ---------------------------------------------------------------------------
+// Color migration helpers
+// ---------------------------------------------------------------------------
+
+const LEGACY_COLOR_MAP: Record<string, HighlightColor> = { red: "yellow", purple: "blue" };
+
+function migrateHighlightColor(ann: Record<string, unknown>): void {
+  if (typeof ann.color === "string" && ann.color in LEGACY_COLOR_MAP) {
+    ann.color = LEGACY_COLOR_MAP[ann.color];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Parse + migrate
 // ---------------------------------------------------------------------------
 
@@ -217,6 +230,16 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     return { ok: false, error: "future", schemaVersion };
   }
 
+  // Migrate legacy highlight colors before validation.
+  const cand = candidate as { annotations?: unknown };
+  if (Array.isArray(cand.annotations)) {
+    for (const ann of cand.annotations) {
+      if (ann && typeof ann === "object") {
+        migrateHighlightColor(ann as Record<string, unknown>);
+      }
+    }
+  }
+
   const result = AnnotationDocSchemaV1.safeParse(candidate);
   if (!result.success) {
     return { ok: false, error: "corrupt" };
@@ -267,6 +290,7 @@ export function migrateToV1(raw: unknown): MigrationResult {
       continue;
     }
     const withRev = { rev: 0, ...(ann as object) };
+    migrateHighlightColor(withRev as Record<string, unknown>);
     const parsed = AnnotationRecordSchemaV1.safeParse(withRev);
     if (parsed.success) annotations.push(parsed.data);
     else droppedAnnotations++;

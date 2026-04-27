@@ -35,7 +35,7 @@ describe("tandem_highlight tool logic", () => {
     const ydoc = setupDoc("hl-2", "Hello world test content here");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
-    for (const color of ["yellow", "red", "green", "blue", "purple"] as const) {
+    for (const color of ["yellow", "green", "blue", "pink"] as const) {
       const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "", { color });
       const stored = map.get(id) as Annotation;
       expect(stored.color).toBe(color);
@@ -339,7 +339,7 @@ describe("annotation on multi-document", () => {
     const map2 = ydoc2.getMap(Y_MAP_ANNOTATIONS);
 
     createAnnotation(map1, ydoc1, "comment", rangeOf(0, 3), "on doc 1");
-    createAnnotation(map2, ydoc2, "highlight", rangeOf(0, 3), "", { color: "red" });
+    createAnnotation(map2, ydoc2, "highlight", rangeOf(0, 3), "", { color: "yellow" });
 
     expect(collectAnnotations(map1)).toHaveLength(1);
     expect(collectAnnotations(map2)).toHaveLength(1);

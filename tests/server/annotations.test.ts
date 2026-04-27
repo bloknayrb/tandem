@@ -49,10 +49,10 @@ describe("createAnnotation", () => {
   it("extras override defaults", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "red" });
+    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "yellow" });
 
     const stored = map.get(id) as Annotation;
-    expect(stored.color).toBe("red");
+    expect(stored.color).toBe("yellow");
   });
 });
 

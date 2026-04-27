@@ -5,10 +5,9 @@ import { ToolbarButton } from "./ToolbarButton";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
   { value: "yellow", label: "Yellow" },
-  { value: "red", label: "Red" },
   { value: "green", label: "Green" },
   { value: "blue", label: "Blue" },
-  { value: "purple", label: "Purple" },
+  { value: "pink", label: "Pink" },
 ];
 
 interface HighlightColorPickerProps {

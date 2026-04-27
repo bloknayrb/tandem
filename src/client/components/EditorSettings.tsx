@@ -21,7 +21,7 @@ export function EditorSettings({ settings, onUpdate }: EditorSettingsProps) {
       <input
         data-testid="editor-width-slider"
         type="range"
-        min={50}
+        min={40}
         max={100}
         step={5}
         value={settings.editorWidthPercent}
@@ -37,7 +37,7 @@ export function EditorSettings({ settings, onUpdate }: EditorSettingsProps) {
           color: "var(--tandem-fg-subtle)",
         }}
       >
-        <span>50%</span>
+        <span>40%</span>
         <span>100%</span>
       </div>
     </div>

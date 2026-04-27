@@ -8,6 +8,7 @@ import {
 } from "react";
 import { PANEL_WIDTH_KEYS, type PanelSide } from "../../shared/constants";
 import {
+  getRightWidth,
   PANEL_DEFAULT_WIDTH,
   PANEL_MAX_WIDTH,
   PANEL_MIN_WIDTH,
@@ -67,7 +68,7 @@ export function useDragResize({
       if (side === "left") {
         startWidth = current.kind === "three-panel" ? current.left : PANEL_DEFAULT_WIDTH;
       } else {
-        startWidth = current.right;
+        startWidth = getRightWidth(current);
       }
       const storageKey = PANEL_WIDTH_KEYS[side];
       let latestWidth = startWidth;
