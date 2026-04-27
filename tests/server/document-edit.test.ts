@@ -212,7 +212,7 @@ describe("cross-element edits with formatting", () => {
     });
 
     // "First line\nplain bold end"
-    // offset 6 = start of "line", offset 17 = after "plain " (11+6)
+    // offset 6 = start of "line", offset 17 = start of "bold" (11 + 6)
     const err = applyEdit(doc, 6, 17, " ");
     expect(err).toBeNull();
 
@@ -259,6 +259,109 @@ describe("cross-element edits with formatting", () => {
     const boldSeg = delta.find((d: any) => d.attributes?.bold === true);
     expect(boldSeg).toBeDefined();
     expect(boldSeg!.insert).toBe("bold");
+  });
+
+  it("correctly deletes from formatted start element (Bug A regression)", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    doc.transact(() => {
+      const p1 = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p1]);
+      const t1 = new Y.XmlText();
+      p1.insert(0, [t1]);
+      t1.insert(0, "Hello world");
+      t1.format(0, 5, { bold: true });
+
+      const p2 = new Y.XmlElement("paragraph");
+      fragment.insert(1, [p2]);
+      const t2 = new Y.XmlText();
+      p2.insert(0, [t2]);
+      t2.insert(0, "Second");
+    });
+
+    // "Hello world\nSecond" — delete from offset 3 to 14 ("ond")
+    // startText = "Hello world" with bold on "Hello", startLen should be 11
+    // With toString().length it would be 24 (<bold>Hello</bold> world) → over-delete
+    const err = applyEdit(doc, 3, 15, "X");
+    expect(err).toBeNull();
+
+    const resultEl = fragment.get(0) as Y.XmlElement;
+    const resultText = resultEl.get(0) as Y.XmlText;
+    const delta = resultText.toDelta();
+
+    expect(extractText(doc)).toBe("HelXond");
+    const boldSeg = delta.find((d: any) => d.attributes?.bold === true);
+    expect(boldSeg).toBeDefined();
+    expect((boldSeg!.insert as string).startsWith("Hel")).toBe(true);
+  });
+
+  it("preserves hardBreak embed in cross-element merge", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    doc.transact(() => {
+      const p1 = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p1]);
+      const t1 = new Y.XmlText();
+      p1.insert(0, [t1]);
+      t1.insert(0, "AAA");
+
+      const p2 = new Y.XmlElement("paragraph");
+      fragment.insert(1, [p2]);
+      const t2 = new Y.XmlText();
+      p2.insert(0, [t2]);
+      t2.insert(0, "before");
+      const br = new Y.XmlElement("hardBreak");
+      t2.insertEmbed(6, br);
+      t2.insert(7, "after");
+    });
+
+    // "AAA\nbefore[hardBreak]after" — delete from 3 to 4 (just the newline)
+    const err = applyEdit(doc, 3, 4, "");
+    expect(err).toBeNull();
+
+    const resultEl = fragment.get(0) as Y.XmlElement;
+    const resultText = resultEl.get(0) as Y.XmlText;
+    const delta = resultText.toDelta();
+
+    const embedSeg = delta.find((d: any) => typeof d.insert !== "string");
+    expect(embedSeg).toBeDefined();
+    const allText = delta
+      .filter((d: any) => typeof d.insert === "string")
+      .map((d: any) => d.insert)
+      .join("");
+    expect(allText).toContain("before");
+    expect(allText).toContain("after");
+  });
+
+  it("plain text after bold stays plain via ?? {} inheritance prevention", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    doc.transact(() => {
+      const p1 = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p1]);
+      const t1 = new Y.XmlText();
+      p1.insert(0, [t1]);
+      t1.insert(0, "bold start");
+      t1.format(0, 10, { bold: true });
+
+      const p2 = new Y.XmlElement("paragraph");
+      fragment.insert(1, [p2]);
+      const t2 = new Y.XmlText();
+      p2.insert(0, [t2]);
+      t2.insert(0, "plain text");
+    });
+
+    // "bold start\nplain text" — delete from 5 to 11 (end of "start" + newline)
+    const err = applyEdit(doc, 5, 11, "");
+    expect(err).toBeNull();
+
+    const resultEl = fragment.get(0) as Y.XmlElement;
+    const resultText = resultEl.get(0) as Y.XmlText;
+    const delta = resultText.toDelta();
+
+    const plainSeg = delta.find((d: any) => d.insert === "plain text");
+    expect(plainSeg).toBeDefined();
+    expect(plainSeg!.attributes?.bold).toBeUndefined();
   });
 });
 
