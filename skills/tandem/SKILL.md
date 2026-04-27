@@ -15,10 +15,10 @@ Tandem lets you annotate and edit documents alongside the user in real time. The
 
 These prevent the most common failures. Follow them always.
 
-1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit`, `tandem_highlight`, `tandem_comment`, `tandem_suggest`, or `tandem_flag`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits.
+1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit`, `tandem_highlight`, `tandem_comment`, or `tandem_flag`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document.
-3. **Use `tandem_getTextContent`, not `tandem_getContent`.** `getContent` returns ProseMirror JSON and burns tokens. Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
-4. **`tandem_edit` cannot create paragraphs.** Newlines become literal characters. For multi-paragraph changes, use multiple `tandem_edit` calls or `tandem_suggest`.
+3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
+4. **`tandem_edit` cannot create paragraphs.** Newlines become literal characters. For multi-paragraph changes, use multiple `tandem_edit` calls or `tandem_comment` with `suggestedText`.
 5. **`.docx` files are read-only.** Use annotations instead of `tandem_edit`. Offer `tandem_convertToMarkdown` if the user wants an editable copy.
 
 ## Workflow
@@ -27,7 +27,7 @@ Standard workflow:
 
 1. `tandem_status` — check for already-open documents (sessions restore automatically)
 2. `tandem_getOutline` — understand document structure
-3. `tandem_setStatus("Working on [section]...", { focusParagraph: N })` — show progress (use `index` from outline)
+3. `tandem_status({ text: "Working on [section]...", focusParagraph: N })` — show progress (use `index` from outline)
 4. `tandem_getTextContent({ section: "..." })` — read one section at a time
 5. Annotate or edit as needed (see annotation guide below)
 6. `tandem_checkInbox` — check for user messages and actions
@@ -40,7 +40,7 @@ Choose the right type for each finding:
 
 - **`tandem_highlight`** — Visual marker with a short note. Colors: `green` (verified/good), `yellow` (needs attention), `blue` (informational), `pink` (style/tone). Use when the finding is self-evident from the color and a brief note.
 - **`tandem_comment`** — Observation requiring explanation. Use when you need more than one sentence to convey reasoning.
-- **`tandem_suggest`** — Specific text replacement. **Prefer over comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs.
+- **`tandem_comment` with `suggestedText`** — Specific text replacement. **Prefer over plain comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs. Pass replacement text as `suggestedText`; the comment text explains the reason.
 - **`tandem_flag`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
 
 **User questions to Claude.** Users can author a "question" annotation in the UI. The server normalizes it to `type: "comment"` with `directedAt: "claude"` before returning it — so when scanning `tandem_checkInbox` or `tandem_getAnnotations`, match on `type === "comment" && directedAt === "claude" && author === "user"`, not `type === "question"`. Respond with `tandem_reply` for conversational answers, or a new `tandem_comment` on the same range for a textual annotation.
@@ -59,7 +59,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 ## Collaboration Etiquette
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area.
-- Use `tandem_setStatus` to show what you're working on — the user sees it in the editor status bar.
+- Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
 - **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. The real-time channel is often not connected; polling is the reliable path.
 - Reply to chat messages with `tandem_reply`, not annotations.
 
@@ -67,7 +67,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 1. `tandem_open` — opens in read-only mode (`readOnly: true`)
 2. `tandem_getAnnotations({ author: "import" })` — check for imported Word comments; read and act on them
-3. Annotate with findings (highlight, comment, suggest, flag)
+3. Annotate with findings (highlight, comment, comment with suggestedText, flag)
 4. `tandem_exportAnnotations` — generate a review summary the user can share
 5. If the user wants editable text, offer `tandem_convertToMarkdown`
 

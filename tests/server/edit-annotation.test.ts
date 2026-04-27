@@ -253,21 +253,17 @@ describe("tandem_comment via MCP", () => {
   });
 });
 
-describe("tandem_suggest shim via MCP", () => {
-  it("creates comment with suggestedText from newText/reason", async () => {
-    const ydoc = setupDoc("suggest-shim-1", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+describe("tandem_suggest deprecation stub", () => {
+  it("returns DEPRECATED error regardless of arguments", async () => {
+    setupDoc("suggest-deprecated-1", "Hello world");
 
     const result = await client.callTool({
       name: "tandem_suggest",
       arguments: { from: 0, to: 5, newText: "Hi", reason: "brevity" },
     });
     const parsed = parseResult(result as any);
-    expect(parsed.error).toBe(false);
-
-    const ann = map.get(parsed.data.annotationId) as Annotation;
-    expect(ann.type).toBe("comment");
-    expect(ann.suggestedText).toBe("Hi");
-    expect(ann.content).toBe("brevity");
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+    expect(parsed.message).toMatch(/deprecated/i);
   });
 });

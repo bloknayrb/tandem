@@ -32,7 +32,7 @@ Setup complete! Start Tandem with: tandem
 Then in Claude, your tandem_* tools will be available.
 ```
 
-The skill teaches Claude how to use Tandem's 31 MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
+The skill teaches Claude how to use Tandem's 28 MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
 Start Tandem from any directory:
 ```bash
@@ -85,7 +85,7 @@ Claude: tandem_getOutline()
 Claude reads section by section without loading the full doc:
 
 ```
-Claude: tandem_setStatus("Working on Cost Summary...", { focusParagraph: 8 })
+Claude: tandem_status({ text: "Working on Cost Summary...", focusParagraph: 8 })
 Claude: tandem_getTextContent({ section: "Cost Summary" })
 ```
 
@@ -117,7 +117,7 @@ Bryan sees the suggestion in the side panel -- accepts or rejects with one click
 When done:
 ```
 Claude: tandem_save()
-Claude: tandem_setStatus("Done")
+Claude: tandem_status({ text: "Done" })
 ```
 
 ## Cross-Referencing an Invoice (Multi-Document)
@@ -192,7 +192,7 @@ Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\rfp-response-draft.md" }
 The document starts with a skeleton. Claude drafts a section:
 
 ```
-Claude: tandem_setStatus("Drafting Technical Approach section...")
+Claude: tandem_status({ text: "Drafting Technical Approach section..." })
 Claude: tandem_resolveRange({ pattern: "[Technical approach content here]" })
 → { from: 156, to: 192 }
 

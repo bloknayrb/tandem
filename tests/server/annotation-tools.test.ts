@@ -55,7 +55,7 @@ describe("tandem_comment tool logic", () => {
   });
 });
 
-describe("tandem_suggest tool logic (comment with suggestedText)", () => {
+describe("tandem_comment with suggestedText", () => {
   it("creates comment with suggestedText", () => {
     const ydoc = setupDoc("sg-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);

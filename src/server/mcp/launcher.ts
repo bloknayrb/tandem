@@ -14,7 +14,7 @@ const TANDEM_SYSTEM_PROMPT = [
   "You will receive real-time push notifications via the tandem-channel when users",
   "create annotations, send chat messages, accept/dismiss your suggestions, or switch documents.",
   "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_highlight,",
-  "tandem_suggest, tandem_edit, etc.) to review and annotate documents.",
+  "tandem_edit, etc.) to review and annotate documents.",
   "Start by calling tandem_checkInbox to see what needs attention.",
 ].join(" ");
 

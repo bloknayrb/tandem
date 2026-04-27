@@ -15,7 +15,6 @@ import {
   getOpenDocs,
   hasDoc,
   removeDoc,
-  requireDocument,
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -37,24 +36,6 @@ function setupDoc(id: string, text: string, opts?: { readOnly?: boolean; format?
 beforeEach(() => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
-});
-
-describe("tandem_getContent logic", () => {
-  it("returns non-empty fragment JSON for populated doc", () => {
-    const ydoc = setupDoc("gc-1", "Hello world");
-    const fragment = ydoc.getXmlFragment("default");
-    const json = fragment.toJSON();
-    expect(json).toBeDefined();
-    expect(typeof json === "string" || typeof json === "object").toBe(true);
-  });
-
-  it("returns null for non-existent document", () => {
-    expect(requireDocument("nonexistent")).toBeNull();
-  });
-
-  it("returns null when no active document", () => {
-    expect(requireDocument()).toBeNull();
-  });
 });
 
 describe("tandem_getTextContent — section filtering via getSection()", () => {

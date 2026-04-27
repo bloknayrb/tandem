@@ -277,7 +277,7 @@ describe("tandem_reply — real Y.Map operations", () => {
   });
 });
 
-describe("tandem_setStatus — real Y.Map operations", () => {
+describe("tandem_status — real Y.Map operations", () => {
   it("writes Claude status to awareness map", () => {
     const ydoc = setupDoc("status-1", "Hello world");
     const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
@@ -342,24 +342,6 @@ describe("tandem_setStatus — real Y.Map operations", () => {
     };
     expect(claude.focusParagraph).toBeNull();
     expect(claude.focusOffset).toBe(5);
-  });
-});
-
-describe("tandem_getSelections — real Y.Map operations", () => {
-  it("returns empty when no selection exists", () => {
-    const ydoc = setupDoc("sel-1", "Hello world");
-    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    expect(userAwareness.get("selection")).toBeUndefined();
-  });
-
-  it("detects no selection when from === to", () => {
-    const ydoc = setupDoc("sel-2", "Hello world");
-    const userAwareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.set("selection", { from: 3, to: 3, timestamp: Date.now() });
-
-    const selection = userAwareness.get("selection") as { from: number; to: number };
-    // Production code: if (!selection || selection.from === selection.to) → no text selected
-    expect(selection.from === selection.to).toBe(true);
   });
 });
 

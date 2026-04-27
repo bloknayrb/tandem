@@ -478,19 +478,19 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 
 **No Tailwind migration.** The `--tandem-*` CSS custom-property system is already semantically correct. Dark mode works via `[data-theme="dark"]` token switching, which keeps dark logic in CSS rather than markup. The ~290 inline styles are a code-style preference, not a correctness issue. Evaluate Tailwind post-1.0 if inline styles become a contribution barrier.
 
-### MCP Tool Consolidation (#259)
+### MCP Tool Consolidation (#259) — done in PR #449
 
-| Tool | Action |
-|------|--------|
-| `tandem_suggest` | Deprecate (keep error-returning stub for one release, hard-remove in v0.10.0) |
-| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`) |
-| `tandem_getSelections` | Hard-remove (redundant with `tandem_checkInbox.activity.selectedText`) |
-| `tandem_setStatus` | Merge into `tandem_status` (read/write with optional params) |
-| `tandem_getActivity` | Keep |
-| `tandem_getContext` | Keep |
-| `tandem_removeAnnotation` | Keep |
+| Tool | Action | Status |
+|------|--------|--------|
+| `tandem_suggest` | Deprecate (error stub, hard-remove in v0.10.0) | Done |
+| `tandem_getContent` | Hard-remove (superseded by `tandem_getTextContent`) | Done |
+| `tandem_getSelections` | Hard-remove (redundant with `tandem_checkInbox`) | Done |
+| `tandem_setStatus` | Merge into `tandem_status` (read/write) | Done |
+| `tandem_getActivity` | Keep | — |
+| `tandem_getContext` | Keep | — |
+| `tandem_removeAnnotation` | Keep | — |
 
-Net result: ~28 tools (down from 31).
+Net result: 28 tools (down from 31).
 
 ### v1.0.0 Exit Criteria
 
