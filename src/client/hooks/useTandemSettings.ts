@@ -6,6 +6,7 @@ import {
   SELECTION_DWELL_MIN_MS,
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants";
+import type { TandemMode } from "../../shared/types.js";
 
 export type LayoutMode = "tabbed" | "three-panel" | "tabbed-left";
 export type EditorFont = "serif" | "sans" | "mono";
@@ -28,7 +29,7 @@ export interface TandemSettings {
   accentHue: number;
   editorFont: EditorFont;
   density: Density;
-  defaultMode: "solo" | "tandem";
+  defaultMode: TandemMode;
   highContrast: boolean;
   annotationPatterns: boolean;
   selectionToolbar: boolean;
@@ -73,7 +74,9 @@ const DEFAULTS: TandemSettings = {
  * ranges on load so corrupted storage cannot wedge the app at an invalid
  * setting. Non-numeric or missing values fall back to the default via the
  * `Number(x) || DEFAULT` idiom (note: this treats `0` as falsy, which is
- * intentional — `0` is not a valid dwell or width anyway).
+ * intentional — `0` is not a valid dwell or width anyway). `accentHue` is
+ * the exception: hue 0 (red) is valid, so it uses an explicit `typeof`
+ * range check instead.
  */
 export function loadSettings(): TandemSettings {
   let saved: string | null;
@@ -109,7 +112,7 @@ export function loadSettings(): TandemSettings {
             Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
           ),
         ),
-        showAuthorship: parsed.showAuthorship === true,
+        showAuthorship: parsed.showAuthorship === false ? false : DEFAULTS.showAuthorship,
         reduceMotion:
           typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
         textSize:
@@ -168,7 +171,9 @@ export function mergeAndClampSettings(
       SELECTION_DWELL_MIN_MS,
       Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
     ),
-    accentHue: Math.max(0, Math.min(360, merged.accentHue)),
+    accentHue: Number.isFinite(merged.accentHue)
+      ? Math.max(0, Math.min(360, merged.accentHue))
+      : DEFAULTS.accentHue,
   };
 }
 

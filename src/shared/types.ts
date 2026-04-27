@@ -91,7 +91,7 @@ interface AnnotationBase {
    * `rev: 0` by the merge/sync code.
    */
   rev?: number;
-  /** When true, this annotation was created while Solo mode was active and is held back from display. */
+  /** When true, marks this annotation as created during Solo mode. Consumers use this to hold back display until mode changes. */
   heldInSolo?: boolean;
 }
 

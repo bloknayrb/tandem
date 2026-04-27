@@ -360,7 +360,7 @@ Highlight text with a color and optional note.
 |-----------|------|----------|-------------|
 | `from` | number | yes | Start position |
 | `to` | number | yes | End position |
-| `color` | enum | yes | `yellow`, `red`, `green`, `blue`, `purple` |
+| `color` | enum | yes | `yellow`, `green`, `blue`, `pink` |
 | `note` | string | no | Optional note for the highlight |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
@@ -372,7 +372,7 @@ Highlight text with a color and optional note.
 
 **Example:**
 ```
-tandem_highlight({ from: 42, to: 67, color: "red", note: "This figure doesn't match the invoice" })
+tandem_highlight({ from: 42, to: 67, color: "yellow", note: "This figure doesn't match the invoice" })
 ```
 
 ---
@@ -491,7 +491,7 @@ Read all annotations, optionally filtered. For checking new user actions, prefer
       "content": "This figure doesn't match the invoice",
       "status": "pending",
       "timestamp": 1710936000000,
-      "color": "red"
+      "color": "yellow"
     }
   ],
   "count": 1

@@ -3,8 +3,9 @@ import { PANEL_WIDTH_KEYS, type PanelSide } from "../shared/constants";
 /**
  * Client-local UI state describing the current side-panel arrangement.
  *
- * Discriminated union so `left` is present if and only if the layout is
- * three-panel — illegal states ("tabbed with a left width") cannot exist.
+ * Discriminated union: each variant carries only the width(s) it uses.
+ * `right` is present in layouts with a right panel (tabbed, three-panel).
+ * `left` is present in layouts with a left panel (three-panel, tabbed-left).
  *
  * Purely in-memory: widths still persist individually via `PANEL_WIDTH_KEYS`
  * in localStorage. Keeping this client-side (not in `src/shared/types.ts`)

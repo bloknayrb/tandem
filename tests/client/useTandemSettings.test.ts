@@ -313,6 +313,10 @@ describe("useTandemSettings — updateSettings write path", () => {
     expect(mergeAndClampSettings(BASE, { accentHue: 400 }).accentHue).toBe(360);
     expect(mergeAndClampSettings(BASE, { accentHue: 180 }).accentHue).toBe(180);
   });
+
+  it("falls back to default accentHue for NaN", () => {
+    expect(mergeAndClampSettings(BASE, { accentHue: NaN }).accentHue).toBe(239);
+  });
 });
 
 describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
@@ -337,6 +341,11 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
   it("preserves stored showAuthorship: false (user choice)", () => {
     writeRawSettings({ showAuthorship: false });
     expect(loadSettings().showAuthorship).toBe(false);
+  });
+
+  it("defaults showAuthorship to true for upgrading users (key absent from existing blob)", () => {
+    writeRawSettings({ layout: "three-panel", editorWidthPercent: 75 });
+    expect(loadSettings().showAuthorship).toBe(true);
   });
 
   it("accepts tabbed-left as a valid layout", () => {

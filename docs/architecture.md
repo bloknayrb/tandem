@@ -155,7 +155,7 @@ Claude calls tandem_open("invoice.docx")
     → Browser receives updated list, adds second tab
     → DocumentTabs renders both tabs, second tab active
 
-Claude calls tandem_highlight({ from: 10, to: 20, color: "red", documentId: "report-a1b2c3" })
+Claude calls tandem_highlight({ from: 10, to: 20, color: "yellow", documentId: "report-a1b2c3" })
     → Targets report.md even though invoice.docx is the active document
 ```
 

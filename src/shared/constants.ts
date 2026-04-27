@@ -13,7 +13,9 @@ export const DISCONNECT_DEBOUNCE_MS = 3000; // 3 seconds before showing "server 
 export const PROLONGED_DISCONNECT_MS = 30_000; // 30 seconds before showing App-level disconnect banner
 export const OVERLAY_STALE_DEBOUNCE = 200; // 200ms
 
-export const HIGHLIGHT_COLORS: Record<string, string> = {
+import type { HighlightColor } from "./types.js";
+
+export const HIGHLIGHT_COLORS: Record<HighlightColor, string> = {
   yellow: "rgba(255, 235, 59, 0.3)",
   green: "rgba(76, 175, 80, 0.3)",
   blue: "rgba(33, 150, 243, 0.3)",

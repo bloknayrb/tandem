@@ -403,6 +403,46 @@ describe("highlight color migration", () => {
     expect(result.doc.annotations[1]?.color).toBe("blue");
     expect(result.doc.annotations[2]?.color).toBe("blue");
   });
+
+  it("migrateToV1 passes through annotations without a color field", () => {
+    const legacy = {
+      annotations: [
+        {
+          id: "ann_comment",
+          author: "user",
+          type: "comment",
+          range: { from: 0, to: 5 },
+          content: "A note",
+          status: "pending",
+          timestamp: 1,
+        },
+      ],
+    };
+    const { doc, droppedAnnotations } = migrateToV1(legacy);
+    expect(droppedAnnotations).toBe(0);
+    expect(doc.annotations).toHaveLength(1);
+    expect(doc.annotations[0]?.color).toBeUndefined();
+  });
+
+  it("migrateToV1 drops annotations with unknown future colors", () => {
+    const legacy = {
+      annotations: [
+        {
+          id: "ann_orange",
+          author: "claude",
+          type: "highlight",
+          range: { from: 0, to: 5 },
+          content: "",
+          status: "pending",
+          timestamp: 1,
+          color: "orange",
+        },
+      ],
+    };
+    const { doc, droppedAnnotations } = migrateToV1(legacy);
+    expect(droppedAnnotations).toBe(1);
+    expect(doc.annotations).toHaveLength(0);
+  });
 });
 
 describe("AnnotationRecordSchemaV1 — per-record shape", () => {

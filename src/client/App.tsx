@@ -189,8 +189,9 @@ export default function App() {
     return { kind: "tabbed", right: loadPanelWidth("right") };
   });
 
-  // Transition between variants when the user toggles layout mid-session.
-  // Preserves `right` across both directions and `left` on return to three-panel.
+  // Transition between layout variants when the user toggles mid-session.
+  // Each variant extracts the widths it needs from the previous layout,
+  // falling back to localStorage if the previous variant lacked that dimension.
   useEffect(() => {
     setPanelLayout((prev) => {
       if (settings.layout === "three-panel") {

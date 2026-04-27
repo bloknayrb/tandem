@@ -78,9 +78,10 @@ const RelativeRangeSchema = z
 // ---------------------------------------------------------------------------
 
 /**
- * Per-annotation envelope record. Structurally matches `AnnotationBase` from
+ * Per-annotation envelope record. Largely mirrors `AnnotationBase` from
  * `src/shared/types.ts`, plus the optional type-discriminator fields
- * (`color` / `suggestedText` / `directedAt`), plus the new required `rev`.
+ * (`color` / `suggestedText` / `directedAt`), plus the required `rev`.
+ * Fields not listed here (e.g. `heldInSolo`) are preserved via `.passthrough()`.
  */
 export const AnnotationRecordSchemaV1 = z
   .object({
@@ -169,11 +170,15 @@ export type TombstoneRecordV1 = z.infer<typeof TombstoneRecordSchemaV1>;
 // Color migration helpers
 // ---------------------------------------------------------------------------
 
-const LEGACY_COLOR_MAP: Record<string, HighlightColor> = { red: "yellow", purple: "blue" };
+const LEGACY_COLOR_MAP: Record<"red" | "purple", HighlightColor> = {
+  red: "yellow",
+  purple: "blue",
+};
 
 function migrateHighlightColor(ann: Record<string, unknown>): void {
-  if (typeof ann.color === "string" && ann.color in LEGACY_COLOR_MAP) {
-    ann.color = LEGACY_COLOR_MAP[ann.color];
+  const color = ann.color;
+  if (typeof color === "string" && color in LEGACY_COLOR_MAP) {
+    ann.color = LEGACY_COLOR_MAP[color as keyof typeof LEGACY_COLOR_MAP];
   }
 }
 
@@ -230,12 +235,16 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     return { ok: false, error: "future", schemaVersion };
   }
 
-  // Migrate legacy highlight colors before validation.
-  const cand = candidate as { annotations?: unknown };
+  // Migrate legacy highlight colors before validation. Clone each annotation
+  // so the caller's input objects are not mutated as a side effect of parsing.
+  const cand = candidate as { annotations?: unknown[] };
   if (Array.isArray(cand.annotations)) {
-    for (const ann of cand.annotations) {
+    for (let i = 0; i < cand.annotations.length; i++) {
+      const ann = cand.annotations[i];
       if (ann && typeof ann === "object") {
-        migrateHighlightColor(ann as Record<string, unknown>);
+        const cloned = { ...(ann as Record<string, unknown>) };
+        migrateHighlightColor(cloned);
+        cand.annotations[i] = cloned;
       }
     }
   }
