@@ -128,6 +128,8 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     if (!ydoc) return [];
 
     const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Y.Map.size is O(n) — avoid calling it on every transaction.
+    let hasAnnotations = annotationsMap.size > 0;
 
     return [
       new Plugin({
@@ -138,12 +140,16 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
             return buildDecorations(state.doc, annotationsMap, ydoc);
           },
           apply(tr, decorationSet, _oldState, newState) {
-            // If annotations were explicitly updated, full rebuild
             if (tr.getMeta(annotationPluginKey)) {
               return buildDecorations(newState.doc, annotationsMap, ydoc);
             }
-            // If doc changed, map existing decorations forward
             if (tr.docChanged) {
+              // Y.Map observer can fire before y-prosemirror populates the doc,
+              // leaving decorationSet empty despite annotations in the map.
+              // Rebuild when doc content arrives and annotations are un-rendered.
+              if (decorationSet === DecorationSet.empty && hasAnnotations) {
+                return buildDecorations(newState.doc, annotationsMap, ydoc);
+              }
               return decorationSet.map(tr.mapping, tr.doc);
             }
             return decorationSet;
@@ -157,9 +163,8 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         },
 
         view(editorView) {
-          // Observe Y.Map changes and trigger decoration rebuild
           const observer = () => {
-            // Dispatch a no-op transaction with metadata to trigger rebuild
+            hasAnnotations = annotationsMap.size > 0;
             const tr = editorView.state.tr.setMeta(annotationPluginKey, true);
             editorView.dispatch(tr);
           };
