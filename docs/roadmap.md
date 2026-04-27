@@ -224,7 +224,7 @@ Real-time push notifications from editor to Claude Code via the Channels API, re
 - **SSE endpoint** (`GET /api/events`): Server-Sent Events stream with `Last-Event-ID` reconnection replay and 15s keepalive.
 - **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `/api/launch-claude`, `DELETE /api/chat`
 - **Build**: tsup produces three bundles — `dist/server/index.js` + `dist/channel/index.js` + `dist/cli/index.js`
-- **7 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `chat:message`, `document:opened`, `document:closed`, `document:switched`
+- **8 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `annotation:reply`, `chat:message`, `document:opened`, `document:closed`, `document:switched`
 
 ### Known Issues from Channel Implementation
 
@@ -368,20 +368,20 @@ Each release targets **one coherent concern** so that a bad PR is bisectable and
 - **PR b (DONE)** — Auth middleware + OAuth protected-resource metadata. Loopback-exempt, `crypto.timingSafeEqual`, SHA-256 length oracle elimination, rate-limit (5/min) with LRU eviction.
 - **PR c (DONE)** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`, Cowork mode binds `0.0.0.0`. Hocuspocus stays loopback-only. Fail-closed on LAN bind without token.
 - **PR d (DONE)** — `tandem rotate-token` CLI subcommand with 60s grace window; re-runs setup across detected MCP configs.
-- **PR e** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup (includes #436 PREUNINSTALL binary-name fix). Implementation done (draft PR #370, reviewed); merge targeting v0.9.0.
-- **PR f** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Implementation done in React (draft PR #371); merge timing depends on Svelte probe outcome — if Svelte Go, rebuild in Svelte for v0.13.0.
+- **PR e (DONE)** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup (includes #436 PREUNINSTALL binary-name fix). Merged 2026-04-26 (PR #370, v0.8.0).
+- **PR f (DONE)** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Merged 2026-04-26 (PR #371, v0.8.0). ADR-025 decided Svelte Go; the React implementation ships now, Svelte rebuild in v0.13.0.
 
 ### Cowork integration status
 
 Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail.
 
-Remaining Cowork work (PRs e-f, #316, #317, #322) is polish — making the installer turnkey and adding cross-platform firewall scoping. Not a capability blocker.
+Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker.
 
 ---
 
 ## v1.0 Release Plan
 
-Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Remaining work: codebase audit remediation, correctness foundations, API cleanup, framework decision, dark theme, desktop UI polish, and first-run UX.
+Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). v0.9.0 consolidates to ~28 tools (#259). Remaining work: MCP API cleanup, redesign data model (#440–#445), Svelte migration (ADR-025), dark theme, desktop UI polish, and first-run UX.
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
@@ -401,27 +401,25 @@ Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three indepe
 | 2 | Server splits: api-routes.ts → per-route modules, file-opener.ts → phased helpers + lifecycle tests | ~2 days | **DONE** (PRs #391, #392, merged 2026-04-23) |
 | 3 | Event queue observer split (highest-risk, sequential) | ~1.5 days | **DONE** (PR #398, merged 2026-04-23; follow-up tests: #399 → PR #408, merged 2026-04-24) |
 | 4 | Client splits: App.tsx hooks, SidePanel decomposition, Toolbar/Settings/AnnotationCard sub-components | ~3 days | **DONE** (PRs #409, #411, #412, #413, merged 2026-04-24; plans: `docs/phase-1-plan.md`, `docs/phase-2-plan.md`) |
-| 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | — |
+| 5 | Prop-drilling evaluation (conditional, post-Phase 4) | ~0.5 day | **SKIPPED** (ADR-025 Svelte Go supersedes; React component tree replaced in v0.10.0) |
 | 6 | Polish: E2E error recovery, extended Tauri integration tests (post-v1.0) | incremental | — |
 
 **Deferrals (with rationale in audit doc):** useYjsSync.ts (350 LOC, tight coupling makes splitting fragile), mcp/server.ts (331 LOC, manageable), shared/types.ts (274 LOC, reasonable for barrel), React.memo (measure with Profiler first), Biome linter (conflicts with ESLint).
 
-**Phases 1-4 are complete** (~8.5 days). Phase 5 (prop-drilling evaluation) is conditional on Phase 4 results — evaluate SidePanel prop count to decide if needed. Phase 6 is post-v1.0 polish.
+**Phases 1-4 are complete** (~8.5 days). Phase 5 is **skipped** (Svelte Go supersedes it; SidePanel has 14 root-to-leaf props, not deep drilling, and the components are rewritten in v0.10.0). Phase 6 is post-v1.0 polish.
 
-### Decision Gate: Svelte Probe (#312)
+### Decision Gate: Svelte Probe (#312) — DECIDED: Go (ADR-025)
 
-Time-boxed to 1-2 weeks, runs alongside v0.8.0 work. Success criteria are **behavioral, not volumetric:**
+All four behavioral gates passed. Observer lifecycle management is genuinely simpler in Svelte 5 — eliminates two entire React bug categories (StrictMode double-mount, functional setState allocation). See [ADR-025](decisions.md#adr-025-svelte-5-migration-go-decision) for the full decision record.
+
+The gates were:
 
 1. `svelte-tiptap` renders with Yjs collaboration extensions (rendering gate)
-2. Svelte equivalent of `useYjsSync` handles tab switch, Y.Doc swap, observer cleanup, and reconnect without memory leaks or orphaned WebSocket connections (lifecycle gate)
-3. Mount → unmount → remount → swap → close cycle without observer lifecycle bugs (stress gate)
+2. Svelte equivalent of `useYjsSync` handles tab switch, Y.Doc swap, observer cleanup, and reconnect without leaks or orphaned connections (lifecycle gate)
+3. Mount / unmount / remount / swap / close cycle without observer lifecycle bugs (stress gate)
 4. CRDT RelativePosition resolution works in Svelte reactivity model
 
-**Go:** All four gates pass. Observer lifecycle management is genuinely simpler — not just syntactically shorter — than the React `useRef` + cleanup ceremony.
-
-**No-go:** svelte-tiptap collaboration fails; observer lifecycle requires equivalent manual management; Y.Doc swap produces bugs from the same class as Lessons 5, 10, 14, 16, 34, 44.
-
-The probe produces a decision document filed as an ADR. The result determines the client-side path for v0.10.0 onward.
+Migration begins v0.10.0. React removal completes by v0.11.0.
 
 ### Release Cadence
 
@@ -431,10 +429,10 @@ The probe produces a decision document filed as an ADR. The result determines th
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.8.0 | Token hygiene + annotation correctness + installer fix (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434 |
-| v0.9.0 | MCP API cleanup + distribution + UX polish | #259, PR e (includes #436), #316, #317, #322, #341, #435, #437, ADR-023 CI smoke test |
+| v0.8.0 | Token hygiene + annotation correctness + installer fix + Cowork PRs e–f (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434, #436, PR #370, PR #371 |
+| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259, #316, #317, #322, #435, #437, #440–#445, highlight palette migration, ADR-023 CI smoke test |
 
-**v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), and event push gap closed. The initial release build failed on Windows due to a missing `tokio` feature flag; #434 (NSIS pre-install sidecar kill) was bundled into the re-release to fix upgrade installs where the sidecar process locks its own executable.
+**v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Bundled into the same release: Cowork installer + onboarding (PRs #370, #371) and installer fixes (#434, #436). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), event push gap closed.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
 
@@ -446,7 +444,9 @@ The probe produces a decision document filed as an ADR. The result determines th
 - #444 — Editor width minimum lowered from 50% to 40%
 - #445 — `tabbed-left` layout variant (new `LayoutMode` with own render branch)
 
-Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink, migration strategy pending from Claude Design), density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale.
+Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink; migration: `red` → `yellow`, `purple` → `blue`), density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale and `docs/v090-plan.md` for migration details.
+
+> **Note:** #341 event-type work is complete (8-variant discriminated union + branded position types already shipped). The remaining #341 scope is only the ADR-023 CI smoke test.
 
 **Distribution coordination:** v0.9.0 is the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Document rollback strategy per surface.
 
@@ -457,7 +457,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 | v0.10.0 | Svelte core migration | #312 Phase 2 (Vite plugin, `useYjsSync` rune, core hooks, Editor, DocumentTabs) |
 | v0.11.0 | Svelte complete | #312 Phase 3-4 (remaining panels, React removal, `<svelte:boundary>` error recovery) |
 | v0.12.0 | Dark theme | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification |
-| v0.13.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319, #378, #380 |
+| v0.13.0 | Desktop UI Tier 1 | #269 §1.1-1.5, #319, #378, #380 (PR f already shipped in v0.8.0) |
 | v0.14.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
 
@@ -472,7 +472,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.10.0 | Dark theme | #59, `editor.css` dark overrides, #311, ErrorBoundary audit, WCAG AA |
-| v0.11.0 | Desktop UI Tier 1 | #269 §1.1-1.5, PR f, #319, #378, #380 |
+| v0.11.0 | Desktop UI Tier 1 | #269 §1.1-1.5, #319, #378, #380 (PR f already shipped in v0.8.0) |
 | v0.12.0 | First-run + desktop polish | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Same as Svelte Go path |
 
