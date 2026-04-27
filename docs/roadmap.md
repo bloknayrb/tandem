@@ -381,7 +381,7 @@ Remaining Cowork work (#316, #317, #322) is polish — making the installer turn
 
 ## v1.0 Release Plan
 
-Core features are complete (31 MCP tools — dropping to ~28 in v0.9.0 via #259, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Remaining work: MCP API cleanup (#259), redesign data model (#440–#445), framework migration (Svelte, ADR-025), dark theme, desktop UI polish, and first-run UX.
+Core features are complete (31 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). v0.9.0 consolidates to ~28 tools (#259). Remaining work: MCP API cleanup, redesign data model (#440–#445), Svelte migration (ADR-025), dark theme, desktop UI polish, and first-run UX.
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
@@ -406,7 +406,7 @@ Full quality sweep documented in [`docs/audit-v1.md`](audit-v1.md). Three indepe
 
 **Deferrals (with rationale in audit doc):** useYjsSync.ts (350 LOC, tight coupling makes splitting fragile), mcp/server.ts (331 LOC, manageable), shared/types.ts (274 LOC, reasonable for barrel), React.memo (measure with Profiler first), Biome linter (conflicts with ESLint).
 
-**Phases 1-4 are complete** (~8.5 days). Phase 5 (prop-drilling evaluation) is **skipped** — ADR-025 decided Svelte Go, so the React component tree is replaced wholesale in v0.10.0. SidePanel has 14 root-to-leaf props (not deep drilling); refactoring components that will be rewritten is waste. Phase 6 is post-v1.0 polish.
+**Phases 1-4 are complete** (~8.5 days). Phase 5 is **skipped** (Svelte Go supersedes it; SidePanel has 14 root-to-leaf props, not deep drilling, and the components are rewritten in v0.10.0). Phase 6 is post-v1.0 polish.
 
 ### Decision Gate: Svelte Probe (#312) — DECIDED: Go (ADR-025)
 
@@ -414,10 +414,10 @@ All four behavioral gates passed. Observer lifecycle management is genuinely sim
 
 The gates were:
 
-1. `svelte-tiptap` renders with Yjs collaboration extensions (rendering gate) — **passed**
-2. Svelte equivalent of `useYjsSync` handles tab switch, Y.Doc swap, observer cleanup, and reconnect without memory leaks or orphaned WebSocket connections (lifecycle gate) — **passed**
-3. Mount → unmount → remount → swap → close cycle without observer lifecycle bugs (stress gate) — **passed**
-4. CRDT RelativePosition resolution works in Svelte reactivity model — **passed**
+1. `svelte-tiptap` renders with Yjs collaboration extensions (rendering gate)
+2. Svelte equivalent of `useYjsSync` handles tab switch, Y.Doc swap, observer cleanup, and reconnect without leaks or orphaned connections (lifecycle gate)
+3. Mount / unmount / remount / swap / close cycle without observer lifecycle bugs (stress gate)
+4. CRDT RelativePosition resolution works in Svelte reactivity model
 
 Migration begins v0.10.0. React removal completes by v0.11.0.
 
@@ -430,9 +430,9 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.8.0 | Token hygiene + annotation correctness + installer fix + Cowork PRs e–f (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434, #436, PR #370, PR #371 |
-| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259, #316, #317, #322, #435, #437, #440, #441, #442, #443, #444, #445, highlight palette migration, ADR-023 CI smoke test |
+| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259, #316, #317, #322, #435, #437, #440–#445, highlight palette migration, ADR-023 CI smoke test |
 
-**v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Also included: Cowork PRs e–f (#370, #371 — per-workspace installer, Settings UI, first-launch onboarding), #434 (NSIS sidecar kill), #436 (PREUNINSTALL binary-name fix). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), and event push gap closed.
+**v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Bundled into the same release: Cowork installer + onboarding (PRs #370, #371) and installer fixes (#434, #436). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), event push gap closed.
 
 **v0.9.0** — #259 is the **last breaking-change window before semver lock**. Before landing tool removals, grep the full test suite for each removed tool name and update/delete tests in the same PR. Keep tool stubs for one release that return structured errors pointing to the replacement; hard-remove in v0.10.0.
 
@@ -444,9 +444,9 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 - #444 — Editor width minimum lowered from 50% to 40%
 - #445 — `tabbed-left` layout variant (new `LayoutMode` with own render branch)
 
-Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink — migration: `red` → `yellow`, `purple` → `blue`; existing annotations must be remapped in the load path to avoid Zod validation failures), density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale.
+Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink; migration: `red` → `yellow`, `purple` → `blue`), density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale and `docs/v090-plan.md` for migration details.
 
-> **Note:** #341 (discriminated event unions + branded coordinate types) is already complete. `src/shared/events/types.ts` has a fully typed `TandemEvent` discriminated union with 8 variants, parse guard, format helpers, and exhaustive switch. Branded position types exist in `src/shared/positions/types.ts`. The remaining #341 scope is only the ADR-023 CI smoke test.
+> **Note:** #341 event-type work is complete (8-variant discriminated union + branded position types already shipped). The remaining #341 scope is only the ADR-023 CI smoke test.
 
 **Distribution coordination:** v0.9.0 is the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Document rollback strategy per surface.
 

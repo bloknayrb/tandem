@@ -21,7 +21,7 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 | #439 (redesign audit) | ADR-026 completed — GH issue still open |
 | v0.9.0 scope line | Lists "PR e (includes #436)" which already shipped; missing #440–#445 |
 | Phase 5 (prop-drilling) | Conditional on Phase 4 results — never evaluated. ADR-025 Svelte Go supersedes it. |
-| #341 (event unions) | Discriminated union already exists in `src/shared/events/types.ts` (8 variants, not 7 as roadmap implies). Branded coordinate types already exist in `src/shared/positions/types.ts`. Remaining #341 work is only the CI smoke test. |
+| #341 (event unions) | Discriminated union + branded coordinate types already shipped (8 variants, not 7 as roadmap implied). Remaining #341 work is only the CI smoke test. |
 
 ---
 
@@ -38,7 +38,7 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 - **#445** — `tabbed-left` layout variant (needs: `LayoutMode` type, `PanelLayout` union in `panel-layout.ts:13-15`, `App.tsx:184-201` init + transition)
 
 ### Highlight Palette Migration (ADR-026)
-- **Not tracked as an issue yet.** ADR-026 says palette switches from 5 colors to 4: yellow/green/blue/pink. Current `HighlightColorSchema` in `src/shared/types.ts:19` is `z.enum(["yellow", "red", "green", "blue", "purple"])`. Removing `red` and `purple` is a **data-loss risk** — existing annotations with those colors will fail Zod validation in `migrateToV1()`. Needs migration logic mapping `red` → closest (pink? yellow?) and `purple` → closest (blue? pink?). **File a GH issue before implementation.**
+- **Not tracked as an issue yet.** ADR-026 says palette switches from 5 colors to 4: yellow/green/blue/pink. Current `HighlightColorSchema` in `src/shared/types.ts:19` is `z.enum(["yellow", "red", "green", "blue", "purple"])`. Removing `red` and `purple` is a **data-loss risk** — existing annotations with those colors will fail Zod validation in `migrateToV1()`. Migration: `red` → `yellow`, `purple` → `blue`. **File a GH issue before implementation.**
 
 ### MCP Tool Consolidation (#259) — CRITICAL: Last Breaking Window
 - Deprecate `tandem_suggest` (error stub + updated description string)
@@ -151,7 +151,7 @@ This is the last breaking-change window before semver lock. If it slips, removal
 - **Effort:** ~2 days (tool changes straightforward; doc + test updates are the bulk)
 
 #### PR 5: ADR-023 CI Smoke Test
-- **Note:** #341 discriminated event unions are **already complete** in `src/shared/events/types.ts` — fully typed union with 8 variants, parse guard, format helpers, exhaustive switch. No type work needed.
+- **Note:** #341 discriminated event unions are **already complete** (8 variants, parse guard, format helpers, exhaustive switch). No type work needed.
 - **Remaining work:** Add CI step to `.github/workflows/ci.yml` that validates the Cowork stdio bridge (e.g., `npm run build && node dist/server/index.js --health-check` or a quick roundtrip test).
 - Update roadmap to mark #341 event types as done, CI smoke test as the residual.
 - **Closes:** #341
