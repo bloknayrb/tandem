@@ -20,7 +20,13 @@ import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
-import { extractText, findXmlText, getElementText, getOrCreateXmlText } from "./document-model.js";
+import {
+  extractText,
+  getElementText,
+  getOrCreateXmlText,
+  mergeXmlTextDelta,
+  TEXTBLOCK_NODES,
+} from "./document-model.js";
 // Document service (state management)
 import {
   broadcastOpenDocs,
@@ -77,7 +83,9 @@ export {
   getElementTextLength,
   getHeadingPrefixLength,
   getOrCreateXmlText,
+  mergeXmlTextDelta,
   populateYDoc,
+  TEXTBLOCK_NODES,
   verifyAndResolveRange,
 } from "./document-model.js";
 export type { OpenDoc } from "./document-service.js";
@@ -333,21 +341,22 @@ export function registerDocumentTools(server: McpServer): void {
           );
         }
 
-        // Guard: container elements (bulletList, blockquote, etc.) have no direct
-        // XmlText child — editing them would corrupt the CRDT structure.
+        // Guard: only textblock elements (paragraph, heading, codeBlock) may be
+        // edited. This must reject before the transaction to prevent partial-commit
+        // corruption — Y.js transactions don't roll back on throw.
         const startNode = fragment.get(startPos.elementIndex);
-        if (startNode instanceof Y.XmlElement && !findXmlText(startNode)) {
+        if (!(startNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(startNode.nodeName)) {
           return mcpError(
             "INVALID_RANGE",
-            `Target element is a container (${startNode.nodeName}) — edit a specific paragraph or list item instead.`,
+            `Target element is a container (${startNode instanceof Y.XmlElement ? startNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
           );
         }
         if (startPos.elementIndex !== endPos.elementIndex) {
           const endNode = fragment.get(endPos.elementIndex);
-          if (endNode instanceof Y.XmlElement && !findXmlText(endNode)) {
+          if (!(endNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(endNode.nodeName)) {
             return mcpError(
               "INVALID_RANGE",
-              `Target end element is a container (${endNode.nodeName}) — edit a specific paragraph or list item instead.`,
+              `Target end element is a container (${endNode instanceof Y.XmlElement ? endNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
             );
           }
         }
@@ -356,7 +365,7 @@ export function registerDocumentTools(server: McpServer): void {
           r.doc.transact(() => {
             const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
             const startText = getOrCreateXmlText(startNode);
-            const startLen = startText.toString().length;
+            const startLen = startText.length;
             if (startPos.textOffset < startLen) {
               startText.delete(startPos.textOffset, startLen - startPos.textOffset);
             }
@@ -371,10 +380,7 @@ export function registerDocumentTools(server: McpServer): void {
             if (endPos.textOffset > 0) {
               endText.delete(0, endPos.textOffset);
             }
-            const remainingText = endText.toString();
-            if (remainingText.length > 0) {
-              startText.insert(startPos.textOffset, remainingText);
-            }
+            mergeXmlTextDelta(startText, endText, startPos.textOffset);
             fragment.delete(startPos.elementIndex + 1, 1);
 
             startText.insert(startPos.textOffset, newText);

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { extractText, getOrCreateXmlText, resolveOffset } from "../../src/server/mcp/document.js";
+import {
+  extractText,
+  getOrCreateXmlText,
+  mergeXmlTextDelta,
+  resolveOffset,
+} from "../../src/server/mcp/document.js";
 import { escapeRegex } from "../../src/server/mcp/response.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
@@ -36,7 +41,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): boole
     doc.transact(() => {
       const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
       const startText = getOrCreateXmlText(startNode);
-      const startLen = startText.toString().length;
+      const startLen = startText.length;
       if (startPos.textOffset < startLen) {
         startText.delete(startPos.textOffset, startLen - startPos.textOffset);
       }
@@ -49,10 +54,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): boole
       if (endPos.textOffset > 0) {
         endText.delete(0, endPos.textOffset);
       }
-      const remainingText = endText.toString();
-      if (remainingText.length > 0) {
-        startText.insert(startPos.textOffset, remainingText);
-      }
+      mergeXmlTextDelta(startText, endText, startPos.textOffset);
       fragment.delete(startPos.elementIndex + 1, 1);
       startText.insert(startPos.textOffset, newText);
     });
