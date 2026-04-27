@@ -118,7 +118,7 @@ User selects text and clicks "Highlight" in toolbar
 ### Claude's Presence
 
 ```
-Claude calls tandem_setStatus("Reviewing cost figures...", { focusParagraph: 3 })
+Claude calls tandem_status({ text: "Reviewing cost figures...", focusParagraph: 3 })
     → MCP server writes to Y.Map('awareness') key 'claude'
     → Yjs syncs to browser
     → AwarenessExtension observes change

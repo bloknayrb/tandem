@@ -197,7 +197,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 ## Documentation
 
 - **[User Guide](docs/user-guide.md)** — How to use Tandem: editor UI, annotations, chat, review mode, keyboard shortcuts
-- [MCP Tool Reference](docs/mcp-tools.md) — 31 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) — 28 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: text iteration, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
@@ -220,7 +220,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 
 ## MCP Configuration
 
-Tandem registers two MCP connections: **HTTP** for document tools (31 tools including annotation editing — always on), and a **channel shim** for real-time push notifications. The channel shim is what enables the live-collaborator experience described in [Connect Claude Code](#connect-claude-code) and is recommended; it activates when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`. If you'd rather not pass that experimental flag, the entry sits idle and everything still works through polling on the HTTP connection — you just lose spontaneous reactions.
+Tandem registers two MCP connections: **HTTP** for document tools (28 tools including annotation editing — always on), and a **channel shim** for real-time push notifications. The channel shim is what enables the live-collaborator experience described in [Connect Claude Code](#connect-claude-code) and is recommended; it activates when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`. If you'd rather not pass that experimental flag, the entry sits idle and everything still works through polling on the HTTP connection — you just lose spontaneous reactions.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 

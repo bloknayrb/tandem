@@ -186,11 +186,11 @@ describe("MCP tool integration — navigation tools", () => {
     expect(parsed.data.to).toBe(11);
   });
 
-  it("tandem_setStatus updates awareness", async () => {
+  it("tandem_status updates awareness when text param is provided", async () => {
     setupDoc("mcp-nav-3", "Hello world");
 
     const result = await client.callTool({
-      name: "tandem_setStatus",
+      name: "tandem_status",
       arguments: { text: "Reviewing..." },
     });
     const parsed = parseResult(result);

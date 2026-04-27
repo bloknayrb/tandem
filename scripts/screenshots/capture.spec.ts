@@ -66,11 +66,11 @@ async function openWithAnnotations() {
     to: 260,
     text: "Could tighten this — consider dropping the parenthetical.",
   });
-  await mcp.callTool("tandem_suggest", {
+  await mcp.callTool("tandem_comment", {
     from: 400,
     to: 470,
-    newText: "The team hit the first two goals early but missed the dashboard deadline.",
-    reason: "More concise summary",
+    text: "More concise summary",
+    suggestedText: "The team hit the first two goals early but missed the dashboard deadline.",
   });
 }
 

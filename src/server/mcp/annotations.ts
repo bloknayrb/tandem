@@ -377,43 +377,20 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_suggest",
-    "Propose a text replacement (tracked change style). Legacy shim — prefer tandem_comment with suggestedText.",
+    "DEPRECATED — use tandem_comment with suggestedText instead. This tool returns an error stub.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
       newText: z.string().describe("Suggested replacement text"),
       reason: z.string().optional().describe("Reason for the suggestion"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-      textSnapshot: z
-        .string()
-        .optional()
-        .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
-        ),
+      documentId: z.string().optional().describe("Target document ID"),
+      textSnapshot: z.string().optional().describe("Expected text at [from, to]"),
     },
-    withErrorBoundary(
-      "tandem_suggest",
-      async ({ from: rawFrom, to: rawTo, newText, reason, documentId, textSnapshot }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) {
-          notifyRangeFailure(result, "tandem_suggest", documentId);
-          return rangeFailureToError(result);
-        }
-        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, da.ydoc, "comment", result, reason || "", {
-          textSnapshot: snap,
-          suggestedText: newText,
-        });
-        return mcpSuccess({ annotationId: id });
-      },
-    ),
+    async () =>
+      mcpError(
+        "DEPRECATED",
+        "tandem_suggest is deprecated. Use tandem_comment with suggestedText instead.",
+      ),
   );
 
   server.tool(

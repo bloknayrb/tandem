@@ -228,11 +228,11 @@ async function main() {
     const suggestText = "The project launched in early 2025 with three core goals";
     const sgRange = findRange(suggestText);
     if (sgRange) {
-      await mcp.addAnnotation("tandem_suggest", {
+      await mcp.addAnnotation("tandem_comment", {
         from: sgRange.from,
         to: sgRange.to,
-        newText: "In early 2025, the project set three ambitious goals",
-        reason: "Active voice and stronger verb choice makes this punchier.",
+        text: "Active voice and stronger verb choice makes this punchier.",
+        suggestedText: "In early 2025, the project set three ambitious goals",
         textSnapshot: suggestText,
       });
       console.log("   + suggestion added");
@@ -252,7 +252,7 @@ async function main() {
     }
 
     // Set Claude's status
-    await mcp.call("tandem_setStatus", {
+    await mcp.call("tandem_status", {
       text: "Reviewing document structure...",
       focusParagraph: 2,
     });
@@ -412,7 +412,7 @@ async function main() {
     // ── Screenshot 6: Status bar (Claude presence) ───────────────────────
     console.log("\n7. Taking 06-claude-presence.png...");
     // Update status to show activity
-    await mcp.call("tandem_setStatus", {
+    await mcp.call("tandem_status", {
       text: "Analyzing paragraph structure and readability...",
       focusParagraph: 3,
     });

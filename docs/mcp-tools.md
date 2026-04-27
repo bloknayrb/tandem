@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 31 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 28 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -96,27 +96,6 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 - Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
-
----
-
-### tandem_getContent
-
-Read full document content as ProseMirror JSON structure.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `documentId` | string | no | Target document ID (defaults to active document) |
-
-**Returns:**
-```json
-{
-  "content": [ ... ProseMirror JSON nodes ... ],
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
-  "documentId": "report-a1b2c3"
-}
-```
-
-**Warning:** Token-heavy. A 20-page doc produces ~50K tokens. Use `tandem_getOutline` or `tandem_getTextContent` instead for large documents.
 
 ---
 
@@ -243,13 +222,16 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 
 ### tandem_status
 
-Check editor status: running state, open documents, active document.
+Check editor status (running state, open documents, active document) and optionally update Claude's status text shown in the editor.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | | | |
+| `text` | string | no | Status text to show in the editor status bar (e.g., `"Reviewing cost figures..."`). When omitted, read-only mode. |
+| `focusParagraph` | number | no | Index of paragraph Claude is focusing on (renders blue tint + animated gutter bar). Only used when `text` is provided. |
+| `focusOffset` | number | no | Flat text offset alternative to `focusParagraph` for paragraph targeting. Only used when `text` is provided. |
+| `documentId` | string | no | Target document ID for status display (defaults to active document). Only used when `text` is provided. |
 
-**Returns:**
+**Returns (read mode — no `text` param):**
 ```json
 {
   "running": true,
@@ -263,8 +245,26 @@ Check editor status: running state, open documents, active document.
 }
 ```
 
+**Returns (write mode — with `text` param):**
+```json
+{ "status": "Reviewing cost figures..." }
+```
+
+**Example (show progress while reviewing):**
+```
+tandem_status({ text: "Reviewing cost figures...", focusParagraph: 8 })
+```
+
+**Example (clear status when done):**
+```
+tandem_status({ text: "Done" })
+```
+
 **Notes:**
-- `mode` reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold annotations until mode switches back to `"tandem"`).
+- `mode` (read mode) reflects the user's current collaboration mode: `"tandem"` (active collaboration — annotate freely) or `"solo"` (focused work — hold annotations until mode switches back to `"tandem"`).
+- Status text appears in the bottom bar of the editor as "Claude — [text]".
+- `focusParagraph` index highlights that paragraph with a soft blue tint and animated gutter bar.
+- Returns a `warning` field (write mode) if no document is open.
 
 ---
 
@@ -419,32 +419,17 @@ tandem_comment({ from: 100, to: 120, text: "Is this figure correct?", directedAt
 
 ### tandem_suggest
 
-> **Legacy shim.** Prefer `tandem_comment` with `suggestedText`. This tool still works but internally delegates to `tandem_comment`.
+> **Deprecated.** This tool now returns an error. Use `tandem_comment` with the `suggestedText` parameter instead.
 
-Propose a text replacement (tracked-change style). User sees it as accept/reject in the editor.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `from` | number | yes | Start position |
-| `to` | number | yes | End position |
-| `newText` | string | yes | Suggested replacement text |
-| `reason` | string | no | Reason for the suggestion |
-| `documentId` | string | no | Target document ID (defaults to active document) |
-| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
-
-**Returns:**
-```json
-{ "annotationId": "ann_1710936000000_g7h8i9" }
 ```
-
-**Example:**
-```
-tandem_suggest({
+tandem_comment({
   from: 180, to: 193,
-  newText: "$13.1 million",
-  reason: "Q3 revenue was updated in the latest financial report"
+  text: "Q3 revenue was updated in the latest financial report",
+  suggestedText: "$13.1 million"
 })
 ```
+
+The `suggestedText` parameter on `tandem_comment` renders as a tracked-change suggestion with accept/reject controls — the same UI behavior `tandem_suggest` produced.
 
 ---
 
@@ -730,28 +715,6 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 
 ---
 
-### tandem_setStatus
-
-Update Claude's status text shown to the user in the editor status bar.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `text` | string | yes | Status text (e.g., "Reviewing cost figures...") |
-| `focusParagraph` | number | no | Index of paragraph Claude is focusing on (renders blue tint) |
-| `documentId` | string | no | Target document ID (defaults to active document) |
-
-**Returns:**
-```json
-{ "status": "Reviewing cost figures..." }
-```
-
-**Notes:**
-- Status appears in the bottom bar of the editor as "Claude -- Reviewing cost figures..."
-- `focusParagraph` index highlights that paragraph with a soft blue tint and animated gutter bar.
-- Returns a `warning` field if no document is open (status not broadcast).
-
----
-
 ### tandem_getContext
 
 Read content around a range without pulling the full document.
@@ -776,31 +739,6 @@ Read content around a range without pulling the full document.
 ---
 
 ## Awareness Tools
-
-### tandem_getSelections
-
-Get text the user currently has selected in the editor.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `documentId` | string | no | Target document ID (defaults to active document) |
-
-**Returns (text selected):**
-```json
-{
-  "selections": [{ "from": 42, "to": 67 }],
-  "timestamp": 1710936000000
-}
-```
-
-**Returns (no selection):**
-```json
-{ "selections": [], "message": "No text selected" }
-```
-
-**Notes:** Positions are flat text offsets (same coordinate system as all other tools). The client converts ProseMirror positions before writing to the shared state.
-
----
 
 ### tandem_getActivity
 

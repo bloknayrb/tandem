@@ -5,6 +5,7 @@ import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
   Y_MAP_AUTHORSHIP,
+  Y_MAP_AWARENESS,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -210,23 +211,6 @@ export function registerDocumentTools(server: McpServer): void {
         }
         return mcpError("FORMAT_ERROR", getErrorMessage(err));
       }
-    }),
-  );
-
-  server.tool(
-    "tandem_getContent",
-    "Read full document content. Warning: token-heavy for large docs. Use getOutline() or getTextContent() instead.",
-    {
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-    },
-    withErrorBoundary("tandem_getContent", async ({ documentId }) => {
-      const r = requireDocument(documentId);
-      if (!r) return noDocumentError();
-      const fragment = r.doc.getXmlFragment("default");
-      return mcpSuccess({ content: fragment.toJSON(), filePath: r.filePath, documentId: r.docId });
     }),
   );
 
@@ -506,32 +490,74 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_status",
-    "Check editor status: running, open documents, active document",
-    {},
-    withErrorBoundary("tandem_status", async () => {
-      const activeId = getActiveDocId();
-      const active = activeId ? openDocs.get(activeId) : null;
+    'Check editor status, or set Claude\'s status text. Read-only when called with no params. Pass "text" to update the status shown to the user (e.g., "Reviewing cost figures...").',
+    {
+      text: z.string().optional().describe("Status text to display — omit for read-only"),
+      focusParagraph: z
+        .number()
+        .optional()
+        .describe("Index of paragraph Claude is focusing on (write mode only)"),
+      focusOffset: z
+        .number()
+        .optional()
+        .describe("Flat character offset for precise cursor positioning (write mode only)"),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID for status write (defaults to active document)"),
+    },
+    withErrorBoundary(
+      "tandem_status",
+      async ({ text, focusParagraph, focusOffset, documentId }) => {
+        if (text !== undefined) {
+          const current = getCurrentDoc(documentId);
+          if (!current) {
+            return mcpSuccess({
+              status: text,
+              warning: "No document open — status not broadcast to editor.",
+            });
+          }
+          const doc = getOrCreateDocument(current.docName);
+          const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
+          doc.transact(
+            () =>
+              awarenessMap.set("claude", {
+                status: text,
+                timestamp: Date.now(),
+                active: true,
+                focusParagraph: focusParagraph ?? null,
+                focusOffset: focusOffset ?? null,
+              }),
+            MCP_ORIGIN,
+          );
+          return mcpSuccess({ status: text });
+        }
 
-      // Read the user's tandem mode from CTRL_ROOM Y.Map
-      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-      const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-      const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(ctrlAwareness.get(Y_MAP_MODE));
+        const activeId = getActiveDocId();
+        const active = activeId ? openDocs.get(activeId) : null;
 
-      return mcpSuccess({
-        running: true,
-        mode,
-        activeDocument: active
-          ? { documentId: active.id, filePath: active.filePath, format: active.format }
-          : null,
-        openDocuments: Array.from(openDocs.values()).map((d) => ({
-          documentId: d.id,
-          filePath: d.filePath,
-          format: d.format,
-          readOnly: d.readOnly,
-        })),
-        documentCount: docCount(),
-      });
-    }),
+        const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+        const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+        const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(
+          ctrlAwareness.get(Y_MAP_MODE),
+        );
+
+        return mcpSuccess({
+          running: true,
+          mode,
+          activeDocument: active
+            ? { documentId: active.id, filePath: active.filePath, format: active.format }
+            : null,
+          openDocuments: Array.from(openDocs.values()).map((d) => ({
+            documentId: d.id,
+            filePath: d.filePath,
+            format: d.format,
+            readOnly: d.readOnly,
+          })),
+          documentCount: docCount(),
+        });
+      },
+    ),
   );
 
   server.tool(

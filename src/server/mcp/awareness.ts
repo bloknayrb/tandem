@@ -27,36 +27,6 @@ export function resetInbox(): void {
 
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
-    "tandem_getSelections",
-    "Get text currently selected by the user in the editor",
-    {
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-    },
-    withErrorBoundary("tandem_getSelections", async ({ documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
-
-      const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-      const selection = userAwareness.get("selection") as
-        | { from: FlatOffset; to: FlatOffset; timestamp: number }
-        | undefined;
-
-      if (!selection || selection.from === selection.to) {
-        return mcpSuccess({ selections: [], message: "No text selected" });
-      }
-
-      return mcpSuccess({
-        selections: [{ from: selection.from, to: selection.to }],
-        timestamp: selection.timestamp,
-      });
-    }),
-  );
-
-  server.tool(
     "tandem_getActivity",
     "Check if the user is actively editing and where their cursor is",
     {

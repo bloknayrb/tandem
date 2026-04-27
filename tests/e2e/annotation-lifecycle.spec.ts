@@ -103,11 +103,11 @@ test("dismiss annotation changes status", async ({ page }) => {
 
 test("suggestion accept applies text change", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await mcp.callTool("tandem_suggest", {
+  await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
     to: TITLE_TO,
-    newText: "Updated Title",
-    reason: "Better title",
+    text: "Better title",
+    suggestedText: "Updated Title",
     textSnapshot: TITLE_TEXT,
   });
 
