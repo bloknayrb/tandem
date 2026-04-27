@@ -30,7 +30,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
     doc.transact(() => {
       const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
       const startText = getOrCreateXmlText(startNode);
-      const startLen = startText.toString().length;
+      const startLen = startText.length;
       if (startPos.textOffset < startLen) {
         startText.delete(startPos.textOffset, startLen - startPos.textOffset);
       }
@@ -45,9 +45,17 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
       if (endPos.textOffset > 0) {
         endText.delete(0, endPos.textOffset);
       }
-      const remainingText = endText.toString();
-      if (remainingText.length > 0) {
-        startText.insert(startPos.textOffset, remainingText);
+      const remaining = endText.toDelta();
+      let mergeOffset = startPos.textOffset;
+      for (const seg of remaining) {
+        if (typeof seg.insert === "string") {
+          startText.insert(mergeOffset, seg.insert, seg.attributes ?? {});
+          mergeOffset += seg.insert.length;
+        } else {
+          const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
+          startText.insertEmbed(mergeOffset, embed, seg.attributes ?? {});
+          mergeOffset += 1;
+        }
       }
       fragment.delete(startPos.elementIndex + 1, 1);
 
@@ -188,4 +196,111 @@ describe("validation", () => {
     expect(err).toBeNull();
     expect(extractText(doc)).toBe("HelXYZlo");
   });
+});
+
+describe("cross-element edits with formatting", () => {
+  it("preserves bold formatting in merged text", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    doc.transact(() => {
+      const p1 = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p1]);
+      const t1 = new Y.XmlText();
+      p1.insert(0, [t1]);
+      t1.insert(0, "First line");
+
+      const p2 = new Y.XmlElement("paragraph");
+      fragment.insert(1, [p2]);
+      const t2 = new Y.XmlText();
+      p2.insert(0, [t2]);
+      t2.insert(0, "plain bold end");
+      t2.format(6, 4, { bold: true });
+    });
+
+    // "First line\nplain bold end"
+    // offset 6 = start of "line", offset 17 = after "plain " (11+6)
+    const err = applyEdit(doc, 6, 17, " ");
+    expect(err).toBeNull();
+
+    const resultEl = fragment.get(0) as Y.XmlElement;
+    const resultText = resultEl.get(0) as Y.XmlText;
+    const delta = resultText.toDelta();
+
+    const boldSeg = delta.find((d: any) => d.attributes?.bold === true);
+    expect(boldSeg).toBeDefined();
+    expect(boldSeg!.insert).toBe("bold");
+  });
+
+  it("handles multi-segment delta with mixed formatting", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    doc.transact(() => {
+      const p1 = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p1]);
+      const t1 = new Y.XmlText();
+      p1.insert(0, [t1]);
+      t1.insert(0, "AAA");
+
+      const p2 = new Y.XmlElement("paragraph");
+      fragment.insert(1, [p2]);
+      const t2 = new Y.XmlText();
+      p2.insert(0, [t2]);
+      t2.insert(0, "normalitalicbold");
+      t2.format(6, 6, { italic: true });
+      t2.format(12, 4, { bold: true });
+    });
+
+    // "AAA\nnormalitalicbold" — delete from 3 to 10 ("normal" = 4..9)
+    const err = applyEdit(doc, 3, 10, "");
+    expect(err).toBeNull();
+
+    const resultEl = fragment.get(0) as Y.XmlElement;
+    const resultText = resultEl.get(0) as Y.XmlText;
+    const delta = resultText.toDelta();
+
+    const italicSeg = delta.find((d: any) => d.attributes?.italic === true);
+    expect(italicSeg).toBeDefined();
+    expect(italicSeg!.insert).toBe("italic");
+
+    const boldSeg = delta.find((d: any) => d.attributes?.bold === true);
+    expect(boldSeg).toBeDefined();
+    expect(boldSeg!.insert).toBe("bold");
+  });
+});
+
+describe("getOrCreateXmlText container guard", () => {
+  const containerTypes = [
+    "blockquote",
+    "bulletList",
+    "orderedList",
+    "table",
+    "tableRow",
+    "listItem",
+    "tableCell",
+    "tableHeader",
+  ];
+
+  for (const nodeType of containerTypes) {
+    it(`throws on container node: ${nodeType}`, () => {
+      const testDoc = new Y.Doc();
+      const frag = testDoc.getXmlFragment("default");
+      const el = new Y.XmlElement(nodeType);
+      frag.insert(0, [el]);
+      expect(() => getOrCreateXmlText(el)).toThrow("Cannot create XmlText");
+      testDoc.destroy();
+    });
+  }
+
+  const textblockTypes = ["paragraph", "heading", "codeBlock"];
+  for (const nodeType of textblockTypes) {
+    it(`succeeds on textblock node: ${nodeType}`, () => {
+      const testDoc = new Y.Doc();
+      const frag = testDoc.getXmlFragment("default");
+      const el = new Y.XmlElement(nodeType);
+      frag.insert(0, [el]);
+      const text = getOrCreateXmlText(el);
+      expect(text).toBeInstanceOf(Y.XmlText);
+      testDoc.destroy();
+    });
+  }
 });

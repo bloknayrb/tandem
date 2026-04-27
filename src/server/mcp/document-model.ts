@@ -308,11 +308,25 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
   return null;
 }
 
+const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
+
 /**
  * Find the first Y.XmlText child of a Y.XmlElement.
  * Creates one if the element is empty.
+ *
+ * Throws if called on a container node (blockquote, bulletList, etc.) — only
+ * textblock elements (paragraph, heading, codeBlock) should have direct XmlText
+ * children. The pre-transaction guards in document.ts are the atomicity barrier;
+ * this throw is defense-in-depth only.
  */
 export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+  if (!TEXTBLOCK_NODES.has(element.nodeName)) {
+    throw new Error(
+      `Cannot create XmlText on "${element.nodeName}" — only textblock elements ` +
+        `(paragraph, heading, codeBlock) should have direct XmlText children. ` +
+        `Edit a specific paragraph or list item instead.`,
+    );
+  }
   return (
     findXmlText(element) ??
     (() => {

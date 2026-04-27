@@ -49,7 +49,7 @@ function applyContinuousMarks(doc: Y.Doc): void {
     for (let i = 0; i < fragment.length; i++) {
       const el = fragment.get(i) as Y.XmlElement;
       const textNode = el.get(0) as Y.XmlText;
-      const len = textNode.toString().length;
+      const len = textNode.length;
       const author = i % 2 === 0 ? "user" : "claude";
       textNode.format(0, len, { author });
     }
@@ -63,7 +63,7 @@ function applyFragmentedMarks(doc: Y.Doc): void {
     for (let i = 0; i < fragment.length; i++) {
       const el = fragment.get(i) as Y.XmlElement;
       const textNode = el.get(0) as Y.XmlText;
-      const len = textNode.toString().length;
+      const len = textNode.length;
       for (let offset = 0; offset < len; offset += 10) {
         const end = Math.min(offset + 10, len);
         const author = Math.floor(offset / 10) % 2 === 0 ? "user" : "claude";
