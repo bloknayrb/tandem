@@ -12,6 +12,10 @@ import { formatEventContent, formatEventMeta, parseTandemEvent } from "../shared
 const AWARENESS_DEBOUNCE_MS = 500;
 const MODE_CACHE_TTL_MS = 2000;
 
+/**
+ * @deprecated Use src/monitor/ for new push-path work.
+ * Kept for backward compatibility with stdio-mode Claude Code connections.
+ */
 export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<void> {
   let retries = 0;
   let lastEventId: string | undefined;
@@ -161,8 +165,6 @@ async function connectAndStream(
         }
       }
 
-      if (eventId) onEventId(eventId);
-
       try {
         await mcp.notification({
           method: "notifications/claude/channel",
@@ -175,6 +177,10 @@ async function connectAndStream(
         console.error("[Channel] MCP notification failed (transport broken?):", err);
         throw err;
       }
+
+      // Advance only after notification succeeds so a transport failure
+      // doesn't silently skip events on reconnect.
+      if (eventId) onEventId(eventId);
 
       scheduleAwareness(event);
     }
