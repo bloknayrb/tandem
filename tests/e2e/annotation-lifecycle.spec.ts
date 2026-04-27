@@ -52,11 +52,7 @@ test("document loads in editor", async ({ page }) => {
   await expect(editor).toContainText(TITLE_TEXT);
 });
 
-// TODO: Decoration rendering fails in E2E — resolveAnnotationPmRange returns null
-// because RelativePosition resolution and flatOffsetToPmPos conversion don't work
-// in the E2E context. The annotation card test (below) verifies the data syncs correctly.
-// Tracked for investigation separately.
-test.skip("annotation appears as decoration", async ({ page }) => {
+test("annotation appears as decoration", async ({ page }) => {
   await openWithComment(tmpDir, "Great title!");
 
   await page.goto("/");
