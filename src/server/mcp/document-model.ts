@@ -322,3 +322,35 @@ export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
     })()
   );
 }
+
+/**
+ * Merge the contents of `endText` into `startText` at `atOffset`, preserving
+ * inline formatting marks and embeds. Walks `endText.toDelta()` and copies
+ * each segment with its attributes via `insert` / `insertEmbed`.
+ *
+ * Index space: `atOffset` and the per-segment advance both use Y.XmlText's
+ * canonical length (string chars + 1 per embed) — never `toString().length`,
+ * which is inflated by markup tags.
+ *
+ * Embed handling: Y.AbstractType embeds (e.g., Y.XmlElement("hardBreak")) are
+ * cloned to detach from `endText` before its parent element is removed.
+ * Plain-object embeds are deep-copied by Yjs internally and pass through.
+ *
+ * Caveat: `seg.attributes === undefined` causes `Y.Text.insert` to inherit the
+ * destination's currentAttributes at `mergeOffset` — i.e., an unformatted
+ * source segment may pick up active formatting at the boundary in `startText`.
+ * This matches the same-element edit path and is intentional for v1.
+ */
+export function mergeXmlText(startText: Y.XmlText, endText: Y.XmlText, atOffset: number): void {
+  let mergeOffset = atOffset;
+  for (const seg of endText.toDelta()) {
+    if (typeof seg.insert === "string") {
+      startText.insert(mergeOffset, seg.insert, seg.attributes);
+      mergeOffset += seg.insert.length;
+    } else {
+      const embed = seg.insert instanceof Y.AbstractType ? seg.insert.clone() : seg.insert;
+      startText.insertEmbed(mergeOffset, embed, seg.attributes);
+      mergeOffset += 1;
+    }
+  }
+}

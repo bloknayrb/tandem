@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { extractText, getOrCreateXmlText, resolveOffset } from "../../src/server/mcp/document.js";
+import {
+  extractText,
+  getOrCreateXmlText,
+  mergeXmlText,
+  resolveOffset,
+} from "../../src/server/mcp/document.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
@@ -53,18 +58,7 @@ function applyEditWithAuthorship(
       if (endPos.textOffset > 0) {
         endText.delete(0, endPos.textOffset);
       }
-      const remaining = endText.toDelta();
-      let mergeOffset = startPos.textOffset;
-      for (const seg of remaining) {
-        if (typeof seg.insert === "string") {
-          startText.insert(mergeOffset, seg.insert, seg.attributes);
-          mergeOffset += seg.insert.length;
-        } else {
-          const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
-          startText.insertEmbed(mergeOffset, embed, seg.attributes);
-          mergeOffset += 1;
-        }
-      }
+      mergeXmlText(startText, endText, startPos.textOffset);
       fragment.delete(startPos.elementIndex + 1, 1);
       startText.insert(startPos.textOffset, newText);
     }, MCP_ORIGIN);

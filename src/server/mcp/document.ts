@@ -20,7 +20,13 @@ import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
-import { extractText, findXmlText, getElementText, getOrCreateXmlText } from "./document-model.js";
+import {
+  extractText,
+  findXmlText,
+  getElementText,
+  getOrCreateXmlText,
+  mergeXmlText,
+} from "./document-model.js";
 // Document service (state management)
 import {
   broadcastOpenDocs,
@@ -77,6 +83,7 @@ export {
   getElementTextLength,
   getHeadingPrefixLength,
   getOrCreateXmlText,
+  mergeXmlText,
   populateYDoc,
   verifyAndResolveRange,
 } from "./document-model.js";
@@ -371,19 +378,7 @@ export function registerDocumentTools(server: McpServer): void {
             if (endPos.textOffset > 0) {
               endText.delete(0, endPos.textOffset);
             }
-            const remaining = endText.toDelta();
-            let mergeOffset = startPos.textOffset;
-            for (const seg of remaining) {
-              if (typeof seg.insert === "string") {
-                startText.insert(mergeOffset, seg.insert, seg.attributes);
-                mergeOffset += seg.insert.length;
-              } else {
-                // Embed (hardBreak, image, etc.) — clone to detach from endText
-                const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
-                startText.insertEmbed(mergeOffset, embed, seg.attributes);
-                mergeOffset += 1;
-              }
-            }
+            mergeXmlText(startText, endText, startPos.textOffset);
             fragment.delete(startPos.elementIndex + 1, 1);
 
             startText.insert(startPos.textOffset, newText);

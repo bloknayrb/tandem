@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { extractText, getOrCreateXmlText, resolveOffset } from "../../src/server/mcp/document.js";
+import {
+  extractText,
+  getOrCreateXmlText,
+  mergeXmlText,
+  resolveOffset,
+} from "../../src/server/mcp/document.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -45,18 +50,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
       if (endPos.textOffset > 0) {
         endText.delete(0, endPos.textOffset);
       }
-      const remaining = endText.toDelta();
-      let mergeOffset = startPos.textOffset;
-      for (const seg of remaining) {
-        if (typeof seg.insert === "string") {
-          startText.insert(mergeOffset, seg.insert, seg.attributes);
-          mergeOffset += seg.insert.length;
-        } else {
-          const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
-          startText.insertEmbed(mergeOffset, embed, seg.attributes);
-          mergeOffset += 1;
-        }
-      }
+      mergeXmlText(startText, endText, startPos.textOffset);
       fragment.delete(startPos.elementIndex + 1, 1);
 
       startText.insert(startPos.textOffset, newText);
@@ -224,6 +218,96 @@ describe("formatted cross-element edits (regression #425)", () => {
     expect(delta[0].attributes).toBeUndefined();
     expect(delta[1].insert).toBe("second");
     expect(delta[1].attributes).toEqual({ bold: true });
+  });
+
+  it("preserves hardBreak embed when merging across paragraphs", () => {
+    // p1: "First"
+    // p2: "Line one<hardBreak>after" — surviving suffix "<hardBreak>after"
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const p1 = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p1]);
+    const t1 = new Y.XmlText();
+    p1.insert(0, [t1]);
+    t1.insert(0, "First");
+
+    const p2 = new Y.XmlElement("paragraph");
+    fragment.insert(1, [p2]);
+    const t2 = new Y.XmlText();
+    p2.insert(0, [t2]);
+    t2.insert(0, "Line one");
+    t2.insertEmbed(t2.length, new Y.XmlElement("hardBreak"));
+    t2.insert(t2.length, "after");
+
+    // Embed counts as 1 in canonical index space; extractText emits \n for embeds.
+    // Top-level fragment join is also \n. Both contribute to the flat offset.
+    expect(t2.length).toBe(8 + 1 + 5); // "Line one" + embed + "after" = 14
+    expect(extractText(doc)).toBe("First\nLine one\nafter");
+
+    // Replace "rst\nLine on" (offsets 2..13) with " " — the cut leaves "e<hardBreak>after"
+    // in the surviving suffix of p2.
+    const err = applyEdit(doc, 2, 13, " ");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("Fi e\nafter");
+
+    const merged = fragment.get(0) as Y.XmlElement;
+    const mergedText = merged.get(0) as Y.XmlText;
+    const delta = mergedText.toDelta();
+
+    // Expected delta: [{insert: "Fi "}, {insert: "e"}, {insert: <hardBreak>}, {insert: "after"}]
+    // Adjacent string segments may or may not be merged depending on currentAttributes
+    // boundaries, so assert structurally rather than counting segments.
+    const stringInserts = delta
+      .filter((d: { insert: unknown }) => typeof d.insert === "string")
+      .map((d: { insert: string }) => d.insert)
+      .join("");
+    expect(stringInserts).toBe("Fi eafter");
+
+    const embeds = delta.filter((d: { insert: unknown }) => d.insert instanceof Y.XmlElement);
+    expect(embeds.length).toBe(1);
+    expect((embeds[0].insert as Y.XmlElement).nodeName).toBe("hardBreak");
+
+    // The cloned embed must be a fresh instance — endText was deleted.
+    // Confirm fragment is now a single paragraph.
+    expect(fragment.length).toBe(1);
+  });
+
+  it("preserves combined marks (bold + italic) when merging across paragraphs", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const p1 = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p1]);
+    const t1 = new Y.XmlText();
+    p1.insert(0, [t1]);
+    t1.insert(0, "Plain start");
+
+    const p2 = new Y.XmlElement("paragraph");
+    fragment.insert(1, [p2]);
+    const t2 = new Y.XmlText();
+    p2.insert(0, [t2]);
+    t2.insert(0, "fancy tail");
+    // Apply both bold and italic to the entire string
+    t2.format(0, 10, { bold: true, italic: true });
+
+    expect(extractText(doc)).toBe("Plain start\nfancy tail");
+
+    // Replace "n start\nfancy " (offsets 4..18) with " " — surviving suffix "tail" with both marks
+    const err = applyEdit(doc, 4, 18, " ");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("Plai tail");
+
+    const merged = fragment.get(0) as Y.XmlElement;
+    const mergedText = merged.get(0) as Y.XmlText;
+    const delta = mergedText.toDelta();
+
+    // Find the "tail" segment and verify it carries BOTH marks
+    const tailSeg = delta.find(
+      (d: { insert: unknown }) => typeof d.insert === "string" && d.insert.includes("tail"),
+    );
+    expect(tailSeg).toBeDefined();
+    expect(tailSeg?.attributes).toEqual({ bold: true, italic: true });
   });
 });
 
