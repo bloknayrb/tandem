@@ -40,7 +40,7 @@ function applyEditWithAuthorship(
     doc.transact(() => {
       const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
       const startText = getOrCreateXmlText(startNode);
-      const startLen = startText.toString().length;
+      const startLen = startText.length;
       if (startPos.textOffset < startLen) {
         startText.delete(startPos.textOffset, startLen - startPos.textOffset);
       }
@@ -53,9 +53,17 @@ function applyEditWithAuthorship(
       if (endPos.textOffset > 0) {
         endText.delete(0, endPos.textOffset);
       }
-      const remainingText = endText.toString();
-      if (remainingText.length > 0) {
-        startText.insert(startPos.textOffset, remainingText);
+      const remaining = endText.toDelta();
+      let mergeOffset = startPos.textOffset;
+      for (const seg of remaining) {
+        if (typeof seg.insert === "string") {
+          startText.insert(mergeOffset, seg.insert, seg.attributes || {});
+          mergeOffset += seg.insert.length;
+        } else {
+          const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
+          startText.insertEmbed(mergeOffset, embed, seg.attributes || {});
+          mergeOffset += 1;
+        }
       }
       fragment.delete(startPos.elementIndex + 1, 1);
       startText.insert(startPos.textOffset, newText);
