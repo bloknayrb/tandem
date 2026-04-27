@@ -5,6 +5,8 @@ import {
   headingPrefix,
   headingPrefixLength as sharedHeadingPrefixLength,
 } from "../../shared/offsets.js";
+import type { ElementPosition } from "../../shared/positions/index.js";
+import { MCP_ORIGIN } from "../events/origins.js";
 import { saveMarkdown } from "../file-io/markdown.js";
 
 /**
@@ -58,7 +60,7 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
   const lines = text.split("\n");
   for (const line of lines) {
     if (line === "") {
-      const empty = new Y.XmlElement("paragraph");
+      const empty = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       empty.insert(0, [new Y.XmlText("")]);
       fragment.insert(fragment.length, [empty]);
       continue;
@@ -67,19 +69,19 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
     let element: Y.XmlElement;
 
     if (line.startsWith("### ")) {
-      element = new Y.XmlElement("heading");
+      element = new Y.XmlElement(NODE_NAMES.HEADING);
       element.setAttribute("level", 3 as any);
       element.insert(0, [new Y.XmlText(line.slice(4))]);
     } else if (line.startsWith("## ")) {
-      element = new Y.XmlElement("heading");
+      element = new Y.XmlElement(NODE_NAMES.HEADING);
       element.setAttribute("level", 2 as any);
       element.insert(0, [new Y.XmlText(line.slice(3))]);
     } else if (line.startsWith("# ")) {
-      element = new Y.XmlElement("heading");
+      element = new Y.XmlElement(NODE_NAMES.HEADING);
       element.setAttribute("level", 1 as any);
       element.insert(0, [new Y.XmlText(line.slice(2))]);
     } else {
-      element = new Y.XmlElement("paragraph");
+      element = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       element.insert(0, [new Y.XmlText(line)]);
     }
 
@@ -229,7 +231,7 @@ export function extractText(doc: Y.Doc): string {
     const node = fragment.get(i);
     if (node instanceof Y.XmlElement) {
       const text = getElementText(node);
-      if (node.nodeName === "heading") {
+      if (node.nodeName === NODE_NAMES.HEADING) {
         const level = Number(node.getAttribute("level") ?? 1);
         lines.push(headingPrefix(level) + text);
       } else {
@@ -254,7 +256,7 @@ export function extractMarkdown(doc: Y.Doc): string {
  * Delegates to shared headingPrefixLength for the actual math.
  */
 export function getHeadingPrefixLength(node: Y.XmlElement): number {
-  if (node.nodeName === "heading") {
+  if (node.nodeName === NODE_NAMES.HEADING) {
     const level = Number(node.getAttribute("level") ?? 1);
     return sharedHeadingPrefixLength(level);
   }
@@ -309,23 +311,48 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
 }
 
 /**
- * Textblock element types that are allowed to have direct XmlText children.
- * Container nodes (bulletList, blockquote, orderedList, table, etc.) must NOT
- * have XmlText created on them — their children are other XmlElements.
+ * Tiptap node names used by the server. Single source of truth for nodeName
+ * predicate checks — constructor sites that pass these strings to
+ * `new Y.XmlElement(...)` may also reference these constants.
+ *
+ * Mirrors the Tiptap schema in src/server/file-io/{mdast-ydoc,docx-html}.ts
+ * and src/client/editor/Editor.tsx. Update here when adding nodes.
  */
-const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
+export const NODE_NAMES = {
+  // Textblocks — may have direct Y.XmlText children.
+  PARAGRAPH: "paragraph",
+  HEADING: "heading",
+  CODE_BLOCK: "codeBlock",
+  // Containers — children must be Y.XmlElement.
+  BLOCKQUOTE: "blockquote",
+  BULLET_LIST: "bulletList",
+  ORDERED_LIST: "orderedList",
+  LIST_ITEM: "listItem",
+  TABLE: "table",
+  TABLE_ROW: "tableRow",
+  TABLE_CELL: "tableCell",
+  TABLE_HEADER: "tableHeader",
+  // Embeds — live inside Y.XmlText, never as fragment children.
+  HARD_BREAK: "hardBreak",
+  IMAGE: "image",
+  HORIZONTAL_RULE: "horizontalRule",
+} as const;
 
 /**
- * Find the first Y.XmlText child of a Y.XmlElement.
- * Creates one if the element is empty.
- *
- * Defense-in-depth: throws on non-textblock elements (containers like
- * bulletList, blockquote, etc.) to prevent phantom XmlText corruption.
- * The primary guard is the pre-transaction check in tandem_edit — this
- * catch exists for any future code path that bypasses that guard.
+ * Textblock element names — only these may have direct Y.XmlText children.
+ */
+export const TEXTBLOCK_NODE_NAMES = new Set<string>([
+  NODE_NAMES.PARAGRAPH,
+  NODE_NAMES.HEADING,
+  NODE_NAMES.CODE_BLOCK,
+]);
+
+/**
+ * Returns the first Y.XmlText child, creating one if missing.
+ * Throws on non-textblock elements — containers must hold XmlElement children only.
  */
 export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
-  if (!TEXTBLOCK_NODES.has(element.nodeName)) {
+  if (!TEXTBLOCK_NODE_NAMES.has(element.nodeName)) {
     throw new Error(
       `Cannot create XmlText on "${element.nodeName}" — only textblock elements ` +
         `(paragraph, heading, codeBlock) should have direct XmlText children. ` +
@@ -340,4 +367,149 @@ export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
       return textNode;
     })()
   );
+}
+
+/**
+ * Soft cap on the number of CRDT nodes a single embed may carry. The merge
+ * loop in `applyTextEdit` clones embeds via `Y.AbstractType.clone()`, which
+ * recurses through children. A tampered Y.Doc with deeply-nested embeds
+ * could blow the stack or eat memory mid-clone.
+ */
+const MAX_EMBED_NODES = 1024;
+
+/**
+ * Walk a Y.Doc's default fragment and check that every fragment-child is a
+ * textblock (or a recognized container/embed) with the expected child shape.
+ * Returns a list of human-readable invariant violations — empty when sound.
+ *
+ * Used as a defensive sanity check after Hocuspocus loads a doc — catches
+ * tampered session files or malformed updates planted by a localhost client.
+ * Does NOT mutate the doc; callers decide whether to log, reject, or repair.
+ */
+export function validateDocStructure(doc: Y.Doc): string[] {
+  const errors: string[] = [];
+  const fragment = doc.getXmlFragment("default");
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) {
+      errors.push(`fragment[${i}]: expected XmlElement, got ${typeof node}`);
+      continue;
+    }
+    const isTextblock = TEXTBLOCK_NODE_NAMES.has(node.nodeName);
+    for (let j = 0; j < node.length; j++) {
+      const child = node.get(j);
+      if (child instanceof Y.XmlText && !isTextblock) {
+        errors.push(`fragment[${i}] "${node.nodeName}": holds XmlText but is not a textblock`);
+        break;
+      }
+    }
+  }
+  return errors;
+}
+
+/**
+ * Iteratively count the AbstractType nodes inside an embed (root + descendants).
+ * Returns early once the count exceeds `max`, so cost is bounded.
+ */
+function embedExceedsCap(root: Y.AbstractType<any>, max: number): boolean {
+  let count = 0;
+  const stack: Y.AbstractType<any>[] = [root];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    count++;
+    if (count > max) return true;
+    if (cur instanceof Y.XmlElement || cur instanceof Y.XmlFragment) {
+      for (let i = 0; i < cur.length; i++) {
+        const child = cur.get(i);
+        if (child instanceof Y.AbstractType) stack.push(child);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Apply a text edit to a Y.Doc fragment. Caller must have already validated
+ * the range and resolved start/end positions; this function performs the CRDT
+ * mutations inside Y.Doc transactions tagged with `origin`.
+ *
+ * Atomicity: in the cross-element branch, both XmlText nodes are resolved
+ * (via getOrCreateXmlText, which may throw) AND embed sizes are validated
+ * BEFORE any destructive mutation. Yjs transactions do not roll back on
+ * throw — doing the throw-eligible work first is what keeps the doc whole.
+ */
+export function applyTextEdit(
+  doc: Y.Doc,
+  fragment: Y.XmlFragment,
+  startPos: ElementPosition,
+  endPos: ElementPosition,
+  newText: string,
+  origin: symbol | string = MCP_ORIGIN,
+): void {
+  if (startPos.elementIndex !== endPos.elementIndex) {
+    doc.transact(() => {
+      const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
+      const endNode = fragment.get(endPos.elementIndex) as Y.XmlElement;
+
+      // Resolve both XmlTexts FIRST. getOrCreateXmlText is the only operation
+      // here that can throw — keep it ahead of any mutation.
+      const startText = getOrCreateXmlText(startNode);
+      const endText = getOrCreateXmlText(endNode);
+
+      // Validate every embed in the soon-to-be-merged delta before mutating.
+      // Cap the recursion clone() will perform so a tampered doc cannot DoS.
+      const preDelta = endText.toDelta();
+      for (const seg of preDelta) {
+        if (seg.insert instanceof Y.AbstractType && embedExceedsCap(seg.insert, MAX_EMBED_NODES)) {
+          throw new Error(
+            `Embed at edit boundary exceeds clone-size cap (${MAX_EMBED_NODES} nodes).`,
+          );
+        }
+      }
+
+      const startLen = startText.length;
+      if (startPos.textOffset < startLen) {
+        startText.delete(startPos.textOffset, startLen - startPos.textOffset);
+      }
+      if (endPos.textOffset > 0) {
+        endText.delete(0, endPos.textOffset);
+      }
+
+      const remaining = endText.toDelta();
+      let mergeOffset = startPos.textOffset;
+      for (const seg of remaining) {
+        const attrs = seg.attributes ? { ...seg.attributes } : undefined;
+        if (typeof seg.insert === "string") {
+          if (attrs) startText.insert(mergeOffset, seg.insert, attrs);
+          else startText.insert(mergeOffset, seg.insert);
+          mergeOffset += seg.insert.length;
+        } else {
+          // Detach embeds before re-inserting. AbstractType covers
+          // Y.XmlElement (hardBreak in practice) plus Y.XmlText / Y.Map /
+          // Y.Array embed types a malicious update could plant.
+          const embed = seg.insert instanceof Y.AbstractType ? seg.insert.clone() : seg.insert;
+          if (attrs) startText.insertEmbed(mergeOffset, embed, attrs);
+          else startText.insertEmbed(mergeOffset, embed);
+          mergeOffset += 1;
+        }
+      }
+
+      const removeCount = endPos.elementIndex - startPos.elementIndex;
+      fragment.delete(startPos.elementIndex + 1, removeCount);
+
+      startText.insert(startPos.textOffset, newText);
+    }, origin);
+  } else {
+    doc.transact(() => {
+      const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
+      const textNode = getOrCreateXmlText(node);
+      const deleteLen = endPos.textOffset - startPos.textOffset;
+      if (deleteLen > 0) {
+        textNode.delete(startPos.textOffset, deleteLen);
+      }
+      if (newText.length > 0) {
+        textNode.insert(startPos.textOffset, newText);
+      }
+    }, origin);
+  }
 }

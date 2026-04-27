@@ -2,6 +2,7 @@ import { Hocuspocus } from "@hocuspocus/server";
 import * as Y from "yjs";
 
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
+import { validateDocStructure } from "../mcp/document-model.js";
 
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
@@ -105,6 +106,17 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
 
       // The Hocuspocus-provided doc is now the authoritative instance
       documents.set(documentName, document);
+
+      // Sanity-check structure after merge. Catches tampered session files
+      // or malformed updates planted by a localhost client. Log only —
+      // tandem_edit's own guards reject malformed nodes at edit time.
+      const violations = validateDocStructure(document);
+      if (violations.length > 0) {
+        console.error(
+          `[Tandem] WARN: doc-structure invariants violated in ${documentName}:`,
+          violations.slice(0, 10).join("; "),
+        );
+      }
 
       // Notify event queue to reattach observers to the new doc instance
       if (onDocSwapped) {

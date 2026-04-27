@@ -3,6 +3,7 @@
 import type { ChildNode, Element, Text } from "domhandler";
 import * as htmlparser2 from "htmlparser2";
 import * as Y from "yjs";
+import { NODE_NAMES } from "../mcp/document-model.js";
 
 /** All marks that can appear on inline text (superset of mdast-ydoc) */
 const ALL_MARKS = [
@@ -120,7 +121,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     // Top-level text node — wrap in paragraph
     const text = node.data;
     if (!text.trim()) return [];
-    const el = new Y.XmlElement("paragraph");
+    const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
     const xmlText = new Y.XmlText();
     el.insert(0, [xmlText]);
     deferred.push({ xmlText, children: [node], marks: {} });
@@ -134,7 +135,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
   // Heading
   const headingMatch = tag.match(/^h([1-6])$/);
   if (headingMatch) {
-    const el = new Y.XmlElement("heading");
+    const el = new Y.XmlElement(NODE_NAMES.HEADING);
     el.setAttribute("level", parseInt(headingMatch[1]) as any);
     const xmlText = new Y.XmlText();
     el.insert(0, [xmlText]);
@@ -144,7 +145,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
 
   switch (tag) {
     case "p": {
-      const el = new Y.XmlElement("paragraph");
+      const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       deferred.push({ xmlText, children: node.children, marks: {} });
@@ -152,7 +153,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "blockquote": {
-      const el = new Y.XmlElement("blockquote");
+      const el = new Y.XmlElement(NODE_NAMES.BLOCKQUOTE);
       const blockChildren = collectBlockChildren(node.children, deferred);
       for (const child of blockChildren) {
         el.insert(el.length, [child]);
@@ -161,7 +162,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "ul": {
-      const el = new Y.XmlElement("bulletList");
+      const el = new Y.XmlElement(NODE_NAMES.BULLET_LIST);
       for (const child of node.children) {
         if (isElement(child) && child.tagName.toLowerCase() === "li") {
           el.insert(el.length, [buildListItem(child, deferred)]);
@@ -171,7 +172,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "ol": {
-      const el = new Y.XmlElement("orderedList");
+      const el = new Y.XmlElement(NODE_NAMES.ORDERED_LIST);
       const start = parseInt(node.attribs.start || "1");
       if (start !== 1) {
         el.setAttribute("start", start as any);
@@ -185,7 +186,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "table": {
-      const el = new Y.XmlElement("table");
+      const el = new Y.XmlElement(NODE_NAMES.TABLE);
       // Walk tbody/thead/tfoot or direct tr children
       const rows = collectTableRows(node);
       for (const row of rows) {
@@ -195,7 +196,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "pre": {
-      const el = new Y.XmlElement("codeBlock");
+      const el = new Y.XmlElement(NODE_NAMES.CODE_BLOCK);
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       // Collect all text content from pre (which may contain a <code> child)
@@ -204,7 +205,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "img": {
-      const el = new Y.XmlElement("image");
+      const el = new Y.XmlElement(NODE_NAMES.IMAGE);
       el.setAttribute("src", node.attribs.src || "");
       if (node.attribs.alt) el.setAttribute("alt", node.attribs.alt);
       if (node.attribs.title) el.setAttribute("title", node.attribs.title);
@@ -212,12 +213,12 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "hr": {
-      return [new Y.XmlElement("horizontalRule")];
+      return [new Y.XmlElement(NODE_NAMES.HORIZONTAL_RULE)];
     }
 
     case "br": {
       // Top-level <br> — produce an empty paragraph
-      const el = new Y.XmlElement("paragraph");
+      const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       el.insert(0, [new Y.XmlText("")]);
       return [el];
     }
@@ -242,7 +243,7 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
         return results;
       }
       // Pure inline content — wrap in paragraph
-      const el = new Y.XmlElement("paragraph");
+      const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       deferred.push({ xmlText, children: node.children, marks: {} });
@@ -268,7 +269,7 @@ function collectBlockChildren(children: ChildNode[], deferred: DeferredText[]): 
     // Only flush if there's non-whitespace content
     const hasContent = inlineBuffer.some((n) => (isText(n) ? n.data.trim().length > 0 : true));
     if (hasContent) {
-      const el = new Y.XmlElement("paragraph");
+      const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       const xmlText = new Y.XmlText();
       el.insert(0, [xmlText]);
       deferred.push({ xmlText, children: inlineBuffer, marks: {} });
@@ -289,7 +290,7 @@ function collectBlockChildren(children: ChildNode[], deferred: DeferredText[]): 
 
   // Ensure at least one paragraph (Tiptap requires content in block containers)
   if (result.length === 0) {
-    const el = new Y.XmlElement("paragraph");
+    const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
     el.insert(0, [new Y.XmlText("")]);
     result.push(el);
   }
@@ -299,7 +300,7 @@ function collectBlockChildren(children: ChildNode[], deferred: DeferredText[]): 
 
 /** Build a listItem Y.XmlElement from an <li> DOM node */
 function buildListItem(li: Element, deferred: DeferredText[]): Y.XmlElement {
-  const listItem = new Y.XmlElement("listItem");
+  const listItem = new Y.XmlElement(NODE_NAMES.LIST_ITEM);
   const blockChildren = collectBlockChildren(li.children, deferred);
   for (const child of blockChildren) {
     listItem.insert(listItem.length, [child]);
@@ -328,12 +329,12 @@ function collectTableRows(table: Element): Element[] {
 
 /** Build a tableRow Y.XmlElement from a <tr> */
 function buildTableRow(tr: Element, deferred: DeferredText[]): Y.XmlElement {
-  const row = new Y.XmlElement("tableRow");
+  const row = new Y.XmlElement(NODE_NAMES.TABLE_ROW);
   for (const child of tr.children) {
     if (!isElement(child)) continue;
     const tag = child.tagName.toLowerCase();
     if (tag === "td" || tag === "th") {
-      const nodeName = tag === "th" ? "tableHeader" : "tableCell";
+      const nodeName = tag === "th" ? NODE_NAMES.TABLE_HEADER : NODE_NAMES.TABLE_CELL;
       const cell = new Y.XmlElement(nodeName);
 
       // Copy colspan/rowspan
@@ -380,7 +381,7 @@ function processInlineNodes(
 
     // Hard break
     if (tag === "br") {
-      const embed = new Y.XmlElement("hardBreak");
+      const embed = new Y.XmlElement(NODE_NAMES.HARD_BREAK);
       xmlText.insertEmbed(xmlText.length, embed);
       continue;
     }

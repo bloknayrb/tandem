@@ -1,5 +1,6 @@
 import type { PhrasingContent, Root, RootContent } from "mdast";
 import * as Y from "yjs";
+import { NODE_NAMES } from "../mcp/document-model.js";
 
 /**
  * Convert an MDAST tree into Y.Doc XmlFragment elements.
@@ -48,7 +49,7 @@ function blockToYxml(
 ): Y.XmlElement[] {
   switch (node.type) {
     case "heading": {
-      const el = new Y.XmlElement("heading");
+      const el = new Y.XmlElement(NODE_NAMES.HEADING);
       el.setAttribute("level", node.depth as any);
       const text = new Y.XmlText();
       el.insert(0, [text]);
@@ -57,7 +58,7 @@ function blockToYxml(
     }
 
     case "paragraph": {
-      const el = new Y.XmlElement("paragraph");
+      const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
       const text = new Y.XmlText();
       el.insert(0, [text]);
       deferred.push({ xmlText: text, nodes: node.children });
@@ -65,7 +66,7 @@ function blockToYxml(
     }
 
     case "blockquote": {
-      const el = new Y.XmlElement("blockquote");
+      const el = new Y.XmlElement(NODE_NAMES.BLOCKQUOTE);
       for (const child of node.children) {
         const childEls = blockToYxml(child, deferred);
         for (const c of childEls) {
@@ -76,13 +77,13 @@ function blockToYxml(
     }
 
     case "list": {
-      const nodeName = node.ordered ? "orderedList" : "bulletList";
+      const nodeName = node.ordered ? NODE_NAMES.ORDERED_LIST : NODE_NAMES.BULLET_LIST;
       const el = new Y.XmlElement(nodeName);
       if (node.ordered && node.start != null && node.start !== 1) {
         el.setAttribute("start", node.start as any);
       }
       for (const item of node.children) {
-        const listItem = new Y.XmlElement("listItem");
+        const listItem = new Y.XmlElement(NODE_NAMES.LIST_ITEM);
         for (const child of item.children) {
           const childEls = blockToYxml(child, deferred);
           for (const c of childEls) {
@@ -95,7 +96,7 @@ function blockToYxml(
     }
 
     case "code": {
-      const el = new Y.XmlElement("codeBlock");
+      const el = new Y.XmlElement(NODE_NAMES.CODE_BLOCK);
       if (node.lang) {
         el.setAttribute("language", node.lang);
       }
@@ -106,11 +107,11 @@ function blockToYxml(
     }
 
     case "thematicBreak": {
-      return [new Y.XmlElement("horizontalRule")];
+      return [new Y.XmlElement(NODE_NAMES.HORIZONTAL_RULE)];
     }
 
     case "image": {
-      const el = new Y.XmlElement("image");
+      const el = new Y.XmlElement(NODE_NAMES.IMAGE);
       el.setAttribute("src", node.url);
       if (node.alt) el.setAttribute("alt", node.alt);
       if (node.title) el.setAttribute("title", node.title);
@@ -120,7 +121,7 @@ function blockToYxml(
     // html blocks, definitions, etc. — wrap as paragraphs to avoid data loss
     default: {
       if ("value" in node && typeof node.value === "string") {
-        const el = new Y.XmlElement("paragraph");
+        const el = new Y.XmlElement(NODE_NAMES.PARAGRAPH);
         const text = new Y.XmlText();
         el.insert(0, [text]);
         deferred.push({ xmlText: text, plainText: node.value });
@@ -189,7 +190,7 @@ function processInline(
         break;
 
       case "break": {
-        const embed = new Y.XmlElement("hardBreak");
+        const embed = new Y.XmlElement(NODE_NAMES.HARD_BREAK);
         xmlText.insertEmbed(xmlText.length, embed);
         break;
       }
@@ -231,15 +232,15 @@ export function yDocToMdast(doc: Y.Doc): Root {
 /** Convert a Y.XmlElement back to an MDAST block node */
 function yxmlToMdast(el: Y.XmlElement): RootContent | null {
   switch (el.nodeName) {
-    case "heading": {
+    case NODE_NAMES.HEADING: {
       const depth = Number(el.getAttribute("level") ?? 1) as 1 | 2 | 3 | 4 | 5 | 6;
       return { type: "heading", depth, children: deltaToPhrasingContent(el) };
     }
 
-    case "paragraph":
+    case NODE_NAMES.PARAGRAPH:
       return { type: "paragraph", children: deltaToPhrasingContent(el) };
 
-    case "blockquote": {
+    case NODE_NAMES.BLOCKQUOTE: {
       const children: RootContent[] = [];
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
@@ -252,14 +253,14 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
       return { type: "blockquote", children: children as any };
     }
 
-    case "bulletList":
-    case "orderedList": {
-      const ordered = el.nodeName === "orderedList";
+    case NODE_NAMES.BULLET_LIST:
+    case NODE_NAMES.ORDERED_LIST: {
+      const ordered = el.nodeName === NODE_NAMES.ORDERED_LIST;
       const start = ordered ? Number(el.getAttribute("start")) || 1 : undefined;
       const listItems: any[] = [];
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
-        if (child instanceof Y.XmlElement && child.nodeName === "listItem") {
+        if (child instanceof Y.XmlElement && child.nodeName === NODE_NAMES.LIST_ITEM) {
           const itemChildren: any[] = [];
           for (let j = 0; j < child.length; j++) {
             const grandchild = child.get(j);
@@ -280,7 +281,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
       } as any;
     }
 
-    case "codeBlock": {
+    case NODE_NAMES.CODE_BLOCK: {
       const lang = el.getAttribute("language") as string | undefined;
       let value = "";
       for (let i = 0; i < el.length; i++) {
@@ -292,10 +293,10 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
       return { type: "code", lang: lang || null, value } as any;
     }
 
-    case "horizontalRule":
+    case NODE_NAMES.HORIZONTAL_RULE:
       return { type: "thematicBreak" };
 
-    case "image": {
+    case NODE_NAMES.IMAGE: {
       return {
         type: "image",
         url: (el.getAttribute("src") as string) || "",
@@ -339,7 +340,7 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
       for (const op of delta) {
         // Embedded elements (hardBreak, etc.)
         if (typeof op.insert !== "string") {
-          if (op.insert instanceof Y.XmlElement && op.insert.nodeName === "hardBreak") {
+          if (op.insert instanceof Y.XmlElement && op.insert.nodeName === NODE_NAMES.HARD_BREAK) {
             result.push({ type: "break" });
           }
           continue;
@@ -399,7 +400,7 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
       }
     } else if (child instanceof Y.XmlElement) {
       // Non-text child elements embedded in a block (shouldn't happen often)
-      if (child.nodeName === "hardBreak") {
+      if (child.nodeName === NODE_NAMES.HARD_BREAK) {
         result.push({ type: "break" });
       }
     }

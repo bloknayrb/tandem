@@ -20,7 +20,13 @@ import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
-import { extractText, findXmlText, getElementText, getOrCreateXmlText } from "./document-model.js";
+import {
+  applyTextEdit,
+  extractText,
+  getElementText,
+  NODE_NAMES,
+  TEXTBLOCK_NODE_NAMES,
+} from "./document-model.js";
 // Document service (state management)
 import {
   broadcastOpenDocs,
@@ -66,6 +72,7 @@ export {
 export type { RangeVerifyResult } from "./document-model.js";
 // Re-export for backward compatibility with existing consumers.
 export {
+  applyTextEdit,
   collectXmlTexts,
   detectFormat,
   docIdFromPath,
@@ -113,7 +120,7 @@ export function getOutline(fragment: Y.XmlFragment): OutlineEntry[] {
   const outline: OutlineEntry[] = [];
   for (let i = 0; i < fragment.length; i++) {
     const node = fragment.get(i);
-    if (node instanceof Y.XmlElement && node.nodeName === "heading") {
+    if (node instanceof Y.XmlElement && node.nodeName === NODE_NAMES.HEADING) {
       const level = Number(node.getAttribute("level") ?? 1);
       outline.push({ level, text: getElementText(node), index: i });
     }
@@ -136,7 +143,7 @@ export function getSection(
 
     const text = getElementText(node);
 
-    if (node.nodeName === "heading") {
+    if (node.nodeName === NODE_NAMES.HEADING) {
       const level = Number(node.getAttribute("level") ?? 1);
       if (inSection && level <= sectionLevel) break;
       if (text.trim().toLowerCase() === sectionName.trim().toLowerCase()) {
@@ -148,7 +155,7 @@ export function getSection(
     }
 
     if (inSection) {
-      if (node.nodeName === "heading") {
+      if (node.nodeName === NODE_NAMES.HEADING) {
         const level = Number(node.getAttribute("level") ?? 1);
         lines.push(headingPrefix(level) + text);
       } else {
@@ -333,74 +340,27 @@ export function registerDocumentTools(server: McpServer): void {
           );
         }
 
-        // Guard: container elements (bulletList, blockquote, etc.) have no direct
-        // XmlText child — editing them would corrupt the CRDT structure.
+        // Guard: only textblock elements (paragraph, heading, codeBlock) may
+        // be edited. Containers and embeds reject here so the helper's
+        // defense-in-depth throw stays unreachable on the happy path.
         const startNode = fragment.get(startPos.elementIndex);
-        if (startNode instanceof Y.XmlElement && !findXmlText(startNode)) {
+        if (startNode instanceof Y.XmlElement && !TEXTBLOCK_NODE_NAMES.has(startNode.nodeName)) {
           return mcpError(
             "INVALID_RANGE",
-            `Target element is a container (${startNode.nodeName}) — edit a specific paragraph or list item instead.`,
+            `Target element "${startNode.nodeName}" is not a textblock — edit a specific paragraph, heading, or code block instead.`,
           );
         }
         if (startPos.elementIndex !== endPos.elementIndex) {
           const endNode = fragment.get(endPos.elementIndex);
-          if (endNode instanceof Y.XmlElement && !findXmlText(endNode)) {
+          if (endNode instanceof Y.XmlElement && !TEXTBLOCK_NODE_NAMES.has(endNode.nodeName)) {
             return mcpError(
               "INVALID_RANGE",
-              `Target end element is a container (${endNode.nodeName}) — edit a specific paragraph or list item instead.`,
+              `Target end element "${endNode.nodeName}" is not a textblock — edit a specific paragraph, heading, or code block instead.`,
             );
           }
         }
 
-        if (startPos.elementIndex !== endPos.elementIndex) {
-          r.doc.transact(() => {
-            const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-            const startText = getOrCreateXmlText(startNode);
-            const startLen = startText.length;
-            if (startPos.textOffset < startLen) {
-              startText.delete(startPos.textOffset, startLen - startPos.textOffset);
-            }
-
-            const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
-            for (let i = 0; i < deleteCount; i++) {
-              fragment.delete(startPos.elementIndex + 1, 1);
-            }
-
-            const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-            const endText = getOrCreateXmlText(endNode);
-            if (endPos.textOffset > 0) {
-              endText.delete(0, endPos.textOffset);
-            }
-            const remaining = endText.toDelta();
-            let mergeOffset = startPos.textOffset;
-            for (const seg of remaining) {
-              if (typeof seg.insert === "string") {
-                startText.insert(mergeOffset, seg.insert, seg.attributes || {});
-                mergeOffset += seg.insert.length;
-              } else {
-                // Embed (hardBreak, image, etc.) — clone to detach from endText
-                const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
-                startText.insertEmbed(mergeOffset, embed, seg.attributes || {});
-                mergeOffset += 1;
-              }
-            }
-            fragment.delete(startPos.elementIndex + 1, 1);
-
-            startText.insert(startPos.textOffset, newText);
-          }, MCP_ORIGIN);
-        } else {
-          r.doc.transact(() => {
-            const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-            const textNode = getOrCreateXmlText(node);
-            const deleteLen = endPos.textOffset - startPos.textOffset;
-            if (deleteLen > 0) {
-              textNode.delete(startPos.textOffset, deleteLen);
-            }
-            if (newText.length > 0) {
-              textNode.insert(startPos.textOffset, newText);
-            }
-          }, MCP_ORIGIN);
-        }
+        applyTextEdit(r.doc, fragment, startPos, endPos, newText);
 
         // Record authorship for the inserted text (Y.Map overlay strategy).
         // This runs in a separate transaction because anchoredRange() reads the

@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { extractText, getOrCreateXmlText, resolveOffset } from "../../src/server/mcp/document.js";
+import {
+  applyTextEdit,
+  extractText,
+  getOrCreateXmlText,
+  resolveOffset,
+} from "../../src/server/mcp/document.js";
+import { validateDocStructure } from "../../src/server/mcp/document-model.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -10,8 +16,8 @@ afterEach(() => {
 });
 
 /**
- * Replicate tandem_edit logic for testing.
- * Returns null on success, or an error string on failure.
+ * Test wrapper around `applyTextEdit` — mirrors the validation surface of
+ * tandem_edit but returns the error message instead of an MCP response.
  */
 function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): string | null {
   if (from > to) return `Invalid range: from (${from}) must be <= to (${to}).`;
@@ -26,55 +32,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
     return "Edit range overlaps with heading markup.";
   }
 
-  if (startPos.elementIndex !== endPos.elementIndex) {
-    doc.transact(() => {
-      const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-      const startText = getOrCreateXmlText(startNode);
-      const startLen = startText.length;
-      if (startPos.textOffset < startLen) {
-        startText.delete(startPos.textOffset, startLen - startPos.textOffset);
-      }
-
-      const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
-      for (let i = 0; i < deleteCount; i++) {
-        fragment.delete(startPos.elementIndex + 1, 1);
-      }
-
-      const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-      const endText = getOrCreateXmlText(endNode);
-      if (endPos.textOffset > 0) {
-        endText.delete(0, endPos.textOffset);
-      }
-      const remaining = endText.toDelta();
-      let mergeOffset = startPos.textOffset;
-      for (const seg of remaining) {
-        if (typeof seg.insert === "string") {
-          startText.insert(mergeOffset, seg.insert, seg.attributes || {});
-          mergeOffset += seg.insert.length;
-        } else {
-          const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
-          startText.insertEmbed(mergeOffset, embed, seg.attributes || {});
-          mergeOffset += 1;
-        }
-      }
-      fragment.delete(startPos.elementIndex + 1, 1);
-
-      startText.insert(startPos.textOffset, newText);
-    });
-  } else {
-    doc.transact(() => {
-      const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-      const textNode = getOrCreateXmlText(node);
-      const deleteLen = endPos.textOffset - startPos.textOffset;
-      if (deleteLen > 0) {
-        textNode.delete(startPos.textOffset, deleteLen);
-      }
-      if (newText.length > 0) {
-        textNode.insert(startPos.textOffset, newText);
-      }
-    });
-  }
-
+  applyTextEdit(doc, fragment, startPos, endPos, newText);
   return null;
 }
 
@@ -225,6 +183,105 @@ describe("formatted cross-element edits (regression #425)", () => {
     expect(delta[1].insert).toBe("second");
     expect(delta[1].attributes).toEqual({ bold: true });
   });
+
+  it("drops endText entirely when endPos.textOffset === endText.length", () => {
+    // Cross-element edit where the end of the range lies at the end of endText.
+    // The merge loop should produce nothing from endText; only newText should
+    // land in startText. Locks in the boundary in any future delta-walk variant.
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const p1 = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p1]);
+    const t1 = new Y.XmlText();
+    p1.insert(0, [t1]);
+    t1.insert(0, "alpha");
+
+    const p2 = new Y.XmlElement("paragraph");
+    fragment.insert(1, [p2]);
+    const t2 = new Y.XmlText();
+    p2.insert(0, [t2]);
+    t2.insert(0, "beta");
+
+    // text: "alpha\nbeta" — replace "ha\nbeta" (offsets 3..10) with "X"
+    const err = applyEdit(doc, 3, 10, "X");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("alpX");
+    expect(fragment.length).toBe(1);
+  });
+
+  it("rejects oversized embeds at the merge boundary", () => {
+    // Build a Y.XmlElement embed with > 1024 nested AbstractType children.
+    // applyTextEdit must reject the merge before mutating the doc.
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const p1 = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p1]);
+    const t1 = new Y.XmlText();
+    p1.insert(0, [t1]);
+    t1.insert(0, "abc");
+
+    const p2 = new Y.XmlElement("paragraph");
+    fragment.insert(1, [p2]);
+    const t2 = new Y.XmlText();
+    p2.insert(0, [t2]);
+
+    // Build a Y.XmlElement with 1100 children — over the 1024 cap.
+    const oversized = new Y.XmlElement("hardBreak");
+    for (let i = 0; i < 1100; i++) {
+      oversized.insert(i, [new Y.XmlElement("hardBreak")]);
+    }
+    t2.insert(0, "y");
+    t2.insertEmbed(0, oversized);
+    // p2 = <oversized><br>y, length 2
+
+    // Edit [3, 4) — pulls everything from p2 into p1. The oversized embed
+    // would be at the start of remaining; cap should kick in.
+    const before = extractText(doc);
+    expect(() => applyEdit(doc, 3, 4, "X")).toThrow(/clone-size cap/);
+    // Doc state unchanged because the throw happens pre-mutation.
+    expect(extractText(doc)).toBe(before);
+  });
+
+  it("preserves a hardBreak embed at the merge boundary", () => {
+    // Cross-element edit that pulls part of p2 (including a hardBreak embed)
+    // into p1. Verifies the AbstractType.clone() detach path on the embed.
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const p1 = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p1]);
+    const t1 = new Y.XmlText();
+    p1.insert(0, [t1]);
+    t1.insert(0, "abc");
+
+    const p2 = new Y.XmlElement("paragraph");
+    fragment.insert(1, [p2]);
+    const t2 = new Y.XmlText();
+    p2.insert(0, [t2]);
+    t2.insert(0, "x");
+    t2.insertEmbed(1, new Y.XmlElement("hardBreak"));
+    t2.insert(2, "y");
+    // p2 = "x<br>y", XmlText length 3
+
+    // Flat offsets: 0..2='abc', 3=sep, 4='x', 5=embed, 6='y'
+    // Edit [2, 5) → drops "c", sep, "x"; keeps the embed onward.
+    const err = applyEdit(doc, 2, 5, "Z");
+    expect(err).toBeNull();
+
+    expect(fragment.length).toBe(1);
+    const merged = fragment.get(0) as Y.XmlElement;
+    const mergedText = merged.get(0) as Y.XmlText;
+    const delta = mergedText.toDelta();
+
+    // Expected: "abZ" + hardBreak + "y"
+    expect(delta.length).toBe(3);
+    expect(delta[0].insert).toBe("abZ");
+    expect(delta[1].insert).toBeInstanceOf(Y.XmlElement);
+    expect((delta[1].insert as Y.XmlElement).nodeName).toBe("hardBreak");
+    expect(delta[2].insert).toBe("y");
+  });
 });
 
 describe("getOrCreateXmlText container guard", () => {
@@ -238,6 +295,12 @@ describe("getOrCreateXmlText container guard", () => {
       "tableCell",
       "tableHeader",
       "listItem",
+      // Embed-type names — these live inside XmlText, not as fragment children,
+      // so they cannot reach the guard via tandem_edit. Listed here so the test
+      // documents the full set of non-textblock node names rejected.
+      "image",
+      "horizontalRule",
+      "hardBreak",
     ];
     for (const name of containers) {
       const d = new Y.Doc();
@@ -280,6 +343,42 @@ describe("getOrCreateXmlText container guard", () => {
     fragment.insert(0, [codeBlock]);
 
     expect(() => getOrCreateXmlText(codeBlock)).not.toThrow();
+    d.destroy();
+  });
+});
+
+describe("validateDocStructure", () => {
+  it("returns no violations for a well-formed doc", () => {
+    const d = makeDoc("Hello\nWorld");
+    expect(validateDocStructure(d)).toEqual([]);
+    d.destroy();
+  });
+
+  it("flags a fragment-child container that holds an XmlText", () => {
+    const d = new Y.Doc();
+    const fragment = d.getXmlFragment("default");
+    const bad = new Y.XmlElement("bulletList");
+    fragment.insert(0, [bad]);
+    bad.insert(0, [new Y.XmlText("phantom")]);
+
+    const violations = validateDocStructure(d);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]).toMatch(/bulletList.*XmlText/);
+    d.destroy();
+  });
+
+  it("accepts containers whose children are XmlElements", () => {
+    const d = new Y.Doc();
+    const fragment = d.getXmlFragment("default");
+    const list = new Y.XmlElement("bulletList");
+    fragment.insert(0, [list]);
+    const item = new Y.XmlElement("listItem");
+    list.insert(0, [item]);
+    const para = new Y.XmlElement("paragraph");
+    item.insert(0, [para]);
+    para.insert(0, [new Y.XmlText("hi")]);
+
+    expect(validateDocStructure(d)).toEqual([]);
     d.destroy();
   });
 });
