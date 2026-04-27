@@ -128,9 +128,9 @@ describe("loadSettings — editorWidthPercent clamping (regression guard)", () =
     expect(loadSettings().editorWidthPercent).toBe(100);
   });
 
-  it("clamps editorWidthPercent below 50 up to 50", () => {
+  it("clamps editorWidthPercent below 40 up to 40", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorWidthPercent: 10 }));
-    expect(loadSettings().editorWidthPercent).toBe(50);
+    expect(loadSettings().editorWidthPercent).toBe(40);
   });
 });
 
@@ -253,10 +253,17 @@ describe("useTandemSettings — updateSettings write path", () => {
     panelOrder: "chat-editor-annotations",
     editorWidthPercent: 75,
     selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
-    showAuthorship: false,
+    showAuthorship: true,
     reduceMotion: false,
     textSize: "m",
     theme: "system",
+    accentHue: 239,
+    editorFont: "sans",
+    density: "cozy",
+    defaultMode: "tandem",
+    highContrast: false,
+    annotationPatterns: false,
+    selectionToolbar: true,
   };
 
   it("clamps editorWidthPercent above 100 down to 100", () => {
@@ -264,9 +271,9 @@ describe("useTandemSettings — updateSettings write path", () => {
     expect(next.editorWidthPercent).toBe(100);
   });
 
-  it("clamps editorWidthPercent below 50 up to 50", () => {
+  it("clamps editorWidthPercent below 40 up to 40", () => {
     const next = mergeAndClampSettings(BASE, { editorWidthPercent: 10 });
-    expect(next.editorWidthPercent).toBe(50);
+    expect(next.editorWidthPercent).toBe(40);
   });
 
   it("clamps selectionDwellMs above max down to SELECTION_DWELL_MAX_MS", () => {
@@ -299,5 +306,132 @@ describe("useTandemSettings — updateSettings write path", () => {
     });
     expect(next.editorWidthPercent).toBe(80);
     expect(next.selectionDwellMs).toBe(1500);
+  });
+
+  it("clamps accentHue to [0, 360]", () => {
+    expect(mergeAndClampSettings(BASE, { accentHue: -10 }).accentHue).toBe(0);
+    expect(mergeAndClampSettings(BASE, { accentHue: 400 }).accentHue).toBe(360);
+    expect(mergeAndClampSettings(BASE, { accentHue: 180 }).accentHue).toBe(180);
+  });
+
+  it("falls back to default accentHue for NaN", () => {
+    expect(mergeAndClampSettings(BASE, { accentHue: NaN }).accentHue).toBe(239);
+  });
+});
+
+describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function writeRawSettings(partial: Record<string, unknown>) {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
+  }
+
+  it("defaults showAuthorship to true", () => {
+    expect(loadSettings().showAuthorship).toBe(true);
+  });
+
+  it("preserves stored showAuthorship: false (user choice)", () => {
+    writeRawSettings({ showAuthorship: false });
+    expect(loadSettings().showAuthorship).toBe(false);
+  });
+
+  it("defaults showAuthorship to true for upgrading users (key absent from existing blob)", () => {
+    writeRawSettings({ layout: "three-panel", editorWidthPercent: 75 });
+    expect(loadSettings().showAuthorship).toBe(true);
+  });
+
+  it("accepts tabbed-left as a valid layout", () => {
+    writeRawSettings({ layout: "tabbed-left" });
+    expect(loadSettings().layout).toBe("tabbed-left");
+  });
+
+  it("preserves accentHue: 0 (red) — not falsy-defaulted", () => {
+    writeRawSettings({ accentHue: 0 });
+    expect(loadSettings().accentHue).toBe(0);
+  });
+
+  it("defaults accentHue to 239 when absent", () => {
+    expect(loadSettings().accentHue).toBe(239);
+  });
+
+  it("falls back to default accentHue for non-numeric values", () => {
+    writeRawSettings({ accentHue: "garbage" });
+    expect(loadSettings().accentHue).toBe(239);
+  });
+
+  it.each(["serif", "sans", "mono"] as const)("accepts editorFont '%s'", (font) => {
+    writeRawSettings({ editorFont: font });
+    expect(loadSettings().editorFont).toBe(font);
+  });
+
+  it("falls back to 'sans' for unknown editorFont", () => {
+    writeRawSettings({ editorFont: "comic-sans" });
+    expect(loadSettings().editorFont).toBe("sans");
+  });
+
+  it("defaults editorFont to 'sans' when absent", () => {
+    expect(loadSettings().editorFont).toBe("sans");
+  });
+
+  it.each(["compact", "cozy", "spacious"] as const)("accepts density '%s'", (d) => {
+    writeRawSettings({ density: d });
+    expect(loadSettings().density).toBe(d);
+  });
+
+  it("falls back to 'cozy' for unknown density", () => {
+    writeRawSettings({ density: "ultra-tight" });
+    expect(loadSettings().density).toBe("cozy");
+  });
+
+  it.each(["solo", "tandem"] as const)("accepts defaultMode '%s'", (mode) => {
+    writeRawSettings({ defaultMode: mode });
+    expect(loadSettings().defaultMode).toBe(mode);
+  });
+
+  it("falls back to 'tandem' for unknown defaultMode", () => {
+    writeRawSettings({ defaultMode: "pair" });
+    expect(loadSettings().defaultMode).toBe("tandem");
+  });
+
+  it("accepts highContrast: true", () => {
+    writeRawSettings({ highContrast: true });
+    expect(loadSettings().highContrast).toBe(true);
+  });
+
+  it("defaults highContrast to false for non-boolean values", () => {
+    writeRawSettings({ highContrast: "yes" });
+    expect(loadSettings().highContrast).toBe(false);
+  });
+
+  it("accepts annotationPatterns: true", () => {
+    writeRawSettings({ annotationPatterns: true });
+    expect(loadSettings().annotationPatterns).toBe(true);
+  });
+
+  it("defaults annotationPatterns to false for non-boolean values", () => {
+    writeRawSettings({ annotationPatterns: 1 });
+    expect(loadSettings().annotationPatterns).toBe(false);
+  });
+
+  it("accepts selectionToolbar: false", () => {
+    writeRawSettings({ selectionToolbar: false });
+    expect(loadSettings().selectionToolbar).toBe(false);
+  });
+
+  it("defaults selectionToolbar to true when absent", () => {
+    expect(loadSettings().selectionToolbar).toBe(true);
+  });
+
+  it("defaults selectionToolbar to true for non-boolean values", () => {
+    writeRawSettings({ selectionToolbar: "nope" });
+    expect(loadSettings().selectionToolbar).toBe(true);
   });
 });

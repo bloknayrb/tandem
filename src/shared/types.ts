@@ -16,7 +16,7 @@ export { toFlatOffset, toPmPos, toSerializedRelPos } from "./positions/types.js"
 export const AnnotationTypeSchema = z.enum(["highlight", "comment", "flag"]);
 
 export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
-export const HighlightColorSchema = z.enum(["yellow", "red", "green", "blue", "purple"]);
+export const HighlightColorSchema = z.enum(["yellow", "green", "blue", "pink"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
 export const TandemModeSchema = z.enum(["solo", "tandem"]);
 export const AuthorSchema = z.enum(["user", "claude", "import"]);
@@ -91,6 +91,8 @@ interface AnnotationBase {
    * `rev: 0` by the merge/sync code.
    */
   rev?: number;
+  /** When true, marks this annotation as created during Solo mode. Consumers use this to hold back display until mode changes. */
+  heldInSolo?: boolean;
 }
 
 /**

@@ -97,7 +97,7 @@ Claude: tandem_resolveRange({ pattern: "$12.4 million" })
 
 Claude: tandem_highlight({
   from: 342, to: 355,
-  color: "red",
+  color: "yellow",
   note: "Q3 revenue was updated to $13.1M in the latest financial report"
 })
 ```
@@ -161,7 +161,7 @@ Claude: tandem_highlight({ from: 342, to: 355, color: "green", note: "Matches in
   documentId: "progress-report-f-1a2b3c" })
 
 // Discrepancy found
-Claude: tandem_highlight({ from: 487, to: 498, color: "red", note: "Invoice shows $2.6M -- $200K discrepancy",
+Claude: tandem_highlight({ from: 487, to: 498, color: "yellow", note: "Invoice shows $2.6M -- $200K discrepancy",
   documentId: "progress-report-f-1a2b3c" })
 
 // Not in invoice

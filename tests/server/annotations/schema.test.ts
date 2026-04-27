@@ -344,6 +344,107 @@ describe("migrateToV1", () => {
   });
 });
 
+describe("highlight color migration", () => {
+  it("migrateToV1 maps legacy red to yellow and purple to blue", () => {
+    const legacy = {
+      annotations: [
+        {
+          id: "ann_red",
+          author: "claude",
+          type: "highlight",
+          range: { from: 0, to: 5 },
+          content: "",
+          status: "pending",
+          timestamp: 1,
+          color: "red",
+        },
+        {
+          id: "ann_purple",
+          author: "user",
+          type: "highlight",
+          range: { from: 6, to: 10 },
+          content: "",
+          status: "pending",
+          timestamp: 2,
+          color: "purple",
+        },
+        {
+          id: "ann_yellow",
+          author: "user",
+          type: "highlight",
+          range: { from: 11, to: 15 },
+          content: "",
+          status: "pending",
+          timestamp: 3,
+          color: "yellow",
+        },
+      ],
+    };
+    const { doc, droppedAnnotations } = migrateToV1(legacy);
+    expect(droppedAnnotations).toBe(0);
+    expect(doc.annotations).toHaveLength(3);
+    expect(doc.annotations[0]?.color).toBe("yellow");
+    expect(doc.annotations[1]?.color).toBe("blue");
+    expect(doc.annotations[2]?.color).toBe("yellow");
+  });
+
+  it("parseAnnotationDoc migrates legacy colors in v1 files", () => {
+    const docWithOldColors: AnnotationDocV1 = {
+      ...validDoc,
+      annotations: [
+        { ...baseAnnotation, id: "ann_r", type: "highlight", color: "red" as never },
+        { ...baseAnnotation, id: "ann_p", type: "highlight", color: "purple" as never },
+        { ...baseAnnotation, id: "ann_b", type: "highlight", color: "blue" },
+      ],
+    };
+    const result = parseAnnotationDoc(docWithOldColors);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.doc.annotations[0]?.color).toBe("yellow");
+    expect(result.doc.annotations[1]?.color).toBe("blue");
+    expect(result.doc.annotations[2]?.color).toBe("blue");
+  });
+
+  it("migrateToV1 passes through annotations without a color field", () => {
+    const legacy = {
+      annotations: [
+        {
+          id: "ann_comment",
+          author: "user",
+          type: "comment",
+          range: { from: 0, to: 5 },
+          content: "A note",
+          status: "pending",
+          timestamp: 1,
+        },
+      ],
+    };
+    const { doc, droppedAnnotations } = migrateToV1(legacy);
+    expect(droppedAnnotations).toBe(0);
+    expect(doc.annotations).toHaveLength(1);
+    expect(doc.annotations[0]?.color).toBeUndefined();
+  });
+
+  it("migrateToV1 drops annotations with unknown future colors", () => {
+    const legacy = {
+      annotations: [
+        {
+          id: "ann_orange",
+          author: "claude",
+          type: "highlight",
+          range: { from: 0, to: 5 },
+          content: "",
+          status: "pending",
+          timestamp: 1,
+          color: "orange",
+        },
+      ],
+    };
+    const { doc, droppedAnnotations } = migrateToV1(legacy);
+    expect(droppedAnnotations).toBe(1);
+    expect(doc.annotations).toHaveLength(0);
+  });
+});
+
 describe("AnnotationRecordSchemaV1 — per-record shape", () => {
   it("accepts a relRange with Yjs-shaped SerializedRelPos values", () => {
     // SerializedRelPos is opaque at the type level; on the wire it's an object

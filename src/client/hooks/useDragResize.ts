@@ -8,6 +8,7 @@ import {
 } from "react";
 import { PANEL_WIDTH_KEYS, type PanelSide } from "../../shared/constants";
 import {
+  getRightWidth,
   PANEL_DEFAULT_WIDTH,
   PANEL_MAX_WIDTH,
   PANEL_MIN_WIDTH,
@@ -61,13 +62,13 @@ export function useDragResize({
       e.preventDefault();
       const startX = e.clientX;
       const current = panelLayoutRef.current;
-      // `left` is only defined in three-panel; fall back to the default so a
-      // stale mid-transition drag never reads undefined.
+      // `left` is present in three-panel and tabbed-left; fall back to the
+      // default so a stale mid-transition drag never reads undefined.
       let startWidth: number;
       if (side === "left") {
-        startWidth = current.kind === "three-panel" ? current.left : PANEL_DEFAULT_WIDTH;
+        startWidth = "left" in current ? current.left : PANEL_DEFAULT_WIDTH;
       } else {
-        startWidth = current.right;
+        startWidth = getRightWidth(current);
       }
       const storageKey = PANEL_WIDTH_KEYS[side];
       let latestWidth = startWidth;
@@ -87,9 +88,9 @@ export function useDragResize({
               ? { ...prev, right: latestWidth }
               : { kind: "tabbed", right: latestWidth };
           }
-          // Left handle is only rendered in three-panel, but guard anyway.
-          if (prev.kind !== "three-panel") return prev;
-          return { ...prev, left: latestWidth };
+          if (prev.kind === "three-panel") return { ...prev, left: latestWidth };
+          if (prev.kind === "tabbed-left") return { ...prev, left: latestWidth };
+          return prev;
         });
       };
 

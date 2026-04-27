@@ -32,7 +32,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useTutorial } from "./hooks/useTutorial";
 import { useWebViewZoom } from "./hooks/useWebViewZoom";
 import { useYjsSync } from "./hooks/useYjsSync";
-import { loadPanelWidth, type PanelLayout } from "./panel-layout";
+import { getRightWidth, loadPanelWidth, type PanelLayout } from "./panel-layout";
 import { ReviewSummary } from "./panels/ReviewSummary";
 import { pmSelectionToFlat } from "./positions";
 import { StatusBar } from "./status/StatusBar";
@@ -181,22 +181,33 @@ export default function App() {
     setActiveAnnotationId(annotationId);
   }, []);
 
-  const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
-    settings.layout === "three-panel"
-      ? { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") }
-      : { kind: "tabbed", right: loadPanelWidth("right") },
-  );
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => {
+    if (settings.layout === "three-panel")
+      return { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") };
+    if (settings.layout === "tabbed-left")
+      return { kind: "tabbed-left", left: loadPanelWidth("left") };
+    return { kind: "tabbed", right: loadPanelWidth("right") };
+  });
 
-  // Transition between variants when the user toggles layout mid-session.
-  // Preserves `right` across both directions and `left` on return to three-panel.
+  // Transition between layout variants when the user toggles mid-session.
+  // Each variant extracts the widths it needs from the previous layout,
+  // falling back to localStorage if the previous variant lacked that dimension.
   useEffect(() => {
     setPanelLayout((prev) => {
       if (settings.layout === "three-panel") {
         if (prev.kind === "three-panel") return prev;
-        return { kind: "three-panel", left: loadPanelWidth("left"), right: prev.right };
+        const right = "right" in prev ? prev.right : loadPanelWidth("right");
+        const left = "left" in prev ? prev.left : loadPanelWidth("left");
+        return { kind: "three-panel", left, right };
+      }
+      if (settings.layout === "tabbed-left") {
+        if (prev.kind === "tabbed-left") return prev;
+        const left = "left" in prev ? prev.left : loadPanelWidth("left");
+        return { kind: "tabbed-left", left };
       }
       if (prev.kind === "tabbed") return prev;
-      return { kind: "tabbed", right: prev.right };
+      const right = "right" in prev ? prev.right : loadPanelWidth("right");
+      return { kind: "tabbed", right };
     });
   }, [settings.layout]);
 
@@ -454,7 +465,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${panelLayout.right}px`,
+              width: `${getRightWidth(panelLayout)}px`,
               borderLeft: "1px solid var(--tandem-border)",
             }}
           >
@@ -549,7 +560,7 @@ export default function App() {
             style={{
               display: "flex",
               flexDirection: "column",
-              width: `${panelLayout.right}px`,
+              width: `${getRightWidth(panelLayout)}px`,
               borderLeft: "1px solid var(--tandem-border)",
             }}
           >

@@ -6,8 +6,11 @@ import {
   SELECTION_DWELL_MIN_MS,
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants";
+import type { TandemMode } from "../../shared/types.js";
 
-export type LayoutMode = "tabbed" | "three-panel";
+export type LayoutMode = "tabbed" | "three-panel" | "tabbed-left";
+export type EditorFont = "serif" | "sans" | "mono";
+export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
@@ -23,6 +26,13 @@ export interface TandemSettings {
   reduceMotion: boolean;
   textSize: TextSize;
   theme: ThemePreference;
+  accentHue: number;
+  editorFont: EditorFont;
+  density: Density;
+  defaultMode: TandemMode;
+  highContrast: boolean;
+  annotationPatterns: boolean;
+  selectionToolbar: boolean;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -44,10 +54,17 @@ const DEFAULTS: TandemSettings = {
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 50,
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
-  showAuthorship: false,
+  showAuthorship: true,
   reduceMotion: false,
   textSize: "m",
   theme: "system",
+  accentHue: 239,
+  editorFont: "sans",
+  density: "cozy",
+  defaultMode: "tandem",
+  highContrast: false,
+  annotationPatterns: false,
+  selectionToolbar: true,
 };
 
 /**
@@ -57,7 +74,9 @@ const DEFAULTS: TandemSettings = {
  * ranges on load so corrupted storage cannot wedge the app at an invalid
  * setting. Non-numeric or missing values fall back to the default via the
  * `Number(x) || DEFAULT` idiom (note: this treats `0` as falsy, which is
- * intentional — `0` is not a valid dwell or width anyway).
+ * intentional — `0` is not a valid dwell or width anyway). `accentHue` is
+ * the exception: hue 0 (red) is valid, so it uses an explicit `typeof`
+ * range check instead.
  */
 export function loadSettings(): TandemSettings {
   let saved: string | null;
@@ -72,7 +91,9 @@ export function loadSettings(): TandemSettings {
       const parsed = JSON.parse(saved);
       return {
         layout:
-          parsed.layout === "three-panel" || parsed.layout === "tabbed"
+          parsed.layout === "three-panel" ||
+          parsed.layout === "tabbed" ||
+          parsed.layout === "tabbed-left"
             ? parsed.layout
             : DEFAULTS.layout,
         primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
@@ -81,7 +102,7 @@ export function loadSettings(): TandemSettings {
             ? "annotations-editor-chat"
             : "chat-editor-annotations",
         editorWidthPercent: Math.max(
-          50,
+          40,
           Math.min(100, Number(parsed.editorWidthPercent) || DEFAULTS.editorWidthPercent),
         ),
         selectionDwellMs: Math.max(
@@ -91,7 +112,7 @@ export function loadSettings(): TandemSettings {
             Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
           ),
         ),
-        showAuthorship: parsed.showAuthorship === true,
+        showAuthorship: parsed.showAuthorship === false ? false : DEFAULTS.showAuthorship,
         reduceMotion:
           typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
         textSize:
@@ -102,6 +123,27 @@ export function loadSettings(): TandemSettings {
           parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
             ? parsed.theme
             : DEFAULTS.theme,
+        accentHue:
+          typeof parsed.accentHue === "number" && parsed.accentHue >= 0 && parsed.accentHue <= 360
+            ? parsed.accentHue
+            : DEFAULTS.accentHue,
+        editorFont:
+          parsed.editorFont === "serif" ||
+          parsed.editorFont === "sans" ||
+          parsed.editorFont === "mono"
+            ? parsed.editorFont
+            : DEFAULTS.editorFont,
+        density:
+          parsed.density === "compact" || parsed.density === "cozy" || parsed.density === "spacious"
+            ? parsed.density
+            : DEFAULTS.density,
+        defaultMode:
+          parsed.defaultMode === "solo" || parsed.defaultMode === "tandem"
+            ? parsed.defaultMode
+            : DEFAULTS.defaultMode,
+        highContrast: parsed.highContrast === true,
+        annotationPatterns: parsed.annotationPatterns === true,
+        selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
@@ -124,11 +166,14 @@ export function mergeAndClampSettings(
   const merged = { ...prev, ...partial };
   return {
     ...merged,
-    editorWidthPercent: Math.max(50, Math.min(100, merged.editorWidthPercent)),
+    editorWidthPercent: Math.max(40, Math.min(100, merged.editorWidthPercent)),
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
     ),
+    accentHue: Number.isFinite(merged.accentHue)
+      ? Math.max(0, Math.min(360, merged.accentHue))
+      : DEFAULTS.accentHue,
   };
 }
 

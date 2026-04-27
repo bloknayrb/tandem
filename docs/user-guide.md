@@ -52,7 +52,7 @@ Select text to reveal formatting buttons: **Bold**, **Italic**, **Headings** (H1
 
 When text is selected, annotation buttons appear alongside the formatting toolbar:
 
-- **Highlight** — Mark text with a colored background. A dropdown lets you pick from 5 colors: yellow, red, green, blue, or purple. An explicit ✕ button closes the color picker.
+- **Highlight** — Mark text with a colored background. A dropdown lets you pick from 4 colors: yellow, green, blue, or pink. An explicit ✕ button closes the color picker.
 - **Comment** — Attach a note to the selected text. Two optional toggles appear:
   - **Replace** — Propose replacement text. A text input appears for the new wording. Accepting the annotation applies the replacement automatically.
   - **@Claude** — Direct the comment to Claude as a question. Claude sees the selected text and your comment, and can respond with annotations, chat messages, or both.
@@ -125,7 +125,7 @@ Annotations are how Claude's feedback shows up in the document. There are three 
 
 ### Highlight
 
-Colored background on the annotated text. Choose from 5 colors (yellow, red, green, blue, purple) via the toolbar's color picker dropdown. Use highlights to mark notable passages — green for good, red for problems, yellow for "check this."
+Colored background on the annotated text. Choose from 4 colors (yellow, green, blue, pink) via the toolbar's color picker dropdown. Use highlights to mark notable passages — green for good, yellow for problems, pink for style/tone.
 
 ### Comment
 

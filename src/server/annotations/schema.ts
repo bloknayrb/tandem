@@ -18,6 +18,7 @@ import {
   AnnotationStatusSchema,
   AnnotationTypeSchema,
   AuthorSchema,
+  type HighlightColor,
   HighlightColorSchema,
   ReplyAuthorSchema,
 } from "../../shared/types.js";
@@ -77,9 +78,10 @@ const RelativeRangeSchema = z
 // ---------------------------------------------------------------------------
 
 /**
- * Per-annotation envelope record. Structurally matches `AnnotationBase` from
+ * Per-annotation envelope record. Largely mirrors `AnnotationBase` from
  * `src/shared/types.ts`, plus the optional type-discriminator fields
- * (`color` / `suggestedText` / `directedAt`), plus the new required `rev`.
+ * (`color` / `suggestedText` / `directedAt`), plus the required `rev`.
+ * Fields not listed here (e.g. `heldInSolo`) are preserved via `.passthrough()`.
  */
 export const AnnotationRecordSchemaV1 = z
   .object({
@@ -165,6 +167,22 @@ export type AnnotationReplyRecordV1 = z.infer<typeof AnnotationReplyRecordSchema
 export type TombstoneRecordV1 = z.infer<typeof TombstoneRecordSchemaV1>;
 
 // ---------------------------------------------------------------------------
+// Color migration helpers
+// ---------------------------------------------------------------------------
+
+const LEGACY_COLOR_MAP: Record<"red" | "purple", HighlightColor> = {
+  red: "yellow",
+  purple: "blue",
+};
+
+function migrateHighlightColor(ann: Record<string, unknown>): void {
+  const color = ann.color;
+  if (typeof color === "string" && color in LEGACY_COLOR_MAP) {
+    ann.color = LEGACY_COLOR_MAP[color as keyof typeof LEGACY_COLOR_MAP];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Parse + migrate
 // ---------------------------------------------------------------------------
 
@@ -217,6 +235,20 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     return { ok: false, error: "future", schemaVersion };
   }
 
+  // Migrate legacy highlight colors before validation. Clone each annotation
+  // so the caller's input objects are not mutated as a side effect of parsing.
+  const cand = candidate as { annotations?: unknown[] };
+  if (Array.isArray(cand.annotations)) {
+    for (let i = 0; i < cand.annotations.length; i++) {
+      const ann = cand.annotations[i];
+      if (ann && typeof ann === "object") {
+        const cloned = { ...(ann as Record<string, unknown>) };
+        migrateHighlightColor(cloned);
+        cand.annotations[i] = cloned;
+      }
+    }
+  }
+
   const result = AnnotationDocSchemaV1.safeParse(candidate);
   if (!result.success) {
     return { ok: false, error: "corrupt" };
@@ -267,6 +299,7 @@ export function migrateToV1(raw: unknown): MigrationResult {
       continue;
     }
     const withRev = { rev: 0, ...(ann as object) };
+    migrateHighlightColor(withRev as Record<string, unknown>);
     const parsed = AnnotationRecordSchemaV1.safeParse(withRev);
     if (parsed.success) annotations.push(parsed.data);
     else droppedAnnotations++;
