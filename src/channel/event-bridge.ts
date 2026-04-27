@@ -13,8 +13,8 @@ const AWARENESS_DEBOUNCE_MS = 500;
 const MODE_CACHE_TTL_MS = 2000;
 
 /**
- * @deprecated Use src/monitor/ for new push-path work.
- * Kept for backward compatibility with stdio-mode Claude Code connections.
+ * Stdio-mode SSE bridge. New push-path work should target src/monitor/.
+ * This path remains active for stdio-mode Claude Code connections.
  */
 export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<void> {
   let retries = 0;
@@ -90,7 +90,12 @@ async function connectAndStream(
         status: "idle",
         active: false,
       }),
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error(
+        "[Channel] clearAwareness failed (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    });
   }
 
   function flushAwareness() {
@@ -147,15 +152,26 @@ async function connectAndStream(
       try {
         event = parseTandemEvent(JSON.parse(data));
       } catch {
-        console.error("[Channel] Malformed SSE event data (skipping):", data.slice(0, 200));
+        console.error(
+          "[Channel] Malformed SSE event data (skipping), eventId=%s:",
+          eventId,
+          data.slice(0, 200),
+        );
+        // Permanently unparseable — advance past it to prevent infinite re-delivery on reconnect.
+        if (eventId) onEventId(eventId);
         continue;
       }
       if (!event) {
-        console.error("[Channel] Received invalid SSE event, skipping");
+        console.error(
+          "[Channel] Invalid SSE event structure (skipping), eventId=%s:",
+          eventId,
+          data.slice(0, 200),
+        );
+        if (eventId) onEventId(eventId);
         continue;
       }
 
-      // Solo mode suppression: drop non-chat events when mode is "solo"
+      // Solo mode: intentionally suppressed (not a delivery failure) — advance past it.
       if (event.type !== "chat:message") {
         const mode = await getCachedMode(tandemUrl);
         if (mode === "solo") {
