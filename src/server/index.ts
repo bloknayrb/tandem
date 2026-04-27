@@ -94,6 +94,7 @@ function handleFatalError(label: string, value: unknown): void {
   } else {
     console.error(`[Tandem] ${label} (FATAL):`, value);
   }
+  console.error(`[Tandem] Fatal context: openDocuments=${docCount()}`);
   process.exit(1);
 }
 process.on("uncaughtException", (err) => handleFatalError("uncaughtException", err));
