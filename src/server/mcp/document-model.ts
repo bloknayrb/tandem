@@ -311,6 +311,25 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
 const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
 
 /**
+ * Merge all delta segments from `source` into `target` at `offset`,
+ * preserving inline formatting and embeds. Passes `?? {}` for attributes
+ * to prevent Y.js formatting inheritance on plain text segments.
+ */
+export function mergeXmlTextDelta(target: Y.XmlText, source: Y.XmlText, offset: number): void {
+  let pos = offset;
+  for (const seg of source.toDelta()) {
+    if (typeof seg.insert === "string") {
+      target.insert(pos, seg.insert, seg.attributes ?? {});
+      pos += seg.insert.length;
+    } else {
+      const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : seg.insert;
+      target.insertEmbed(pos, embed, seg.attributes ?? {});
+      pos += 1;
+    }
+  }
+}
+
+/**
  * Find the first Y.XmlText child of a Y.XmlElement.
  * Creates one if the element is empty.
  *
