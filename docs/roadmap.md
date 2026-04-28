@@ -185,8 +185,8 @@ Remaining:
 - ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
 - ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, HTML5 drag-and-drop reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
 - ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
-- Version indicator in the UI (#435) — About dialog or settings footer showing current version
-- "View Changelog" button in Settings panel (#437) — opens bundled `CHANGELOG.md` as a read-only document tab
+- ~~Version indicator in the UI (#435)~~ — **SHIPPED** (PR #460, 2026-04-28). About footer in Settings popover showing version + MCP SDK version via `useAppInfo` hook fetching `/api/info`.
+- ~~"View Changelog" button in Settings panel (#437)~~ — **SHIPPED** (PR #463, 2026-04-28). Opens bundled `CHANGELOG.md` as a read-only document tab via `POST /api/open` with `readOnly: true`.
 - Highlight color picker (palette switched to 4 colors in PR #451; UI picker not yet built)
 
 ### Verification
@@ -381,7 +381,7 @@ Remaining Cowork work (#316, #317, #322) is polish — making the installer turn
 
 ## v1.0 Release Plan
 
-Core features are complete (28 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Remaining work: redesign data model (#443, #445), distribution (#316, #317, #322), UX polish (#435, #437), Svelte migration (ADR-025), dark theme, desktop UI polish, and first-run UX.
+Core features are complete (28 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Redesign data model (#443, #445) and UX polish (#435, #437) shipped in v0.9.0. Remaining work: distribution (#316, #317, #322), Svelte migration (ADR-025), dark theme, desktop UI polish, and first-run UX.
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
@@ -430,7 +430,7 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.8.0 | Token hygiene + annotation correctness + installer fix + Cowork PRs e–f (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434, #436, PR #370, PR #371 |
-| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259 ✅, #316, #317, #322, #435, #437, #440 ✅, #441 ✅, #442 ✅, #443, #444 ✅, #445, #450 ✅, ADR-023 CI smoke test ✅ |
+| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259 ✅, #316, #317, #322, #435 ✅, #437 ✅, #440 ✅, #441 ✅, #442 ✅, #443 ✅, #444 ✅, #445 ✅, #450 ✅, ADR-023 CI smoke test ✅ |
 
 **v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Bundled into the same release: Cowork installer + onboarding (PRs #370, #371) and installer fixes (#434, #436). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), event push gap closed.
 
@@ -440,9 +440,9 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 - #440 — `heldInSolo` schema field on `AnnotationBase` — **SHIPPED** (PR #451, 2026-04-27)
 - #441 — `/api/info` endpoint for About panel dynamic values (BLOCKER, prerequisite for #435) — **SHIPPED** (PR #458, 2026-04-28)
 - #442 — New settings data model fields (7 fields + `showAuthorship` default → `true`) — **SHIPPED** (PR #451, 2026-04-27). UI deferred to Svelte.
-- #443 — Authorship decorations switch from CSS classes to `data-tandem-author` attributes
+- #443 — Authorship decorations switch from CSS classes to `data-tandem-author` attributes — **SHIPPED** (PR #462, 2026-04-28)
 - #444 — Editor width minimum lowered from 50% to 40% — **SHIPPED** (PR #451, 2026-04-27)
-- #445 — `tabbed-left` layout variant (type + `PanelLayout` union added in PR #451; render branch deferred to PR 7)
+- #445 — `tabbed-left` layout variant (type + `PanelLayout` union added in PR #451; render branch deferred to PR 7) — **SHIPPED** (PR #461, 2026-04-28)
 
 Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink; migration: `red` → `yellow`, `purple` → `blue`) — **SHIPPED** as #450 (PR #451, 2026-04-27). Density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale and `docs/v090-plan.md` for migration details.
 

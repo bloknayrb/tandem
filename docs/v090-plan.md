@@ -29,13 +29,13 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 
 ### Blockers
 - **#440** — `heldInSolo` field on `AnnotationBase` — **DONE** (PR #451, merged 2026-04-27)
-- **#441** — `/api/info` endpoint (prerequisite for #435; no route exists in `src/server/mcp/routes/`)
+- **#441** — `/api/info` endpoint (prerequisite for #435; no route exists in `src/server/mcp/routes/`) — **DONE** (PR #458, merged 2026-04-28)
 
 ### Redesign Data Model (#439/ADR-026)
 - **#442** — 7 new `TandemSettings` fields + `showAuthorship` default `false` → `true` — **DONE** (PR #451, merged 2026-04-27)
-- **#443** — Authorship decorations: CSS classes → `data-tandem-author` attributes (current: `src/client/editor/extensions/authorship.ts:61`, CSS in `src/client/editor/editor.css:64-66`)
+- **#443** — Authorship decorations: CSS classes → `data-tandem-author` attributes (current: `src/client/editor/extensions/authorship.ts:61`, CSS in `src/client/editor/editor.css:64-66`) — **DONE** (PR #462, merged 2026-04-28)
 - **#444** — Editor width minimum 50% → 40% — **DONE** (PR #451, merged 2026-04-27)
-- **#445** — `tabbed-left` layout variant (needs render branch in `App.tsx`; type + `PanelLayout` union added in PR #451, render logic deferred to PR 7)
+- **#445** — `tabbed-left` layout variant (needs render branch in `App.tsx`; type + `PanelLayout` union added in PR #451, render logic deferred to PR 7) — **DONE** (PR #461, merged 2026-04-28)
 
 ### Highlight Palette Migration (ADR-026)
 - **#450** — Palette switched from 5 colors to 4 (yellow/green/blue/pink). `LEGACY_COLOR_MAP` in `schema.ts` migrates `red` → `yellow`, `purple` → `blue`. `parseAnnotationDoc()` runs migration before Zod validation. — **DONE** (PR #451, merged 2026-04-27)
@@ -48,8 +48,8 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 - Net result: ~28 tools (down from 31)
 
 ### UX Polish
-- **#435** — Version indicator in UI (depends on #441)
-- **#437** — "View Changelog" button in Settings panel
+- **#435** — Version indicator in UI (depends on #441) — **DONE** (PR #460, merged 2026-04-28)
+- **#437** — "View Changelog" button in Settings panel — **DONE** (PR #463, merged 2026-04-28)
 
 ### Distribution
 - **#316** — macOS/Linux Cowork auto-setup
@@ -167,7 +167,7 @@ This is the last breaking-change window before semver lock. If it slips, removal
 
 ### Wave 3 — Depends on Wave 2
 
-#### PR 7: Authorship Attributes + tabbed-left Layout (#443 + #445)
+#### PR 7: Authorship Attributes + tabbed-left Layout (#443 + #445) — **DONE** (PRs #462 + #461, merged 2026-04-28)
 - **Depends on:** PR 2 (needs extended `LayoutMode` type)
 - **#443:** In `src/client/editor/extensions/authorship.ts:61`, change:
   - From: `class: \`tandem-authorship tandem-authorship--${entry.author}\``
@@ -187,7 +187,7 @@ This is the last breaking-change window before semver lock. If it slips, removal
 - **Key files:** `src/client/editor/extensions/authorship.ts`, `src/client/editor/editor.css`, `src/client/panel-layout.ts`, `src/client/App.tsx`, `src/client/hooks/useDragResize.ts`
 - **Effort:** ~1.5 days
 
-#### PR 8: Version Indicator + Changelog Button (#435 + #437)
+#### PR 8: Version Indicator + Changelog Button (#435 + #437) — **DONE** (PRs #460 + #463, merged 2026-04-28)
 - **Depends on:** PR 3 (`/api/info` endpoint)
 - #435: Fetch version from `GET /api/info`, display in Settings footer or StatusBar
 - #437: "View Changelog" button in Settings → opens `CHANGELOG.md` via `POST /api/open` (route exists at `src/server/mcp/routes/open.ts`)
@@ -204,17 +204,18 @@ fix/audit-findings-batch → merge to master
                          PR 1 (docs)
                               ↓
         ┌──────────┬──────────┼──────────┬──────────┐
-      ✅PR 2     PR 3      ✅PR 4     PR 5       PR 6
+      ✅PR 2   ✅PR 3      ✅PR 4   ✅PR 5       PR 6
     (schema+    (/api/info) (MCP#259)  (CI test)  (distro)
      palette)
         ↓          ↓
-      PR 7       PR 8
+    ✅PR 7     ✅PR 8
    (attrs+      (version+
     layout)     changelog)
 ```
 
-PRs 2–6 are fully independent and run in parallel. PRs 2 and 4 are complete.
-PRs 7 and 8 each have one dependency.
+PRs 2–6 are fully independent and run in parallel. PRs 2, 3, 4, and 5 are complete.
+PRs 7 and 8 (which depended on PRs 2 and 3 respectively) are also complete.
+Only PR 6 (distribution) remains.
 
 **Critical path:** PR 4 (#259) was highest priority (last breaking-change window) — now complete.
 
