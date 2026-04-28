@@ -111,3 +111,40 @@ describe("_resetAppInfoCache", () => {
     expect(() => _resetAppInfoCache()).not.toThrow();
   });
 });
+
+describe("fetchAppInfo — cache behaviour", () => {
+  it("first call makes a network request; second call returns cached data without fetching again", async () => {
+    const spy = makeFetchStub(200, MOCK_INFO);
+    vi.stubGlobal("fetch", spy);
+
+    const signal = new AbortController().signal;
+
+    // First call — hits the network.
+    const first = await fetchAppInfo(signal);
+    expect(first).toEqual(MOCK_INFO);
+    expect((spy as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+
+    // Second call — served from cache, no additional fetch.
+    const second = await fetchAppInfo(signal);
+    expect(second).toEqual(MOCK_INFO);
+    expect((spy as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("after _resetAppInfoCache(), the next call fetches again", async () => {
+    const spy = makeFetchStub(200, MOCK_INFO);
+    vi.stubGlobal("fetch", spy);
+
+    const signal = new AbortController().signal;
+
+    // Populate the cache.
+    await fetchAppInfo(signal);
+    expect((spy as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+
+    // Reset the cache.
+    _resetAppInfoCache();
+
+    // Should fetch again.
+    await fetchAppInfo(signal);
+    expect((spy as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
+  });
+});

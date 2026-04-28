@@ -19,16 +19,20 @@ export function _resetAppInfoCache(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch `/api/info` and return the parsed `AppInfoData`. Throws on network
- * error, non-ok HTTP status, or if the provided signal is aborted. The caller
- * is responsible for constructing an appropriate AbortSignal.
+ * Fetch `/api/info` and return the parsed `AppInfoData`. The result is cached
+ * at module scope so repeated calls within a session skip the network. Throws
+ * on network error, non-ok HTTP status, or if the provided signal is aborted.
+ * The caller is responsible for constructing an appropriate AbortSignal.
  */
 export async function fetchAppInfo(signal: AbortSignal): Promise<AppInfoData> {
+  if (cachedInfo !== null) return cachedInfo;
   const resp = await fetch(`${API_BASE}/info`, { signal });
   if (!resp.ok) {
     throw new Error(`/api/info responded ${resp.status} ${resp.statusText}`);
   }
-  return resp.json() as Promise<AppInfoData>;
+  const data = (await resp.json()) as AppInfoData;
+  cachedInfo = data;
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,35 +61,35 @@ export function useAppInfo(open: boolean): UseAppInfoResult {
 
   useEffect(() => {
     if (!open) return;
-    // If we already have a cached result, skip the network call.
-    if (cachedInfo !== null) {
-      setInfo(cachedInfo);
-      setLoading(false);
-      return;
-    }
 
     let cancelled = false;
     const controller = new AbortController();
-    // Combine caller-controlled abort with a 3 s hard timeout.
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]);
+    // Manual timeout — AbortSignal.any is not available on macOS 13 / Safari 16
+    // (WKWebView used by Tauri on older macOS).
+    const timeout = setTimeout(() => controller.abort(), 3000);
 
     setLoading(true);
 
-    fetchAppInfo(signal)
+    fetchAppInfo(controller.signal)
       .then((data) => {
         if (cancelled) return;
-        cachedInfo = data;
         setInfo(data);
       })
-      .catch(() => {
-        // Errors are silently swallowed — UI hides the footer, no degradation.
+      .catch((err: unknown) => {
+        // AbortError is expected on cleanup or timeout — stay silent.
+        if (err instanceof Error && err.name !== "AbortError") {
+          console.warn("[useAppInfo] failed to load /api/info:", err);
+        }
+        // Otherwise silently swallowed — UI hides the footer, no degradation.
       })
       .finally(() => {
+        clearTimeout(timeout);
         if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
       controller.abort();
     };
   }, [open]);
