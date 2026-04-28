@@ -375,7 +375,7 @@ Each release targets **one coherent concern** so that a bad PR is bisectable and
 
 Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail.
 
-Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker.
+Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker. Deferred from v0.9.0 to v0.13.0 (requires macOS/Linux validation hardware).
 
 ---
 
@@ -430,11 +430,11 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.8.0 | Token hygiene + annotation correctness + installer fix + Cowork PRs e–f (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434, #436, PR #370, PR #371 |
-| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259 ✅, #316, #317, #322, #435 ✅, #437 ✅, #440 ✅, #441 ✅, #442 ✅, #443 ✅, #444 ✅, #445 ✅, #450 ✅, ADR-023 CI smoke test ✅ |
+| v0.9.0 | MCP API cleanup + redesign data model + UX polish (released 2026-04-28) | #259 ✅, #435 ✅, #437 ✅, #440 ✅, #441 ✅, #442 ✅, #443 ✅, #444 ✅, #445 ✅, #450 ✅, ADR-023 CI smoke test ✅ |
 
 **v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Bundled into the same release: Cowork installer + onboarding (PRs #370, #371) and installer fixes (#434, #436). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), event push gap closed.
 
-**v0.9.0** — #259 (MCP tool consolidation) shipped in PR #449. `tandem_suggest` is a deprecation stub (hard-remove in v0.10.0); the other three tools were hard-removed. This was the last breaking-change window before semver lock.
+**v0.9.0 — RELEASED (2026-04-28).** MCP tool consolidation (#259) shipped in PR #449 — `tandem_suggest` is a deprecation stub (hard-remove in v0.10.0); the other three tools were hard-removed. This was the last breaking-change window before semver lock. Redesign data model (#440–#445, #450) shipped across PRs #451, #458, #460–#463. UX polish (#435 version indicator, #437 changelog button) shipped. ADR-023 CI stdio smoke test shipped in PR #459. Distribution items (#316, #317, #322) deferred to v0.13.0 — cross-platform Cowork requires macOS/Linux validation hardware not available during this cycle.
 
 **Redesign gap audit (#439):** Product decisions resolved, design response prompt drafted (`docs/claude-design-response-prompt.md`). [Claude Design handoff](https://api.anthropic.com/v1/design/h/YkiJv2qQa82QG0GHUxce-g?open_file=Tandem+Redesign.html). Code-side work for v0.9.0:
 - #440 — `heldInSolo` schema field on `AnnotationBase` — **SHIPPED** (PR #451, 2026-04-27)
@@ -448,7 +448,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 
 > **Note:** #341 is fully complete. Event-type work (8-variant discriminated union + branded position types) shipped earlier; ADR-023 CI stdio smoke test shipped in PR #459 (2026-04-28).
 
-**Distribution coordination:** v0.9.0 is the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Document rollback strategy per surface.
+**Distribution coordination:** v0.9.0 was the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Rollback strategy per surface documented in `docs/v090-plan.md`.
 
 #### If Svelte Go
 
@@ -457,7 +457,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 | v0.10.0 | Svelte core migration | #312 Phase 2 (Vite plugin, `useYjsSync` rune, core hooks, Editor, DocumentTabs) |
 | v0.11.0 | Svelte complete | #312 Phase 3-4 (remaining panels, React removal, `<svelte:boundary>` error recovery) |
 | v0.12.0 | Dark theme | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification |
-| v0.13.0 | Desktop UI Tier 1 | #269 §1.1-1.5, #319, #378, #380 (PR f already shipped in v0.8.0) |
+| v0.13.0 | Desktop UI Tier 1 + Cowork cross-platform | #269 §1.1-1.5, #316, #317, #319, #322, #378, #380 (PR f already shipped in v0.8.0) |
 | v0.14.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
 

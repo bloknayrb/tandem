@@ -51,10 +51,10 @@ The current branch (`fix/audit-findings-batch`, 5 commits) has legitimate harden
 - **#435** — Version indicator in UI (depends on #441) — **DONE** (PR #460, merged 2026-04-28)
 - **#437** — "View Changelog" button in Settings panel — **DONE** (PR #463, merged 2026-04-28)
 
-### Distribution
-- **#316** — macOS/Linux Cowork auto-setup
-- **#317** — OS-specific firewall rules (macOS/Linux)
-- **#322** — Network-type detection for Cowork
+### Distribution — DEFERRED to v0.13.0
+- **#316** — macOS/Linux Cowork auto-setup — deferred (requires macOS/Linux validation hardware)
+- **#317** — OS-specific firewall rules (macOS/Linux) — deferred (same reason + security-sensitive)
+- **#322** — Network-type detection for Cowork — deferred (same reason)
 
 ### Remaining from #341
 - ADR-023 CI smoke test (event type work is already complete)
@@ -157,13 +157,8 @@ This is the last breaking-change window before semver lock. If it slips, removal
 - **Closes:** #341
 - **Effort:** ~0.5 day
 
-#### PR 6: Cowork Cross-Platform (#316, #317, #322)
-- #316: macOS/Linux Cowork auto-setup in `src/cli/setup.ts` + Tauri `run_setup()`
-- #317: OS-specific firewall scoping (macOS `pfctl`, Linux `ufw`). Must be idempotent — rerunning setup shouldn't duplicate rules. Must handle privilege escalation gracefully (prompt, not crash). Must surface errors clearly to user.
-- #322: Network-type detection for Cowork mode safety warnings
-- **Pre-check:** Verify #433 (TOCTOU hardening) does not apply to the new macOS/Linux code paths. If the same race exists, either fix it in this PR or document why it doesn't apply.
-- **Closes:** #316, #317, #322
-- **Effort:** ~2–3 days
+#### ~~PR 6: Cowork Cross-Platform (#316, #317, #322)~~ — DEFERRED to v0.13.0
+Requires macOS/Linux validation hardware not available during this cycle. Cross-platform Cowork is polish, not a capability blocker — Windows Cowork works end-to-end since v0.7.1.
 
 ### Wave 3 — Depends on Wave 2
 
@@ -213,9 +208,9 @@ fix/audit-findings-batch → merge to master
     layout)     changelog)
 ```
 
-PRs 2–6 are fully independent and run in parallel. PRs 2, 3, 4, and 5 are complete.
-PRs 7 and 8 (which depended on PRs 2 and 3 respectively) are also complete.
-Only PR 6 (distribution) remains.
+PRs 2–5 are complete. PRs 7 and 8 (which depended on PRs 2 and 3 respectively) are also complete.
+PR 6 (distribution) deferred to v0.13.0 — requires macOS/Linux hardware.
+**All v0.9.0 code work is complete.**
 
 **Critical path:** PR 4 (#259) was highest priority (last breaking-change window) — now complete.
 
