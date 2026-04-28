@@ -36,6 +36,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Stdio smoke test
+        run: node scripts/ci/stdio-smoke.mjs
+        timeout-minutes: 2
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
