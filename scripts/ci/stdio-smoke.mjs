@@ -12,6 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,10 +49,13 @@ function fail(msg) {
 // ---------------------------------------------------------------------------
 // Line-buffer helper — ported from tests/cli/mcp-stdio.test.ts:46-75
 // Resolves with up to n lines within timeoutMs; fewer lines = timeout.
+// Removes the data listener on resolution to prevent listener accumulation
+// across successive calls (stale listeners steal data from later calls).
 // ---------------------------------------------------------------------------
 function readLines(child, n, timeoutMs) {
   const stdoutChunks = [];
-  child.stdout.on("data", (c) => stdoutChunks.push(c.toString("utf8")));
+  const handler = (c) => stdoutChunks.push(c.toString("utf8"));
+  child.stdout.on("data", handler);
 
   return new Promise((resolve) => {
     const lines = [];
@@ -68,12 +72,14 @@ function readLines(child, n, timeoutMs) {
       if (lines.length >= n) {
         clearTimeout(timer);
         clearInterval(checker);
+        child.stdout.off("data", handler);
         resolve(lines);
       }
     }, 50);
 
     const timer = setTimeout(() => {
       clearInterval(checker);
+      child.stdout.off("data", handler);
       resolve(lines);
     }, timeoutMs);
   });
@@ -81,9 +87,11 @@ function readLines(child, n, timeoutMs) {
 
 // ---------------------------------------------------------------------------
 // Health poll — 30 retries × 500ms = 15s max
+// isCrashed() callback allows fail-fast if the server exits unexpectedly.
 // ---------------------------------------------------------------------------
-async function pollHealth(baseUrl, retries = 30, intervalMs = 500) {
+async function pollHealth(baseUrl, retries = 30, intervalMs = 500, isCrashed = () => false) {
   for (let i = 0; i < retries; i++) {
+    if (isCrashed()) return false;
     try {
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 2000);
@@ -106,6 +114,13 @@ let proxy;
 let tmpDir;
 
 async function main() {
+  // Pre-flight: fail fast if dist artifacts are missing rather than wasting 15s
+  if (!existsSync(serverEntry) || !existsSync(cliEntry)) {
+    fail(
+      `Built artifacts missing — run \`npm run build\` first.\nExpected: ${serverEntry} and ${cliEntry}`,
+    );
+  }
+
   // Create isolated temp dir for TANDEM_APP_DATA_DIR
   tmpDir = await mkdtemp(join(tmpdir(), "tandem-smoke-"));
   log(`App data dir: ${tmpDir}`);
@@ -130,10 +145,22 @@ async function main() {
     log(`Server spawn error: ${err.message}`);
   });
 
+  // Detect early server crashes so health poll can fail fast
+  let serverCrashed = false;
+  server.on("exit", (code, signal) => {
+    if (code !== 0 && code !== null) {
+      serverCrashed = true;
+      log(`Server exited unexpectedly with code ${code} (signal: ${signal ?? "none"})`);
+    }
+  });
+
   // Poll health before spawning proxy
   log("Polling /health (30 × 500ms)...");
-  const healthy = await pollHealth("http://127.0.0.1:3479");
+  const healthy = await pollHealth("http://127.0.0.1:3479", 30, 500, () => serverCrashed);
   if (!healthy) {
+    if (serverCrashed) {
+      fail("Server crashed during startup — see server output above");
+    }
     fail(
       "Server did not become healthy within 15s — check dist/server/index.js exists and ports 3478/3479 are free",
     );
@@ -152,6 +179,12 @@ async function main() {
 
   proxy.on("error", (err) => {
     log(`Proxy spawn error: ${err.message}`);
+  });
+
+  // Suppress unhandled write errors if proxy dies before stdin.write() — without
+  // this, Node emits an uncaught error that bypasses .catch() and skips cleanup.
+  proxy.stdin.on("error", (err) => {
+    log(`Proxy stdin error: ${err.message}`);
   });
 
   // Prefix-log proxy stderr to CI output
@@ -236,6 +269,11 @@ async function main() {
     fail(`Stage: tools/list response — could not parse JSON: ${toolsLines[0]}`);
   }
 
+  if (toolsResponse.id !== 2) {
+    fail(
+      `Stage: tools/list response — unexpected response id ${JSON.stringify(toolsResponse.id)}, expected 2 (got: ${toolsLines[0]})`,
+    );
+  }
   if (toolsResponse.error) {
     fail(
       `Stage: tools/list response — got error: ${JSON.stringify(toolsResponse.error)} (raw: ${toolsLines[0]})`,
@@ -249,9 +287,9 @@ async function main() {
       `Stage: tools/list response — result.tools is not an array (got: ${JSON.stringify(toolsResponse.result)})`,
     );
   }
-  if (toolsResponse.result.tools.length === 0) {
+  if (toolsResponse.result.tools.length < 20) {
     fail(
-      "Stage: tools/list response — result.tools is empty (tool registrations stripped by build?)",
+      `Stage: tools/list response — only ${toolsResponse.result.tools.length} tools registered, expected ≥20 (tool registrations stripped by build?)`,
     );
   }
 
@@ -282,7 +320,9 @@ async function cleanup() {
       }
     }, 3000);
     proxyKillTimer.unref();
-    await new Promise((r) => proxy.once("exit", r));
+    if (proxy.exitCode === null && proxy.signalCode === null) {
+      await new Promise((r) => proxy.once("exit", r));
+    }
     clearTimeout(proxyKillTimer);
     log("Proxy exited.");
   }
@@ -299,7 +339,9 @@ async function cleanup() {
       }
     }, 3000);
     serverKillTimer.unref();
-    await new Promise((r) => server.once("exit", r));
+    if (server.exitCode === null && server.signalCode === null) {
+      await new Promise((r) => server.once("exit", r));
+    }
     clearTimeout(serverKillTimer);
     log("Server exited.");
   }
