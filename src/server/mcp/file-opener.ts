@@ -88,12 +88,20 @@ interface ResolvedPath {
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
  * Pass `force: true` to reload from disk even if already open (clears all document state).
+ * Pass `readOnly: true` to force the document open in read-only mode (e.g. CHANGELOG.md).
  */
 export async function openFileByPath(
   filePath: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; readOnly?: boolean },
 ): Promise<OpenFileResult> {
-  const { resolved, format, readOnly, id } = await resolveAndValidatePath(filePath);
+  const {
+    resolved,
+    format,
+    readOnly: derivedReadOnly,
+    id,
+  } = await resolveAndValidatePath(filePath);
+  // Caller may override the derived readOnly (e.g. force changelog read-only).
+  const readOnly = options?.readOnly === true ? true : derivedReadOnly;
   const fileName = path.basename(resolved);
   const openDocs = getOpenDocs();
   const existing = openDocs.get(id);
@@ -123,7 +131,15 @@ export async function openFileByPath(
         forceReloaded: true,
       };
     }
-    return handleAlreadyOpen(id, getOrCreateDocument(id), format, resolved, readOnly);
+    return handleAlreadyOpen(
+      id,
+      getOrCreateDocument(id),
+      format,
+      resolved,
+      readOnly,
+      existing,
+      options?.readOnly === true,
+    );
   }
 
   // Normal open
@@ -253,6 +269,12 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
 /**
  * Handle the non-force already-open branch: activate the doc and broadcast.
  * This is the only place that sets alreadyOpen: true in the return value.
+ *
+ * If the caller explicitly requests readOnly: true and the existing record
+ * is not already read-only, we upgrade the document to read-only in both the
+ * open-docs registry and the Y.Doc metadata so clients see the correct flag.
+ * We never downgrade an existing readOnly:true document — the explicit signal
+ * only upgrades.
  */
 function handleAlreadyOpen(
   id: string,
@@ -260,7 +282,16 @@ function handleAlreadyOpen(
   format: string,
   resolved: string,
   readOnly: boolean,
+  existing: OpenDoc,
+  explicitReadOnly: boolean,
 ): OpenFileResult {
+  // Upgrade to read-only when explicitly requested and not already read-only.
+  if (explicitReadOnly && !existing.readOnly) {
+    addDoc(id, { ...existing, readOnly: true });
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    doc.transact(() => meta.set("readOnly", true), MCP_ORIGIN);
+  }
+
   setActiveDocId(id);
   broadcastOpenDocs();
   return {

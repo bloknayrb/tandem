@@ -14,12 +14,17 @@ export interface InfoHandlerDeps {
   storagePath: string;
   /** Returns the absolute path to the auth token file. */
   getTokenFilePath: () => string;
+  /**
+   * Absolute path to CHANGELOG.md on disk, resolved at server startup.
+   * Undefined if the file does not exist (e.g. stripped production builds).
+   */
+  changelogPath?: string;
 }
 
 /**
  * GET /api/info — returns app metadata for the client About panel.
  *
- * Public fields (always returned): version, toolCount, mcpSdkVersion, transport.
+ * Public fields (always returned): version, toolCount, mcpSdkVersion, transport, changelogPath.
  * Sensitive fields (loopback-only): storagePath, tokenRotatedAt.
  */
 export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
@@ -50,6 +55,11 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
       mcpSdkVersion: deps.mcpSdkVersion,
       transport: "http",
     };
+
+    // changelogPath is not sensitive — include whenever the file exists on disk.
+    if (deps.changelogPath !== undefined) {
+      body.changelogPath = deps.changelogPath;
+    }
 
     if (loopback) {
       body.storagePath = deps.storagePath;

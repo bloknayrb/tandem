@@ -46,6 +46,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist/server/ → dist/client/ (tsup bundles server into dist/server/index.js)
 const CLIENT_DIST = join(__dirname, "../client");
 
+// Resolve CHANGELOG.md by walking up from __dirname until we find a directory
+// that contains both package.json and CHANGELOG.md. This works in both dev
+// (src/server/mcp/) and production (dist/server/) without hardcoding depth.
+// Capped at 5 levels to avoid runaway traversal.
+function findChangelogPath(startDir: string): string | undefined {
+  let dir = startDir;
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, "CHANGELOG.md");
+    if (existsSync(candidate) && existsSync(join(dir, "package.json"))) {
+      return candidate;
+    }
+    const parent = join(dir, "..");
+    if (parent === dir) break; // filesystem root
+    dir = parent;
+  }
+  return undefined;
+}
+const CHANGELOG_PATH: string | undefined = findChangelogPath(__dirname);
+
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
 let mcpServer: McpServer | null = null;
@@ -325,6 +344,7 @@ export async function startMcpServerHttp(
       mcpSdkVersion: MCP_SDK_VERSION,
       storagePath: SESSION_DIR,
       getTokenFilePath,
+      changelogPath: CHANGELOG_PATH,
     },
   );
 
