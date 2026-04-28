@@ -282,6 +282,8 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 6. **Editor width minimum → 40%.** Applies as `maxWidth` on the editor flex child after panel subtraction. Tracked in #444.
 7. **`imported` field → keep `author: "import"` enum value.** Design updates to match codebase. No code change.
 
-**Blocking issues:** #440 (`heldInSolo` schema field), #441 (`/api/info` endpoint for About panel).
+**Blocking issues:** #440 (`heldInSolo` schema field) — resolved in PR #451. #441 (`/api/info` endpoint) — resolved in PR #458.
+
+**Implementation status (2026-04-28):** Decisions 1, 2, 6 shipped in PR #451 (schema + palette). Decision 3 (`tabbed-left`) shipped in PR #461. Decision 5 (authorship data attributes) shipped in PR #462. Decision 4 (density) and 7 (`"import"` enum) required no code changes.
 
 **Versioning:** All code-side work targets v0.9.0 (last breaking-change window). New settings UI deferred to Svelte rebuild (v0.10.0+) per ADR-025. Only the data model + `loadSettings()` parser changes land in v0.9.0.

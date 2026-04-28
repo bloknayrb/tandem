@@ -35,7 +35,7 @@ These WILL break things if violated:
 4. **Ranges use `validateRange()` + `anchoredRange()`**, not raw offsets. `anchoredRange()` creates both flat + Yjs RelativePosition in one call.
 5. **`tandem_getTextContent` uses `extractText()`, never `extractMarkdown()`.** Even for .md files. `extractMarkdown()` shifts character offsets relative to the annotation coordinate system. If you need actual markdown, use `tandem_save` and read the file.
 6. **`tandem_edit` rejects heading markup ranges.** Ranges that overlap heading prefixes (e.g., `## `) return INVALID_RANGE -- target text content only.
-7. **E2E tests use `data-testid` attributes** (kebab-case). Key selectors: `accept-btn`, `dismiss-btn`, `edit-btn`, `review-mode-btn`, `annotation-card-{id}`, `tab-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`, `toast-container`.
+7. **E2E tests use `data-testid` attributes** (kebab-case). Key selectors: `accept-btn`, `dismiss-btn`, `edit-btn`, `review-mode-btn`, `annotation-card-{id}`, `tab-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`, `toast-container`, `settings-popover`, `settings-display-name`, `dwell-time-slider`, `view-changelog-btn`, `app-info-footer`, `left-panel-resize-handle`, `right-panel-resize-handle`, `panel-resize-handle`, `cowork-settings-suspense-fallback`.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ Key files for navigation:
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
-- `src/client/` -- Tiptap editor, React components, hooks (`useYjsSync`, `useTabOrder`, `useTutorial`, `useNotifications`)
+- `src/client/` -- Tiptap editor, React components, hooks (`useYjsSync`, `useTabOrder`, `useTutorial`, `useNotifications`, `useAppInfo`), types (`types.ts`)
 - `src/shared/` -- Types (`types.ts`), constants (`constants.ts`), offsets (`offsets.ts`), position types (`positions/`)
 
 Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
@@ -64,7 +64,8 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Communication: `tandem_checkInbox` (poll for user actions + chat) and `tandem_reply` (Claude's chat responses). **Call `tandem_checkInbox` between tasks.** `tandem_status` and `tandem_checkInbox` return `mode: "solo" | "tandem"` — adapt behavior accordingly (in Solo mode, hold annotations)
 - Solo/Tandem mode is stored in CTRL_ROOM's `Y_MAP_USER_AWARENESS` map under the `Y_MAP_MODE` key, not per-document. Mode changes broadcast to all open documents
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
-- File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`
+- File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`. `openFileByPath` accepts an optional `readOnly` flag to force read-only mode (used by the View Changelog button)
+- Three layout modes: `tabbed` (panel right, default), `tabbed-left` (panel left), `three-panel` (annotations left, chat right). Layout state persists in `tandem:settings` localStorage key. `App.tsx` uses extracted `ResizeHandle` and `TabbedPanelContainer` shared components across layout arms
 
 ## Semantic Tokens
 - Token families defined in `index.html` `:root` (light) and `[data-theme="dark"]` blocks. Never use raw hex or non-neutral `rgba()` for semantic colors in `src/client/**/*.{ts,tsx}` — use `var(--tandem-*)` or import from `src/client/utils/colors.ts`. (`rgba(0,0,0,...)` / `rgba(255,255,255,...)` alpha values for shadows and overlays are fine.)
@@ -111,7 +112,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 ### MCP / Server
 - **Channel shim uses low-level `Server`, not `McpServer`.** The Channels spec requires `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` with explicit `setRequestHandler()` calls. The HTTP MCP server uses the high-level `McpServer` wrapper.
 - **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` -- not `document-id`.
-- **`APP_VERSION` is read from `package.json`** via `createRequire` in `src/server/mcp/server.ts`. Don't hardcode version strings.
+- **`APP_VERSION` is read from `package.json`** via `createRequire` in `src/server/mcp/server.ts`. Don't hardcode version strings. `findChangelogPath()` in the same file walks up from `__dirname` to find `CHANGELOG.md` (handles both `src/server/mcp/` in dev and `dist/server/` in production).
 - **`__MCP_SDK_VERSION__` is injected by tsup at build time.** `require("@modelcontextprotocol/sdk/package.json")` resolves to `dist/cjs/package.json` (a CJS type marker without `version`), not the root. `tsup.config.ts` walks the resolved path back past `dist/` to read the real version. The `typeof` guard in `server.ts` falls back to `"0.0.0-unknown"` in dev/test (no tsup).
 - **MCP must start before Hocuspocus** in stdio mode -- init timeout fires if order is reversed.
 
@@ -140,7 +141,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 28 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. Redesign gap audit (#439) resolved: 7 product decisions in [ADR-026](docs/decisions.md#adr-026-redesign-gap-audit-decisions-439), 6 issues filed (#440–#445), design response prompt at `docs/claude-design-response-prompt.md`. v0.9.0 in progress: MCP consolidation (#259) shipped, schema foundations (#451) shipped, `/api/info` endpoint (#441, PR #458) shipped, CI stdio smoke test (#341, PR #459) shipped. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 28 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. Redesign gap audit (#439) resolved: 7 product decisions in [ADR-026](docs/decisions.md#adr-026-redesign-gap-audit-decisions-439), 6 issues filed (#440–#445), design response prompt at `docs/claude-design-response-prompt.md`. v0.9.0 in progress: MCP consolidation (#259) shipped, schema foundations (#451) shipped, `/api/info` endpoint (#441, PR #458) shipped, CI stdio smoke test (#341, PR #459) shipped, authorship data attributes (#443, PR #462) shipped, tabbed-left layout (#445, PR #461) shipped, version in UI (#435, PR #460) shipped, View Changelog button (#437, PR #463) shipped. Only distribution (#316) remains. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 

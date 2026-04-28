@@ -494,3 +494,27 @@ The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `
 **Fix:** Resolve the stub path, then walk back past `dist/` to find the package root: `sdkStub.slice(0, sdkStub.lastIndexOf("dist"))` + `readFileSync(join(sdkRoot, "package.json"))`. A `typeof` guard in `server.ts` falls back to `"0.0.0-unknown"` in dev/test environments where tsup hasn't run.
 
 **Key insight:** `require("some-package/package.json")` is not guaranteed to return the root `package.json` when the package has an `exports` map. Always verify that the resolved path is what you expect — `require.resolve()` can reveal the actual target. This is especially treacherous in build-time config files where the error surfaces in CI (where tsup runs) but not in dev (where tsx skips it).
+
+## 50. AbortSignal.any Is Not Available in Older Safari / WKWebView
+
+**Problem:** `useAppInfo` combined two abort signals via `AbortSignal.any([signal, AbortSignal.timeout(3000)])` — an idiomatic pattern for "whichever comes first" timeout + cleanup cancellation. This worked in Chrome and modern Safari, but Tauri's WKWebView on macOS 13 uses Safari 16, where `AbortSignal.any()` is undefined. The hook crashed on mount, leaving the Settings footer permanently in "loading" state.
+
+**Fix:** Replace `AbortSignal.any` with the manual equivalent: a local `AbortController`, a `setTimeout` that calls `controller.abort()`, and a cleanup function that clears the timeout. More verbose but universally supported.
+
+**Key insight:** Tauri's WKWebView version is pinned to the OS's Safari version, not the latest Safari release. macOS 13 ships Safari 16; macOS 14 ships Safari 17. Any Web API that landed in Safari 17+ (`AbortSignal.any`, `Set.prototype.intersection`, `URL.canParse`) is unavailable to Tauri users who haven't upgraded macOS. Always check MDN's Safari version column, not just "Safari: Yes", and treat the minimum supported macOS version as the API floor.
+
+## 51. Browser Testing with Y.js Writes File Content Back to Disk
+
+**Problem:** Clicking "View Changelog" opened `CHANGELOG.md` as a document tab, which created a Hocuspocus room and synced the file's Y.Doc state to the browser. When the dev server session auto-saved, the Y.Doc's representation of the changelog — which included content merged from the session restore — was written back to disk, producing a 1200-line diff in `CHANGELOG.md` that had nothing to do with the code changes.
+
+**Fix:** After browser testing sessions that open real files, always `git checkout -- <file>` to restore the on-disk state before committing. Alternatively, use `readOnly: true` on test document opens to prevent session writes (which is what the View Changelog feature does in production — but the session file may still grow).
+
+**Key insight:** The Tandem dev server treats every open file as a live Y.Doc with session persistence. Opening a file in the browser during manual testing is a write operation from the CRDT's perspective — even read-only documents populate a session file. Always check `git diff` after browser testing before committing, especially for files that weren't part of the feature under test.
+
+## 52. Discriminated Union Variants Need Exhaustive Handling, Not Default Fallthroughs
+
+**Problem:** `useDragResize` handled right-side drag with a two-arm conditional: `if (layout === "tabbed") { ... } else { /* three-panel logic */ }`. When `tabbed-left` was added as a third `PanelLayout` variant, right-drag silently fell into the three-panel branch — writing to a `right` width key that `tabbed-left` doesn't have, and reading from a `left` key that three-panel interprets differently. No TypeScript error, no runtime error, just wrong resize behavior.
+
+**Fix:** Explicit arm-per-kind handling with an exhaustive pattern. Each layout variant gets its own branch with explicit localStorage key guards (`"left" in current` / `"right" in current`). TypeScript's control flow analysis ensures new variants produce a compile-time error if unhandled.
+
+**Key insight:** When extending a discriminated union, grep for every `if/else` and `switch` that branches on the discriminant. A `default` or `else` branch that "handles everything else" silently absorbs new variants — this is the most common source of bugs when adding variants to an existing union. Prefer explicit arms that TypeScript can exhaustiveness-check over catch-all defaults.
