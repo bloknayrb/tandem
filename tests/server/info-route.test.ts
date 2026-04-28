@@ -9,10 +9,15 @@
  *
  * DNS-rebinding tests use Node's `http.request` (not `fetch`) so we can inject
  * a custom Host header — the Fetch API forbids overriding Host for security.
+ *
+ * Unit tests for the non-loopback and ENOENT branches use `makeInfoHandler`
+ * directly with a mock Express request, mirroring the pattern in
+ * server-security-invariants.test.ts (Invariant 7).
  */
 
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeInfoHandler } from "../../src/server/mcp/routes/info.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -147,5 +152,93 @@ describe("GET /api/info — public shape contract", () => {
     expect("mcpSdkVersion" in b).toBe(true);
     expect("transport" in b).toBe(true);
     expect(b.transport).toBe("http");
+  });
+});
+
+// ── Unit tests for handler branches not reachable via loopback integration ────
+//
+// The integration suite above always connects from 127.0.0.1, so the
+// `if (loopback)` false-branch and the ENOENT stat() path have zero coverage
+// there. These unit tests drive `makeInfoHandler` directly with mock Express
+// objects, following the pattern in server-security-invariants.test.ts §7.
+
+/** Minimal mock of an Express Response that captures the json() argument. */
+function makeMockRes(): {
+  json: (body: Record<string, unknown>) => void;
+  _body: Record<string, unknown> | null;
+} {
+  const mock = {
+    _body: null as Record<string, unknown> | null,
+    json(body: Record<string, unknown>) {
+      mock._body = body;
+    },
+  };
+  return mock;
+}
+
+/** Build a minimal Express-like Request with the given remoteAddress. */
+function makeMockReq(remoteAddress: string): { socket: { remoteAddress: string } } {
+  return { socket: { remoteAddress } };
+}
+
+const BASE_DEPS = {
+  version: "0.0.0-test",
+  toolCount: 1,
+  mcpSdkVersion: "0.0.0",
+  storagePath: "/tmp/sessions",
+  getTokenFilePath: () => `/tmp/token-file-${Date.now()}`,
+};
+
+describe("GET /api/info — non-loopback branch (unit)", () => {
+  it("omits storagePath and tokenRotatedAt when caller is not loopback", async () => {
+    // Simulate a non-loopback caller (e.g. another machine on the LAN).
+    // The handler must not expose sensitive fields to remote callers.
+    const handler = makeInfoHandler(BASE_DEPS);
+    const req = makeMockReq("192.168.1.100");
+    const res = makeMockRes();
+
+    // Handler signature: (req, res, next) — next is not called in this path.
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body).not.toBeNull();
+    // Public fields must still be present
+    expect(body.version).toBe("0.0.0-test");
+    expect(body.transport).toBe("http");
+    // Sensitive fields must be absent
+    expect("storagePath" in body).toBe(false);
+    expect("tokenRotatedAt" in body).toBe(false);
+  });
+});
+
+describe("GET /api/info — ENOENT token stat branch (unit)", () => {
+  it("returns tokenRotatedAt === null when the token file does not exist", async () => {
+    // Use a path that is guaranteed not to exist. The handler catches ENOENT
+    // and falls back to null without logging an error.
+    const missingPath = `/tmp/tandem-test-no-such-token-${Date.now()}`;
+    const handler = makeInfoHandler({
+      ...BASE_DEPS,
+      getTokenFilePath: () => missingPath,
+    });
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body).not.toBeNull();
+    // loopback → sensitive fields present
+    expect("storagePath" in body).toBe(true);
+    expect("tokenRotatedAt" in body).toBe(true);
+    // ENOENT path → null (not a number)
+    expect(body.tokenRotatedAt).toBeNull();
   });
 });

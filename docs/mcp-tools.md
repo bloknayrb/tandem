@@ -865,7 +865,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 | `mcpSdkVersion` | string | no | `@modelcontextprotocol/sdk` version, baked at build time |
 | `transport` | `"http"` | no | Always `"http"` for HTTP mode |
 | `storagePath` | string | yes | Absolute path to session storage directory |
-| `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent |
+| `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable |
 
 **Errors:** `403 FORBIDDEN` (Host header not localhost — DNS rebinding protection)
 
