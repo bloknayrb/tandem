@@ -36,7 +36,7 @@ function resolveAuthorshipRange(
 /**
  * Build decorations from authorship Y.Map entries.
  */
-function buildAuthorshipDecorations(
+export function buildAuthorshipDecorations(
   doc: PmNode,
   authorshipMap: Y.Map<unknown>,
   ydoc: Y.Doc,
@@ -51,6 +51,10 @@ function buildAuthorshipDecorations(
     const entry = value as AuthorshipRange;
     if (!entry.author || !entry.range) return;
 
+    // Defensive guard: skip entries with unexpected author values (Y.Map is untyped at runtime)
+    const validAuthors: ReadonlyArray<string> = ["user", "claude"];
+    if (!validAuthors.includes(entry.author)) return;
+
     const resolved = resolveAuthorshipRange(entry, doc, ydoc);
     if (!resolved) return;
 
@@ -58,7 +62,7 @@ function buildAuthorshipDecorations(
     if (from >= to || from < 0 || to > maxPos) return;
 
     const attrs: Record<string, string> = {
-      class: `tandem-authorship tandem-authorship--${entry.author}`,
+      "data-tandem-author": entry.author,
     };
 
     try {

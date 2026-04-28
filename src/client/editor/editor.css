@@ -61,9 +61,9 @@
 }
 
 /* Authorship decorations — user=blue, claude=orange */
-.tandem-authorship { transition: color 0.2s; }
-.tandem-authorship--user { color: var(--tandem-author-user); }
-.tandem-authorship--claude { color: var(--tandem-author-claude); }
+.ProseMirror [data-tandem-author] { transition: color 0.2s; }
+.ProseMirror [data-tandem-author="user"] { color: var(--tandem-author-user); }
+.ProseMirror [data-tandem-author="claude"] { color: var(--tandem-author-claude); }
 
 /* Claude focus paragraph */
 .tandem-claude-focus {
