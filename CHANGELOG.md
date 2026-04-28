@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+## \[0.9.0] - 2026-04-28
+
+### Breaking Changes (MCP)
+
+This is the last breaking-change window before semver lock. MCP tool count: 31 → 28.
+
+- **`tandem_suggest` deprecated (#259)** — returns a structured error stub pointing to `tandem_comment` with `suggestedText`. Hard-remove in v0.10.0.
+- **`tandem_getContent` removed (#259)** — superseded by `tandem_getTextContent`.
+- **`tandem_getSelections` removed (#259)** — superseded by `tandem_checkInbox`.
+- **`tandem_setStatus` merged into `tandem_status` (#259)** — `tandem_status` now accepts optional write params (`text`, `focusParagraph`, `focusOffset`). When params are present it writes to awareness; when absent it reads.
+
+### Added
+
+- **`/api/info` endpoint (#441)** — returns app version, MCP SDK version, tool count, data directory, and platform. Serves the Settings panel About footer.
+- **Tabbed-left layout variant (#445)** — new `"tabbed-left"` layout mode places the side panel on the left and editor on the right. Three layout modes total: `tabbed`, `tabbed-left`, `three-panel`.
+- **App version in Settings (#435)** — `useAppInfo` hook fetches `/api/info` and displays version + MCP SDK version in the Settings popover footer.
+- **View Changelog button (#437)** — Settings panel button opens `CHANGELOG.md` as a read-only document tab via `POST /api/open` with `readOnly: true`.
+- **Authorship `data-tandem-author` attributes (#443)** — authorship decorations switched from CSS classes (`.tandem-authorship--user`) to data attributes (`[data-tandem-author="user"]`), per ADR-026. Enables future attribute-based styling without class proliferation.
+- **Schema foundations (#440, #442, #444, #450)** — `heldInSolo` field on `AnnotationBase`; 7 new `TandemSettings` fields (`accentHue`, `editorFont`, `density`, `defaultMode`, `highContrast`, `annotationPatterns`, `selectionToolbar`); `showAuthorship` default flipped to `true`; editor width minimum lowered from 50% to 40%.
+- **Highlight palette migration (#450)** — palette switched from 5 colors to 4 (yellow/green/blue/pink). `LEGACY_COLOR_MAP` migrates `red` → `yellow`, `purple` → `blue` on annotation load.
+- **CI stdio smoke test (#341)** — GitHub Actions step validates the Cowork stdio bridge (`scripts/ci/stdio-smoke.mjs`) on every push.
+- **`__MCP_SDK_VERSION__` build-time injection** — tsup reads the real SDK version from the package root (not the CJS type marker) and injects it at build time.
+
+### Fixed
+
+- **Cross-element edit merging (#456)** — canonical Y.js length + delta-walking merge for edits spanning multiple inline elements.
+- **Annotation decoration initial-sync race** — Y.Map observers firing before y-prosemirror sync no longer produce empty decoration sets.
+- **Channel checkpoint timing** — checkpoint advances after MCP notification delivery, not before, preventing event loss on reconnect.
+- **Auto-save spurious tab switches** — auto-save no longer triggers `document:switched` events that confuse tab state.
+- **Annotation recovery guard hardening** — narrowed guard scope for edge cases in session restore.
+- **Event-bridge error handling** — uncaught errors in SSE delivery no longer crash the event loop.
+- **MCP SDK version resolution** — `require("@modelcontextprotocol/sdk/package.json")` resolves to `dist/cjs/package.json` (a CJS type marker without `version`); build now walks back past `dist/` to find the real version.
+
+### Changed
+
+- **Redesign gap audit resolved (#439)** — 7 product decisions documented in ADR-026. Design response prompt at `docs/claude-design-response-prompt.md`.
+- **Distribution items deferred** — #316 (macOS/Linux Cowork auto-setup), #317 (cross-platform firewall scoping), #322 (network-type detection) moved to v0.13.0. Requires macOS/Linux validation hardware.
+
+### Internal
+
+- Annotation schema Zod validation with `LEGACY_COLOR_MAP` migration path.
+- `ResizeHandle` and `TabbedPanelContainer` shared components extracted for layout code reuse.
+- `useAppInfo` hook with exponential backoff retry for `/api/info` fetch.
+- `file-opener` read-only mode support for changelog viewing.
+- 900+ lines of new test coverage: authorship decorations, annotation decorations, panel layout, app info hook, settings fields, schema migration, info route, document edit edge cases.
+
 ## \[0.8.0] - 2026-04-26
 
 ### Added
