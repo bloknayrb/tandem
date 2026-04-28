@@ -12,7 +12,9 @@ import { createRequire } from "module";
 
 import { DEFAULT_BIND_HOST, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
+import { getTokenFilePath } from "../auth/token-store.js";
 import { openBrowser } from "../open-browser.js";
+import { SESSION_DIR } from "../platform.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
@@ -32,6 +34,13 @@ try {
 }
 
 export { APP_VERSION };
+
+// __MCP_SDK_VERSION__ is injected by tsup at build time (see tsup.config.ts).
+// In test environments (Vitest runs .ts directly, no tsup), the global is absent.
+// The typeof guard avoids a ReferenceError in tests.
+declare const __MCP_SDK_VERSION__: string;
+const MCP_SDK_VERSION: string =
+  typeof __MCP_SDK_VERSION__ !== "undefined" ? __MCP_SDK_VERSION__ : "0.0.0-unknown";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist/server/ → dist/client/ (tsup bundles server into dist/server/index.js)
@@ -124,6 +133,26 @@ export async function startMcpServerStdio(): Promise<void> {
   await server.connect(transport);
 }
 
+/**
+ * Snapshot the number of registered MCP tools from a server instance.
+ *
+ * Uses `_registeredTools`, a private field of McpServer (SDK 1.27.1, plain object keyed
+ * by tool name). Returns null if the field is absent or not a plain object — callers
+ * should log and surface null rather than silently returning 0.
+ *
+ * NOTE: This relies on a private SDK field. If the SDK renames it, this returns null
+ * (not 0), which is surfaced to the client so maintainers can detect shape drift.
+ */
+function snapshotToolCount(server: McpServer): number | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tools = (server as any)._registeredTools;
+  if (tools === null || tools === undefined || typeof tools !== "object" || Array.isArray(tools)) {
+    console.error("[Tandem] /api/info: _registeredTools shape drift — cannot snapshot tool count");
+    return null;
+  }
+  return Object.keys(tools).length;
+}
+
 /** Start the MCP server on HTTP using Streamable HTTP transport. Returns the http.Server for lifecycle management. */
 export async function startMcpServerHttp(
   port: number,
@@ -138,6 +167,9 @@ export async function startMcpServerHttp(
   resolvedLanIP?: string,
 ): Promise<Server> {
   mcpServer = createMcpServer();
+  // Snapshot tool count now — all registrations are unconditional in createMcpServer(),
+  // so this is stable for the lifetime of the process.
+  const toolCount = snapshotToolCount(mcpServer);
 
   // We need two different body parser limits: 100kb for MCP (SDK default)
   // and 70MB for file upload API. createMcpExpressApp applies express.json()
@@ -287,6 +319,13 @@ export async function startMcpServerHttp(
       tokenRef.current = newToken;
     },
     () => tokenRef.current,
+    {
+      version: APP_VERSION,
+      toolCount,
+      mcpSdkVersion: MCP_SDK_VERSION,
+      storagePath: SESSION_DIR,
+      getTokenFilePath,
+    },
   );
 
   // --- Channel support endpoints ---

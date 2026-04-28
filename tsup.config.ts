@@ -3,6 +3,7 @@ import { defineConfig } from "tsup";
 
 const require = createRequire(import.meta.url);
 const pkg = require("./package.json") as { version: string };
+const mcpSdkPkg = require("@modelcontextprotocol/sdk/package.json") as { version: string };
 
 // Node builtins must stay external — CJS deps that call require("fs") etc.
 // fail with "Dynamic require not supported" if bundled into ESM.
@@ -29,6 +30,9 @@ export default defineConfig([
     dts: false,
     sourcemap: true,
     ...selfContained,
+    define: {
+      __MCP_SDK_VERSION__: JSON.stringify(mcpSdkPkg.version),
+    },
   },
   {
     entry: ["src/channel/index.ts"],

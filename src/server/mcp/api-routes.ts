@@ -6,6 +6,7 @@ import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
 import { handleClose } from "./routes/close.js";
 import { handleConvert } from "./routes/convert.js";
+import { makeInfoHandler } from "./routes/info.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
@@ -88,6 +89,7 @@ export const apiMiddleware: Handler = createApiMiddleware();
  * @param getCurrentToken - Required callback that returns the current in-memory token
  *   before rotation; used to register the grace-window slot from a trusted source
  *   rather than from the request body.
+ * @param infoHandlerDeps - Dependencies for GET /api/info (version, toolCount, etc.).
  */
 export function registerApiRoutes(
   app: Express,
@@ -96,7 +98,11 @@ export function registerApiRoutes(
   mw: Handler,
   setCurrentToken: (t: string) => void,
   getCurrentToken: () => string | null,
+  infoHandlerDeps: Parameters<typeof makeInfoHandler>[0],
 ): void {
+  // App metadata endpoint — consumed by the client's About panel
+  app.get("/api/info", mw, makeInfoHandler(infoHandlerDeps));
+
   // SSE notification stream for browser toasts
   app.get("/api/notify-stream", mw, handleNotifyStream);
 
