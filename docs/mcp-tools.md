@@ -832,6 +832,45 @@ In addition to MCP tools, the server exposes REST endpoints on the same port (:3
 
 Both endpoints converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
 
+### GET /api/info
+
+Returns app metadata for the client's About panel and version indicator. All fields are returned for loopback (127.0.0.1) callers; sensitive fields are omitted for non-loopback callers.
+
+**Response (200) — loopback caller:**
+```json
+{
+  "version": "0.8.0",
+  "toolCount": 28,
+  "mcpSdkVersion": "1.27.1",
+  "transport": "http",
+  "storagePath": "C:\\Users\\user\\AppData\\Local\\tandem\\Data\\sessions",
+  "tokenRotatedAt": 1710936000000
+}
+```
+
+**Response (200) — non-loopback caller (public fields only):**
+```json
+{
+  "version": "0.8.0",
+  "toolCount": 28,
+  "mcpSdkVersion": "1.27.1",
+  "transport": "http"
+}
+```
+
+| Field | Type | Loopback only | Description |
+|-------|------|--------------|-------------|
+| `version` | string | no | Running app version (from `package.json`) |
+| `toolCount` | number \| null | no | MCP tools registered at startup; `null` if SDK private field shape drifted |
+| `mcpSdkVersion` | string | no | `@modelcontextprotocol/sdk` version, baked at build time |
+| `transport` | `"http"` | no | Always `"http"` for HTTP mode |
+| `storagePath` | string | yes | Absolute path to session storage directory |
+| `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent |
+
+**Errors:** `403 FORBIDDEN` (Host header not localhost — DNS rebinding protection)
+
+---
+
 ### POST /api/open
 
 Open a file by its absolute path on disk. Equivalent to `tandem_open` but callable from the editor UI.
