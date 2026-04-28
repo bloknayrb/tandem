@@ -84,9 +84,9 @@ export function useDragResize({
         latestWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, next));
         setPanelLayout((prev) => {
           if (side === "right") {
-            return prev.kind === "three-panel"
-              ? { ...prev, right: latestWidth }
-              : { kind: "tabbed", right: latestWidth };
+            if (prev.kind === "three-panel") return { ...prev, right: latestWidth };
+            if (prev.kind === "tabbed") return { kind: "tabbed", right: latestWidth };
+            return prev; // tabbed-left has no right handle
           }
           if (prev.kind === "three-panel") return { ...prev, left: latestWidth };
           if (prev.kind === "tabbed-left") return { ...prev, left: latestWidth };
@@ -100,10 +100,15 @@ export function useDragResize({
         dragListenersRef.current = null;
         document.body.style.userSelect = "";
         document.body.style.cursor = "";
-        try {
-          localStorage.setItem(storageKey, String(latestWidth));
-        } catch (err) {
-          console.warn(`[tandem] failed to persist ${storageKey}:`, err);
+        const current = panelLayoutRef.current;
+        const shouldPersist =
+          (side === "left" && "left" in current) || (side === "right" && "right" in current);
+        if (shouldPersist) {
+          try {
+            localStorage.setItem(storageKey, String(latestWidth));
+          } catch (err) {
+            console.warn(`[tandem] failed to persist ${storageKey}:`, err);
+          }
         }
       };
 
