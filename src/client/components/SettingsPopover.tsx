@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
+import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
@@ -8,6 +8,7 @@ import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { useAppInfo } from "../hooks/useAppInfo";
 import type { TandemSettings } from "../hooks/useTandemSettings";
 import { useUserName } from "../hooks/useUserName";
+import { API_BASE } from "../utils/fileUpload";
 import { AccessibilitySettings } from "./AccessibilitySettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { EditorSettings } from "./EditorSettings";
@@ -53,6 +54,42 @@ export function SettingsPopover({
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
   const { info: appInfo, loading: appInfoLoading } = useAppInfo(open);
+  const [changelogLoading, setChangelogLoading] = useState(false);
+  const [changelogError, setChangelogError] = useState<string | null>(null);
+
+  const handleViewChangelog = useCallback(async () => {
+    const changelogPath = appInfo?.changelogPath;
+    if (!changelogPath) {
+      setChangelogError("Changelog file not found.");
+      return;
+    }
+    setChangelogLoading(true);
+    setChangelogError(null);
+    try {
+      const res = await fetch(`${API_BASE}/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: changelogPath, readOnly: true }),
+      });
+      if (!res.ok) {
+        let msg = "Failed to open changelog.";
+        try {
+          const data = (await res.json()) as { message?: string };
+          if (data.message) msg = data.message;
+        } catch {
+          // ignore JSON parse failure
+        }
+        if (res.status === 404) msg = "Changelog file not found.";
+        setChangelogError(msg);
+        return;
+      }
+      onClose();
+    } catch {
+      setChangelogError("Server unavailable.");
+    } finally {
+      setChangelogLoading(false);
+    }
+  }, [appInfo, onClose]);
 
   // Idle-sync: commit c9a63de dropped the always-sync effect because it
   // clobbered in-progress edits. This version syncs only when the input
@@ -268,6 +305,40 @@ export function SettingsPopover({
           <span>{(SELECTION_DWELL_MIN_MS / 1000).toFixed(1)}s</span>
           <span>{(SELECTION_DWELL_MAX_MS / 1000).toFixed(1)}s</span>
         </div>
+      </div>
+
+      {/* View Changelog — opens CHANGELOG.md as a read-only tab */}
+      <div>
+        <button
+          data-testid="view-changelog-btn"
+          onClick={handleViewChangelog}
+          disabled={changelogLoading || appInfoLoading}
+          style={{
+            width: "100%",
+            padding: "8px",
+            fontSize: "13px",
+            fontWeight: 500,
+            border: "1px solid var(--tandem-border-strong)",
+            borderRadius: "4px",
+            cursor: changelogLoading || appInfoLoading ? "not-allowed" : "pointer",
+            background: "var(--tandem-surface-muted)",
+            color: "var(--tandem-fg)",
+            opacity: changelogLoading || appInfoLoading ? 0.6 : 1,
+          }}
+        >
+          {changelogLoading ? "Opening…" : "View Changelog"}
+        </button>
+        {changelogError && (
+          <div
+            style={{
+              marginTop: "6px",
+              fontSize: "11px",
+              color: "var(--tandem-error-fg)",
+            }}
+          >
+            {changelogError}
+          </div>
+        )}
       </div>
 
       {/* Cowork integration — Tauri desktop only (CLI / pure web callers don't

@@ -46,6 +46,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist/server/ → dist/client/ (tsup bundles server into dist/server/index.js)
 const CLIENT_DIST = join(__dirname, "../client");
 
+// Resolve CHANGELOG.md at module load time so it's ready before any request
+// comes in. The path is dist/server/ at runtime → root is "../../..".
+// In dev (src/server/mcp/) the root is also "../../../" relative to this file.
+// We check existence once and store undefined if the file isn't present (e.g.
+// stripped distribution builds) — the handler simply omits the field.
+const _changelogCandidate = join(__dirname, "../../..", "CHANGELOG.md");
+const CHANGELOG_PATH: string | undefined = existsSync(_changelogCandidate)
+  ? _changelogCandidate
+  : undefined;
+
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
 let mcpServer: McpServer | null = null;
@@ -325,6 +335,7 @@ export async function startMcpServerHttp(
       mcpSdkVersion: MCP_SDK_VERSION,
       storagePath: SESSION_DIR,
       getTokenFilePath,
+      changelogPath: CHANGELOG_PATH,
     },
   );
 

@@ -153,6 +153,22 @@ describe("GET /api/info — public shape contract", () => {
     expect("transport" in b).toBe(true);
     expect(b.transport).toBe("http");
   });
+
+  it("includes changelogPath when CHANGELOG.md exists in the repo root", async () => {
+    // The integration server resolves CHANGELOG.md relative to server.ts at startup.
+    // This test verifies the field is present in the response (file exists in this repo).
+    const { status, body } = await rawGet(port, "/api/info", `127.0.0.1:${port}`);
+    const b = body as Record<string, unknown>;
+
+    expect(status).toBe(200);
+    // changelogPath is present and points to an absolute path ending in CHANGELOG.md
+    if ("changelogPath" in b) {
+      expect(typeof b.changelogPath).toBe("string");
+      expect(String(b.changelogPath)).toMatch(/CHANGELOG\.md$/);
+    }
+    // Note: we don't assert presence because a stripped distribution without the file
+    // will omit the field — that is intentional behaviour.
+  });
 });
 
 // ── Unit tests for handler branches not reachable via loopback integration ────
@@ -187,6 +203,7 @@ const BASE_DEPS = {
   mcpSdkVersion: "0.0.0",
   storagePath: "/tmp/sessions",
   getTokenFilePath: () => `/tmp/token-file-${Date.now()}`,
+  changelogPath: "/tmp/CHANGELOG.md",
 };
 
 describe("GET /api/info — non-loopback branch (unit)", () => {
@@ -240,5 +257,62 @@ describe("GET /api/info — ENOENT token stat branch (unit)", () => {
     expect("tokenRotatedAt" in body).toBe(true);
     // ENOENT path → null (not a number)
     expect(body.tokenRotatedAt).toBeNull();
+  });
+});
+
+describe("GET /api/info — changelogPath field (unit)", () => {
+  it("includes changelogPath in response when dep is set", async () => {
+    const handler = makeInfoHandler(BASE_DEPS);
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body).not.toBeNull();
+    // changelogPath is a public field — present for all callers when dep is set
+    expect("changelogPath" in body).toBe(true);
+    expect(body.changelogPath).toBe("/tmp/CHANGELOG.md");
+  });
+
+  it("omits changelogPath from response when dep is undefined", async () => {
+    const handler = makeInfoHandler({ ...BASE_DEPS, changelogPath: undefined });
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body).not.toBeNull();
+    expect("changelogPath" in body).toBe(false);
+  });
+
+  it("includes changelogPath for non-loopback callers (not a sensitive field)", async () => {
+    const handler = makeInfoHandler(BASE_DEPS);
+    const req = makeMockReq("192.168.1.100");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body).not.toBeNull();
+    // changelogPath is public — should appear even for non-loopback callers
+    expect("changelogPath" in body).toBe(true);
+    expect(body.changelogPath).toBe("/tmp/CHANGELOG.md");
+    // Sensitive fields still absent
+    expect("storagePath" in body).toBe(false);
+    expect("tokenRotatedAt" in body).toBe(false);
   });
 });

@@ -88,12 +88,20 @@ interface ResolvedPath {
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
  * Pass `force: true` to reload from disk even if already open (clears all document state).
+ * Pass `readOnly: true` to force the document open in read-only mode (e.g. CHANGELOG.md).
  */
 export async function openFileByPath(
   filePath: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; readOnly?: boolean },
 ): Promise<OpenFileResult> {
-  const { resolved, format, readOnly, id } = await resolveAndValidatePath(filePath);
+  const {
+    resolved,
+    format,
+    readOnly: derivedReadOnly,
+    id,
+  } = await resolveAndValidatePath(filePath);
+  // Caller may override the derived readOnly (e.g. force changelog read-only).
+  const readOnly = options?.readOnly === true ? true : derivedReadOnly;
   const fileName = path.basename(resolved);
   const openDocs = getOpenDocs();
   const existing = openDocs.get(id);

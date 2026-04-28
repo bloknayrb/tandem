@@ -83,4 +83,6 @@ export interface AppInfoData {
   storagePath?: string;
   /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
   tokenRotatedAt?: number | null;
+  /** Absolute path to CHANGELOG.md on the server host. Undefined if not found at startup. */
+  changelogPath?: string;
 }
