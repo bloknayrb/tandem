@@ -430,7 +430,7 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 | Release | Concern | Scope |
 |---------|---------|-------|
 | v0.8.0 | Token hygiene + annotation correctness + installer fix + Cowork PRs e–f (released 2026-04-26) | #260, #308, #340, #351, #356, #376, #377, #381, #382, #415, #434, #436, PR #370, PR #371 |
-| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259 ✅, #316, #317, #322, #435, #437, #440 ✅, #441, #442 ✅, #443, #444 ✅, #445, #450 ✅, ADR-023 CI smoke test |
+| v0.9.0 | MCP API cleanup + redesign data model + distribution + UX polish | #259 ✅, #316, #317, #322, #435, #437, #440 ✅, #441 ✅, #442 ✅, #443, #444 ✅, #445, #450 ✅, ADR-023 CI smoke test ✅ |
 
 **v0.8.0 — RELEASED (2026-04-26).** Published to GitHub Releases + npm (`tandem-editor@0.8.0`). Run B shipped 10 issues across 4 waves: token hygiene (#340, #356), coordinate system bug fixes (#260, #377), annotation UX (#381, #382, #415), observability (#351, #376), and visual polish (#308). Bundled into the same release: Cowork installer + onboarding (PRs #370, #371) and installer fixes (#434, #436). Key outcomes: semantic token lint enforcement via pre-commit hook, three compounding position bugs fixed (inline markup stripping, nested structure support, list item separators), user annotations simplified to Edit+Remove (no Accept/Reject), event push gap closed.
 
@@ -438,7 +438,7 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 
 **Redesign gap audit (#439):** Product decisions resolved, design response prompt drafted (`docs/claude-design-response-prompt.md`). [Claude Design handoff](https://api.anthropic.com/v1/design/h/YkiJv2qQa82QG0GHUxce-g?open_file=Tandem+Redesign.html). Code-side work for v0.9.0:
 - #440 — `heldInSolo` schema field on `AnnotationBase` — **SHIPPED** (PR #451, 2026-04-27)
-- #441 — `/api/info` endpoint for About panel dynamic values (BLOCKER, prerequisite for #435)
+- #441 — `/api/info` endpoint for About panel dynamic values (BLOCKER, prerequisite for #435) — **SHIPPED** (PR #458, 2026-04-28)
 - #442 — New settings data model fields (7 fields + `showAuthorship` default → `true`) — **SHIPPED** (PR #451, 2026-04-27). UI deferred to Svelte.
 - #443 — Authorship decorations switch from CSS classes to `data-tandem-author` attributes
 - #444 — Editor width minimum lowered from 50% to 40% — **SHIPPED** (PR #451, 2026-04-27)
@@ -446,7 +446,7 @@ Migration begins v0.10.0. React removal completes by v0.11.0.
 
 Additional decisions from #439: highlight palette switches from 5 to 4 colors (yellow/green/blue/pink; migration: `red` → `yellow`, `purple` → `blue`) — **SHIPPED** as #450 (PR #451, 2026-04-27). Density controls spacing only (no font-size collision with `textSize`), `author: "import"` kept (design updates to match). See [ADR-026](decisions.md#adr-026-redesign-gap-audit-decisions-439) for rationale and `docs/v090-plan.md` for migration details.
 
-> **Note:** #341 event-type work is complete (8-variant discriminated union + branded position types already shipped). The remaining #341 scope is only the ADR-023 CI smoke test.
+> **Note:** #341 is fully complete. Event-type work (8-variant discriminated union + branded position types) shipped earlier; ADR-023 CI stdio smoke test shipped in PR #459 (2026-04-28).
 
 **Distribution coordination:** v0.9.0 is the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Document rollback strategy per surface.
 

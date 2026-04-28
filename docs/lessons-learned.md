@@ -484,3 +484,13 @@ The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `
 **Fix:** The `NSIS_HOOK_PREINSTALL` macro should ONLY kill the sidecar process. Use `nsis_tauri_utils::KillProcessCurrentUser` (not raw `taskkill`) for user-scoped kill that's consistent with how Tauri handles the main binary. Allow 2 seconds for file handles to release — the Rust side uses a 5-second polling loop for the same reason (`TerminateProcess` returns before Windows releases the exe file handle).
 
 **Key insight:** Read the generated NSIS template (`src-tauri/target/release/nsis/x64/installer.nsi`) before writing installer hooks. It shows exactly which macros Tauri calls, in what order, and what utilities are available (`nsis_tauri_utils`). The binary name comes from `Cargo.toml [package].name`, not `tauri.conf.json productName`.
+
+## 49. SDK `package.json` Resolves to CJS Stub via Exports Map
+
+**Problem:** `require("@modelcontextprotocol/sdk/package.json")` in `tsup.config.ts` resolved to `dist/cjs/package.json` — a CJS type marker (`{"type": "commonjs"}`) without a `version` field — instead of the root `package.json`. `JSON.stringify(undefined)` returned `undefined`, which esbuild rejected as an invalid define value, breaking the CI build.
+
+**Root cause:** The SDK's `exports` map doesn't expose `./package.json`. Node's CJS resolver falls through to `dist/cjs/package.json` (a real file in the dist tree). The `createRequire`-based require follows the same resolution path, so `require.resolve("@modelcontextprotocol/sdk/package.json")` returns the stub, not the root.
+
+**Fix:** Resolve the stub path, then walk back past `dist/` to find the package root: `sdkStub.slice(0, sdkStub.lastIndexOf("dist"))` + `readFileSync(join(sdkRoot, "package.json"))`. A `typeof` guard in `server.ts` falls back to `"0.0.0-unknown"` in dev/test environments where tsup hasn't run.
+
+**Key insight:** `require("some-package/package.json")` is not guaranteed to return the root `package.json` when the package has an `exports` map. Always verify that the resolved path is what you expect — `require.resolve()` can reveal the actual target. This is especially treacherous in build-time config files where the error surfaces in CI (where tsup runs) but not in dev (where tsx skips it).

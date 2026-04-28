@@ -23,7 +23,7 @@
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-026)
-- [Lessons Learned](docs/lessons-learned.md) -- 48 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 49 lessons including E2E testing gotchas
 
 ## Critical Rules
 
@@ -47,7 +47,7 @@ Key files for navigation:
 - `src/cli/start.ts` -- `tandem start`: spawn server (opens editor via `TANDEM_OPEN_BROWSER=1`)
 - `src/server/index.ts` -- Entry point, port binding, console redirect
 - `src/server/open-browser.ts` -- Cross-platform browser launcher for npm-install path (execFile-based)
-- `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`
+- `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
 - `src/client/` -- Tiptap editor, React components, hooks (`useYjsSync`, `useTabOrder`, `useTutorial`, `useNotifications`)
@@ -112,6 +112,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **Channel shim uses low-level `Server`, not `McpServer`.** The Channels spec requires `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` with explicit `setRequestHandler()` calls. The HTTP MCP server uses the high-level `McpServer` wrapper.
 - **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` -- not `document-id`.
 - **`APP_VERSION` is read from `package.json`** via `createRequire` in `src/server/mcp/server.ts`. Don't hardcode version strings.
+- **`__MCP_SDK_VERSION__` is injected by tsup at build time.** `require("@modelcontextprotocol/sdk/package.json")` resolves to `dist/cjs/package.json` (a CJS type marker without `version`), not the root. `tsup.config.ts` walks the resolved path back past `dist/` to read the real version. The `typeof` guard in `server.ts` falls back to `"0.0.0-unknown"` in dev/test (no tsup).
 - **MCP must start before Hocuspocus** in stdio mode -- init timeout fires if order is reversed.
 
 ### Client / UI
@@ -139,7 +140,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 28 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. Redesign gap audit (#439) resolved: 7 product decisions in [ADR-026](docs/decisions.md#adr-026-redesign-gap-audit-decisions-439), 6 issues filed (#440–#445), design response prompt at `docs/claude-design-response-prompt.md`. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
+Core complete: 28 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app (v0.8.0 released). Run B (v0.8.0) shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. Redesign gap audit (#439) resolved: 7 product decisions in [ADR-026](docs/decisions.md#adr-026-redesign-gap-audit-decisions-439), 6 issues filed (#440–#445), design response prompt at `docs/claude-design-response-prompt.md`. v0.9.0 in progress: MCP consolidation (#259) shipped, schema foundations (#451) shipped, `/api/info` endpoint (#441, PR #458) shipped, CI stdio smoke test (#341, PR #459) shipped. See [docs/roadmap.md](docs/roadmap.md) for remaining work.
 
 <!-- autoskills:start -->
 
