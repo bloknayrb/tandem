@@ -1,8 +1,18 @@
+import { readFileSync } from "node:fs";
 import { builtinModules, createRequire } from "node:module";
+import { join } from "node:path";
 import { defineConfig } from "tsup";
 
 const require = createRequire(import.meta.url);
 const pkg = require("./package.json") as { version: string };
+// require("@modelcontextprotocol/sdk/package.json") resolves to dist/cjs/package.json
+// (a CJS type marker without "version") due to the SDK's exports map. Walk the resolved
+// path back to the package root to read the real version.
+const sdkStub = require.resolve("@modelcontextprotocol/sdk/package.json");
+const sdkRoot = sdkStub.slice(0, sdkStub.lastIndexOf("dist"));
+const mcpSdkPkg = JSON.parse(readFileSync(join(sdkRoot, "package.json"), "utf8")) as {
+  version: string;
+};
 
 // Node builtins must stay external — CJS deps that call require("fs") etc.
 // fail with "Dynamic require not supported" if bundled into ESM.
@@ -29,6 +39,9 @@ export default defineConfig([
     dts: false,
     sourcemap: true,
     ...selfContained,
+    define: {
+      __MCP_SDK_VERSION__: JSON.stringify(mcpSdkPkg.version),
+    },
   },
   {
     entry: ["src/channel/index.ts"],

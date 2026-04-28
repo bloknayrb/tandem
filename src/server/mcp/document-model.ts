@@ -308,11 +308,41 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
   return null;
 }
 
+export const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
+
 /**
- * Find the first Y.XmlText child of a Y.XmlElement.
- * Creates one if the element is empty.
+ * Merge all delta segments from `source` into `target` at `offset`,
+ * preserving inline formatting and embeds. XmlElement embeds (hardBreak)
+ * are cloned to avoid moving attached nodes out of `source`.
+ */
+export function mergeXmlTextDelta(target: Y.XmlText, source: Y.XmlText, offset: number): void {
+  let pos = offset;
+  for (const seg of source.toDelta()) {
+    // Pass {} (not undefined) — Y.js insert(pos, str, undefined) inherits
+    // formatting from the preceding character; insert(pos, str, {}) terminates it.
+    if (typeof seg.insert === "string") {
+      target.insert(pos, seg.insert, seg.attributes ?? {});
+      pos += seg.insert.length;
+    } else {
+      const embed = seg.insert instanceof Y.XmlElement ? seg.insert.clone() : { ...seg.insert };
+      target.insertEmbed(pos, embed, seg.attributes ?? {});
+      pos += 1;
+    }
+  }
+}
+
+/**
+ * Return the XmlText child of a textblock element, creating one if empty.
+ * Throws on non-textblock nodes (containers like blockquote, bulletList, etc.).
  */
 export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
+  if (!TEXTBLOCK_NODES.has(element.nodeName)) {
+    throw new Error(
+      `Cannot create XmlText on "${element.nodeName}" — only textblock elements ` +
+        `(paragraph, heading, codeBlock) should have direct XmlText children. ` +
+        `Edit a specific paragraph or list item instead.`,
+    );
+  }
   return (
     findXmlText(element) ??
     (() => {
