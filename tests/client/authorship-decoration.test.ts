@@ -138,15 +138,16 @@ describe("buildAuthorshipDecorations", () => {
     expect(capturedInlines[0].attrs["data-tandem-author"]).toBe("user");
   });
 
-  it("emits data-tandem-author attribute for import (Word comments)", () => {
+  it("skips entries with author='import' (import belongs to annotations, not authorship)", () => {
     const ydoc = new Y.Doc();
     const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
-    addEntry(authorshipMap, "import", "auth-import");
+    // "import" is a valid annotation author but is not a valid AuthorshipRange author;
+    // no code path writes author="import" to Y_MAP_AUTHORSHIP.
+    addEntry(authorshipMap, "import" as any, "auth-import");
 
     buildAuthorshipDecorations(makeMockDoc(), authorshipMap, ydoc, true);
 
-    expect(capturedInlines).toHaveLength(1);
-    expect(capturedInlines[0].attrs["data-tandem-author"]).toBe("import");
+    expect(capturedInlines).toHaveLength(0);
   });
 
   it("skips entries with unknown author values", () => {

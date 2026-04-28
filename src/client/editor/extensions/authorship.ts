@@ -52,8 +52,8 @@ export function buildAuthorshipDecorations(
     if (!entry.author || !entry.range) return;
 
     // Defensive guard: skip entries with unexpected author values (Y.Map is untyped at runtime)
-    const validAuthors = ["user", "claude", "import"] as const;
-    if (!validAuthors.includes(entry.author as (typeof validAuthors)[number])) return;
+    const validAuthors: ReadonlyArray<string> = ["user", "claude"];
+    if (!validAuthors.includes(entry.author)) return;
 
     const resolved = resolveAuthorshipRange(entry, doc, ydoc);
     if (!resolved) return;
