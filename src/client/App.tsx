@@ -83,14 +83,15 @@ function ResizeHandle({ side, onMouseDown, testId }: ResizeHandleProps) {
 
 interface TabbedPanelContainerProps {
   width: number;
+  /** Which side of the viewport the panel sits on. Determines which edge gets the border. */
   borderSide: "left" | "right";
   showChat: boolean;
   pendingAnnotationBadge: number;
   onShowAnnotations: () => void;
   onShowChat: () => void;
   onChatMouseDown: () => void;
-  chatPanelProps: object;
-  sidePanelProps: object;
+  chatPanelProps: React.ComponentProps<typeof ChatSlot>;
+  sidePanelProps: React.ComponentProps<typeof SideSlot>;
 }
 
 function TabbedPanelContainer({
@@ -185,11 +186,8 @@ function TabbedPanelContainer({
         </button>
       </div>
       {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
-      <ChatSlot {...(chatPanelProps as React.ComponentProps<typeof ChatSlot>)} visible={showChat} />
-      <SideSlot
-        {...(sidePanelProps as React.ComponentProps<typeof SideSlot>)}
-        visible={!showChat}
-      />
+      <ChatSlot {...chatPanelProps} visible={showChat} />
+      <SideSlot {...sidePanelProps} visible={!showChat} />
     </div>
   );
 }
@@ -609,7 +607,7 @@ export default function App() {
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
           <TabbedPanelContainer
             width={panelLayout.left}
-            borderSide="right"
+            borderSide="left"
             showChat={showChat}
             pendingAnnotationBadge={pendingAnnotationBadge}
             onShowAnnotations={() => setShowChat(false)}
@@ -711,7 +709,7 @@ export default function App() {
           />
           <TabbedPanelContainer
             width={getRightWidth(panelLayout)}
-            borderSide="left"
+            borderSide="right"
             showChat={showChat}
             pendingAnnotationBadge={pendingAnnotationBadge}
             onShowAnnotations={() => setShowChat(false)}
