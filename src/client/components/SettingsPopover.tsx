@@ -5,6 +5,7 @@ import {
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
+import { useAppInfo } from "../hooks/useAppInfo";
 import type { TandemSettings } from "../hooks/useTandemSettings";
 import { useUserName } from "../hooks/useUserName";
 import { AccessibilitySettings } from "./AccessibilitySettings";
@@ -51,6 +52,7 @@ export function SettingsPopover({
   const inputRef = useRef<HTMLInputElement>(null);
   const { userName, setUserName } = useUserName();
   const [nameInput, setNameInput] = useState(userName);
+  const { info: appInfo, loading: appInfoLoading } = useAppInfo(open);
 
   // Idle-sync: commit c9a63de dropped the always-sync effect because it
   // clobbered in-progress edits. This version syncs only when the input
@@ -283,6 +285,37 @@ export function SettingsPopover({
         >
           <CoworkSettings />
         </Suspense>
+      )}
+
+      {/* App version footer — read-only metadata. Hidden on error (graceful
+          degradation); shown as "Loading..." until the /api/info fetch
+          completes. */}
+      {(appInfoLoading || appInfo !== null) && (
+        <div
+          data-testid="app-info-footer"
+          style={{
+            borderTop: "1px solid var(--tandem-border)",
+            paddingTop: "10px",
+          }}
+        >
+          <div style={sectionLabelStyle}>About</div>
+          {appInfoLoading ? (
+            <div style={{ fontSize: "11px", color: "var(--tandem-fg-subtle)" }}>Loading...</div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "3px",
+                fontSize: "11px",
+                color: "var(--tandem-fg-subtle)",
+              }}
+            >
+              <span>Tandem v{appInfo?.version}</span>
+              <span>MCP SDK {appInfo?.mcpSdkVersion}</span>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

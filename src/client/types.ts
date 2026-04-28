@@ -64,3 +64,23 @@ export type FirewallErrorVariant =
   | { kind: "netshFailure"; exitCode: number; stderrTail: string; stdoutTail: string }
   | { kind: "subnetDetectionFailed" }
   | { kind: "adapterEnumerationFailed" };
+
+// ---------------------------------------------------------------------------
+// App info response from GET /api/info
+// ---------------------------------------------------------------------------
+
+/**
+ * Shape returned by GET /api/info. Public fields are always present; loopback-
+ * only fields (storagePath, tokenRotatedAt) are included only when the request
+ * originates from 127.0.0.1.
+ */
+export interface AppInfoData {
+  version: string;
+  toolCount: number | null;
+  mcpSdkVersion: string;
+  transport: "http";
+  /** Loopback-only: absolute path to session storage directory. */
+  storagePath?: string;
+  /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
+  tokenRotatedAt?: number | null;
+}
