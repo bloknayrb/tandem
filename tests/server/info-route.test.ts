@@ -156,18 +156,15 @@ describe("GET /api/info — public shape contract", () => {
 
   it("includes changelogPath when CHANGELOG.md exists in the repo root", async () => {
     // The integration server resolves CHANGELOG.md relative to server.ts at startup.
-    // This test verifies the field is present in the response (file exists in this repo).
+    // CHANGELOG.md is present in this repo root, so the field must appear in the response.
+    // The unit test suite covers the absent-file case via makeInfoHandler({ changelogPath: undefined }).
     const { status, body } = await rawGet(port, "/api/info", `127.0.0.1:${port}`);
     const b = body as Record<string, unknown>;
 
     expect(status).toBe(200);
-    // changelogPath is present and points to an absolute path ending in CHANGELOG.md
-    if ("changelogPath" in b) {
-      expect(typeof b.changelogPath).toBe("string");
-      expect(String(b.changelogPath)).toMatch(/CHANGELOG\.md$/);
-    }
-    // Note: we don't assert presence because a stripped distribution without the file
-    // will omit the field — that is intentional behaviour.
+    expect("changelogPath" in b).toBe(true);
+    expect(typeof b.changelogPath).toBe("string");
+    expect(String(b.changelogPath)).toMatch(/CHANGELOG\.md$/);
   });
 });
 
