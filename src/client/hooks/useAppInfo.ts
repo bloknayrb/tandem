@@ -38,14 +38,13 @@ export async function fetchAppInfo(signal: AbortSignal): Promise<AppInfoData> {
 export interface UseAppInfoResult {
   info: AppInfoData | null;
   loading: boolean;
-  error: string | null;
 }
 
 /**
  * Fetches app metadata from GET /api/info each time `open` transitions to
  * true. The result is cached at module scope so repeated popover opens after
- * the first are instant. Error state shows nothing in the UI — the footer
- * simply doesn't render, so no degradation on transient network issues.
+ * the first are instant. Errors are silently discarded — the footer simply
+ * doesn't render on failure (graceful degradation, no visible error state).
  *
  * @param open - Whether the calling panel is currently open. Effect fires
  *               each time this flips from false → true.
@@ -55,7 +54,6 @@ export function useAppInfo(open: boolean): UseAppInfoResult {
   // subsequent opens.
   const [info, setInfo] = useState<AppInfoData | null>(cachedInfo);
   const [loading, setLoading] = useState<boolean>(open && cachedInfo === null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -72,19 +70,15 @@ export function useAppInfo(open: boolean): UseAppInfoResult {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]);
 
     setLoading(true);
-    setError(null);
 
     fetchAppInfo(signal)
       .then((data) => {
         if (cancelled) return;
         cachedInfo = data;
         setInfo(data);
-        setError(null);
       })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
+      .catch(() => {
+        // Errors are silently swallowed — UI hides the footer, no degradation.
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -96,5 +90,5 @@ export function useAppInfo(open: boolean): UseAppInfoResult {
     };
   }, [open]);
 
-  return { info, loading, error };
+  return { info, loading };
 }
