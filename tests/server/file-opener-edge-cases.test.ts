@@ -8,6 +8,9 @@ import {
   openFileFromContent,
   SUPPORTED_EXTENSIONS,
 } from "../../src/server/mcp/file-opener.js";
+import { handleOpen } from "../../src/server/mcp/routes/open.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
 let tmpDir: string;
 
@@ -194,5 +197,143 @@ describe("SUPPORTED_EXTENSIONS", () => {
     expect(SUPPORTED_EXTENSIONS.has(".pdf")).toBe(false);
     expect(SUPPORTED_EXTENSIONS.has(".js")).toBe(false);
     expect(SUPPORTED_EXTENSIONS.has(".py")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readOnly option
+// ---------------------------------------------------------------------------
+
+describe("openFileByPath — readOnly option", () => {
+  it("opens a file as read-only when readOnly:true is passed", async () => {
+    const f = path.join(tmpDir, "ro.md");
+    await fs.writeFile(f, "# Read-only content");
+
+    const result = await openFileByPath(f, { readOnly: true });
+
+    expect(result.readOnly).toBe(true);
+    expect(result.alreadyOpen).toBe(false);
+    // Y.Doc metadata should also reflect the flag
+    const doc = getOrCreateDocument(result.documentId);
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    expect(meta.get("readOnly")).toBe(true);
+  });
+
+  it("opens a file as writable by default (no readOnly option)", async () => {
+    const f = path.join(tmpDir, "rw.md");
+    await fs.writeFile(f, "# Writable content");
+
+    const result = await openFileByPath(f);
+
+    expect(result.readOnly).toBe(false);
+  });
+
+  it("upgrading an already-open file to readOnly:true updates registry and Y.Doc meta", async () => {
+    const f = path.join(tmpDir, "upgrade-ro.md");
+    await fs.writeFile(f, "# Upgrade to read-only");
+
+    // Open normally (writable)
+    const first = await openFileByPath(f);
+    expect(first.readOnly).toBe(false);
+
+    // Re-open with readOnly:true — should upgrade in-place
+    const second = await openFileByPath(f, { readOnly: true });
+    expect(second.alreadyOpen).toBe(true);
+    expect(second.readOnly).toBe(true);
+
+    // Open-docs registry should reflect the upgrade
+    const openDocs = getOpenDocs();
+    expect(openDocs.get(first.documentId)?.readOnly).toBe(true);
+
+    // Y.Doc metadata should reflect the upgrade
+    const doc = getOrCreateDocument(first.documentId);
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    expect(meta.get("readOnly")).toBe(true);
+  });
+
+  it("does not downgrade a read-only doc when re-opened without readOnly option", async () => {
+    const f = path.join(tmpDir, "no-downgrade.md");
+    await fs.writeFile(f, "# No downgrade");
+
+    // Open with readOnly:true
+    await openFileByPath(f, { readOnly: true });
+
+    // Re-open without specifying readOnly — should NOT downgrade
+    const second = await openFileByPath(f);
+    expect(second.alreadyOpen).toBe(true);
+    // readOnly reflects the re-open's derived value (false for .md), but the
+    // registry and Y.Doc should NOT have been downgraded
+    const openDocs = getOpenDocs();
+    expect(openDocs.get(second.documentId)?.readOnly).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/open — readOnly via HTTP route
+// ---------------------------------------------------------------------------
+
+describe("handleOpen — readOnly propagation", () => {
+  it("opens a file as read-only when body contains readOnly:true", async () => {
+    const f = path.join(tmpDir, "api-ro.md");
+    await fs.writeFile(f, "# API read-only test");
+
+    let capturedBody: unknown;
+    const req = { body: { filePath: f, readOnly: true } } as Parameters<typeof handleOpen>[0];
+    const res = {
+      json: (body: unknown) => {
+        capturedBody = body;
+      },
+      status: () => res,
+    } as unknown as Parameters<typeof handleOpen>[1];
+
+    await handleOpen(req, res);
+
+    expect((capturedBody as { data: { readOnly: boolean } }).data.readOnly).toBe(true);
+  });
+
+  it("returns BAD_REQUEST when filePath is missing", async () => {
+    let capturedStatus: number | undefined;
+    let capturedBody: unknown;
+
+    const req = { body: {} } as Parameters<typeof handleOpen>[0];
+    const res = {
+      status: (code: number) => {
+        capturedStatus = code;
+        return res;
+      },
+      json: (body: unknown) => {
+        capturedBody = body;
+      },
+    } as unknown as Parameters<typeof handleOpen>[1];
+
+    await handleOpen(req, res);
+
+    expect(capturedStatus).toBe(400);
+    expect((capturedBody as { error: string }).error).toBe("BAD_REQUEST");
+  });
+
+  it("propagates readOnly:true to an already-open document", async () => {
+    const f = path.join(tmpDir, "api-already-open-ro.md");
+    await fs.writeFile(f, "# Already-open read-only upgrade");
+
+    // Open the document first (writable)
+    await openFileByPath(f);
+
+    let capturedBody: unknown;
+    const req = {
+      body: { filePath: f, readOnly: true },
+    } as Parameters<typeof handleOpen>[0];
+    const res = {
+      json: (body: unknown) => {
+        capturedBody = body;
+      },
+      status: () => res,
+    } as unknown as Parameters<typeof handleOpen>[1];
+
+    await handleOpen(req, res);
+
+    const data = (capturedBody as { data: { readOnly: boolean; alreadyOpen: boolean } }).data;
+    expect(data.alreadyOpen).toBe(true);
+    expect(data.readOnly).toBe(true);
   });
 });
