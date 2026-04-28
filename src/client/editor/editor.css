@@ -60,10 +60,11 @@
   border-radius: 2px;
 }
 
-/* Authorship decorations — user=blue, claude=orange */
+/* Authorship decorations — user=blue, claude=orange, import=muted */
 .tandem-authorship { transition: color 0.2s; }
-.tandem-authorship--user { color: var(--tandem-author-user); }
-.tandem-authorship--claude { color: var(--tandem-author-claude); }
+.ProseMirror [data-tandem-author="user"] { color: var(--tandem-author-user); }
+.ProseMirror [data-tandem-author="claude"] { color: var(--tandem-author-claude); }
+.ProseMirror [data-tandem-author="import"] { color: var(--tandem-fg-muted); }
 
 /* Claude focus paragraph */
 .tandem-claude-focus {
