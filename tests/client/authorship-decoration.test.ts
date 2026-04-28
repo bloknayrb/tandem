@@ -125,7 +125,7 @@ describe("buildAuthorshipDecorations", () => {
     expect(capturedInlines[0].attrs["data-tandem-author"]).toBe("claude");
   });
 
-  it("still emits base class tandem-authorship", () => {
+  it("does NOT emit any CSS class (data-tandem-author replaces class variants)", () => {
     const ydoc = new Y.Doc();
     const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
     addEntry(authorshipMap, "user");
@@ -133,18 +133,20 @@ describe("buildAuthorshipDecorations", () => {
     buildAuthorshipDecorations(makeMockDoc(), authorshipMap, ydoc, true);
 
     expect(capturedInlines).toHaveLength(1);
-    expect(capturedInlines[0].attrs.class).toBe("tandem-authorship");
+    // Decoration carries only data-tandem-author; no class prop at all
+    expect(capturedInlines[0].attrs.class).toBeUndefined();
+    expect(capturedInlines[0].attrs["data-tandem-author"]).toBe("user");
   });
 
-  it("does NOT emit variant class (tandem-authorship--user)", () => {
+  it("emits data-tandem-author attribute for import (Word comments)", () => {
     const ydoc = new Y.Doc();
     const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
-    addEntry(authorshipMap, "user");
+    addEntry(authorshipMap, "import", "auth-import");
 
     buildAuthorshipDecorations(makeMockDoc(), authorshipMap, ydoc, true);
 
     expect(capturedInlines).toHaveLength(1);
-    expect(capturedInlines[0].attrs.class).not.toContain("tandem-authorship--");
+    expect(capturedInlines[0].attrs["data-tandem-author"]).toBe("import");
   });
 
   it("skips entries with unknown author values", () => {

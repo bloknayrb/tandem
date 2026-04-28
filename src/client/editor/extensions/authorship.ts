@@ -52,7 +52,8 @@ export function buildAuthorshipDecorations(
     if (!entry.author || !entry.range) return;
 
     // Defensive guard: skip entries with unexpected author values (Y.Map is untyped at runtime)
-    if ((entry.author as string) !== "user" && (entry.author as string) !== "claude") return;
+    const validAuthors = ["user", "claude", "import"] as const;
+    if (!validAuthors.includes(entry.author as (typeof validAuthors)[number])) return;
 
     const resolved = resolveAuthorshipRange(entry, doc, ydoc);
     if (!resolved) return;
@@ -61,7 +62,6 @@ export function buildAuthorshipDecorations(
     if (from >= to || from < 0 || to > maxPos) return;
 
     const attrs: Record<string, string> = {
-      class: "tandem-authorship",
       "data-tandem-author": entry.author,
     };
 

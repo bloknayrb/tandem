@@ -61,7 +61,7 @@
 }
 
 /* Authorship decorations — user=blue, claude=orange, import=muted */
-.tandem-authorship { transition: color 0.2s; }
+.ProseMirror [data-tandem-author] { transition: color 0.2s; }
 .ProseMirror [data-tandem-author="user"] { color: var(--tandem-author-user); }
 .ProseMirror [data-tandem-author="claude"] { color: var(--tandem-author-claude); }
 .ProseMirror [data-tandem-author="import"] { color: var(--tandem-fg-muted); }
