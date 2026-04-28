@@ -16,6 +16,12 @@ interface AppearanceSettingsProps {
   onUpdate: (partial: Partial<TandemSettings>) => void;
 }
 
+const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; icon: string }> = [
+  { value: "tabbed", label: "Tabbed", icon: "[=|]" },
+  { value: "tabbed-left", label: "Tabbed-Left", icon: "[|=]" },
+  { value: "three-panel", label: "Three-Panel", icon: "[|||]" },
+];
+
 function cardStyle(selected: boolean, disabled?: boolean): React.CSSProperties {
   return {
     flex: 1,
@@ -53,7 +59,7 @@ export function AppearanceSettings({ open, settings, onUpdate }: AppearanceSetti
   );
   const layoutRg = useRadioGroup<LayoutMode>(
     settings.layout,
-    ["tabbed", "three-panel"] as const,
+    ["tabbed", "tabbed-left", "three-panel"] as const,
     (l) => onUpdate({ layout: l }),
     (l) => l === "three-panel" && threePanelDisabled,
   );
@@ -118,34 +124,29 @@ export function AppearanceSettings({ open, settings, onUpdate }: AppearanceSetti
           role="radiogroup"
           aria-labelledby="settings-layout-label"
           onKeyDown={layoutRg.handleKeyDown}
-          style={{ display: "flex", gap: "8px" }}
+          style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}
         >
-          <button
-            data-testid="layout-tabbed-btn"
-            role="radio"
-            aria-checked={settings.layout === "tabbed"}
-            tabIndex={layoutRg.tabIndexFor("tabbed")}
-            onClick={() => onUpdate({ layout: "tabbed" })}
-            style={cardStyle(settings.layout === "tabbed")}
-          >
-            <div style={{ fontSize: "18px", marginBottom: "2px" }}>{"[=|]"}</div>
-            Tabbed
-          </button>
-          <button
-            data-testid="layout-three-panel-btn"
-            role="radio"
-            aria-checked={settings.layout === "three-panel"}
-            aria-disabled={threePanelDisabled || undefined}
-            tabIndex={layoutRg.tabIndexFor("three-panel")}
-            onClick={() => {
-              if (!threePanelDisabled) onUpdate({ layout: "three-panel" });
-            }}
-            style={cardStyle(settings.layout === "three-panel", threePanelDisabled)}
-            title={threePanelDisabled ? "Requires viewport wider than 768px" : undefined}
-          >
-            <div style={{ fontSize: "18px", marginBottom: "2px" }}>{"[|||]"}</div>
-            Three-Panel
-          </button>
+          {LAYOUT_OPTIONS.map(({ value, label, icon }) => {
+            const disabled = value === "three-panel" && threePanelDisabled;
+            return (
+              <button
+                key={value}
+                data-testid={`layout-${value}-btn`}
+                role="radio"
+                aria-checked={settings.layout === value}
+                aria-disabled={disabled || undefined}
+                tabIndex={layoutRg.tabIndexFor(value)}
+                onClick={() => {
+                  if (!disabled) onUpdate({ layout: value });
+                }}
+                style={cardStyle(settings.layout === value, disabled)}
+                title={disabled ? "Requires viewport wider than 768px" : undefined}
+              >
+                <div style={{ fontSize: "18px", marginBottom: "2px" }}>{icon}</div>
+                {label}
+              </button>
+            );
+          })}
         </div>
         {threePanelDisabled && (
           <div style={{ fontSize: "10px", color: "var(--tandem-fg-subtle)", marginTop: "4px" }}>
@@ -154,8 +155,8 @@ export function AppearanceSettings({ open, settings, onUpdate }: AppearanceSetti
         )}
       </div>
 
-      {/* Primary tab (tabbed mode only) */}
-      {settings.layout === "tabbed" && (
+      {/* Default tab (tabbed and tabbed-left modes) */}
+      {(settings.layout === "tabbed" || settings.layout === "tabbed-left") && (
         <div>
           <div id="settings-default-tab-label" style={sectionLabelStyle}>
             Default Tab

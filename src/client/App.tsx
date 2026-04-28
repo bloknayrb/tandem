@@ -1,5 +1,5 @@
 import type { Editor as TiptapEditor } from "@tiptap/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -41,6 +41,158 @@ import type { DocListEntry, OpenTab } from "./types";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 export type { DocListEntry, OpenTab };
+
+// ---------------------------------------------------------------------------
+// Shared sub-components used by multiple layout arms
+// ---------------------------------------------------------------------------
+
+interface ResizeHandleProps {
+  side: "left" | "right";
+  onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void;
+  /** Override data-testid. Defaults to `{side}-panel-resize-handle`. */
+  testId?: string;
+}
+
+function ResizeHandle({ side, onMouseDown, testId }: ResizeHandleProps) {
+  const id = testId ?? `${side}-panel-resize-handle`;
+  const label = side === "left" ? "Resize left panel" : "Resize right panel";
+  return (
+    <div
+      data-testid={id}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      tabIndex={0}
+      onMouseDown={onMouseDown}
+      style={{
+        width: "4px",
+        cursor: "col-resize",
+        background: "transparent",
+        flexShrink: 0,
+        transition: "background 0.15s",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLDivElement).style.background = "transparent";
+      }}
+    />
+  );
+}
+
+interface TabbedPanelContainerProps {
+  width: number;
+  borderSide: "left" | "right";
+  showChat: boolean;
+  pendingAnnotationBadge: number;
+  onShowAnnotations: () => void;
+  onShowChat: () => void;
+  onChatMouseDown: () => void;
+  chatPanelProps: object;
+  sidePanelProps: object;
+}
+
+function TabbedPanelContainer({
+  width,
+  borderSide,
+  showChat,
+  pendingAnnotationBadge,
+  onShowAnnotations,
+  onShowChat,
+  onChatMouseDown,
+  chatPanelProps,
+  sidePanelProps,
+}: TabbedPanelContainerProps) {
+  const borderStyle =
+    borderSide === "left"
+      ? { borderRight: "1px solid var(--tandem-border)" }
+      : { borderLeft: "1px solid var(--tandem-border)" };
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        width: `${width}px`,
+        ...borderStyle,
+      }}
+    >
+      {/* Panel toggle tabs */}
+      <div
+        style={{
+          display: "flex",
+          borderBottom: "1px solid var(--tandem-border)",
+          background: "var(--tandem-surface-muted)",
+        }}
+      >
+        <button
+          data-testid="annotations-tab"
+          onClick={onShowAnnotations}
+          style={{
+            flex: 1,
+            padding: "8px",
+            fontSize: "12px",
+            fontWeight: showChat ? 400 : 600,
+            border: "none",
+            borderBottom: showChat ? "none" : "2px solid var(--tandem-accent)",
+            background: "transparent",
+            cursor: "pointer",
+            color: showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)",
+            position: "relative",
+          }}
+        >
+          Annotations
+          {showChat && pendingAnnotationBadge > 0 && (
+            <span
+              style={{
+                position: "absolute",
+                top: "2px",
+                right: "6px",
+                background: "var(--tandem-error)",
+                color: "var(--tandem-error-fg)",
+                fontSize: "9px",
+                width: "16px",
+                height: "16px",
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 700,
+              }}
+            >
+              {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+            </span>
+          )}
+        </button>
+        <button
+          data-testid="chat-tab"
+          onMouseDown={onChatMouseDown}
+          onClick={onShowChat}
+          style={{
+            flex: 1,
+            padding: "8px",
+            fontSize: "12px",
+            fontWeight: showChat ? 600 : 400,
+            border: "none",
+            borderBottom: showChat ? "2px solid var(--tandem-accent)" : "none",
+            background: "transparent",
+            cursor: "pointer",
+            color: showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
+            position: "relative",
+          }}
+        >
+          Chat
+        </button>
+      </div>
+      {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
+      <ChatSlot {...(chatPanelProps as React.ComponentProps<typeof ChatSlot>)} visible={showChat} />
+      <SideSlot
+        {...(sidePanelProps as React.ComponentProps<typeof SideSlot>)}
+        visible={!showChat}
+      />
+    </div>
+  );
+}
 
 export default function App() {
   useWebViewZoom();
@@ -377,27 +529,7 @@ export default function App() {
             </div>
           </div>
           {/* Left resize handle */}
-          <div
-            data-testid="left-panel-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize left panel"
-            tabIndex={0}
-            onMouseDown={(e) => handleResizeStart(e, "left")}
-            style={{
-              width: "4px",
-              cursor: "col-resize",
-              background: "transparent",
-              flexShrink: 0,
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "transparent";
-            }}
-          />
+          <ResizeHandle side="left" onMouseDown={(e) => handleResizeStart(e, "left")} />
           {/* Editor (center) */}
           <div
             style={{
@@ -439,27 +571,7 @@ export default function App() {
             </div>
           </div>
           {/* Right resize handle */}
-          <div
-            data-testid="right-panel-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize right panel"
-            tabIndex={0}
-            onMouseDown={(e) => handleResizeStart(e, "right")}
-            style={{
-              width: "4px",
-              cursor: "col-resize",
-              background: "transparent",
-              flexShrink: 0,
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "transparent";
-            }}
-          />
+          <ResizeHandle side="right" onMouseDown={(e) => handleResizeStart(e, "right")} />
           {/* Right panel */}
           <div
             style={{
@@ -488,6 +600,63 @@ export default function App() {
                 <SideSlot {...sidePanelProps} />
               ) : (
                 <ChatSlot {...chatPanelProps} visible={true} />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : panelLayout.kind === "tabbed-left" ? (
+        /* ── Tabbed-Left layout: Panel+Tabs | Editor ── */
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          <TabbedPanelContainer
+            width={panelLayout.left}
+            borderSide="right"
+            showChat={showChat}
+            pendingAnnotationBadge={pendingAnnotationBadge}
+            onShowAnnotations={() => setShowChat(false)}
+            onShowChat={() => setShowChat(true)}
+            onChatMouseDown={captureSelectionForChat}
+            chatPanelProps={chatPanelProps}
+            sidePanelProps={sidePanelProps}
+          />
+          {/* Left resize handle (right edge of left panel) */}
+          <ResizeHandle side="left" onMouseDown={(e) => handleResizeStart(e, "left")} />
+          {/* Editor */}
+          <div
+            style={{
+              flex: 1,
+              overflow: "auto",
+              padding: "24px 48px",
+              border: fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent",
+              background: fileDragOver ? "var(--tandem-accent-bg)" : undefined,
+              transition: "border-color 0.15s, background 0.15s",
+            }}
+            onDragOver={handleEditorDragOver}
+            onDragLeave={handleEditorDragLeave}
+            onDrop={handleEditorDrop}
+          >
+            <ReviewOnlyBanner
+              visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+              documentId={activeTab?.id}
+            />
+            <div
+              style={{
+                maxWidth: editorMaxWidth,
+                margin: editorMargin,
+              }}
+            >
+              {activeTab ? (
+                <Editor
+                  key={activeTab.id}
+                  ydoc={activeTab.ydoc}
+                  provider={activeTab.provider}
+                  readOnly={readOnly}
+                  reviewMode={reviewMode}
+                  activeAnnotationId={activeAnnotationId}
+                  onEditorReady={handleEditorReady}
+                  onAnnotationClick={handleAnnotationClick}
+                />
+              ) : (
+                <EmptyState connected={connected} claudeActive={claudeActive} />
               )}
             </div>
           </div>
@@ -534,107 +703,23 @@ export default function App() {
               )}
             </div>
           </div>
-          {/* Resize handle */}
-          <div
-            data-testid="panel-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize panel"
-            tabIndex={0}
+          {/* Resize handle — testid preserved for E2E compatibility */}
+          <ResizeHandle
+            side="right"
             onMouseDown={(e) => handleResizeStart(e, "right")}
-            style={{
-              width: "4px",
-              cursor: "col-resize",
-              background: "transparent",
-              flexShrink: 0,
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = "transparent";
-            }}
+            testId="panel-resize-handle"
           />
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              width: `${getRightWidth(panelLayout)}px`,
-              borderLeft: "1px solid var(--tandem-border)",
-            }}
-          >
-            {/* Panel toggle tabs */}
-            <div
-              style={{
-                display: "flex",
-                borderBottom: "1px solid var(--tandem-border)",
-                background: "var(--tandem-surface-muted)",
-              }}
-            >
-              <button
-                data-testid="annotations-tab"
-                onClick={() => setShowChat(false)}
-                style={{
-                  flex: 1,
-                  padding: "8px",
-                  fontSize: "12px",
-                  fontWeight: showChat ? 400 : 600,
-                  border: "none",
-                  borderBottom: showChat ? "none" : "2px solid var(--tandem-accent)",
-                  background: "transparent",
-                  cursor: "pointer",
-                  color: showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)",
-                  position: "relative",
-                }}
-              >
-                Annotations
-                {showChat && pendingAnnotationBadge > 0 && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      top: "2px",
-                      right: "6px",
-                      background: "var(--tandem-error)",
-                      color: "var(--tandem-error-fg)",
-                      fontSize: "9px",
-                      width: "16px",
-                      height: "16px",
-                      borderRadius: "50%",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: 700,
-                    }}
-                  >
-                    {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
-                  </span>
-                )}
-              </button>
-              <button
-                data-testid="chat-tab"
-                onMouseDown={captureSelectionForChat}
-                onClick={() => setShowChat(true)}
-                style={{
-                  flex: 1,
-                  padding: "8px",
-                  fontSize: "12px",
-                  fontWeight: showChat ? 600 : 400,
-                  border: "none",
-                  borderBottom: showChat ? "2px solid var(--tandem-accent)" : "none",
-                  background: "transparent",
-                  cursor: "pointer",
-                  color: showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)",
-                  position: "relative",
-                }}
-              >
-                Chat
-              </button>
-            </div>
-            {/* Panel content — both panels stay mounted, toggle visibility via CSS */}
-            <ChatSlot {...chatPanelProps} visible={showChat} />
-            <SideSlot {...sidePanelProps} visible={!showChat} />
-          </div>
+          <TabbedPanelContainer
+            width={getRightWidth(panelLayout)}
+            borderSide="left"
+            showChat={showChat}
+            pendingAnnotationBadge={pendingAnnotationBadge}
+            onShowAnnotations={() => setShowChat(false)}
+            onShowChat={() => setShowChat(true)}
+            onChatMouseDown={captureSelectionForChat}
+            chatPanelProps={chatPanelProps}
+            sidePanelProps={sidePanelProps}
+          />
         </div>
       )}
       <StatusBar
