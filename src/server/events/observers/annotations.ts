@@ -29,7 +29,7 @@ export function makeAnnotationsObserver(deps: {
         continue;
       }
 
-      if (change.action === "add" && ann.author === "user" && ann.type !== "note") {
+      if (change.action === "add" && ann.author === "user" && ann.type === "comment") {
         pushEvent({
           id: generateEventId(),
           type: "annotation:created",

@@ -164,6 +164,42 @@ describe("origin filtering", () => {
     cleanup();
   });
 
+  it("does NOT emit annotation:created for user highlights", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    map.set("ann_hl", {
+      id: "ann_hl",
+      type: "highlight",
+      author: "user",
+      color: "yellow",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
+
+  it("does NOT emit annotation:created for user notes", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    map.set("ann_note", {
+      id: "ann_note",
+      type: "note",
+      author: "user",
+      content: "private thought",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
+
   it("emits annotation:accepted when claude annotation is updated to accepted", () => {
     const { events, cleanup } = collectEvents();
     const map = doc.getMap(Y_MAP_ANNOTATIONS);

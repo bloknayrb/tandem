@@ -41,17 +41,15 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}note-1`,
     type: "note",
-    targetText: "Accept or dismiss",
+    targetText: "accept or dismiss",
     content:
       "Notes are personal \u2014 Claude won\u2019t act on them unless you convert them to comments.",
   },
 ];
 
-/** Idempotent — skips if the guard annotation already exists. */
+/** Idempotent — skips annotations that already exist in the Y.Map. */
 export function injectTutorialAnnotations(doc: Y.Doc): void {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
-
-  if (map.has(`${TUTORIAL_ANNOTATION_PREFIX}highlight-1`)) return;
 
   const fullText = extractText(doc);
   if (!fullText) {
@@ -62,6 +60,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
   let injected = 0;
   doc.transact(() => {
     for (const def of TUTORIAL_ANNOTATIONS) {
+      if (map.has(def.id)) continue;
       const idx = fullText.indexOf(def.targetText);
       if (idx === -1) {
         console.error(`[tutorial] Target text "${def.targetText}" not found — skipping ${def.id}`);

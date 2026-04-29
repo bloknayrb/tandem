@@ -32,7 +32,7 @@ Setup complete! Start Tandem with: tandem
 Then in Claude, your tandem_* tools will be available.
 ```
 
-The skill teaches Claude how to use Tandem's 25 MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
+The skill teaches Claude how to use Tandem's 28 MCP tools (25 active, 3 deprecated stubs) effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
 Start Tandem from any directory:
 ```bash
