@@ -63,11 +63,7 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
     } as Annotation;
   }
 
-  if (ann.type === "flag") {
-    return { ...base, type: "note" } as Annotation;
-  }
-
-  if (ann.type === "note") {
+  if (ann.type === "flag" || ann.type === "note") {
     return { ...base, type: "note" } as Annotation;
   }
 
