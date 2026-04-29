@@ -13,7 +13,7 @@ export { toFlatOffset, toPmPos, toSerializedRelPos } from "./positions/types.js"
 
 // --- Zod schemas (source of truth) ---
 
-export const AnnotationTypeSchema = z.enum(["highlight", "comment", "flag"]);
+export const AnnotationTypeSchema = z.enum(["highlight", "note", "comment"]);
 
 export const AnnotationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
 export const HighlightColorSchema = z.enum(["yellow", "green", "blue", "pink"]);
@@ -97,29 +97,25 @@ interface AnnotationBase {
 
 /**
  * Discriminated union for annotations. Three canonical types:
- * - `highlight` — marks text with a color and optional note
- * - `comment` — note on text; optionally carries `suggestedText` (replacement)
- *   or `directedAt: "claude"` (question)
- * - `flag` — flags text for attention
+ * - `highlight` — visual marker with color, not sent to Claude
+ * - `note` — personal text annotation, findable but Claude doesn't act
+ * - `comment` — text for Claude; optionally carries `suggestedText` (replacement)
  */
 export type Annotation =
   | (AnnotationBase & {
       type: "highlight";
       color?: HighlightColor;
       suggestedText?: undefined;
-      directedAt?: undefined;
+    })
+  | (AnnotationBase & {
+      type: "note";
+      color?: undefined;
+      suggestedText?: undefined;
     })
   | (AnnotationBase & {
       type: "comment";
       color?: undefined;
       suggestedText?: string;
-      directedAt?: "claude";
-    })
-  | (AnnotationBase & {
-      type: "flag";
-      color?: undefined;
-      suggestedText?: undefined;
-      directedAt?: undefined;
     });
 
 /**

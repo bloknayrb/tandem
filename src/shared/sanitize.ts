@@ -6,8 +6,10 @@ export type RawAnnotation = Omit<Annotation, "type"> & { type: string };
 /**
  * Normalize a legacy annotation into the unified shape.
  * - `suggestion` → `comment` with `suggestedText` + `content` (parsed from JSON)
- * - `question` → `comment` with `directedAt: "claude"`
+ * - `question` → `comment` (directedAt removed per ADR-027)
+ * - `flag` → `note` (ADR-027: audience-based model)
  * - Strips stray `color` from non-highlight entries (#245)
+ * - Strips `directedAt` from comments (ADR-027)
  * - Preserves `rev` (the durable-annotation last-writer-wins counter — added
  *   by the on-disk schema, see `src/server/annotations/schema.ts`). `rev` is
  *   a server-internal durability concept, not a client-facing annotation
@@ -50,7 +52,7 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
   }
 
   if (ann.type === "question") {
-    return { ...base, type: "comment", directedAt: "claude" as const } as Annotation;
+    return { ...base, type: "comment" } as Annotation;
   }
 
   if (ann.type === "highlight") {
@@ -62,7 +64,11 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
   }
 
   if (ann.type === "flag") {
-    return { ...base, type: "flag" } as Annotation;
+    return { ...base, type: "note" } as Annotation;
+  }
+
+  if (ann.type === "note") {
+    return { ...base, type: "note" } as Annotation;
   }
 
   if (ann.type === "comment") {
@@ -70,7 +76,6 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
       ...base,
       type: "comment",
       ...(ann.suggestedText !== undefined ? { suggestedText: ann.suggestedText } : {}),
-      ...(ann.directedAt !== undefined ? { directedAt: ann.directedAt } : {}),
     } as Annotation;
   }
 

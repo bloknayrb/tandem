@@ -38,6 +38,13 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
     content: "More precise verb choice",
     suggestedText: "streamline onboarding",
   },
+  {
+    id: `${TUTORIAL_ANNOTATION_PREFIX}note-1`,
+    type: "note",
+    targetText: "Accept or dismiss",
+    content:
+      "Notes are personal \u2014 Claude won\u2019t act on them unless you convert them to comments.",
+  },
 ];
 
 /** Idempotent — skips if the guard annotation already exists. */

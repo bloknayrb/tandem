@@ -107,10 +107,10 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
     to: 6,
     text: "First",
   });
-  await mcp.callTool("tandem_highlight", {
+  await mcp.callTool("tandem_comment", {
     from: 7,
     to: 15,
-    color: "yellow",
+    text: "Second",
   });
   // Sanity check: confirm both annotations exist before navigating.
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
@@ -156,7 +156,7 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "First" });
   await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Second" });
-  await mcp.callTool("tandem_highlight", { from: 16, to: 24, color: "yellow" });
+  await mcp.callTool("tandem_comment", { from: 16, to: 24, text: "Third" });
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
     data?: { annotations?: unknown[] };
   };
@@ -709,10 +709,10 @@ test("side panel scrolls to top (+ logs warn) when active annotation is filtered
         textSnapshot: "Test",
       }),
     ),
-    mcp.callTool("tandem_highlight", {
+    mcp.callTool("tandem_comment", {
       from: 7,
       to: 15,
-      color: "yellow",
+      text: "Document note",
       textSnapshot: "Document",
     }),
   ]);

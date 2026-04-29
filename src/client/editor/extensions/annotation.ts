@@ -65,17 +65,8 @@ function buildDecorations(
             "data-annotation-id": ann.id,
             "aria-label": "Replacement annotation",
           };
-        } else if (ann.directedAt === "claude") {
-          // Comment directed at Claude → solid blue underline (question visual)
-          attrs = {
-            class: "tandem-question",
-            style:
-              "background: var(--tandem-accent-bg); border-bottom: 2px solid var(--tandem-accent); padding-bottom: 1px;",
-            "data-annotation-id": ann.id,
-            "aria-label": "Question annotation",
-          };
         } else {
-          // Plain comment → dashed blue underline (unchanged)
+          // Plain comment → dashed blue underline
           attrs = {
             class: "tandem-comment",
             style: "border-bottom: 2px dashed var(--tandem-author-user); padding-bottom: 1px;",
@@ -84,13 +75,12 @@ function buildDecorations(
           };
         }
         break;
-      case "flag":
+      case "note":
         attrs = {
-          class: "tandem-flag",
-          style:
-            "background: var(--tandem-error-bg); border-bottom: 2px solid var(--tandem-error); padding-bottom: 1px;",
+          class: "tandem-note",
+          style: "border-bottom: 2px dotted var(--tandem-fg-muted); padding-bottom: 1px;",
           "data-annotation-id": ann.id,
-          "aria-label": "Flag annotation",
+          "aria-label": "Note annotation",
         };
         break;
       default: {

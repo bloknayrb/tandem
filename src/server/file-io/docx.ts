@@ -38,14 +38,13 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
   const fullText = extractFullText(fragment);
 
   // Group by derived category using field presence, not raw type
-  type GroupKey = "highlights" | "comments" | "suggestions" | "questions" | "flags";
+  type GroupKey = "highlights" | "comments" | "suggestions" | "notes";
   const groups: Partial<Record<GroupKey, Annotation[]>> = {};
   for (const ann of annotations) {
     let key: GroupKey;
     if (ann.type === "highlight") key = "highlights";
     else if (ann.suggestedText !== undefined) key = "suggestions";
-    else if (ann.directedAt === "claude") key = "questions";
-    else if (ann.type === "flag") key = "flags";
+    else if (ann.type === "note") key = "notes";
     else key = "comments";
     if (!groups[key]) groups[key] = [];
     groups[key]?.push(ann);
@@ -57,11 +56,10 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     highlights: "Highlights",
     comments: "Comments",
     suggestions: "Suggestions",
-    questions: "Questions for Claude",
-    flags: "Flags",
+    notes: "Notes",
   };
 
-  const groupOrder: GroupKey[] = ["highlights", "comments", "suggestions", "questions", "flags"];
+  const groupOrder: GroupKey[] = ["highlights", "comments", "suggestions", "notes"];
 
   for (const key of groupOrder) {
     const anns = groups[key];

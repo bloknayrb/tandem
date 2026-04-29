@@ -197,18 +197,17 @@ async function main() {
     // ── Add annotations via MCP ──────────────────────────────────────────
     console.log("   Adding annotations...");
 
-    // Highlight on "Both you and Claude can see and edit this document at the same time"
+    // Comment on "Both you and Claude can see and edit this document at the same time"
     const highlightText = "Both you and Claude can see and edit this document at the same time";
     const hlRange = findRange(highlightText);
     if (hlRange) {
-      await mcp.addAnnotation("tandem_highlight", {
+      await mcp.addAnnotation("tandem_comment", {
         from: hlRange.from,
         to: hlRange.to,
-        color: "yellow",
-        note: "Great opening line — sets collaborative expectations immediately.",
+        text: "Great opening line — sets collaborative expectations immediately.",
         textSnapshot: highlightText,
       });
-      console.log("   + highlight added");
+      console.log("   + comment added (was highlight)");
     }
 
     // Comment on the "Review an annotation" instruction
@@ -238,17 +237,17 @@ async function main() {
       console.log("   + suggestion added");
     }
 
-    // Flag on the timeline slip mention
+    // Comment on the timeline slip mention
     const flagText = "the dashboard timeline slipped due to an unexpected API redesign in May";
     const flRange = findRange(flagText);
     if (flRange) {
-      await mcp.addAnnotation("tandem_flag", {
+      await mcp.addAnnotation("tandem_comment", {
         from: flRange.from,
         to: flRange.to,
-        note: "This needs a mitigation plan or updated timeline before sharing externally.",
+        text: "This needs a mitigation plan or updated timeline before sharing externally.",
         textSnapshot: flagText,
       });
-      console.log("   + flag added");
+      console.log("   + comment added (was flag)");
     }
 
     // Set Claude's status
@@ -454,10 +453,10 @@ async function main() {
     console.log("\n9. Taking 07-toast-notification.png...");
     // Trigger a toast by calling an MCP tool with invalid args that produces a notification
     try {
-      await mcp.call("tandem_highlight", {
+      await mcp.call("tandem_comment", {
         from: 0,
         to: 5,
-        color: "yellow",
+        text: "test",
         textSnapshot: "NOMATCH_FORCE_ERROR_FOR_TOAST",
       });
     } catch {

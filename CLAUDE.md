@@ -17,7 +17,7 @@
 - **Start the server before connecting Claude Code.** `npm run dev:standalone` runs both. Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 28 MCP tools + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 25 MCP tools + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems, file map
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
@@ -57,7 +57,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Key Patterns
 - All document mutations go through the server's Y.Doc -> changes sync to editor via Hocuspocus
-- Annotations stored in Y.Map('annotations'), not in document content. `author` field: `"user" | "claude" | "import"` (import = Word comments from .docx files). User annotations are plain notes to Claude — `suggestedText` and `directedAt: "claude"` are Claude-only features created via `tandem_comment`, not the UI.
+- Annotations stored in Y.Map('annotations'), not in document content. `author` field: `"user" | "claude" | "import"` (import = Word comments from .docx files). Annotation types: `"highlight"` (user-only, color-coded), `"comment"` (Claude-created, may include `suggestedText`), `"note"` (personal, not surfaced to Claude). `directedAt` is deprecated and stripped on read (ADR-027).
 - Three coordinate systems: flat text offsets (server, includes heading prefixes), ProseMirror positions (client, structural), Yjs RelativePositions (CRDT-anchored, survive edits). Modules: `src/server/positions.ts`, `src/client/positions.ts`, shared types in `src/shared/positions/`
 - `getElementText()` returns clean plain text (no markup tags) with `\n` separators between nested block children (list items, paragraphs within list items). Embedded elements (hardBreaks) emit `\n` to preserve XmlText index alignment. `extractText()` additionally prepends heading prefixes and joins top-level elements with `\n`.
 - Multi-document: each file gets a documentId (hash of path) = Hocuspocus room name. All MCP tools accept optional `documentId`, defaulting to active document. `CTRL_ROOM` is reserved -- never use as a document ID. Server broadcasts `openDocuments` via Y.Map('documentMeta')
@@ -141,7 +141,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 28 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app. v0.8.0 shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. v0.9.0 complete: MCP consolidation (#259, PR #449), redesign data model (#440–#445/#450, PRs #451/#458/#461/#462), UX polish (#435/#437, PRs #460/#463), CI stdio smoke test (#341, PR #459). Distribution items (#316, #317, #322) deferred to v0.13.0. Next: v0.10.0 (Svelte core migration). See [docs/roadmap.md](docs/roadmap.md) for full plan.
+Core complete: 25 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app. v0.8.0 shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. v0.9.0 complete: MCP consolidation (#259, PR #449), redesign data model (#440–#445/#450, PRs #451/#458/#461/#462), UX polish (#435/#437, PRs #460/#463), CI stdio smoke test (#341, PR #459). Distribution items (#316, #317, #322) deferred to v0.13.0. Next: v0.10.0 (Svelte core migration). See [docs/roadmap.md](docs/roadmap.md) for full plan.
 
 <!-- autoskills:start -->
 

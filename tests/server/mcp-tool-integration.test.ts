@@ -125,7 +125,7 @@ describe("MCP tool integration — annotation tools", () => {
     }
   });
 
-  it("tandem_highlight creates highlight with color", async () => {
+  it("tandem_highlight returns DEPRECATED error", async () => {
     setupDoc("mcp-ann-3", "Hello world");
 
     const result = await client.callTool({
@@ -133,8 +133,8 @@ describe("MCP tool integration — annotation tools", () => {
       arguments: { from: 0, to: 5, color: "yellow" },
     });
     const parsed = parseResult(result);
-    expect(parsed.error).toBe(false);
-    expect(parsed.data.annotationId).toMatch(/^ann_/);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
   });
 
   it("tandem_getAnnotations returns created annotations", async () => {
@@ -145,8 +145,8 @@ describe("MCP tool integration — annotation tools", () => {
       arguments: { from: 0, to: 5, text: "Note 1" },
     });
     await client.callTool({
-      name: "tandem_highlight",
-      arguments: { from: 6, to: 11, color: "blue" },
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "Note 2" },
     });
 
     const result = await client.callTool({

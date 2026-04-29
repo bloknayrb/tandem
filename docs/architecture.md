@@ -155,7 +155,7 @@ Claude calls tandem_open("invoice.docx")
     → Browser receives updated list, adds second tab
     → DocumentTabs renders both tabs, second tab active
 
-Claude calls tandem_highlight({ from: 10, to: 20, color: "yellow", documentId: "report-a1b2c3" })
+Claude calls tandem_comment({ from: 10, to: 20, text: "Review this section", documentId: "report-a1b2c3" })
     → Targets report.md even though invoice.docx is the active document
 ```
 
@@ -724,7 +724,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `components/AppearanceSettings.tsx` -- Theme, text size, and panel order controls (extracted from SettingsPopover)
 - `components/EditorSettings.tsx` -- User name and dwell-time controls (extracted from SettingsPopover)
 - `components/AccessibilitySettings.tsx` -- Accessibility preference controls (extracted from SettingsPopover)
-- `AnnotationExtension` -- Renders highlights, comments, and flags as ProseMirror Decorations from Y.Map('annotations')
+- `AnnotationExtension` -- Renders highlights, comments, and notes as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
 - `editor/toolbar/HighlightColorPicker.tsx` -- Color swatch picker for highlight annotations (extracted from Toolbar)
 - `editor/toolbar/ModeToggle.tsx` -- Solo/Tandem mode toggle button (extracted from Toolbar)

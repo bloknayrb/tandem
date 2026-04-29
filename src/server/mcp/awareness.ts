@@ -72,7 +72,7 @@ export function registerAwarenessTools(server: McpServer): void {
 
   server.tool(
     "tandem_checkInbox",
-    "Check for user actions you haven't seen yet — new highlights, comments, questions, flags, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.",
+    "Check for user actions you haven't seen yet — new comments, notes, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.",
     {
       documentId: z
         .string()
@@ -105,7 +105,7 @@ export function registerAwarenessTools(server: McpServer): void {
       for (const ann of unsurfaced) {
         const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
 
-        if (ann.author === "user") {
+        if (ann.author === "user" && ann.type === "comment") {
           userActions.push({ ...ann, textSnippet: snippet });
           surfacedIds.add(ann.id);
         } else if (ann.author === "claude" && ann.status !== "pending") {
@@ -277,7 +277,7 @@ export function processInboxAnnotations(
 
   for (const ann of unsurfaced) {
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
-    if (ann.author === "user") {
+    if (ann.author === "user" && ann.type === "comment") {
       userActions.push({ ...ann, textSnippet: snippet });
       surfaced.add(ann.id);
     } else if (ann.author === "claude" && ann.status !== "pending") {

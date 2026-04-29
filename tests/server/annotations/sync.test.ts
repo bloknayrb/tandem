@@ -323,7 +323,7 @@ describe("legacy-type sanitize on write", () => {
     errorSpy.mockRestore();
   });
 
-  it("rewrites 'question' type to 'comment' with directedAt preserved, envelope stays loadable", async () => {
+  it("rewrites 'question' type to 'comment' (directedAt stripped per ADR-027), envelope stays loadable", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -344,7 +344,8 @@ describe("legacy-type sanitize on write", () => {
     const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations[0].type).toBe("comment");
-    expect(onDisk.annotations[0].directedAt).toBe("claude");
+    // directedAt is stripped by ADR-027 sanitize/migrate
+    expect(onDisk.annotations[0].directedAt).toBeUndefined();
 
     // Envelope must parse cleanly — regression here means the store would
     // self-quarantine on the next open.

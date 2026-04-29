@@ -78,12 +78,12 @@ describe("collectAnnotations", () => {
     const map = getAnnotationsMap(doc);
     createAnnotation(map, doc, "comment", rangeOf(0, 2), "c");
     createAnnotation(map, doc, "highlight", rangeOf(0, 2), "h");
-    createAnnotation(map, doc, "flag", rangeOf(0, 2), "f");
+    createAnnotation(map, doc, "note", rangeOf(0, 2), "n");
 
     const types = collectAnnotations(map).map((a) => a.type);
     expect(types).toContain("comment");
     expect(types).toContain("highlight");
-    expect(types).toContain("flag");
+    expect(types).toContain("note");
   });
 });
 
@@ -347,11 +347,11 @@ describe("sanitizeAnnotation", () => {
     expect(result.content).toBe("");
   });
 
-  it("converts legacy question to comment with directedAt", () => {
+  it("converts legacy question to comment (directedAt stripped per ADR-027)", () => {
     const legacy = { ...base, type: "question" };
     const result = sanitizeAnnotation(legacy as unknown as Annotation);
     expect(result.type).toBe("comment");
-    expect(result.directedAt).toBe("claude");
+    expect(result.directedAt).toBeUndefined();
   });
 
   it("strips stray color from non-highlight entries", () => {
@@ -376,17 +376,17 @@ describe("sanitizeAnnotation", () => {
     expect(result.content).toBe("test");
   });
 
-  it("passes through valid comment with directedAt unchanged", () => {
+  it("strips directedAt from comments (ADR-027)", () => {
     const comment = { ...base, type: "comment", directedAt: "claude" as const };
     const result = sanitizeAnnotation(comment as unknown as Annotation);
     expect(result.type).toBe("comment");
-    expect(result.directedAt).toBe("claude");
+    expect(result.directedAt).toBeUndefined();
   });
 
-  it("passes through valid flag unchanged", () => {
+  it("migrates flag to note (ADR-027)", () => {
     const flag = { ...base, type: "flag" };
     const result = sanitizeAnnotation(flag as unknown as Annotation);
-    expect(result.type).toBe("flag");
+    expect(result.type).toBe("note");
   });
 
   it("preserves optional fields (relRange, textSnapshot, editedAt)", () => {
@@ -404,10 +404,10 @@ describe("sanitizeAnnotation", () => {
 
   it("warns and coerces truly unknown types to comment", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const unknown = { ...base, type: "note" };
+    const unknown = { ...base, type: "foobar" };
     const result = sanitizeAnnotation(unknown as unknown as Annotation);
     expect(result.type).toBe("comment");
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown type "note"'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown type "foobar"'));
     warnSpy.mockRestore();
   });
 

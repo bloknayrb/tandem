@@ -47,7 +47,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
         "Event types: annotation:created, annotation:accepted, annotation:dismissed, annotation:reply,",
         "chat:message, document:opened, document:closed, document:switched.",
         "Chat messages may include a 'selection' field with buffered selection context.",
-        "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_highlight, etc.) to act on them.",
+        "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_edit, etc.) to act on them.",
         "Reply to chat messages using tandem_reply. Pass document_id from the tag attributes.",
         "Do not reply to non-chat events — just act on them using tools.",
         "If you haven't received channel notifications recently, call tandem_checkInbox as a fallback.",

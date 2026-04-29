@@ -84,24 +84,23 @@ describe("tandem_checkInbox logic", () => {
     expect(responses.length).toBe(2);
   });
 
-  it("question annotation (directedAt claude) works", () => {
+  it("comment annotation surfaces in userActions", () => {
     makeDoc("Hello world");
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
-    const _question = addAnnotation(map, {
+    const _comment = addAnnotation(map, {
       author: "user",
       type: "comment",
       range: { from: 0, to: 5 },
       content: "What does this mean?",
-      directedAt: "claude",
     });
 
     const allAnns = collectAnnotations(map);
-    const questions = allAnns.filter((a) => a.directedAt === "claude");
+    const userComments = allAnns.filter((a) => a.author === "user" && a.type === "comment");
 
-    expect(questions.length).toBe(1);
-    expect(questions[0].content).toBe("What does this mean?");
-    expect(questions[0].author).toBe("user");
+    expect(userComments.length).toBe(1);
+    expect(userComments[0].content).toBe("What does this mean?");
+    expect(userComments[0].author).toBe("user");
   });
 
   it("text snippets can be extracted for annotation ranges", () => {

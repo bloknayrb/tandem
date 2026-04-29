@@ -236,7 +236,7 @@ describe("tandem_comment via MCP", () => {
     expect(ann.content).toBe("more concise");
   });
 
-  it("creates annotation with directedAt", async () => {
+  it("silently ignores deprecated directedAt (ADR-027)", async () => {
     const ydoc = setupDoc("comment-da-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -249,7 +249,8 @@ describe("tandem_comment via MCP", () => {
 
     const ann = map.get(parsed.data.annotationId) as Annotation;
     expect(ann.type).toBe("comment");
-    expect(ann.directedAt).toBe("claude");
+    // directedAt is deprecated and silently dropped — kept in schema for backward compat
+    expect(ann.directedAt).toBeUndefined();
   });
 });
 

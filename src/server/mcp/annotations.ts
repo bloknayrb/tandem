@@ -8,7 +8,6 @@ import type {
   Annotation,
   AnnotationReply,
   AnnotationType,
-  HighlightColor,
   ReplyAuthor,
 } from "../../shared/types.js";
 import {
@@ -228,13 +227,8 @@ export function createAnnotation(
     : "";
   // Derive notification label from field presence, not raw type
   const label =
-    annotation.suggestedText !== undefined
-      ? "Replacement"
-      : annotation.directedAt === "claude"
-        ? "Question"
-        : type[0].toUpperCase() + type.slice(1);
-  const dedupSuffix =
-    annotation.suggestedText !== undefined ? "replacement" : (annotation.directedAt ?? type);
+    annotation.suggestedText !== undefined ? "Replacement" : type[0].toUpperCase() + type.slice(1);
+  const dedupSuffix = annotation.suggestedText !== undefined ? "replacement" : type;
   pushNotification({
     id: generateNotificationId(),
     type: "review-pending",
@@ -279,7 +273,7 @@ export { refreshAllRanges, refreshRange } from "../positions.js";
 export function registerAnnotationTools(server: McpServer): void {
   server.tool(
     "tandem_highlight",
-    "Highlight text with a color and optional note",
+    "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
@@ -296,31 +290,17 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    withErrorBoundary(
-      "tandem_highlight",
-      async ({ from: rawFrom, to: rawTo, color, note, documentId, textSnapshot }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) {
-          notifyRangeFailure(result, "tandem_highlight", documentId);
-          return rangeFailureToError(result);
-        }
-        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, da.ydoc, "highlight", result, note || "", {
-          color: color as HighlightColor,
-          textSnapshot: snap,
-        });
-        return mcpSuccess({ annotationId: id });
-      },
+    withErrorBoundary("tandem_highlight", async () =>
+      mcpError(
+        "DEPRECATED",
+        "tandem_highlight is deprecated. Highlights are user-only. Use tandem_comment for text annotations.",
+      ),
     ),
   );
 
   server.tool(
     "tandem_comment",
-    "Add a comment to a text range. Optionally include suggestedText for a replacement proposal, or directedAt: 'claude' to ask Claude.",
+    "Add a comment to a text range. Optionally include suggestedText for a replacement proposal.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
@@ -332,7 +312,7 @@ export function registerAnnotationTools(server: McpServer): void {
       directedAt: z
         .enum(["claude"])
         .optional()
-        .describe("Set to 'claude' to direct this comment to Claude for response"),
+        .describe("Deprecated — silently ignored. Kept for backward compatibility."),
       documentId: z
         .string()
         .optional()
@@ -346,15 +326,7 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({
-        from: rawFrom,
-        to: rawTo,
-        text,
-        suggestedText,
-        directedAt,
-        documentId,
-        textSnapshot,
-      }) => {
+      async ({ from: rawFrom, to: rawTo, text, suggestedText, documentId, textSnapshot }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -368,7 +340,6 @@ export function registerAnnotationTools(server: McpServer): void {
         const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
           textSnapshot: snap,
           ...(suggestedText !== undefined ? { suggestedText } : {}),
-          ...(directedAt !== undefined ? { directedAt } : {}),
         });
         return mcpSuccess({ annotationId: id });
       },
@@ -396,7 +367,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_flag",
-    "Flag a text range for attention (e.g., issues, concerns, or items needing review)",
+    "DEPRECATED. Use tandem_comment instead.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
@@ -412,24 +383,8 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    withErrorBoundary(
-      "tandem_flag",
-      async ({ from: rawFrom, to: rawTo, note, documentId, textSnapshot }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) {
-          notifyRangeFailure(result, "tandem_flag", documentId);
-          return rangeFailureToError(result);
-        }
-        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, da.ydoc, "flag", result, note || "", {
-          textSnapshot: snap,
-        });
-        return mcpSuccess({ annotationId: id });
-      },
+    withErrorBoundary("tandem_flag", async () =>
+      mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead."),
     ),
   );
 

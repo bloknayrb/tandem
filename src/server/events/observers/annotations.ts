@@ -29,7 +29,7 @@ export function makeAnnotationsObserver(deps: {
         continue;
       }
 
-      if (change.action === "add" && ann.author === "user") {
+      if (change.action === "add" && ann.author === "user" && ann.type !== "note") {
         pushEvent({
           id: generateEventId(),
           type: "annotation:created",
@@ -41,7 +41,6 @@ export function makeAnnotationsObserver(deps: {
             content: ann.content,
             textSnippet: ann.textSnapshot ?? "",
             ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
-            ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
           },
         });
       } else if (change.action === "update" && ann.author === "claude") {

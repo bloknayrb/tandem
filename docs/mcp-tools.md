@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 28 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 25 tools via MCP HTTP (Model Context Protocol). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -354,32 +354,13 @@ Annotations are metadata stored in `Y.Map('annotations')` on the shared document
 
 ### tandem_highlight
 
-Highlight text with a color and optional note.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `from` | number | yes | Start position |
-| `to` | number | yes | End position |
-| `color` | enum | yes | `yellow`, `green`, `blue`, `pink` |
-| `note` | string | no | Optional note for the highlight |
-| `documentId` | string | no | Target document ID (defaults to active document) |
-| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
-
-**Returns:**
-```json
-{ "annotationId": "ann_1710936000000_a1b2c3" }
-```
-
-**Example:**
-```
-tandem_highlight({ from: 42, to: 67, color: "yellow", note: "This figure doesn't match the invoice" })
-```
+> **Deprecated.** Highlights are user-only. Use `tandem_comment` for Claude-authored text annotations. Always returns a `DEPRECATED` error.
 
 ---
 
 ### tandem_comment
 
-Add a comment attached to a text range. Appears in the side panel. Subsumes the old `suggestion` and `question` annotation types — use `suggestedText` for replacement proposals and `directedAt` to address a specific participant.
+Add a comment attached to a text range. Appears in the side panel. Use `suggestedText` for replacement proposals.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -387,7 +368,6 @@ Add a comment attached to a text range. Appears in the side panel. Subsumes the 
 | `to` | number | yes | End position |
 | `text` | string | yes | Comment text |
 | `suggestedText` | string | no | Proposed replacement text. When set, the comment renders as a tracked-change suggestion with accept/reject controls. |
-| `directedAt` | string | no | Who the comment is for (e.g., `"claude"`). When set, the comment renders with an @-mention badge. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
 
@@ -410,46 +390,17 @@ tandem_comment({
 })
 ```
 
-**Example (directed at Claude):**
-```
-tandem_comment({ from: 100, to: 120, text: "Is this figure correct?", directedAt: "claude" })
-```
-
 ---
 
 ### tandem_suggest
 
-> **Deprecated.** This tool now returns an error. Use `tandem_comment` with the `suggestedText` parameter instead.
-
-```
-tandem_comment({
-  from: 180, to: 193,
-  text: "Q3 revenue was updated in the latest financial report",
-  suggestedText: "$13.1 million"
-})
-```
-
-The `suggestedText` parameter on `tandem_comment` renders as a tracked-change suggestion with accept/reject controls — the same UI behavior `tandem_suggest` produced.
+> **Deprecated.** Always returns a `DEPRECATED` error. Use `tandem_comment` with the `suggestedText` parameter instead.
 
 ---
 
 ### tandem_flag
 
-Flag a text range for attention (e.g., issues, concerns, or items needing review). Renders as a red underline decoration.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `from` | number | Yes | Start position (character offset) |
-| `to` | number | Yes | End position (character offset) |
-| `note` | string | No | Reason for flagging |
-| `documentId` | string | No | Target document ID (defaults to active document) |
-| `textSnapshot` | string | No | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
-
-**Returns:** `{ annotationId: string }`
-
-```js
-tandem_flag({ from: 100, to: 120, note: "This claim needs a citation" })
-```
+> **Deprecated.** Always returns a `DEPRECATED` error. Use `tandem_comment` instead.
 
 ---
 
@@ -460,7 +411,7 @@ Read all annotations, optionally filtered. For checking new user actions, prefer
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment`, `flag` |
+| `type` | enum | no | `highlight`, `comment`, `note` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 

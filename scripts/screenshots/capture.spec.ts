@@ -55,11 +55,10 @@ async function openWithAnnotations() {
   // Offsets target text in the welcome doc. The sample file is stable across
   // releases, so these ranges are approximate but should land on readable
   // content. Annotations default to the active document.
-  await mcp.callTool("tandem_highlight", {
+  await mcp.callTool("tandem_comment", {
     from: 10,
     to: 24,
-    color: "yellow",
-    note: "Nice opener",
+    text: "Nice opener",
   });
   await mcp.callTool("tandem_comment", {
     from: 200,

@@ -46,7 +46,6 @@ export interface AnnotationCardProps {
 
 function getDisplayType(annotation: Annotation): string {
   if (annotation.suggestedText !== undefined) return "replacement";
-  if (annotation.directedAt === "claude") return "question";
   return annotation.type;
 }
 
@@ -61,8 +60,7 @@ function getBorderColor(annotation: Annotation): string {
     return HIGHLIGHT_COLORS[annotation.color] || "var(--tandem-border)";
   }
   if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)"; // replacement
-  if (annotation.directedAt === "claude") return "var(--tandem-accent)"; // question for Claude
-  if (annotation.type === "flag") return "var(--tandem-error)";
+  if (annotation.type === "note") return "var(--tandem-fg-muted)"; // personal note
   return "var(--tandem-author-user)"; // plain comment
 }
 

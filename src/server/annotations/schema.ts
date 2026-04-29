@@ -100,7 +100,7 @@ export const AnnotationRecordSchemaV1 = z
     // (see `src/shared/types.ts`). Here we only gate shape.
     color: HighlightColorSchema.optional(),
     suggestedText: z.string().optional(),
-    directedAt: z.literal("claude").optional(),
+    directedAt: z.literal("claude").optional(), // ADR-027: deprecated, stripped on read
     // New for v1 envelope: monotonically-increasing revision counter used for
     // last-writer-wins merge between in-memory Y.Map state and on-disk state.
     rev: z.number().int().nonnegative(),
@@ -182,6 +182,14 @@ function migrateHighlightColor(ann: Record<string, unknown>): void {
   }
 }
 
+// ADR-027: flag→note migration + directedAt removal
+// ---------------------------------------------------------------------------
+
+function migrateFlagAndDirectedAt(ann: Record<string, unknown>): void {
+  if (ann.type === "flag") ann.type = "note";
+  delete ann.directedAt;
+}
+
 // ---------------------------------------------------------------------------
 // Parse + migrate
 // ---------------------------------------------------------------------------
@@ -244,6 +252,7 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
       if (ann && typeof ann === "object") {
         const cloned = { ...(ann as Record<string, unknown>) };
         migrateHighlightColor(cloned);
+        migrateFlagAndDirectedAt(cloned);
         cand.annotations[i] = cloned;
       }
     }
@@ -300,6 +309,7 @@ export function migrateToV1(raw: unknown): MigrationResult {
     }
     const withRev = { rev: 0, ...(ann as object) };
     migrateHighlightColor(withRev as Record<string, unknown>);
+    migrateFlagAndDirectedAt(withRev as Record<string, unknown>);
     const parsed = AnnotationRecordSchemaV1.safeParse(withRev);
     if (parsed.success) annotations.push(parsed.data);
     else droppedAnnotations++;

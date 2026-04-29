@@ -156,11 +156,11 @@ export function Toolbar({
     }
   }
 
-  // -- Flag --
+  // -- Note --
 
-  function handleFlag(e: React.MouseEvent) {
+  function handleNote(e: React.MouseEvent) {
     e.preventDefault();
-    createAnnotation("flag", "");
+    createAnnotation("note", "");
   }
 
   const canAnnotate = editor && ydoc && hasSelection;
@@ -234,7 +234,7 @@ export function Toolbar({
         />
       )}
 
-      <ToolbarButton label="Flag" disabled={!canAnnotate || inInputMode} onMouseDown={handleFlag} />
+      <ToolbarButton label="Note" disabled={!canAnnotate || inInputMode} onMouseDown={handleNote} />
 
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
