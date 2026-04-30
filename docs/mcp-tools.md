@@ -408,11 +408,14 @@ tandem_comment({
 
 Read all annotations, optionally filtered. For checking new user actions, prefer `tandem_checkInbox`.
 
+By default, results exclude `note`-type annotations (user-private) and `author: "import"` annotations (imported `.docx` reviewer comments — user triages them first). Pass `includeImports: true` to surface imported comments; pass `type: "note"` to read user-authored notes addressed to Claude. When imports are excluded, the response includes `importsExcluded: N` so you can ask the user whether to opt in.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
 | `type` | enum | no | `highlight`, `comment`, `note` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
+| `includeImports` | boolean | no | Include `author: "import"` annotations (imported `.docx` reviewer comments). Defaults to `false`. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
@@ -430,9 +433,12 @@ Read all annotations, optionally filtered. For checking new user actions, prefer
       "color": "yellow"
     }
   ],
-  "count": 1
+  "count": 1,
+  "importsExcluded": 3
 }
 ```
+
+`importsExcluded` is only present when imports were filtered out and the document contains at least one. If you see it, consider asking the user whether to re-call with `includeImports: true`.
 
 ---
 
