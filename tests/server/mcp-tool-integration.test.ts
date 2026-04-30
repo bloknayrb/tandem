@@ -137,6 +137,44 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.code).toBe("DEPRECATED");
   });
 
+  it("tandem_flag returns DEPRECATED error", async () => {
+    setupDoc("mcp-ann-flag", "Hello world");
+
+    const result = await client.callTool({
+      name: "tandem_flag",
+      arguments: { from: 0, to: 5 },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+  });
+
+  it("tandem_flag returns DEPRECATED error when called with no arguments", async () => {
+    // Schema params are optional (PR #474 review finding #7) so callers omitting
+    // them get DEPRECATED rather than a Zod validation error.
+    setupDoc("mcp-ann-flag-noargs", "Hello world");
+
+    const result = await client.callTool({
+      name: "tandem_flag",
+      arguments: {},
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+  });
+
+  it("tandem_highlight returns DEPRECATED error when called with no arguments", async () => {
+    setupDoc("mcp-ann-hl-noargs", "Hello world");
+
+    const result = await client.callTool({
+      name: "tandem_highlight",
+      arguments: {},
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+  });
+
   it("tandem_getAnnotations returns created annotations", async () => {
     setupDoc("mcp-ann-4", "Hello world test");
 

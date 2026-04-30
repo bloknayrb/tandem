@@ -347,6 +347,23 @@ describe("exportAnnotations", () => {
     expect(result).toContain("No annotations found");
   });
 
+  it("exports notes under the Notes group heading", () => {
+    loadHtml("<p>Hello world test content</p>");
+
+    const annotations: Annotation[] = [
+      makeAnnotation({
+        id: "n1",
+        type: "note",
+        range: { from: 0, to: 5 },
+        content: "Personal reminder",
+      }),
+    ];
+
+    const result = exportAnnotations(doc, annotations);
+    expect(result).toContain("## Notes");
+    expect(result).toContain("Personal reminder");
+  });
+
   it("generates markdown grouped by type", () => {
     loadHtml("<p>Hello world test content</p>");
 

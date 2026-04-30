@@ -226,6 +226,7 @@ describe("migrateToV1", () => {
           content: "check this",
           status: "pending",
           timestamp: 1,
+          directedAt: "claude",
         },
       ],
       replies: [],
@@ -233,6 +234,14 @@ describe("migrateToV1", () => {
     const { doc: migrated } = migrateToV1(legacy);
     const round = AnnotationDocSchemaV1.safeParse(migrated);
     expect(round.success).toBe(true);
+
+    // ADR-027: legacy `flag` migrates to `note`.
+    expect(migrated.annotations).toHaveLength(1);
+    expect(migrated.annotations[0]?.type).toBe("note");
+    // ADR-027: directedAt is stripped on migration.
+    expect(migrated.annotations[0]?.directedAt).toBeUndefined();
+    // Envelope schema requires `rev`; legacy records get `rev: 0`.
+    expect(migrated.annotations[0]?.rev).toBe(0);
   });
 
   it("tolerates completely empty input", () => {
