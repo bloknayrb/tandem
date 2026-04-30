@@ -275,8 +275,8 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_highlight",
     "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
     {
-      // All params optional so callers omitting them get the DEPRECATED message
-      // rather than a Zod validation error.
+      // All params optional: a deprecated stub must surface DEPRECATED for any
+      // call shape, including ones missing the legacy required params.
       from: z.number().optional(),
       to: z.number().optional(),
       color: HighlightColorSchema.optional(),
@@ -363,8 +363,8 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_flag",
     "DEPRECATED. Use tandem_comment instead.",
     {
-      // All params optional so callers omitting them get the DEPRECATED message
-      // rather than a Zod validation error.
+      // All params optional: a deprecated stub must surface DEPRECATED for any
+      // call shape, including ones missing the legacy required params.
       from: z.number().optional(),
       to: z.number().optional(),
       note: z.string().optional(),

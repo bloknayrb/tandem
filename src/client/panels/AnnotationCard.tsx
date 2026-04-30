@@ -64,6 +64,12 @@ function getBorderColor(annotation: Annotation): string {
   return "var(--tandem-author-user)"; // plain comment
 }
 
+function getCardBackground(annotation: Annotation, isReviewTarget?: boolean): string {
+  if (isReviewTarget) return "var(--tandem-accent-bg)";
+  if (annotation.type === "note") return "var(--tandem-warning-bg)";
+  return "var(--tandem-surface)";
+}
+
 export const AnnotationCard = React.memo(function AnnotationCard({
   annotation,
   replies = [],
@@ -139,11 +145,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         padding: "8px 10px",
         marginBottom: "6px",
         borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget
-          ? "var(--tandem-accent-bg)"
-          : annotation.type === "note"
-            ? "var(--tandem-warning-bg)"
-            : "var(--tandem-surface)",
+        background: getCardBackground(annotation, isReviewTarget),
         borderRadius: "0 4px 4px 0",
         fontSize: "13px",
         opacity: isPending ? 1 : 0.6,

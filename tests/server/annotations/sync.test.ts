@@ -357,8 +357,8 @@ describe("legacy-type sanitize on write", () => {
   });
 
   it("fast-path (canonical type + numeric rev) strips directedAt from disk output", async () => {
-    // Regression for finding #2: pre-ADR-027 comment records with directedAt hit the fast path
-    // in normalizeAnnotation, which returned obj as-is, preserving directedAt on disk.
+    // The fast path returns obj as-is when type is canonical and rev is numeric,
+    // so it must explicitly strip directedAt — pre-ADR-027 records may carry it.
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));

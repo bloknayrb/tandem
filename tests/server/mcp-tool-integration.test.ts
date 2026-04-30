@@ -125,51 +125,18 @@ describe("MCP tool integration — annotation tools", () => {
     }
   });
 
-  it("tandem_highlight returns DEPRECATED error", async () => {
-    setupDoc("mcp-ann-3", "Hello world");
+  // The no-args variants verify that deprecated stubs accept calls missing the
+  // legacy required params — the Zod schema must let them through so the handler
+  // can return DEPRECATED rather than a validation error.
+  it.each([
+    ["tandem_highlight", { from: 0, to: 5, color: "yellow" }, "mcp-ann-hl"],
+    ["tandem_highlight", {}, "mcp-ann-hl-noargs"],
+    ["tandem_flag", { from: 0, to: 5 }, "mcp-ann-flag"],
+    ["tandem_flag", {}, "mcp-ann-flag-noargs"],
+  ] as const)("%s returns DEPRECATED error (args: %j)", async (toolName, args, docId) => {
+    setupDoc(docId, "Hello world");
 
-    const result = await client.callTool({
-      name: "tandem_highlight",
-      arguments: { from: 0, to: 5, color: "yellow" },
-    });
-    const parsed = parseResult(result);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-  });
-
-  it("tandem_flag returns DEPRECATED error", async () => {
-    setupDoc("mcp-ann-flag", "Hello world");
-
-    const result = await client.callTool({
-      name: "tandem_flag",
-      arguments: { from: 0, to: 5 },
-    });
-    const parsed = parseResult(result);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-  });
-
-  it("tandem_flag returns DEPRECATED error when called with no arguments", async () => {
-    // Schema params are optional (PR #474 review finding #7) so callers omitting
-    // them get DEPRECATED rather than a Zod validation error.
-    setupDoc("mcp-ann-flag-noargs", "Hello world");
-
-    const result = await client.callTool({
-      name: "tandem_flag",
-      arguments: {},
-    });
-    const parsed = parseResult(result);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-  });
-
-  it("tandem_highlight returns DEPRECATED error when called with no arguments", async () => {
-    setupDoc("mcp-ann-hl-noargs", "Hello world");
-
-    const result = await client.callTool({
-      name: "tandem_highlight",
-      arguments: {},
-    });
+    const result = await client.callTool({ name: toolName, arguments: args });
     const parsed = parseResult(result);
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("DEPRECATED");
