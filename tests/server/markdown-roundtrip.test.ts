@@ -276,8 +276,8 @@ describe("markdown round-trip", () => {
     // The anchor word must exist in flat text and live AFTER the table content
     const anchorIdx = flat.indexOf("ANCHORTARGET");
     expect(anchorIdx).toBeGreaterThan(0);
-    // The cell content "a" and "b" must appear before the anchor, joined by \t
-    const aIdx = flat.indexOf("a\tb");
+    // The cell content "a" and "b" must appear before the anchor, joined by \n
+    const aIdx = flat.indexOf("a\nb");
     expect(aIdx).toBeGreaterThan(-1);
     expect(aIdx).toBeLessThan(anchorIdx);
     // Round-trip preserves the anchor on disk

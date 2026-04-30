@@ -88,31 +88,19 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
 }
 
 /**
- * Flat-text separator between cells within a tableRow.
- *
- * Table separator contract (must stay in sync with getElementTextLength):
- *   - cells within a row: "\t" (single char)
- *   - rows within a table: "\n" (single char, same as FLAT_SEPARATOR)
- *   - table boundary: "\n" emitted by extractText() between top-level blocks
- *
- * Rationale: a one-char-per-gap scheme keeps offsets predictable (every gap
- * costs exactly 1 char), so an annotation placed AFTER a table is offset by
- * (cells * (cellLen + 1)) - 1 for the tabs, plus row newlines — the same
- * accounting other multi-element containers (lists, blockquotes) use today.
- */
-const CELL_SEPARATOR = "\t";
-
-/**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
  * Inserts FLAT_SEPARATOR between nested XmlElement children so offsets are consistent
- * with the document-level separator convention (e.g., list items get \n between them).
- * For tableRow elements, child cells are joined with CELL_SEPARATOR ("\t") instead.
+ * with the document-level separator convention (e.g., list items and table cells
+ * get \n between them).
+ *
+ * Separator contract (must stay in sync with getElementTextLength):
+ * every gap between nested block/container XmlElement children contributes one
+ * FLAT_SEPARATOR character. Offset helpers account for that as a one-character
+ * between-element gap.
  */
 export function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
   let hasPriorContent = false;
-  const isTableRow = element.nodeName === "tableRow";
-  const sep = isTableRow ? CELL_SEPARATOR : FLAT_SEPARATOR;
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
@@ -127,7 +115,7 @@ export function getElementText(element: Y.XmlElement): string {
       }
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
-      if (hasPriorContent) parts.push(sep);
+      if (hasPriorContent) parts.push(FLAT_SEPARATOR);
       parts.push(getElementText(child));
       hasPriorContent = true;
     }
@@ -137,7 +125,7 @@ export function getElementText(element: Y.XmlElement): string {
 
 /**
  * Compute the flat text length of a Y.XmlElement without building the string.
- * Uses the same separator predicate as getElementText() so lengths are consistent.
+ * Uses the same one-character separator invariant as getElementText().
  */
 export function getElementTextLength(element: Y.XmlElement): number {
   let len = 0;
@@ -209,7 +197,7 @@ export function findXmlTextAtOffset(
 
 /**
  * Collect all Y.XmlText nodes in a Y.XmlElement with their flat offsets from the
- * element's start. Uses the same separator predicate as getElementText().
+ * element's start. Uses the same one-character separator invariant as getElementText().
  */
 export function collectXmlTexts(
   element: Y.XmlElement,

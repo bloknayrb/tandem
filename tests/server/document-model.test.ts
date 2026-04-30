@@ -37,6 +37,16 @@ function loadTree(tree: Root): Y.Doc {
   return doc;
 }
 
+function makeTableCell(text: string): Y.XmlElement {
+  const cell = new Y.XmlElement("tableCell");
+  const paragraph = new Y.XmlElement("paragraph");
+  const xmlText = new Y.XmlText();
+  xmlText.insert(0, text);
+  paragraph.insert(0, [xmlText]);
+  cell.insert(0, [paragraph]);
+  return cell;
+}
+
 // ---------------------------------------------------------------------------
 // getElementText — bold/italic inline marks must not leak as HTML tags
 // ---------------------------------------------------------------------------
@@ -354,5 +364,27 @@ describe("list content (Phase B)", () => {
     const textLen = getElementText(bulletList!).length;
     const computedLen = getElementTextLength(bulletList!);
     expect(computedLen).toBe(textLen);
+  });
+});
+
+describe("table row flat-text offsets", () => {
+  it("uses a single FLAT_SEPARATOR between cells", () => {
+    doc = new Y.Doc();
+    const row = new Y.XmlElement("tableRow");
+    row.insert(0, [makeTableCell("A"), makeTableCell("B")]);
+    doc.getXmlFragment("default").insert(0, [row]);
+
+    expect(getElementText(row)).toBe("A\nB");
+    expect(getElementTextLength(row)).toBe(3);
+    expect(findXmlTextAtOffset(row, 1)).toBeNull();
+
+    const foundB = findXmlTextAtOffset(row, 2);
+    expect(foundB).not.toBeNull();
+    expect(foundB!.offsetInXmlText).toBe(0);
+    expect(foundB!.xmlText.toString()).toBe("B");
+
+    const collected = collectXmlTexts(row);
+    expect(collected.map((entry) => entry.offsetFromStart)).toEqual([0, 2]);
+    expect(collected.map((entry) => entry.xmlText.toString())).toEqual(["A", "B"]);
   });
 });

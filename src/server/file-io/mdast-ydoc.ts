@@ -356,22 +356,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
             cellChild instanceof Y.XmlElement &&
             (cellChild.nodeName === "tableHeader" || cellChild.nodeName === "tableCell")
           ) {
-            // Find the inner paragraph wrapper and serialize its inline content.
-            // Fall back to direct cell content if no paragraph (shouldn't happen).
-            let phrasing: PhrasingContent[] = [];
-            let foundPara = false;
-            for (let k = 0; k < cellChild.length; k++) {
-              const inner = cellChild.get(k);
-              if (inner instanceof Y.XmlElement && inner.nodeName === "paragraph") {
-                phrasing = deltaToPhrasingContent(inner);
-                foundPara = true;
-                break;
-              }
-            }
-            if (!foundPara) {
-              phrasing = deltaToPhrasingContent(cellChild);
-            }
-            cells.push({ type: "tableCell", children: phrasing });
+            cells.push({ type: "tableCell", children: cellToPhrasingContent(cellChild) });
           }
         }
         rows.push({ type: "tableRow", children: cells });
@@ -490,4 +475,89 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
   }
 
   return result;
+}
+
+function cellToPhrasingContent(cell: Y.XmlElement): PhrasingContent[] {
+  const chunks: PhrasingContent[][] = [];
+
+  for (let i = 0; i < cell.length; i++) {
+    const child = cell.get(i);
+    if (child instanceof Y.XmlElement) {
+      const chunk =
+        child.nodeName === "paragraph"
+          ? deltaToPhrasingContent(child)
+          : plainTextToPhrasingContent(plainTextFromElement(child));
+      if (isNonEmptyPhrasing(chunk)) chunks.push(chunk);
+    } else if (child instanceof Y.XmlText) {
+      const direct = deltaToPhrasingContent(cell);
+      if (isNonEmptyPhrasing(direct)) chunks.push(direct);
+      break;
+    }
+  }
+
+  const result: PhrasingContent[] = [];
+  chunks.forEach((chunk, index) => {
+    if (index > 0) result.push({ type: "text", value: " " });
+    result.push(...chunk);
+  });
+  return result;
+}
+
+function isNonEmptyPhrasing(nodes: PhrasingContent[]): boolean {
+  return nodes.some((node) => phrasingPlainText(node).trim().length > 0);
+}
+
+function phrasingPlainText(node: PhrasingContent): string {
+  switch (node.type) {
+    case "text":
+    case "inlineCode":
+      return node.value;
+    case "break":
+      return "\n";
+    case "strong":
+    case "emphasis":
+    case "delete":
+    case "link":
+      return node.children.map(phrasingPlainText).join("");
+    case "image":
+      return node.alt ?? "";
+    default:
+      return "value" in node && typeof node.value === "string" ? node.value : "";
+  }
+}
+
+function plainTextToPhrasingContent(text: string): PhrasingContent[] {
+  return text.trim().length > 0 ? [{ type: "text", value: text }] : [];
+}
+
+function plainTextFromElement(element: Y.XmlElement): string {
+  const parts: string[] = [];
+  let hasPriorContent = false;
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      parts.push(xmlTextToPlainText(child));
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (child.nodeName === "hardBreak") {
+        parts.push("\n");
+        hasPriorContent = true;
+      } else {
+        if (hasPriorContent) parts.push("\n");
+        parts.push(plainTextFromElement(child));
+        hasPriorContent = true;
+      }
+    }
+  }
+
+  return parts.join("");
+}
+
+function xmlTextToPlainText(xmlText: Y.XmlText): string {
+  let text = "";
+  for (const op of xmlText.toDelta()) {
+    text += typeof op.insert === "string" ? op.insert : "\n";
+  }
+  return text;
 }

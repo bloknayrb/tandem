@@ -1,8 +1,9 @@
 import type { Root } from "mdast";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
 import { mdastToYDoc, yDocToMdast } from "../../src/server/file-io/mdast-ydoc.js";
-import { getElementText } from "../../src/server/mcp/document.js";
+import { extractText, getElementText } from "../../src/server/mcp/document.js";
 import { getFragment } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -19,6 +20,36 @@ function loadTree(tree: Root): Y.Doc {
   doc = new Y.Doc();
   mdastToYDoc(doc, tree);
   return doc;
+}
+
+function appendTableCellParagraph(
+  cell: Y.XmlElement,
+  value: string,
+  attributes?: Record<string, object>,
+): void {
+  const paragraph = new Y.XmlElement("paragraph");
+  const text = new Y.XmlText();
+  paragraph.insert(0, [text]);
+  cell.insert(cell.length, [paragraph]);
+  text.insert(0, value, attributes);
+}
+
+function makeOneCellTable(
+  ...paragraphs: Array<{ value: string; attributes?: Record<string, object> }>
+): Y.Doc {
+  const tableDoc = new Y.Doc();
+  const table = new Y.XmlElement("table");
+  const row = new Y.XmlElement("tableRow");
+  const header = new Y.XmlElement("tableHeader");
+
+  table.setAttribute("align", JSON.stringify([null]) as any);
+  table.insert(0, [row]);
+  row.insert(0, [header]);
+  for (const paragraph of paragraphs) {
+    appendTableCellParagraph(header, paragraph.value, paragraph.attributes);
+  }
+  tableDoc.getXmlFragment("default").insert(0, [table]);
+  return tableDoc;
 }
 
 describe("mdastToYDoc — block nodes", () => {
@@ -464,5 +495,54 @@ describe("yDocToMdast — reverse conversion", () => {
     const p = tree.children[0] as any;
     // Should recognize as bold despite the hash suffix
     expect(p.children.some((c: any) => c.type === "strong")).toBe(true);
+  });
+});
+
+describe("yDocToMdast — table cell block flattening", () => {
+  it("serializes two paragraph children in one GFM cell", () => {
+    doc = makeOneCellTable({ value: "First" }, { value: "Second" });
+
+    const table = yDocToMdast(doc).children[0] as any;
+    const cell = table.children[0].children[0];
+
+    expect(cell.children).toEqual([
+      { type: "text", value: "First" },
+      { type: "text", value: " " },
+      { type: "text", value: "Second" },
+    ]);
+  });
+
+  it("skips an empty first paragraph and keeps the second paragraph", () => {
+    doc = makeOneCellTable({ value: "" }, { value: "Kept" });
+
+    const table = yDocToMdast(doc).children[0] as any;
+    const cell = table.children[0].children[0];
+
+    expect(cell.children).toEqual([{ type: "text", value: "Kept" }]);
+  });
+
+  it("preserves inline marks in later paragraphs", () => {
+    doc = makeOneCellTable({ value: "First" }, { value: "Bold", attributes: { bold: {} } });
+
+    const table = yDocToMdast(doc).children[0] as any;
+    const cell = table.children[0].children[0];
+
+    expect(cell.children[0]).toEqual({ type: "text", value: "First" });
+    expect(cell.children[1]).toEqual({ type: "text", value: " " });
+    expect(cell.children[2]).toMatchObject({ type: "strong" });
+    expect(cell.children[2].children).toEqual([{ type: "text", value: "Bold" }]);
+  });
+
+  it("saves as a pipe table and reloads with all cell strings preserved", () => {
+    doc = makeOneCellTable({ value: "First" }, { value: "Second" });
+
+    const markdown = saveMarkdown(doc);
+    expect(markdown).toMatch(/\|\s*First Second\s*\|/);
+    expect(markdown).toMatch(/\|\s*-+\s*\|/);
+
+    const reloaded = new Y.Doc();
+    loadMarkdown(reloaded, markdown);
+    expect(extractText(reloaded)).toContain("First Second");
+    reloaded.destroy();
   });
 });
