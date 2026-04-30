@@ -43,6 +43,8 @@
 .tandem-comment { cursor: pointer; }
 .tandem-comment:hover { border-bottom-style: solid; }
 .tandem-suggestion { cursor: pointer; }
+.tandem-note { cursor: pointer; }
+.tandem-note:hover { border-bottom-style: solid; }
 
 /* Review mode dimming — grays out text, keeps annotated spans readable */
 .tandem-review-dimmed .ProseMirror {
@@ -51,7 +53,8 @@
 }
 .tandem-review-dimmed .tandem-highlight,
 .tandem-review-dimmed .tandem-comment,
-.tandem-review-dimmed .tandem-suggestion {
+.tandem-review-dimmed .tandem-suggestion,
+.tandem-review-dimmed .tandem-note {
   color: var(--tandem-fg);
 }
 .tandem-review-dimmed .tandem-annotation-active {

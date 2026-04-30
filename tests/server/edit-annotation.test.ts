@@ -236,7 +236,7 @@ describe("tandem_comment via MCP", () => {
     expect(ann.content).toBe("more concise");
   });
 
-  it("creates annotation with directedAt", async () => {
+  it("rejects deprecated directedAt with DEPRECATED error (ADR-027)", async () => {
     const ydoc = setupDoc("comment-da-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -245,11 +245,10 @@ describe("tandem_comment via MCP", () => {
       arguments: { from: 0, to: 5, text: "Is this right?", directedAt: "claude" },
     });
     const parsed = parseResult(result as any);
-    expect(parsed.error).toBe(false);
-
-    const ann = map.get(parsed.data.annotationId) as Annotation;
-    expect(ann.type).toBe("comment");
-    expect(ann.directedAt).toBe("claude");
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+    expect(parsed.message).toMatch(/directedAt/i);
+    expect(map.size).toBe(0);
   });
 });
 

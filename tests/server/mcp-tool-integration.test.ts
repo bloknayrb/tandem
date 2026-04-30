@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
+import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -20,7 +21,13 @@ import {
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import {
+  getBuffer as getNotificationBuffer,
+  resetForTesting as resetNotifications,
+} from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import type { Annotation } from "../../src/shared/types.js";
 
 let client: Client;
 
@@ -125,16 +132,47 @@ describe("MCP tool integration — annotation tools", () => {
     }
   });
 
-  it("tandem_highlight creates highlight with color", async () => {
-    setupDoc("mcp-ann-3", "Hello world");
+  // The no-args variants verify that deprecated stubs accept calls missing the
+  // legacy required params — the Zod schema must let them through so the handler
+  // can return DEPRECATED rather than a validation error.
+  it.each([
+    ["tandem_highlight", { from: 0, to: 5, color: "yellow" }, "mcp-ann-hl"],
+    ["tandem_highlight", {}, "mcp-ann-hl-noargs"],
+    ["tandem_flag", { from: 0, to: 5 }, "mcp-ann-flag"],
+    ["tandem_flag", {}, "mcp-ann-flag-noargs"],
+  ] as const)("%s returns DEPRECATED error (args: %j)", async (toolName, args, docId) => {
+    setupDoc(docId, "Hello world");
+    resetNotifications();
+
+    const result = await client.callTool({ name: toolName, arguments: args });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+
+    // Deprecated stubs surface to the user via pushNotification — without it,
+    // Claude sees DEPRECATED but the user has no idea the call happened.
+    const notifications = getNotificationBuffer();
+    const found = notifications.find(
+      (n) => n.errorCode === "DEPRECATED" && n.toolName === toolName,
+    );
+    expect(found).toBeDefined();
+    expect(found?.severity).toBe("warning");
+    expect(found?.dedupKey).toBe(`deprecated:${toolName}`);
+  });
+
+  it("tandem_comment rejects directedAt with DEPRECATED error and creates no annotation", async () => {
+    const ydoc = setupDoc("mcp-ann-da", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     const result = await client.callTool({
-      name: "tandem_highlight",
-      arguments: { from: 0, to: 5, color: "yellow" },
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "Nice intro", directedAt: "claude" },
     });
     const parsed = parseResult(result);
-    expect(parsed.error).toBe(false);
-    expect(parsed.data.annotationId).toMatch(/^ann_/);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+    // No annotation should have been created
+    expect(map.size).toBe(0);
   });
 
   it("tandem_getAnnotations returns created annotations", async () => {
@@ -145,8 +183,8 @@ describe("MCP tool integration — annotation tools", () => {
       arguments: { from: 0, to: 5, text: "Note 1" },
     });
     await client.callTool({
-      name: "tandem_highlight",
-      arguments: { from: 6, to: 11, color: "blue" },
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "Note 2" },
     });
 
     const result = await client.callTool({
@@ -156,6 +194,138 @@ describe("MCP tool integration — annotation tools", () => {
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
     expect(parsed.data.count).toBe(2);
+  });
+
+  it("tandem_getAnnotations excludes notes by default and reports notesExcluded", async () => {
+    const ydoc = setupDoc("mcp-ann-notes-1", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Seed a comment via MCP tool
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "A comment" },
+    });
+
+    // Seed a note directly into Y.Map (notes are not creatable via MCP tools)
+    const note: Annotation = {
+      id: "ann_test_note_1",
+      author: "user",
+      type: "note",
+      range: { from: 6, to: 11 },
+      content: "A private note",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => map.set(note.id, note), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: {},
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    // Only the comment is returned; the note is excluded
+    expect(parsed.data.count).toBe(1);
+    expect(parsed.data.annotations[0].type).toBe("comment");
+    expect(parsed.data.notesExcluded).toBe(1);
+  });
+
+  it("tandem_getAnnotations returns only notes when type: note is requested", async () => {
+    const ydoc = setupDoc("mcp-ann-notes-2", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Seed a comment via MCP tool
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "A comment" },
+    });
+
+    // Seed a note directly into Y.Map
+    const note: Annotation = {
+      id: "ann_test_note_2",
+      author: "user",
+      type: "note",
+      range: { from: 6, to: 11 },
+      content: "A private note",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => map.set(note.id, note), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: { type: "note" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    // Only the note is returned
+    expect(parsed.data.count).toBe(1);
+    expect(parsed.data.annotations[0].type).toBe("note");
+    // notesExcluded should not be present (or be 0) when notes are explicitly requested
+    expect(parsed.data.notesExcluded ?? 0).toBe(0);
+  });
+
+  it("tandem_getAnnotations excludes imported Word comments by default and reports importsExcluded", async () => {
+    const ydoc = setupDoc("mcp-ann-imports-1", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Seed a Claude comment via MCP tool
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "Claude comment" },
+    });
+
+    // Seed two imported Word comments (author=import, type=note)
+    const imported1: Annotation = {
+      id: "imp_1",
+      author: "import",
+      type: "note",
+      range: { from: 6, to: 11 },
+      content: "[Reviewer] Reword this",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    const imported2: Annotation = {
+      id: "imp_2",
+      author: "import",
+      type: "note",
+      range: { from: 12, to: 16 },
+      content: "[Reviewer] Check fact",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => {
+      map.set(imported1.id, imported1);
+      map.set(imported2.id, imported2);
+    }, MCP_ORIGIN);
+
+    // Default call: imports excluded, count surfaced so Claude knows to ask
+    const defaultResult = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: {},
+    });
+    const defaultParsed = parseResult(defaultResult);
+    expect(defaultParsed.data.count).toBe(1);
+    expect(defaultParsed.data.annotations[0].author).toBe("claude");
+    expect(defaultParsed.data.importsExcluded).toBe(2);
+
+    // Opt-in call: imports surfaced
+    const optInResult = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: { includeImports: true },
+    });
+    const optInParsed = parseResult(optInResult);
+    expect(optInParsed.data.count).toBe(3);
+    expect(optInParsed.data.importsExcluded ?? 0).toBe(0);
+    const importedAuthors = optInParsed.data.annotations
+      .filter((a: Annotation) => a.author === "import")
+      .map((a: Annotation) => a.id)
+      .sort();
+    expect(importedAuthors).toEqual(["imp_1", "imp_2"]);
   });
 });
 

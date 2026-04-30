@@ -30,6 +30,12 @@ export function makeAnnotationsObserver(deps: {
       }
 
       if (change.action === "add" && ann.author === "user") {
+        // ADR-027: notes are user-private; highlights are user-only UI markup.
+        // Only comments surface to the channel (Claude). The early-continue
+        // makes this privacy invariant structurally explicit — a future
+        // refactor that drops the type check breaks visibly here, not by
+        // silently leaking notes.
+        if (ann.type !== "comment") continue;
         pushEvent({
           id: generateEventId(),
           type: "annotation:created",
@@ -41,7 +47,6 @@ export function makeAnnotationsObserver(deps: {
             content: ann.content,
             textSnippet: ann.textSnapshot ?? "",
             ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
-            ...(ann.directedAt ? { directedAt: ann.directedAt } : {}),
           },
         });
       } else if (change.action === "update" && ann.author === "claude") {

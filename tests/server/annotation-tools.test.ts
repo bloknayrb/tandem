@@ -16,8 +16,8 @@ beforeEach(() => {
   clearOpenDocs();
 });
 
-describe("tandem_highlight tool logic", () => {
-  it("creates highlight annotation with color", () => {
+describe("createAnnotation supports highlight type for editor-created highlights", () => {
+  it("createAnnotation still supports highlight type for user-created highlights", () => {
     const ydoc = setupDoc("hl-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "", {
@@ -82,21 +82,21 @@ describe("tandem_comment with suggestedText", () => {
   });
 });
 
-describe("tandem_flag tool logic", () => {
-  it("creates flag annotation", () => {
-    const ydoc = setupDoc("fl-1", "Hello world");
+describe("tandem_note tool logic (via createAnnotation)", () => {
+  it("creates note annotation", () => {
+    const ydoc = setupDoc("nt-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "flag", rangeOf(0, 5, ydoc), "Needs review");
+    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "Needs review");
 
     const stored = map.get(id) as Annotation;
-    expect(stored.type).toBe("flag");
+    expect(stored.type).toBe("note");
     expect(stored.content).toBe("Needs review");
   });
 
-  it("flag with no note has empty content", () => {
-    const ydoc = setupDoc("fl-2", "Hello world");
+  it("note with no content has empty content", () => {
+    const ydoc = setupDoc("nt-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "flag", rangeOf(0, 5, ydoc), "");
+    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "");
 
     const stored = map.get(id) as Annotation;
     expect(stored.content).toBe("");

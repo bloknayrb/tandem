@@ -32,7 +32,7 @@ Setup complete! Start Tandem with: tandem
 Then in Claude, your tandem_* tools will be available.
 ```
 
-The skill teaches Claude how to use Tandem's 28 MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
+The skill teaches Claude how to use Tandem's 28 MCP tools (25 active, 3 deprecated stubs) effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
 Start Tandem from any directory:
 ```bash
@@ -95,10 +95,10 @@ Bryan sees Claude's focus move to the Cost Summary section (blue tint). Claude f
 Claude: tandem_resolveRange({ pattern: "$12.4 million" })
 → { from: 342, to: 355 }
 
-Claude: tandem_highlight({
+Claude: tandem_comment({
   from: 342, to: 355,
-  color: "yellow",
-  note: "Q3 revenue was updated to $13.1M in the latest financial report"
+  text: "Q3 revenue was updated to $13.1M in the latest financial report",
+  suggestedText: "$13.1 million"
 })
 ```
 
@@ -157,15 +157,15 @@ Claude cross-references against the invoice and annotates the progress report:
 
 ```
 // Matches invoice
-Claude: tandem_highlight({ from: 342, to: 355, color: "green", note: "Matches invoice line 12",
+Claude: tandem_comment({ from: 342, to: 355, text: "Matches invoice line 12",
   documentId: "progress-report-f-1a2b3c" })
 
 // Discrepancy found
-Claude: tandem_highlight({ from: 487, to: 498, color: "yellow", note: "Invoice shows $2.6M -- $200K discrepancy",
+Claude: tandem_comment({ from: 487, to: 498, text: "Invoice shows $2.6M -- $200K discrepancy",
   documentId: "progress-report-f-1a2b3c" })
 
 // Not in invoice
-Claude: tandem_highlight({ from: 612, to: 621, color: "yellow", note: "Not found in invoice -- verify",
+Claude: tandem_comment({ from: 612, to: 621, text: "Not found in invoice -- verify",
   documentId: "progress-report-f-1a2b3c" })
 ```
 
@@ -241,7 +241,7 @@ Agent C: tandem_getTextContent({ section: "Issues and Risks" })
 // Checks for completeness and specificity
 ```
 
-Each agent uses `tandem_highlight`, `tandem_comment`, and `tandem_flag` independently. All annotations appear in Bryan's editor in real-time. Opus monitors progress:
+Each agent uses `tandem_comment` independently. All annotations appear in Bryan's editor in real-time. Opus monitors progress:
 
 ```
 Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
@@ -253,7 +253,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 **Setup:** Claude has finished and left 15+ annotations. Bryan wants to process them efficiently.
 
 The editor's side panel shows all pending annotations with filter controls:
-- Filter by type (highlights, comments, flags) — comments with replacement text show as "With replacement", comments with `directedAt` show as "For Claude"
+- Filter by type (highlights, comments, notes) — comments with replacement text show as "With replacement"
 - Filter by author (Claude, You)
 - Filter by status (pending, accepted, dismissed)
 
@@ -309,9 +309,9 @@ Claude reads the imported comments and acts on them:
 Claude: tandem_getContext({ from: 120, to: 135, documentId: "contract-review-x1y2z3" })
 // Reads the context around the flagged figure
 
-Claude: tandem_flag({
+Claude: tandem_comment({
   from: 120, to: 135,
-  note: "Imported comment flagged this figure. Cross-checked: the correct amount per Q3 report is $4.2M, not $3.8M.",
+  text: "Imported note flagged this figure. Cross-checked: the correct amount per Q3 report is $4.2M, not $3.8M.",
 })
 ```
 
@@ -330,7 +330,7 @@ A floating tutorial card appears at the bottom-left of the editor with three ste
 
 **Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or using Y/N in keyboard review mode) completes this step.
 
-**Step 2: Ask Claude a question.** The card prompts the user to select text and create an annotation (highlight, comment, or comment with @Claude toggle). Creating any user annotation completes this step.
+**Step 2: Annotate the text.** The card prompts the user to select text and create a Comment (sent to Claude) or a Note (private to the user). Creating any user annotation completes this step.
 
 **Step 3: Try editing.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
 
@@ -344,7 +344,7 @@ After all three steps, the tutorial card disappears and doesn't return (persiste
 
 Each pending annotation card shows a pencil (edit) button. Clicking it enters inline edit mode:
 
-- **For highlights and flags:** A single textarea appears with the current note/text content.
+- **For highlights and notes:** A single textarea appears with the current note/text content.
 - **For comments:** A textarea for the comment text, plus an optional field for `suggestedText` (replacement proposal) if one exists.
 
 Click "Save" to apply the edit or "Cancel" to discard. The annotation card shows "(edited)" after saving, with the `editedAt` timestamp.

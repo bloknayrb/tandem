@@ -86,7 +86,7 @@ describe("isUserActive", () => {
 });
 
 describe("processInboxAnnotations", () => {
-  it("buckets user annotations into userActions", () => {
+  it("buckets user comment annotations into userActions (not highlights/notes)", () => {
     const ydoc = setupDoc("inbox-1", "Hello world test");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "highlight", rangeOf(0, 5), "", {
@@ -94,15 +94,18 @@ describe("processInboxAnnotations", () => {
       color: "yellow",
     });
     createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "Nice", { author: "user" });
+    createAnnotation(map, ydoc, "note", rangeOf(0, 3), "private", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
     const result = processInboxAnnotations(allAnns, fullText, surfaced, (ann) => ann);
-    expect(result.userActions).toHaveLength(2);
-    expect(result.userActions.find((a) => a.type === "highlight")).toBeTruthy();
+    // Only comments are surfaced; highlights and notes are excluded
+    expect(result.userActions).toHaveLength(1);
     expect(result.userActions.find((a) => a.type === "comment")).toBeTruthy();
+    expect(result.userActions.find((a) => a.type === "highlight")).toBeUndefined();
+    expect(result.userActions.find((a) => a.type === "note")).toBeUndefined();
   });
 
   it("buckets resolved Claude annotations into userResponses", () => {
@@ -140,7 +143,7 @@ describe("processInboxAnnotations", () => {
   it("deduplicates via surfacedIds — second call returns empty", () => {
     const ydoc = setupDoc("inbox-4", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "highlight", rangeOf(0, 5), "", { author: "user" });
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);
@@ -156,7 +159,7 @@ describe("processInboxAnnotations", () => {
   it("calls refreshFn on each unsurfaced annotation", () => {
     const ydoc = setupDoc("inbox-5", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "highlight", rangeOf(0, 5), "", { author: "user" });
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test", { author: "user" });
 
     const allAnns = collectAnnotations(map);
     const fullText = extractText(ydoc);

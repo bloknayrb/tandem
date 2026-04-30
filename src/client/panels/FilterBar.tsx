@@ -1,12 +1,6 @@
 import { FilterSelect } from "./FilterSelect";
 
-export type FilterType =
-  | "highlight"
-  | "comment"
-  | "flag"
-  | "all"
-  | "with-replacement"
-  | "for-claude";
+export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
 export type FilterAuthor = "all" | "claude" | "user" | "import";
 export type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
 
@@ -50,9 +44,8 @@ export function FilterBar({
           { value: "all", label: "All types" },
           { value: "highlight", label: "Highlights" },
           { value: "comment", label: "Comments" },
+          { value: "note", label: "Notes" },
           { value: "with-replacement", label: "With replacement" },
-          { value: "for-claude", label: "For Claude" },
-          { value: "flag", label: "Flags" },
         ]}
       />
       <FilterSelect

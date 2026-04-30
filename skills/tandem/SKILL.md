@@ -15,7 +15,7 @@ Tandem lets you annotate and edit documents alongside the user in real time. The
 
 These prevent the most common failures. Follow them always.
 
-1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit`, `tandem_highlight`, `tandem_comment`, or `tandem_flag`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits.
+1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit` or `tandem_comment`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document.
 3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
 4. **`tandem_edit` cannot create paragraphs.** Newlines become literal characters. For multi-paragraph changes, use multiple `tandem_edit` calls or `tandem_comment` with `suggestedText`.
@@ -38,12 +38,12 @@ Standard workflow:
 
 Choose the right type for each finding:
 
-- **`tandem_highlight`** — Visual marker with a short note. Colors: `green` (verified/good), `yellow` (needs attention), `blue` (informational), `pink` (style/tone). Use when the finding is self-evident from the color and a brief note.
-- **`tandem_comment`** — Observation requiring explanation. Use when you need more than one sentence to convey reasoning.
-- **`tandem_comment` with `suggestedText`** — Specific text replacement. **Prefer over plain comment when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs. Pass replacement text as `suggestedText`; the comment text explains the reason.
-- **`tandem_flag`** — Factual errors, compliance risks, missing required content. Signals a blocking issue the user must address before the document ships.
+- **`tandem_comment`** — Observation or question. Use for any finding that needs explanation or a text replacement.
+- **`tandem_comment` with `suggestedText`** — Specific text replacement. **Prefer when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs. Pass replacement text as `suggestedText`; the comment text explains the reason.
 
-**User questions to Claude.** Users can author a "question" annotation in the UI. The server normalizes it to `type: "comment"` with `directedAt: "claude"` before returning it — so when scanning `tandem_checkInbox` or `tandem_getAnnotations`, match on `type === "comment" && directedAt === "claude" && author === "user"`, not `type === "question"`. Respond with `tandem_reply` for conversational answers, or a new `tandem_comment` on the same range for a textual annotation.
+**Note annotations** (`type: "note"`) are user-personal — `tandem_checkInbox` does not surface them to you. Don't act on notes unless the user explicitly mentions one in chat. Highlights are also user-only; `tandem_highlight` is deprecated and returns an error.
+
+**User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. Respond with `tandem_reply` for conversational answers, or a new `tandem_comment` on the same range for a textual annotation.
 
 ## Collaboration Mode
 
@@ -67,7 +67,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 1. `tandem_open` — opens in read-only mode (`readOnly: true`)
 2. `tandem_getAnnotations({ author: "import" })` — check for imported Word comments; read and act on them
-3. Annotate with findings (highlight, comment, comment with suggestedText, flag)
+3. Annotate with findings (comment, comment with suggestedText)
 4. `tandem_exportAnnotations` — generate a review summary the user can share
 5. If the user wants editable text, offer `tandem_convertToMarkdown`
 

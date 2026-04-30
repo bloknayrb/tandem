@@ -161,6 +161,45 @@ describe("origin filtering", () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("annotation:created");
     expect(events[0].payload.annotationId).toBe("ann_1");
+    // ADR-027: directedAt is removed from the payload type. Defense-in-depth
+    // assertion against a future spread regression on AnnotationCreatedPayload.
+    expect(events[0].payload).not.toHaveProperty("directedAt");
+    cleanup();
+  });
+
+  it("does NOT emit annotation:created for user highlights", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    map.set("ann_hl", {
+      id: "ann_hl",
+      type: "highlight",
+      author: "user",
+      color: "yellow",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
+
+  it("does NOT emit annotation:created for user notes", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    map.set("ann_note", {
+      id: "ann_note",
+      type: "note",
+      author: "user",
+      content: "private thought",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(0);
     cleanup();
   });
 

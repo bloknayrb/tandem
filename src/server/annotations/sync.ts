@@ -59,9 +59,11 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/consta
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
 import { FILE_SYNC_ORIGIN } from "../events/origins.js";
+import { forgetDoc, logLegacyMigration } from "./migration-log.js";
 import {
   type AnnotationDocV1,
   type AnnotationRecordV1,
+  AnnotationReplyRecordSchemaV1,
   type AnnotationReplyRecordV1,
   SCHEMA_VERSION,
   type TombstoneRecordV1,
@@ -97,7 +99,6 @@ const tombstonesByDoc = new Map<string, TombstoneRecordV1[]>();
 // ---------------------------------------------------------------------------
 
 const CANONICAL_TYPES = new Set<string>(AnnotationTypeSchema.options);
-const loggedLegacyDocs = new Set<string>();
 
 /**
  * Normalize a Y.Map annotation value into an `AnnotationRecordV1`. Supplies
@@ -119,15 +120,17 @@ function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown> & Partial<AnnotationRecordV1>;
   const isCanonical = CANONICAL_TYPES.has(obj.type as string);
-  if (typeof obj.rev === "number" && isCanonical) return obj as AnnotationRecordV1;
+  if (typeof obj.rev === "number" && isCanonical) {
+    // Strip directedAt even on the fast path — pre-ADR-027 comment records may carry it.
+    if (!("directedAt" in obj)) return obj as AnnotationRecordV1;
 
-  if (!isCanonical && docHash && !loggedLegacyDocs.has(docHash)) {
-    loggedLegacyDocs.add(docHash);
-    // TODO(#330): surface this lossy upgrade as a toast / doctor field once
-    // migrateToV1 has a production caller.
-    console.error(
-      `[ANNOTATION-STORE] upgrading legacy annotation type in ${docHash} to "comment" on write`,
-    );
+    logLegacyMigration(docHash, "directedAt");
+    const { directedAt: _, ...clean } = obj;
+    return clean as AnnotationRecordV1;
+  }
+
+  if (!isCanonical) {
+    logLegacyMigration(docHash, "legacy-type");
   }
 
   const sanitized = sanitizeAnnotation(obj as unknown as RawAnnotation);
@@ -140,8 +143,17 @@ function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1
 function normalizeReply(raw: unknown): AnnotationReplyRecordV1 | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown> & Partial<AnnotationReplyRecordV1>;
-  if (typeof obj.rev === "number") return obj as AnnotationReplyRecordV1;
-  return { ...(obj as AnnotationReplyRecordV1), rev: 0 };
+  const withRev = typeof obj.rev === "number" ? obj : { ...obj, rev: 0 };
+  const parsed = AnnotationReplyRecordSchemaV1.safeParse(withRev);
+  if (!parsed.success) {
+    const replyId = (withRev as { id?: unknown }).id ?? "<missing>";
+    console.error(
+      `[ANNOTATION-STORE] normalizeReply: dropping reply id=${String(replyId)}:`,
+      parsed.error.issues,
+    );
+    return null;
+  }
+  return parsed.data;
 }
 
 /**
@@ -242,9 +254,9 @@ export function registerAnnotationObserver(
     repMap.unobserve(onMutation);
     if (phase === "close") {
       tombstonesByDoc.delete(docHash);
-      // Drop the dedupe flag so a subsequent reopen can log once again —
+      // Drop migration-log dedup so a subsequent reopen can log once again —
       // matches "close" semantics (fresh context on next open).
-      loggedLegacyDocs.delete(docHash);
+      forgetDoc(docHash);
     }
   };
 }
@@ -502,5 +514,4 @@ export async function loadAndMerge(
 /** Reset all module state. Tests only — never call in production. */
 export function resetForTesting(): void {
   tombstonesByDoc.clear();
-  loggedLegacyDocs.clear();
 }

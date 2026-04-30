@@ -22,6 +22,7 @@ import {
   HighlightColorSchema,
   ReplyAuthorSchema,
 } from "../../shared/types.js";
+import { logLegacyMigration, MIGRATE_TO_V1_DOC_HASH } from "./migration-log.js";
 
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
 export const SCHEMA_VERSION = 1 as const;
@@ -80,7 +81,9 @@ const RelativeRangeSchema = z
 /**
  * Per-annotation envelope record. Largely mirrors `AnnotationBase` from
  * `src/shared/types.ts`, plus the optional type-discriminator fields
- * (`color` / `suggestedText` / `directedAt`), plus the required `rev`.
+ * (`color` / `suggestedText`), plus the required `rev`. ADR-027 removed
+ * `directedAt` from the model; the schema enforces its absence via a
+ * `.refine()` so any caller that skips migration is caught at validation time.
  * Fields not listed here (e.g. `heldInSolo`) are preserved via `.passthrough()`.
  */
 export const AnnotationRecordSchemaV1 = z
@@ -100,12 +103,19 @@ export const AnnotationRecordSchemaV1 = z
     // (see `src/shared/types.ts`). Here we only gate shape.
     color: HighlightColorSchema.optional(),
     suggestedText: z.string().optional(),
-    directedAt: z.literal("claude").optional(),
     // New for v1 envelope: monotonically-increasing revision counter used for
     // last-writer-wins merge between in-memory Y.Map state and on-disk state.
     rev: z.number().int().nonnegative(),
   })
-  .passthrough();
+  .passthrough()
+  // ADR-027: directedAt is removed from the model. All production read paths
+  // (parseAnnotationDoc, migrateToV1) run migrateFlagAndDirectedAt() before
+  // reaching this schema, so the field is already gone. This refine catches
+  // any caller that bypasses migration and passes a stale record directly.
+  .refine((rec) => !("directedAt" in rec), {
+    message: "directedAt is removed in ADR-027; run migrateFlagAndDirectedAt before validation",
+    path: ["directedAt"],
+  });
 
 /**
  * Reply record (existing `AnnotationReply` shape + `rev`).
@@ -182,6 +192,20 @@ function migrateHighlightColor(ann: Record<string, unknown>): void {
   }
 }
 
+// ADR-027: flag→note migration + directedAt removal
+// ---------------------------------------------------------------------------
+
+function migrateFlagAndDirectedAt(ann: Record<string, unknown>, docHash?: string): void {
+  if (ann.type === "flag") {
+    ann.type = "note";
+    logLegacyMigration(docHash, "flag");
+  }
+  if ("directedAt" in ann) {
+    delete ann.directedAt;
+    logLegacyMigration(docHash, "directedAt");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Parse + migrate
 // ---------------------------------------------------------------------------
@@ -215,12 +239,16 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
   if (typeof candidate === "string") {
     try {
       candidate = JSON.parse(candidate);
-    } catch {
+    } catch (err) {
+      console.error("[parseAnnotationDoc] JSON.parse failed:", err);
       return { ok: false, error: "corrupt" };
     }
   }
 
   if (candidate === null || typeof candidate !== "object") {
+    console.error(
+      `[parseAnnotationDoc] expected object, got ${candidate === null ? "null" : typeof candidate}`,
+    );
     return { ok: false, error: "corrupt" };
   }
 
@@ -237,13 +265,15 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
 
   // Migrate legacy highlight colors before validation. Clone each annotation
   // so the caller's input objects are not mutated as a side effect of parsing.
-  const cand = candidate as { annotations?: unknown[] };
+  const cand = candidate as { annotations?: unknown[]; docHash?: unknown };
+  const candDocHash = typeof cand.docHash === "string" ? cand.docHash : undefined;
   if (Array.isArray(cand.annotations)) {
     for (let i = 0; i < cand.annotations.length; i++) {
       const ann = cand.annotations[i];
       if (ann && typeof ann === "object") {
         const cloned = { ...(ann as Record<string, unknown>) };
         migrateHighlightColor(cloned);
+        migrateFlagAndDirectedAt(cloned, candDocHash);
         cand.annotations[i] = cloned;
       }
     }
@@ -251,6 +281,7 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
 
   const result = AnnotationDocSchemaV1.safeParse(candidate);
   if (!result.success) {
+    console.error("[parseAnnotationDoc] schema validation failed:", result.error.issues);
     return { ok: false, error: "corrupt" };
   }
   return { ok: true, doc: result.data };
@@ -300,9 +331,18 @@ export function migrateToV1(raw: unknown): MigrationResult {
     }
     const withRev = { rev: 0, ...(ann as object) };
     migrateHighlightColor(withRev as Record<string, unknown>);
+    migrateFlagAndDirectedAt(withRev as Record<string, unknown>, MIGRATE_TO_V1_DOC_HASH);
     const parsed = AnnotationRecordSchemaV1.safeParse(withRev);
-    if (parsed.success) annotations.push(parsed.data);
-    else droppedAnnotations++;
+    if (parsed.success) {
+      annotations.push(parsed.data);
+    } else {
+      droppedAnnotations++;
+      const annId = (withRev as { id?: unknown }).id ?? "<missing>";
+      console.error(
+        `[ANNOTATION-STORE] migrateToV1: dropping annotation id=${String(annId)}:`,
+        parsed.error.issues,
+      );
+    }
   }
 
   const replies: AnnotationReplyRecordV1[] = [];
@@ -313,8 +353,16 @@ export function migrateToV1(raw: unknown): MigrationResult {
     }
     const withRev = { rev: 0, ...(r as object) };
     const parsed = AnnotationReplyRecordSchemaV1.safeParse(withRev);
-    if (parsed.success) replies.push(parsed.data);
-    else droppedReplies++;
+    if (parsed.success) {
+      replies.push(parsed.data);
+    } else {
+      droppedReplies++;
+      const replyId = (withRev as { id?: unknown }).id ?? "<missing>";
+      console.error(
+        `[ANNOTATION-STORE] migrateToV1: dropping reply id=${String(replyId)}:`,
+        parsed.error.issues,
+      );
+    }
   }
 
   if (droppedAnnotations > 0 || droppedReplies > 0) {

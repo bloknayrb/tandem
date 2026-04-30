@@ -8,7 +8,6 @@ import type {
   Annotation,
   AnnotationReply,
   AnnotationType,
-  HighlightColor,
   ReplyAuthor,
 } from "../../shared/types.js";
 import {
@@ -190,6 +189,20 @@ function notifyRangeFailure(
   });
 }
 
+/** Surface a deprecated-tool call to the user; without this, only Claude sees the failure. */
+function notifyDeprecatedTool(toolName: string): void {
+  pushNotification({
+    id: generateNotificationId(),
+    type: "annotation-error",
+    severity: "warning",
+    message: `Claude tried a deprecated tool (${toolName}). Ask Claude to retry with tandem_comment.`,
+    toolName,
+    errorCode: "DEPRECATED",
+    dedupKey: `deprecated:${toolName}`,
+    timestamp: Date.now(),
+  });
+}
+
 const SNAPSHOT_CAP = 200;
 /** Capture a text snapshot from the document at the given range, truncated to SNAPSHOT_CAP chars. */
 function captureSnapshot(ydoc: Y.Doc, from: number, to: number): string {
@@ -228,13 +241,8 @@ export function createAnnotation(
     : "";
   // Derive notification label from field presence, not raw type
   const label =
-    annotation.suggestedText !== undefined
-      ? "Replacement"
-      : annotation.directedAt === "claude"
-        ? "Question"
-        : type[0].toUpperCase() + type.slice(1);
-  const dedupSuffix =
-    annotation.suggestedText !== undefined ? "replacement" : (annotation.directedAt ?? type);
+    annotation.suggestedText !== undefined ? "Replacement" : type[0].toUpperCase() + type.slice(1);
+  const dedupSuffix = annotation.suggestedText !== undefined ? "replacement" : type;
   pushNotification({
     id: generateNotificationId(),
     type: "review-pending",
@@ -279,48 +287,29 @@ export { refreshAllRanges, refreshRange } from "../positions.js";
 export function registerAnnotationTools(server: McpServer): void {
   server.tool(
     "tandem_highlight",
-    "Highlight text with a color and optional note",
+    "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
-      color: HighlightColorSchema.describe("Highlight color"),
-      note: z.string().optional().describe("Optional note for the highlight"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-      textSnapshot: z
-        .string()
-        .optional()
-        .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
-        ),
+      // All params optional: a deprecated stub must surface DEPRECATED for any
+      // call shape, including ones missing the legacy required params.
+      from: z.number().optional(),
+      to: z.number().optional(),
+      color: HighlightColorSchema.optional(),
+      note: z.string().optional(),
+      documentId: z.string().optional(),
+      textSnapshot: z.string().optional(),
     },
-    withErrorBoundary(
-      "tandem_highlight",
-      async ({ from: rawFrom, to: rawTo, color, note, documentId, textSnapshot }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) {
-          notifyRangeFailure(result, "tandem_highlight", documentId);
-          return rangeFailureToError(result);
-        }
-        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, da.ydoc, "highlight", result, note || "", {
-          color: color as HighlightColor,
-          textSnapshot: snap,
-        });
-        return mcpSuccess({ annotationId: id });
-      },
-    ),
+    withErrorBoundary("tandem_highlight", async () => {
+      notifyDeprecatedTool("tandem_highlight");
+      return mcpError(
+        "DEPRECATED",
+        "tandem_highlight is deprecated. Highlights are user-only. Use tandem_comment for text annotations.",
+      );
+    }),
   );
 
   server.tool(
     "tandem_comment",
-    "Add a comment to a text range. Optionally include suggestedText for a replacement proposal, or directedAt: 'claude' to ask Claude.",
+    "Add a comment to a text range. Optionally include suggestedText for a replacement proposal.",
     {
       from: z.number().describe("Start position"),
       to: z.number().describe("End position"),
@@ -332,7 +321,7 @@ export function registerAnnotationTools(server: McpServer): void {
       directedAt: z
         .enum(["claude"])
         .optional()
-        .describe("Set to 'claude' to direct this comment to Claude for response"),
+        .describe("Deprecated — pass omitted; including this field returns DEPRECATED."),
       documentId: z
         .string()
         .optional()
@@ -355,6 +344,11 @@ export function registerAnnotationTools(server: McpServer): void {
         documentId,
         textSnapshot,
       }) => {
+        if (directedAt !== undefined)
+          return mcpError(
+            "DEPRECATED",
+            "directedAt is no longer supported — comments now always reach Claude. Drop the field from your call.",
+          );
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -368,7 +362,6 @@ export function registerAnnotationTools(server: McpServer): void {
         const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
           textSnapshot: snap,
           ...(suggestedText !== undefined ? { suggestedText } : {}),
-          ...(directedAt !== undefined ? { directedAt } : {}),
         });
         return mcpSuccess({ annotationId: id });
       },
@@ -386,85 +379,96 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_suggest", async () =>
-      mcpError(
+    withErrorBoundary("tandem_suggest", async () => {
+      notifyDeprecatedTool("tandem_suggest");
+      return mcpError(
         "DEPRECATED",
         "tandem_suggest is deprecated. Use tandem_comment with suggestedText instead.",
-      ),
-    ),
+      );
+    }),
   );
 
   server.tool(
     "tandem_flag",
-    "Flag a text range for attention (e.g., issues, concerns, or items needing review)",
+    "DEPRECATED. Use tandem_comment instead.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
-      note: z.string().optional().describe("Reason for flagging"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-      textSnapshot: z
-        .string()
-        .optional()
-        .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
-        ),
+      // All params optional: a deprecated stub must surface DEPRECATED for any
+      // call shape, including ones missing the legacy required params.
+      from: z.number().optional(),
+      to: z.number().optional(),
+      note: z.string().optional(),
+      documentId: z.string().optional(),
+      textSnapshot: z.string().optional(),
     },
-    withErrorBoundary(
-      "tandem_flag",
-      async ({ from: rawFrom, to: rawTo, note, documentId, textSnapshot }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
-        if (!result.ok) {
-          notifyRangeFailure(result, "tandem_flag", documentId);
-          return rangeFailureToError(result);
-        }
-        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, da.ydoc, "flag", result, note || "", {
-          textSnapshot: snap,
-        });
-        return mcpSuccess({ annotationId: id });
-      },
-    ),
+    withErrorBoundary("tandem_flag", async () => {
+      notifyDeprecatedTool("tandem_flag");
+      return mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead.");
+    }),
   );
 
   server.tool(
     "tandem_getAnnotations",
-    "Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox.",
+    'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox. User notes are private and excluded by default; pass `type: "note"` to read them. Imported Word reviewer comments arrive as `author: "import", type: "note"` for user triage and are also excluded by default; pass `includeImports: true` to read them when the user asks for help with reviewer comments. The `notesExcluded` and `importsExcluded` fields in the response report how many were filtered out so you know when to ask.',
     {
       author: AuthorSchema.optional().describe("Filter by author"),
       type: AnnotationTypeSchema.optional().describe("Filter by type"),
       status: AnnotationStatusSchema.optional().describe("Filter by status"),
+      includeImports: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, include imported Word reviewer comments (author=import). Defaults to false so users can triage before Claude sees them.",
+        ),
       documentId: z
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
+    withErrorBoundary(
+      "tandem_getAnnotations",
+      async ({ author, type, status, includeImports, documentId }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
 
-      let results = refreshAllRanges(collectAnnotations(da.map), da.ydoc, da.map);
-      if (author) results = results.filter((a) => a.author === author);
-      if (type) results = results.filter((a) => a.type === type);
-      if (status) results = results.filter((a) => a.status === status);
+        let results = refreshAllRanges(collectAnnotations(da.map), da.ydoc, da.map);
+        if (author) results = results.filter((a) => a.author === author);
+        if (type) results = results.filter((a) => a.type === type);
+        if (status) results = results.filter((a) => a.status === status);
 
-      const repliesMap = getRepliesMap(da.ydoc);
-      const annotationsWithReplies = results.map((ann) => ({
-        ...ann,
-        replies: collectRepliesForAnnotation(repliesMap, ann.id),
-      }));
+        // Imported Word comments arrive as author=import, type=note. They're
+        // excluded by default so the user can triage before Claude sees them
+        // (ADR-027: "Import (Word) comments enter as notes for user triage").
+        // Claude can opt in via includeImports when the user asks for help.
+        const importsExcluded = includeImports
+          ? 0
+          : results.filter((a) => a.author === "import").length;
+        if (!includeImports) results = results.filter((a) => a.author !== "import");
 
-      return mcpSuccess({
-        annotations: annotationsWithReplies,
-        count: annotationsWithReplies.length,
-      });
-    }),
+        // User notes are private — exclude them unless explicitly requested.
+        // Imports (already filtered above when !includeImports) are scoped out
+        // here so includeImports surfaces them even though they're type=note.
+        const notesIncluded = type === "note";
+        const notesExcluded = notesIncluded
+          ? 0
+          : results.filter((a) => a.type === "note" && a.author !== "import").length;
+        if (!notesIncluded) {
+          results = results.filter((a) => a.type !== "note" || a.author === "import");
+        }
+
+        const repliesMap = getRepliesMap(da.ydoc);
+        const annotationsWithReplies = results.map((ann) => ({
+          ...ann,
+          replies: collectRepliesForAnnotation(repliesMap, ann.id),
+        }));
+
+        return mcpSuccess({
+          annotations: annotationsWithReplies,
+          count: annotationsWithReplies.length,
+          ...(notesExcluded > 0 ? { notesExcluded } : {}),
+          ...(importsExcluded > 0 ? { importsExcluded } : {}),
+        });
+      },
+    ),
   );
 
   server.tool(

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetMigrationLog } from "../../../src/server/annotations/migration-log.js";
 import {
   AnnotationDocSchemaV1,
   type AnnotationDocV1,
@@ -226,6 +227,7 @@ describe("migrateToV1", () => {
           content: "check this",
           status: "pending",
           timestamp: 1,
+          directedAt: "claude",
         },
       ],
       replies: [],
@@ -233,6 +235,14 @@ describe("migrateToV1", () => {
     const { doc: migrated } = migrateToV1(legacy);
     const round = AnnotationDocSchemaV1.safeParse(migrated);
     expect(round.success).toBe(true);
+
+    // ADR-027: legacy `flag` migrates to `note`.
+    expect(migrated.annotations).toHaveLength(1);
+    expect(migrated.annotations[0]?.type).toBe("note");
+    // ADR-027: directedAt is stripped on migration.
+    expect(migrated.annotations[0]?.directedAt).toBeUndefined();
+    // Envelope schema requires `rev`; legacy records get `rev: 0`.
+    expect(migrated.annotations[0]?.rev).toBe(0);
   });
 
   it("tolerates completely empty input", () => {
@@ -326,14 +336,22 @@ describe("migrateToV1", () => {
     expect(doc.replies).toEqual([]);
   });
 
-  it("logs once when any records are dropped (future-caller safety net)", () => {
+  it("logs the summary line plus per-record details when records are dropped", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     migrateToV1({
       annotations: [null, "garbage"],
       replies: [{ author: "user" }],
     });
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy.mock.calls[0]?.[0]).toMatch(/migrateToV1/);
+    // Summary line + per-record log for the malformed reply (the two annotation
+    // entries are non-objects and short-circuit before per-record logging).
+    const summary = errorSpy.mock.calls.find((args) =>
+      String(args[0]).includes("migrateToV1 dropped"),
+    );
+    const replyDetail = errorSpy.mock.calls.find((args) =>
+      String(args[0]).includes("dropping reply"),
+    );
+    expect(summary).toBeDefined();
+    expect(replyDetail).toBeDefined();
 
     errorSpy.mockClear();
     // Clean input → no log.
@@ -516,5 +534,251 @@ describe("AnnotationRecordSchemaV1 — per-record shape", () => {
     if (!parsed.ok) throw new Error("expected success");
     const ann = parsed.doc.annotations[0] as Record<string, unknown> & { relRange?: unknown };
     expect(ann.relRange).toEqual(withRel.relRange);
+  });
+
+  it("rejects a record that still carries directedAt (ADR-027 regression)", () => {
+    // Production paths (parseAnnotationDoc, migrateToV1) strip directedAt via
+    // migrateFlagAndDirectedAt before reaching safeParse. This test verifies
+    // that any caller bypassing migration is caught by the schema refine.
+    const stale = { ...baseAnnotation, directedAt: "claude" };
+    const result = AnnotationRecordSchemaV1.safeParse(stale);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((i) => i.path.join("."));
+      expect(paths).toContain("directedAt");
+    }
+  });
+});
+
+describe("parseAnnotationDoc — console.error on corrupt input", () => {
+  it("logs schema validation issues when the envelope is corrupt", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const bad = { ...validDoc, annotations: "not an array" };
+    const result = parseAnnotationDoc(bad);
+    expect(result).toEqual({ ok: false, error: "corrupt" });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("logs when JSON.parse fails on a string input", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = parseAnnotationDoc("{not valid json");
+    expect(result).toEqual({ ok: false, error: "corrupt" });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("logs when input is non-object (number, boolean, null)", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(parseAnnotationDoc(42)).toEqual({ ok: false, error: "corrupt" });
+    expect(parseAnnotationDoc(null)).toEqual({ ok: false, error: "corrupt" });
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    errorSpy.mockRestore();
+  });
+});
+
+describe("parseAnnotationDoc — heterogeneous-envelope migration", () => {
+  it("migrates a mixed envelope: flag→note, strips directedAt, leaves canonical records intact", () => {
+    // Construct a single envelope whose annotations array contains four records
+    // in different pre-migration states. parseAnnotationDoc must migrate all of
+    // them before schema validation and return a fully canonical doc.
+    const envelope = {
+      schemaVersion: 1 as const,
+      docHash: "sha256:aabbccdd",
+      meta: { filePath: "/docs/mixed.md", lastUpdated: 1_744_819_200_000 },
+      tombstones: [],
+      replies: [],
+      annotations: [
+        // 1. Legacy flag type (no directedAt)
+        {
+          id: "ann_flag",
+          author: "user",
+          type: "flag",
+          range: { from: 0, to: 5 },
+          content: "check this",
+          status: "pending",
+          timestamp: 1_700_000_000_000,
+          rev: 1,
+        },
+        // 2. Canonical note (already correct shape)
+        {
+          id: "ann_note",
+          author: "user",
+          type: "note",
+          range: { from: 6, to: 11 },
+          content: "personal note",
+          status: "pending",
+          timestamp: 1_700_000_000_001,
+          rev: 0,
+        },
+        // 3. Comment with stray directedAt (pre-ADR-027 on-disk record)
+        {
+          id: "ann_stale",
+          author: "claude",
+          type: "comment",
+          range: { from: 12, to: 20 },
+          content: "please clarify",
+          status: "pending",
+          timestamp: 1_700_000_000_002,
+          rev: 3,
+          directedAt: "claude",
+        },
+        // 4. Canonical comment (nothing to migrate)
+        {
+          id: "ann_canonical",
+          author: "claude",
+          type: "comment",
+          range: { from: 21, to: 30 },
+          content: "looks good",
+          status: "pending",
+          timestamp: 1_700_000_000_003,
+          rev: 2,
+        },
+      ],
+    };
+
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected success, got: ${result.error}`);
+
+    expect(result.doc.annotations).toHaveLength(4);
+
+    // Record 1: flag → note
+    const rec1 = result.doc.annotations[0] as Record<string, unknown>;
+    expect(rec1.id).toBe("ann_flag");
+    expect(rec1.type).toBe("note");
+
+    // Record 2: canonical note — unchanged
+    const rec2 = result.doc.annotations[1] as Record<string, unknown>;
+    expect(rec2.id).toBe("ann_note");
+    expect(rec2.type).toBe("note");
+
+    // Record 3: stray directedAt stripped
+    const rec3 = result.doc.annotations[2] as Record<string, unknown>;
+    expect(rec3.id).toBe("ann_stale");
+    expect(rec3.type).toBe("comment");
+    expect(rec3.directedAt).toBeUndefined();
+
+    // Record 4: canonical comment — unchanged
+    const rec4 = result.doc.annotations[3] as Record<string, unknown>;
+    expect(rec4.id).toBe("ann_canonical");
+    expect(rec4.type).toBe("comment");
+    expect(rec4.directedAt).toBeUndefined();
+  });
+});
+
+describe("migrateToV1 — drop logging", () => {
+  afterEach(() => resetMigrationLog());
+
+  it("logs dropped annotations with their id and Zod issues", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = migrateToV1({
+      annotations: [
+        {
+          id: "ann_bad",
+          type: "comment",
+          range: { from: 0, to: 5 } /* missing content/status/etc */,
+        },
+      ],
+      replies: [],
+    });
+    expect(result.droppedAnnotations).toBe(1);
+    const found = errorSpy.mock.calls.some(
+      (args) =>
+        String(args[0]).includes("dropping annotation id=ann_bad") && Array.isArray(args[1]),
+    );
+    expect(found).toBe(true);
+    errorSpy.mockRestore();
+  });
+
+  it("logs dropped replies with their id and Zod issues", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = migrateToV1({
+      annotations: [],
+      replies: [{ id: "rep_bad" /* missing annotationId/author/text/timestamp */ }],
+    });
+    expect(result.droppedReplies).toBe(1);
+    const found = errorSpy.mock.calls.some(
+      (args) => String(args[0]).includes("dropping reply id=rep_bad") && Array.isArray(args[1]),
+    );
+    expect(found).toBe(true);
+    errorSpy.mockRestore();
+  });
+});
+
+describe("migrateFlagAndDirectedAt — dedup via parseAnnotationDoc", () => {
+  afterEach(() => resetMigrationLog());
+
+  it("logs flag→note migration once per doc, even with multiple flag records", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const envelope = {
+      schemaVersion: 1 as const,
+      docHash: "sha256:dedup-flag",
+      meta: { filePath: "/d.md", lastUpdated: 0 },
+      tombstones: [],
+      replies: [],
+      annotations: [
+        {
+          id: "f1",
+          author: "user",
+          type: "flag",
+          range: { from: 0, to: 1 },
+          content: "",
+          status: "pending",
+          timestamp: 0,
+          rev: 1,
+        },
+        {
+          id: "f2",
+          author: "user",
+          type: "flag",
+          range: { from: 2, to: 3 },
+          content: "",
+          status: "pending",
+          timestamp: 0,
+          rev: 1,
+        },
+      ],
+    };
+    const result = parseAnnotationDoc(envelope);
+    expect(result.ok).toBe(true);
+    const flagLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("legacy migration: flag in sha256:dedup-flag"),
+    );
+    expect(flagLogs).toHaveLength(1);
+    errorSpy.mockRestore();
+  });
+
+  it("logs flag and directedAt independently for the same doc", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const envelope = {
+      schemaVersion: 1 as const,
+      docHash: "sha256:dedup-both",
+      meta: { filePath: "/d.md", lastUpdated: 0 },
+      tombstones: [],
+      replies: [],
+      annotations: [
+        {
+          id: "f1",
+          author: "user",
+          type: "flag",
+          range: { from: 0, to: 1 },
+          content: "",
+          status: "pending",
+          timestamp: 0,
+          rev: 1,
+          directedAt: "claude",
+        },
+      ],
+    };
+    parseAnnotationDoc(envelope);
+    const flagLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("legacy migration: flag in sha256:dedup-both"),
+    );
+    const directedAtLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("legacy migration: directedAt in sha256:dedup-both"),
+    );
+    expect(flagLogs).toHaveLength(1);
+    expect(directedAtLogs).toHaveLength(1);
+    errorSpy.mockRestore();
   });
 });

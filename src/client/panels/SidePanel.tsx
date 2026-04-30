@@ -122,7 +122,6 @@ export function SidePanel({
       let matchType: boolean;
       if (filterType === "all") matchType = true;
       else if (filterType === "with-replacement") matchType = a.suggestedText !== undefined;
-      else if (filterType === "for-claude") matchType = a.directedAt === "claude";
       else matchType = a.type === filterType;
       const matchAuthor = filterAuthor === "all" || a.author === filterAuthor;
       const matchStatus = filterStatus === "all" || a.status === filterStatus;

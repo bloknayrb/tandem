@@ -381,7 +381,7 @@ Remaining Cowork work (#316, #317, #322) is polish — making the installer turn
 
 ## v1.0 Release Plan
 
-Core features are complete (28 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Redesign data model (#443, #445) and UX polish (#435, #437) shipped in v0.9.0. Remaining work: distribution (#316, #317, #322), Svelte migration (ADR-025), dark theme, desktop UI polish, and first-run UX.
+Core features are complete (25 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Redesign data model (#443, #445) and UX polish (#435, #437) shipped in v0.9.0. Remaining work: distribution (#316, #317, #322), Svelte migration (ADR-025), dark theme, desktop UI polish, and first-run UX.
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
@@ -454,18 +454,21 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.10.0 | Svelte core migration | #312 Phase 2 (Vite plugin, `useYjsSync` rune, core hooks, Editor, DocumentTabs) |
-| v0.11.0 | Svelte complete | #312 Phase 3-4 (remaining panels, React removal, `<svelte:boundary>` error recovery) |
-| v0.12.0 | Dark theme | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification |
-| v0.13.0 | Desktop UI Tier 1 + Cowork cross-platform | #269 §1.1-1.5, #316, #317, #319, #322, #378, #380 (PR f already shipped in v0.8.0) |
-| v0.14.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
+| v0.10.0 | Full Svelte conversion | #312 Phases 2-4: Vite plugin (#465), useYjsSync rune (#466), all hooks (#467), Editor+toolbar (#468), DocumentTabs (#469), panels (#470), settings/modals/misc (#471), App.svelte+React removal (#472) |
+| v0.11.0 | Dark theme | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification |
+| v0.12.0 | Desktop UI Tier 1 + Cowork cross-platform | #269 §1.1-1.5, #316, #317, #319, #322, #378, #380 (PR f already shipped in v0.8.0) |
+| v0.13.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
 
-**v0.10.0 test strategy:** E2E tests (`data-testid` selectors) survive unchanged. Unit tests rewritten against `@testing-library/svelte` per ported component, same PR. Floor: no net behavioral coverage loss. React and Svelte coexist during this release (transitional); dual-framework state MUST NOT persist beyond v0.11.0.
+**v0.10.0 scope change (2026-04-28):** Consolidated former v0.10.0 (Phase 2) and v0.11.0 (Phase 3-4) into a single release. Three independent Phase B plan reviewers identified cross-framework integration (React hosting Svelte 5 components via unproven bridge shims) as a blocker for the incremental approach. Full conversion eliminates the bridge problem entirely. The remaining ~7,900 LOC beyond the original scope is mechanical UI conversion — the hard CRDT/lifecycle work (useYjsSync, Editor) was already in scope. See `.pipeline-state/v010-full-conversion-plan.md` for the full execution plan.
 
-**v0.11.0:** Each new Svelte component includes ARIA attributes as definition-of-done (accessibility is continuous, not a v1.0 audit). CLI is structurally unaffected by the migration — verify with server tests + manual CLI smoke test.
+**v0.10.0 execution order:** Phase 1: #465 (toolchain). Phase 2: #466 + #467 in parallel (hooks). Phase 3: #468 + #469 + #470 + #471 in parallel (components). Phase 4: #472 (App.svelte integration + React removal). Each issue creates new .svelte/.svelte.ts files alongside originals; existing .tsx files are untouched until #472's atomic switchover.
 
-**v0.12.0 dark theme completeness:** #355 landed (v0.8.0), `editor.css` has dark overrides for all content-area rules, awareness decorations verified in dark mode, WCAG AA contrast on annotation highlights against dark surface. Test in both Tauri WebView and browser.
+**v0.10.0 test strategy:** E2E tests (`data-testid` selectors) survive unchanged — React app keeps working through Phases 1-3; Svelte app takes over in Phase 4. New Svelte components can be unit-tested with `@testing-library/svelte` in isolation. Floor: no net behavioral coverage loss.
+
+**v0.10.0 agent assignment:** Opus for CRDT state machine (#466), Tiptap lifecycle (#468), and full-app integration (#472). Sonnet for config (#465), mechanical hook ports (#467), and UI component ports (#469-#471).
+
+**v0.11.0 dark theme:** #355 landed (v0.8.0), `editor.css` has dark overrides for all content-area rules, awareness decorations verified in dark mode, WCAG AA contrast on annotation highlights against dark surface. Test in both Tauri WebView and browser. Each Svelte component includes ARIA attributes as definition-of-done.
 
 #### If Svelte No-Go
 
@@ -490,7 +493,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 | `tandem_getContext` | Keep | — |
 | `tandem_removeAnnotation` | Keep | — |
 
-Net result: 28 tools (down from 31).
+Net result: 25 tools (down from 31; `tandem_highlight`, `tandem_flag`, `tandem_suggest` deprecated to stubs in v0.9.0; hard-remove targeted for v0.10.0).
 
 ### v1.0.0 Exit Criteria
 

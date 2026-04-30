@@ -107,10 +107,10 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
     to: 6,
     text: "First",
   });
-  await mcp.callTool("tandem_highlight", {
+  await mcp.callTool("tandem_comment", {
     from: 7,
     to: 15,
-    color: "yellow",
+    text: "Second",
   });
   // Sanity check: confirm both annotations exist before navigating.
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
@@ -156,7 +156,7 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "First" });
   await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Second" });
-  await mcp.callTool("tandem_highlight", { from: 16, to: 24, color: "yellow" });
+  await mcp.callTool("tandem_comment", { from: 16, to: 24, text: "Third" });
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
     data?: { annotations?: unknown[] };
   };
@@ -709,10 +709,10 @@ test("side panel scrolls to top (+ logs warn) when active annotation is filtered
         textSnapshot: "Test",
       }),
     ),
-    mcp.callTool("tandem_highlight", {
+    mcp.callTool("tandem_comment", {
       from: 7,
       to: 15,
-      color: "yellow",
+      text: "Document note",
       textSnapshot: "Document",
     }),
   ]);
@@ -884,4 +884,67 @@ test("selections are buffered, not pushed as SSE events (#188)", async ({ page }
     selectionEvents.length,
     "selection:changed events should no longer be emitted — selections are buffered per-document (#188)",
   ).toBe(0);
+});
+
+test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page }) => {
+  // Seed one comment via MCP. Notes are user-private and cannot be created via
+  // MCP tools — they must be driven through the editor toolbar (ADR-027).
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 6,
+    text: "MCP comment",
+    textSnapshot: "Test",
+  });
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  // Wait for the MCP comment card to appear before driving the toolbar.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 15_000,
+  });
+
+  // Select text in the editor so the Note button becomes enabled.
+  // "Section One" appears at the top of the second heading — a stable range.
+  const editor = page.locator(".tiptap");
+  await editor.click();
+  // Select the first-paragraph text so we have a non-empty selection.
+  const firstParagraph = editor.locator("p").first();
+  await firstParagraph.selectText();
+
+  // Wait for the toolbar to detect the selection and enable the Note button.
+  // ToolbarButton sets aria-label from its label prop when it's a string, so
+  // `getByRole` is reliable here. (TODO: add data-testid="note-btn" to Toolbar.tsx)
+  const noteBtn = page.getByRole("button", { name: "Note", exact: true });
+  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+
+  // Open note mode (mousedown handler captures selection before focus shifts).
+  await noteBtn.click();
+
+  // The InputGroup renders with placeholder "Add a note to yourself..." — find
+  // the text input that just appeared.
+  const noteInput = page.locator('input[placeholder="Add a note to yourself..."]');
+  await expect(noteInput).toBeVisible({ timeout: 2_000 });
+
+  // Type note content and submit with Enter.
+  await noteInput.fill("my private note");
+  await noteInput.press("Enter");
+
+  // Both annotations must sync over Hocuspocus before we filter.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
+    timeout: 15_000,
+  });
+
+  // Filter to "note" — only the note card should be visible.
+  await page.locator("[data-testid='filter-type']").selectOption("note");
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 3_000,
+  });
+
+  // Switch filter to "comment" — only the MCP comment should be visible.
+  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 3_000,
+  });
 });

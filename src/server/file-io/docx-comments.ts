@@ -205,7 +205,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
       const annotation: Annotation = {
         id,
         author: "import" as const,
-        type: "comment" as const,
+        type: "note" as const,
         range: { from: result.range.from, to: result.range.to },
         content,
         status: "pending" as const,

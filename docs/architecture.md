@@ -155,7 +155,7 @@ Claude calls tandem_open("invoice.docx")
     → Browser receives updated list, adds second tab
     → DocumentTabs renders both tabs, second tab active
 
-Claude calls tandem_highlight({ from: 10, to: 20, color: "yellow", documentId: "report-a1b2c3" })
+Claude calls tandem_comment({ from: 10, to: 20, text: "Review this section", documentId: "report-a1b2c3" })
     → Targets report.md even though invoice.docx is the active document
 ```
 
@@ -368,7 +368,7 @@ Each open document has its own Y.Doc (one per Hocuspocus room). Each Y.Doc conta
 | Structure | Type | Purpose |
 |-----------|------|---------|
 | `Y.XmlFragment('default')` | Document content | Paragraphs, headings as Y.XmlElement nodes with Y.XmlText children |
-| `Y.Map('annotations')` | Annotation metadata | Highlights, comments, flags keyed by annotation ID |
+| `Y.Map('annotations')` | Annotation metadata | Highlights, comments, notes keyed by annotation ID |
 | `Y.Map('awareness')` | Claude's presence | Status text, focus paragraph, active flag |
 | `Y.Map('userAwareness')` | User's presence | Selection range, typing state, cursor position |
 | `Y.Map('documentMeta')` | Document metadata | `openDocuments` array, `activeDocumentId`, readOnly flag, format |
@@ -724,7 +724,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `components/AppearanceSettings.tsx` -- Theme, text size, and panel order controls (extracted from SettingsPopover)
 - `components/EditorSettings.tsx` -- User name and dwell-time controls (extracted from SettingsPopover)
 - `components/AccessibilitySettings.tsx` -- Accessibility preference controls (extracted from SettingsPopover)
-- `AnnotationExtension` -- Renders highlights, comments, and flags as ProseMirror Decorations from Y.Map('annotations')
+- `AnnotationExtension` -- Renders highlights, comments, and notes as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
 - `editor/toolbar/HighlightColorPicker.tsx` -- Color swatch picker for highlight annotations (extracted from Toolbar)
 - `editor/toolbar/ModeToggle.tsx` -- Solo/Tandem mode toggle button (extracted from Toolbar)

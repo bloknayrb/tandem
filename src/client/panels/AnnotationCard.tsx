@@ -46,7 +46,6 @@ export interface AnnotationCardProps {
 
 function getDisplayType(annotation: Annotation): string {
   if (annotation.suggestedText !== undefined) return "replacement";
-  if (annotation.directedAt === "claude") return "question";
   return annotation.type;
 }
 
@@ -61,9 +60,14 @@ function getBorderColor(annotation: Annotation): string {
     return HIGHLIGHT_COLORS[annotation.color] || "var(--tandem-border)";
   }
   if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)"; // replacement
-  if (annotation.directedAt === "claude") return "var(--tandem-accent)"; // question for Claude
-  if (annotation.type === "flag") return "var(--tandem-error)";
+  if (annotation.type === "note") return "var(--tandem-warning)"; // personal note — amber signals private
   return "var(--tandem-author-user)"; // plain comment
+}
+
+function getCardBackground(annotation: Annotation, isReviewTarget?: boolean): string {
+  if (isReviewTarget) return "var(--tandem-accent-bg)";
+  if (annotation.type === "note") return "var(--tandem-warning-bg)";
+  return "var(--tandem-surface)";
 }
 
 export const AnnotationCard = React.memo(function AnnotationCard({
@@ -141,7 +145,7 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         padding: "8px 10px",
         marginBottom: "6px",
         borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
+        background: getCardBackground(annotation, isReviewTarget),
         borderRadius: "0 4px 4px 0",
         fontSize: "13px",
         opacity: isPending ? 1 : 0.6,
