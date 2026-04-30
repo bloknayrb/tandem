@@ -266,6 +266,67 @@ describe("MCP tool integration — annotation tools", () => {
     // notesExcluded should not be present (or be 0) when notes are explicitly requested
     expect(parsed.data.notesExcluded ?? 0).toBe(0);
   });
+
+  it("tandem_getAnnotations excludes imported Word comments by default and reports importsExcluded", async () => {
+    const ydoc = setupDoc("mcp-ann-imports-1", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Seed a Claude comment via MCP tool
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "Claude comment" },
+    });
+
+    // Seed two imported Word comments (author=import, type=note)
+    const imported1: Annotation = {
+      id: "imp_1",
+      author: "import",
+      type: "note",
+      range: { from: 6, to: 11 },
+      content: "[Reviewer] Reword this",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    const imported2: Annotation = {
+      id: "imp_2",
+      author: "import",
+      type: "note",
+      range: { from: 12, to: 16 },
+      content: "[Reviewer] Check fact",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => {
+      map.set(imported1.id, imported1);
+      map.set(imported2.id, imported2);
+    }, MCP_ORIGIN);
+
+    // Default call: imports excluded, count surfaced so Claude knows to ask
+    const defaultResult = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: {},
+    });
+    const defaultParsed = parseResult(defaultResult);
+    expect(defaultParsed.data.count).toBe(1);
+    expect(defaultParsed.data.annotations[0].author).toBe("claude");
+    expect(defaultParsed.data.importsExcluded).toBe(2);
+
+    // Opt-in call: imports surfaced
+    const optInResult = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: { includeImports: true },
+    });
+    const optInParsed = parseResult(optInResult);
+    expect(optInParsed.data.count).toBe(3);
+    expect(optInParsed.data.importsExcluded ?? 0).toBe(0);
+    const importedAuthors = optInParsed.data.annotations
+      .filter((a: Annotation) => a.author === "import")
+      .map((a: Annotation) => a.id)
+      .sort();
+    expect(importedAuthors).toEqual(["imp_1", "imp_2"]);
+  });
 });
 
 describe("MCP tool integration — navigation tools", () => {
