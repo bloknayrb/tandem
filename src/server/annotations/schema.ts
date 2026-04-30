@@ -80,9 +80,9 @@ const RelativeRangeSchema = z
 /**
  * Per-annotation envelope record. Largely mirrors `AnnotationBase` from
  * `src/shared/types.ts`, plus the optional type-discriminator fields
- * (`color` / `suggestedText`), plus the required `rev`. The `directedAt`
- * field remains in the schema but is deprecated per ADR-027 and stripped
- * by `sanitizeAnnotation` / the `normalizeAnnotation` fast path on read.
+ * (`color` / `suggestedText`), plus the required `rev`. ADR-027 removed
+ * `directedAt` from the model; the schema enforces its absence via a
+ * `.refine()` so any caller that skips migration is caught at validation time.
  * Fields not listed here (e.g. `heldInSolo`) are preserved via `.passthrough()`.
  */
 export const AnnotationRecordSchemaV1 = z
@@ -102,12 +102,19 @@ export const AnnotationRecordSchemaV1 = z
     // (see `src/shared/types.ts`). Here we only gate shape.
     color: HighlightColorSchema.optional(),
     suggestedText: z.string().optional(),
-    directedAt: z.literal("claude").optional(), // ADR-027: deprecated, stripped on read
     // New for v1 envelope: monotonically-increasing revision counter used for
     // last-writer-wins merge between in-memory Y.Map state and on-disk state.
     rev: z.number().int().nonnegative(),
   })
-  .passthrough();
+  .passthrough()
+  // ADR-027: directedAt is removed from the model. All production read paths
+  // (parseAnnotationDoc, migrateToV1) run migrateFlagAndDirectedAt() before
+  // reaching this schema, so the field is already gone. This refine catches
+  // any caller that bypasses migration and passes a stale record directly.
+  .refine((rec) => !("directedAt" in rec), {
+    message: "directedAt is removed in ADR-027; run migrateFlagAndDirectedAt before validation",
+    path: ["directedAt"],
+  });
 
 /**
  * Reply record (existing `AnnotationReply` shape + `rev`).
@@ -262,6 +269,7 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
 
   const result = AnnotationDocSchemaV1.safeParse(candidate);
   if (!result.success) {
+    console.error("[parseAnnotationDoc] schema validation failed:", result.error.issues);
     return { ok: false, error: "corrupt" };
   }
   return { ok: true, doc: result.data };

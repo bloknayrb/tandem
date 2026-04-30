@@ -306,7 +306,7 @@ export function registerAnnotationTools(server: McpServer): void {
       directedAt: z
         .enum(["claude"])
         .optional()
-        .describe("Deprecated — silently ignored. Kept for backward compatibility."),
+        .describe("Deprecated — pass omitted; including this field returns DEPRECATED."),
       documentId: z
         .string()
         .optional()
@@ -320,7 +320,20 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({ from: rawFrom, to: rawTo, text, suggestedText, documentId, textSnapshot }) => {
+      async ({
+        from: rawFrom,
+        to: rawTo,
+        text,
+        suggestedText,
+        directedAt,
+        documentId,
+        textSnapshot,
+      }) => {
+        if (directedAt !== undefined)
+          return mcpError(
+            "DEPRECATED",
+            "directedAt is no longer supported — comments now always reach Claude. Drop the field from your call.",
+          );
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
@@ -378,7 +391,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_getAnnotations",
-    "Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox.",
+    'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox. Notes are user-private and excluded by default; pass `type: "note"` to read them. The `notesExcluded` field in the response reports how many notes were filtered out.',
     {
       author: AuthorSchema.optional().describe("Filter by author"),
       type: AnnotationTypeSchema.optional().describe("Filter by type"),
@@ -397,6 +410,11 @@ export function registerAnnotationTools(server: McpServer): void {
       if (type) results = results.filter((a) => a.type === type);
       if (status) results = results.filter((a) => a.status === status);
 
+      // Notes are user-private — exclude them unless explicitly requested.
+      const notesIncluded = type === "note";
+      const notesExcluded = notesIncluded ? 0 : results.filter((a) => a.type === "note").length;
+      if (!notesIncluded) results = results.filter((a) => a.type !== "note");
+
       const repliesMap = getRepliesMap(da.ydoc);
       const annotationsWithReplies = results.map((ann) => ({
         ...ann,
@@ -406,6 +424,7 @@ export function registerAnnotationTools(server: McpServer): void {
       return mcpSuccess({
         annotations: annotationsWithReplies,
         count: annotationsWithReplies.length,
+        ...(notesExcluded > 0 ? { notesExcluded } : {}),
       });
     }),
   );

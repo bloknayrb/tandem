@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
+import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -21,6 +22,8 @@ import {
 } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import type { Annotation } from "../../src/shared/types.js";
 
 let client: Client;
 
@@ -142,6 +145,21 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.code).toBe("DEPRECATED");
   });
 
+  it("tandem_comment rejects directedAt with DEPRECATED error and creates no annotation", async () => {
+    const ydoc = setupDoc("mcp-ann-da", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const result = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "Nice intro", directedAt: "claude" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("DEPRECATED");
+    // No annotation should have been created
+    expect(map.size).toBe(0);
+  });
+
   it("tandem_getAnnotations returns created annotations", async () => {
     setupDoc("mcp-ann-4", "Hello world test");
 
@@ -161,6 +179,77 @@ describe("MCP tool integration — annotation tools", () => {
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
     expect(parsed.data.count).toBe(2);
+  });
+
+  it("tandem_getAnnotations excludes notes by default and reports notesExcluded", async () => {
+    const ydoc = setupDoc("mcp-ann-notes-1", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Seed a comment via MCP tool
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "A comment" },
+    });
+
+    // Seed a note directly into Y.Map (notes are not creatable via MCP tools)
+    const note: Annotation = {
+      id: "ann_test_note_1",
+      author: "user",
+      type: "note",
+      range: { from: 6, to: 11 },
+      content: "A private note",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => map.set(note.id, note), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: {},
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    // Only the comment is returned; the note is excluded
+    expect(parsed.data.count).toBe(1);
+    expect(parsed.data.annotations[0].type).toBe("comment");
+    expect(parsed.data.notesExcluded).toBe(1);
+  });
+
+  it("tandem_getAnnotations returns only notes when type: note is requested", async () => {
+    const ydoc = setupDoc("mcp-ann-notes-2", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Seed a comment via MCP tool
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "A comment" },
+    });
+
+    // Seed a note directly into Y.Map
+    const note: Annotation = {
+      id: "ann_test_note_2",
+      author: "user",
+      type: "note",
+      range: { from: 6, to: 11 },
+      content: "A private note",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => map.set(note.id, note), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: { type: "note" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    // Only the note is returned
+    expect(parsed.data.count).toBe(1);
+    expect(parsed.data.annotations[0].type).toBe("note");
+    // notesExcluded should not be present (or be 0) when notes are explicitly requested
+    expect(parsed.data.notesExcluded ?? 0).toBe(0);
   });
 });
 

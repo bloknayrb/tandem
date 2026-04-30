@@ -526,4 +526,120 @@ describe("AnnotationRecordSchemaV1 — per-record shape", () => {
     const ann = parsed.doc.annotations[0] as Record<string, unknown> & { relRange?: unknown };
     expect(ann.relRange).toEqual(withRel.relRange);
   });
+
+  it("rejects a record that still carries directedAt (ADR-027 regression)", () => {
+    // Production paths (parseAnnotationDoc, migrateToV1) strip directedAt via
+    // migrateFlagAndDirectedAt before reaching safeParse. This test verifies
+    // that any caller bypassing migration is caught by the schema refine.
+    const stale = { ...baseAnnotation, directedAt: "claude" };
+    const result = AnnotationRecordSchemaV1.safeParse(stale);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((i) => i.path.join("."));
+      expect(paths).toContain("directedAt");
+    }
+  });
+});
+
+describe("parseAnnotationDoc — console.error on corrupt input", () => {
+  it("logs schema validation issues when the envelope is corrupt", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const bad = { ...validDoc, annotations: "not an array" };
+    const result = parseAnnotationDoc(bad);
+    expect(result).toEqual({ ok: false, error: "corrupt" });
+    expect(errorSpy).toHaveBeenCalledOnce();
+    const [label, issues] = errorSpy.mock.calls[0] ?? [];
+    expect(label).toMatch(/\[parseAnnotationDoc\]/);
+    expect(Array.isArray(issues)).toBe(true);
+    errorSpy.mockRestore();
+  });
+});
+
+describe("parseAnnotationDoc — heterogeneous-envelope migration", () => {
+  it("migrates a mixed envelope: flag→note, strips directedAt, leaves canonical records intact", () => {
+    // Construct a single envelope whose annotations array contains four records
+    // in different pre-migration states. parseAnnotationDoc must migrate all of
+    // them before schema validation and return a fully canonical doc.
+    const envelope = {
+      schemaVersion: 1 as const,
+      docHash: "sha256:aabbccdd",
+      meta: { filePath: "/docs/mixed.md", lastUpdated: 1_744_819_200_000 },
+      tombstones: [],
+      replies: [],
+      annotations: [
+        // 1. Legacy flag type (no directedAt)
+        {
+          id: "ann_flag",
+          author: "user",
+          type: "flag",
+          range: { from: 0, to: 5 },
+          content: "check this",
+          status: "pending",
+          timestamp: 1_700_000_000_000,
+          rev: 1,
+        },
+        // 2. Canonical note (already correct shape)
+        {
+          id: "ann_note",
+          author: "user",
+          type: "note",
+          range: { from: 6, to: 11 },
+          content: "personal note",
+          status: "pending",
+          timestamp: 1_700_000_000_001,
+          rev: 0,
+        },
+        // 3. Comment with stray directedAt (pre-ADR-027 on-disk record)
+        {
+          id: "ann_stale",
+          author: "claude",
+          type: "comment",
+          range: { from: 12, to: 20 },
+          content: "please clarify",
+          status: "pending",
+          timestamp: 1_700_000_000_002,
+          rev: 3,
+          directedAt: "claude",
+        },
+        // 4. Canonical comment (nothing to migrate)
+        {
+          id: "ann_canonical",
+          author: "claude",
+          type: "comment",
+          range: { from: 21, to: 30 },
+          content: "looks good",
+          status: "pending",
+          timestamp: 1_700_000_000_003,
+          rev: 2,
+        },
+      ],
+    };
+
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected success, got: ${result.error}`);
+
+    expect(result.doc.annotations).toHaveLength(4);
+
+    // Record 1: flag → note
+    const rec1 = result.doc.annotations[0] as Record<string, unknown>;
+    expect(rec1.id).toBe("ann_flag");
+    expect(rec1.type).toBe("note");
+
+    // Record 2: canonical note — unchanged
+    const rec2 = result.doc.annotations[1] as Record<string, unknown>;
+    expect(rec2.id).toBe("ann_note");
+    expect(rec2.type).toBe("note");
+
+    // Record 3: stray directedAt stripped
+    const rec3 = result.doc.annotations[2] as Record<string, unknown>;
+    expect(rec3.id).toBe("ann_stale");
+    expect(rec3.type).toBe("comment");
+    expect(rec3.directedAt).toBeUndefined();
+
+    // Record 4: canonical comment — unchanged
+    const rec4 = result.doc.annotations[3] as Record<string, unknown>;
+    expect(rec4.id).toBe("ann_canonical");
+    expect(rec4.type).toBe("comment");
+    expect(rec4.directedAt).toBeUndefined();
+  });
 });

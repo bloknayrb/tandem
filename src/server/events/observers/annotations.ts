@@ -29,6 +29,7 @@ export function makeAnnotationsObserver(deps: {
         continue;
       }
 
+      // ADR-027: notes are user-private — never push them to the channel. Only user-authored comments fire annotation:created.
       if (change.action === "add" && ann.author === "user" && ann.type === "comment") {
         pushEvent({
           id: generateEventId(),
