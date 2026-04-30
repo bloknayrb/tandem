@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
 
 let doc: Y.Doc;
 
@@ -193,5 +194,114 @@ describe("markdown round-trip", () => {
     expect(output).toContain("> -");
     expect(output).toContain("Item one");
     expect(output).toContain("Item two");
+  });
+
+  // -- GFM tables (#379) -----------------------------------------------------
+
+  it("simple GFM table with header + 2 body rows", () => {
+    const input = [
+      "| Col A | Col B |",
+      "| ----- | ----- |",
+      "| a1    | b1    |",
+      "| a2    | b2    |",
+    ].join("\n");
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("Col A");
+    expect(output).toContain("Col B");
+    expect(output).toContain("a1");
+    expect(output).toContain("b1");
+    expect(output).toContain("a2");
+    expect(output).toContain("b2");
+    // Pipe-table markup survives
+    expect(output).toMatch(/\|.*Col A.*\|/);
+  });
+
+  it("table with mixed column alignment (:--, :-:, --:)", () => {
+    const input = [
+      "| Left | Center | Right |",
+      "| :--- | :----: | ----: |",
+      "| l1   | c1     | r1    |",
+    ].join("\n");
+    const output = normalize(roundTrip(input));
+    // Alignment characters preserved (remark renders them with consistent spacing)
+    expect(output).toMatch(/\|\s*:-+\s*\|/); // left-aligned column
+    expect(output).toMatch(/\|\s*:-+:\s*\|/); // center-aligned column
+    expect(output).toMatch(/\|\s*-+:\s*\|/); // right-aligned column
+    expect(output).toContain("l1");
+    expect(output).toContain("c1");
+    expect(output).toContain("r1");
+  });
+
+  it("table with inline marks in cells (bold, italic, code, link)", () => {
+    const input = [
+      "| Style | Value |",
+      "| ----- | ----- |",
+      "| bold  | **hi** |",
+      "| ital  | *hi*  |",
+      "| code  | `hi`  |",
+      "| link  | [hi](https://example.com) |",
+    ].join("\n");
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("**hi**");
+    expect(output).toContain("*hi*");
+    expect(output).toContain("`hi`");
+    expect(output).toContain("[hi](https://example.com)");
+  });
+
+  it("table with empty cells", () => {
+    const input = ["| A | B |", "| - | - |", "|   | b1 |", "| a2 |    |"].join("\n");
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("b1");
+    expect(output).toContain("a2");
+    // Two header cells survive
+    expect(output).toMatch(/\|\s*A\s*\|\s*B\s*\|/);
+  });
+
+  it("flat-offset survives across a table (annotation anchored after)", () => {
+    // Build a doc with: paragraph, table, paragraph. Verify the offset of the
+    // trailing paragraph in extractText() is correctly past the table content.
+    const input = [
+      "Before table.",
+      "",
+      "| H1 | H2 |",
+      "| -- | -- |",
+      "| a  | b  |",
+      "",
+      "ANCHORTARGET",
+    ].join("\n");
+
+    const doc = new Y.Doc();
+    loadMarkdown(doc, input);
+    const flat = extractText(doc);
+    // The anchor word must exist in flat text and live AFTER the table content
+    const anchorIdx = flat.indexOf("ANCHORTARGET");
+    expect(anchorIdx).toBeGreaterThan(0);
+    // The cell content "a" and "b" must appear before the anchor, joined by \t
+    const aIdx = flat.indexOf("a\tb");
+    expect(aIdx).toBeGreaterThan(-1);
+    expect(aIdx).toBeLessThan(anchorIdx);
+    // Round-trip preserves the anchor on disk
+    const output = saveMarkdown(doc);
+    expect(output).toContain("ANCHORTARGET");
+    expect(output).toContain("Before table.");
+    doc.destroy();
+  });
+
+  it("table preceded and followed by paragraphs survives round-trip", () => {
+    const input = [
+      "Intro paragraph.",
+      "",
+      "| K | V |",
+      "| - | - |",
+      "| a | 1 |",
+      "",
+      "Outro paragraph.",
+    ].join("\n");
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("Intro paragraph.");
+    expect(output).toContain("Outro paragraph.");
+    expect(output).toContain("| K");
+    expect(output).toContain("| V");
+    expect(output).toContain("a");
   });
 });

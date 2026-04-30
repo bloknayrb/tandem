@@ -1,4 +1,4 @@
-import type { PhrasingContent, Root, RootContent } from "mdast";
+import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
 
 /**
@@ -107,6 +107,40 @@ function blockToYxml(
 
     case "thematicBreak": {
       return [new Y.XmlElement("horizontalRule")];
+    }
+
+    case "table": {
+      // GFM table: first MDAST tableRow becomes a row of tableHeader cells;
+      // subsequent rows become tableCell rows. Column alignment is stored as
+      // a JSON-stringified table-level "align" attribute (matches MDAST's
+      // table-level storage and avoids per-cell alignment plumbing).
+      //
+      // Per CLAUDE.md "Y.XmlText must be attached before populating": each
+      // cell's paragraph + Y.XmlText is attached to the tree first, and the
+      // inline children are pushed to deferred[] for the second pass — same
+      // pattern used by paragraph/heading above.
+      const tableEl = new Y.XmlElement("table");
+      const align: (AlignType | null | undefined)[] = node.align ?? [];
+      tableEl.setAttribute("align", JSON.stringify(align) as any);
+      node.children.forEach((row, rowIdx) => {
+        const rowEl = new Y.XmlElement("tableRow");
+        const cellNodeName = rowIdx === 0 ? "tableHeader" : "tableCell";
+        for (const cell of row.children) {
+          const cellEl = new Y.XmlElement(cellNodeName);
+          // Tiptap wraps cell content in a paragraph; mirror that here so the
+          // Y.Doc structure matches what the editor would produce.
+          const para = new Y.XmlElement("paragraph");
+          const text = new Y.XmlText();
+          // Attach in order: row → cell → paragraph → text. Each child is
+          // attached to its parent before deferring inline population.
+          cellEl.insert(0, [para]);
+          para.insert(0, [text]);
+          rowEl.insert(rowEl.length, [cellEl]);
+          deferred.push({ xmlText: text, nodes: cell.children });
+        }
+        tableEl.insert(tableEl.length, [rowEl]);
+      });
+      return [tableEl];
     }
 
     case "image": {
@@ -294,6 +328,56 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
 
     case "horizontalRule":
       return { type: "thematicBreak" };
+
+    case "table": {
+      // Read column alignment from the table-level "align" attribute (stored
+      // as JSON). Default to [] if missing or unparseable — alignment is
+      // optional in GFM, body-row alignment attrs are ignored.
+      let align: (AlignType | null)[] = [];
+      const rawAlign = el.getAttribute("align");
+      if (typeof rawAlign === "string" && rawAlign.length > 0) {
+        try {
+          const parsed = JSON.parse(rawAlign);
+          if (Array.isArray(parsed)) align = parsed as (AlignType | null)[];
+        } catch {
+          // fall through with empty align
+        }
+      }
+      const rows: any[] = [];
+      for (let i = 0; i < el.length; i++) {
+        const rowChild = el.get(i);
+        if (!(rowChild instanceof Y.XmlElement) || rowChild.nodeName !== "tableRow") {
+          continue;
+        }
+        const cells: any[] = [];
+        for (let j = 0; j < rowChild.length; j++) {
+          const cellChild = rowChild.get(j);
+          if (
+            cellChild instanceof Y.XmlElement &&
+            (cellChild.nodeName === "tableHeader" || cellChild.nodeName === "tableCell")
+          ) {
+            // Find the inner paragraph wrapper and serialize its inline content.
+            // Fall back to direct cell content if no paragraph (shouldn't happen).
+            let phrasing: PhrasingContent[] = [];
+            let foundPara = false;
+            for (let k = 0; k < cellChild.length; k++) {
+              const inner = cellChild.get(k);
+              if (inner instanceof Y.XmlElement && inner.nodeName === "paragraph") {
+                phrasing = deltaToPhrasingContent(inner);
+                foundPara = true;
+                break;
+              }
+            }
+            if (!foundPara) {
+              phrasing = deltaToPhrasingContent(cellChild);
+            }
+            cells.push({ type: "tableCell", children: phrasing });
+          }
+        }
+        rows.push({ type: "tableRow", children: cells });
+      }
+      return { type: "table", align, children: rows } as Table;
+    }
 
     case "image": {
       return {
