@@ -132,7 +132,8 @@ export const AnnotationCard = React.memo(function AnnotationCard({
       ? annotation.content.slice(0, 57) + "..."
       : annotation.content
     : "";
-  const cardLabel = `${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
+  const isPrivateNote = annotation.type === "note";
+  const cardLabel = `${isPrivateNote ? "private " : ""}${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`;
 
   return (
     <div
@@ -165,6 +166,26 @@ export const AnnotationCard = React.memo(function AnnotationCard({
           }}
         >
           {displayType}
+          {isPrivateNote && (
+            <span
+              data-testid="annotation-private-pill"
+              aria-hidden="true"
+              title="Private note"
+              style={{
+                padding: "1px 6px",
+                fontSize: "10px",
+                fontWeight: 600,
+                letterSpacing: "0.02em",
+                textTransform: "uppercase",
+                color: "var(--tandem-warning-fg)",
+                background: "var(--tandem-warning)",
+                borderRadius: "3px",
+                lineHeight: 1,
+              }}
+            >
+              Private
+            </span>
+          )}
           {!isPending && (
             <span
               style={{
