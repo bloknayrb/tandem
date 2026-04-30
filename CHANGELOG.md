@@ -32,6 +32,8 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - **Highlight palette migration (#450)** — palette switched from 5 colors to 4 (yellow/green/blue/pink). `LEGACY_COLOR_MAP` migrates `red` → `yellow`, `purple` → `blue` on annotation load.
 - **CI stdio smoke test (#341)** — GitHub Actions step validates the Cowork stdio bridge (`scripts/ci/stdio-smoke.mjs`) on every push.
 - **`__MCP_SDK_VERSION__` build-time injection** — tsup reads the real SDK version from the package root (not the CJS type marker) and injects it at build time.
+- **`tandem_getAnnotations` `includeImports` opt-in (ADR-027, #473)** — accepts `includeImports: true` to surface `author: "import"` reviewer comments imported from `.docx` files. Default still excludes them so the user triages first. When imports are filtered out, the response includes `importsExcluded: N` so Claude can prompt the user to opt in.
+- **Deprecated-tool user notifications (ADR-027, #473)** — `tandem_highlight`, `tandem_flag`, and `tandem_suggest` stubs now `pushNotification` a warning toast in addition to returning the `DEPRECATED` mcpError, so the user sees what Claude tried.
 
 ### Fixed
 
@@ -42,6 +44,8 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - **Annotation recovery guard hardening** — narrowed guard scope for edge cases in session restore.
 - **Event-bridge error handling** — uncaught errors in SSE delivery no longer crash the event loop.
 - **MCP SDK version resolution** — `require("@modelcontextprotocol/sdk/package.json")` resolves to `dist/cjs/package.json` (a CJS type marker without `version`); build now walks back past `dist/` to find the real version.
+- **Silent-migration logging (ADR-027, #473)** — `parseAnnotationDoc`, `migrateToV1`, and the `directedAt` strip fast path now log via the new `migration-log.ts` module (once per `${docHash}:${kind}`) instead of silently rewriting v0 records. Restores forensic trail for the v0→v1 transition.
+- **`normalizeReply` validation (#473)** — replies are now Zod-validated before being merged; malformed entries are dropped + logged instead of poisoning the envelope.
 
 ### Changed
 
