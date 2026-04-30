@@ -21,6 +21,10 @@ import {
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import {
+  getBuffer as getNotificationBuffer,
+  resetForTesting as resetNotifications,
+} from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
@@ -138,11 +142,22 @@ describe("MCP tool integration — annotation tools", () => {
     ["tandem_flag", {}, "mcp-ann-flag-noargs"],
   ] as const)("%s returns DEPRECATED error (args: %j)", async (toolName, args, docId) => {
     setupDoc(docId, "Hello world");
+    resetNotifications();
 
     const result = await client.callTool({ name: toolName, arguments: args });
     const parsed = parseResult(result);
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("DEPRECATED");
+
+    // Deprecated stubs surface to the user via pushNotification — without it,
+    // Claude sees DEPRECATED but the user has no idea the call happened.
+    const notifications = getNotificationBuffer();
+    const found = notifications.find(
+      (n) => n.errorCode === "DEPRECATED" && n.toolName === toolName,
+    );
+    expect(found).toBeDefined();
+    expect(found?.severity).toBe("warning");
+    expect(found?.dedupKey).toBe(`deprecated:${toolName}`);
   });
 
   it("tandem_comment rejects directedAt with DEPRECATED error and creates no annotation", async () => {

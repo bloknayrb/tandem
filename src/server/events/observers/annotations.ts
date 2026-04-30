@@ -29,8 +29,13 @@ export function makeAnnotationsObserver(deps: {
         continue;
       }
 
-      // ADR-027: notes are user-private — never push them to the channel. Only user-authored comments fire annotation:created.
-      if (change.action === "add" && ann.author === "user" && ann.type === "comment") {
+      if (change.action === "add" && ann.author === "user") {
+        // ADR-027: notes are user-private; highlights are user-only UI markup.
+        // Only comments surface to the channel (Claude). The early-continue
+        // makes this privacy invariant structurally explicit — a future
+        // refactor that drops the type check breaks visibly here, not by
+        // silently leaking notes.
+        if (ann.type !== "comment") continue;
         pushEvent({
           id: generateEventId(),
           type: "annotation:created",

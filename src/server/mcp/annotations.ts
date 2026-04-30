@@ -189,6 +189,20 @@ function notifyRangeFailure(
   });
 }
 
+/** Surface a deprecated-tool call to the user; without this, only Claude sees the failure. */
+function notifyDeprecatedTool(toolName: string): void {
+  pushNotification({
+    id: generateNotificationId(),
+    type: "annotation-error",
+    severity: "warning",
+    message: `Claude tried a deprecated tool (${toolName}). Ask Claude to retry with tandem_comment.`,
+    toolName,
+    errorCode: "DEPRECATED",
+    dedupKey: `deprecated:${toolName}`,
+    timestamp: Date.now(),
+  });
+}
+
 const SNAPSHOT_CAP = 200;
 /** Capture a text snapshot from the document at the given range, truncated to SNAPSHOT_CAP chars. */
 function captureSnapshot(ydoc: Y.Doc, from: number, to: number): string {
@@ -284,12 +298,13 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_highlight", async () =>
-      mcpError(
+    withErrorBoundary("tandem_highlight", async () => {
+      notifyDeprecatedTool("tandem_highlight");
+      return mcpError(
         "DEPRECATED",
         "tandem_highlight is deprecated. Highlights are user-only. Use tandem_comment for text annotations.",
-      ),
-    ),
+      );
+    }),
   );
 
   server.tool(
@@ -364,12 +379,13 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_suggest", async () =>
-      mcpError(
+    withErrorBoundary("tandem_suggest", async () => {
+      notifyDeprecatedTool("tandem_suggest");
+      return mcpError(
         "DEPRECATED",
         "tandem_suggest is deprecated. Use tandem_comment with suggestedText instead.",
-      ),
-    ),
+      );
+    }),
   );
 
   server.tool(
@@ -384,9 +400,10 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_flag", async () =>
-      mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead."),
-    ),
+    withErrorBoundary("tandem_flag", async () => {
+      notifyDeprecatedTool("tandem_flag");
+      return mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead.");
+    }),
   );
 
   server.tool(

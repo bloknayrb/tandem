@@ -20,6 +20,7 @@ vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
   };
 });
 
+import { resetMigrationLog } from "../../../src/server/annotations/migration-log.js";
 import {
   type AnnotationRecordV1,
   parseAnnotationDoc,
@@ -67,11 +68,13 @@ const env = useTmpAnnotationsEnvWithFlag("tandem-sync-test-");
 beforeEach(() => {
   resetForTesting();
   resetStoreForTesting();
+  resetMigrationLog();
 });
 
 afterEach(() => {
   resetForTesting();
   resetStoreForTesting();
+  resetMigrationLog();
 });
 
 // ---------------------------------------------------------------------------
@@ -385,6 +388,62 @@ describe("legacy-type sanitize on write", () => {
     expect(parsed.ok).toBe(true);
 
     cleanup();
+  });
+
+  it("fast-path directedAt strip logs the migration once per doc", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(() => {
+      annMap.set("a1", {
+        ...annRecord({ id: "a1", rev: 5 }),
+        type: "comment",
+        directedAt: "claude",
+      });
+      annMap.set("a2", {
+        ...annRecord({ id: "a2", rev: 5 }),
+        type: "comment",
+        directedAt: "claude",
+      });
+    }, MCP_ORIGIN);
+    await store.flush();
+
+    const directedAtLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes(`legacy migration: directedAt in ${HASH_A}`),
+    );
+    expect(directedAtLogs).toHaveLength(1);
+
+    cleanup();
+    errorSpy.mockRestore();
+  });
+
+  it("normalizeReply drops a malformed reply with a logged error", async () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    ydoc.transact(() => {
+      // Missing required fields (annotationId, author, text, timestamp)
+      repMap.set("rep_bad", { id: "rep_bad", rev: 1 });
+    }, MCP_ORIGIN);
+    await store.flush();
+
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.replies).toHaveLength(0);
+
+    const dropLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("normalizeReply: dropping reply id=rep_bad"),
+    );
+    expect(dropLogs.length).toBeGreaterThanOrEqual(1);
+
+    cleanup();
+    errorSpy.mockRestore();
   });
 
   it("dedupes the upgrade warning to once per docHash per session", async () => {

@@ -161,6 +161,9 @@ describe("origin filtering", () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("annotation:created");
     expect(events[0].payload.annotationId).toBe("ann_1");
+    // ADR-027: directedAt is removed from the payload type. Defense-in-depth
+    // assertion against a future spread regression on AnnotationCreatedPayload.
+    expect(events[0].payload).not.toHaveProperty("directedAt");
     cleanup();
   });
 

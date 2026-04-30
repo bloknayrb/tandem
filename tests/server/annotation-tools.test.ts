@@ -16,7 +16,7 @@ beforeEach(() => {
   clearOpenDocs();
 });
 
-describe("tandem_highlight is user-only (internal logic still works)", () => {
+describe("createAnnotation supports highlight type for editor-created highlights", () => {
   it("createAnnotation still supports highlight type for user-created highlights", () => {
     const ydoc = setupDoc("hl-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
