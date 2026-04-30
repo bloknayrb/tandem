@@ -275,20 +275,14 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_highlight",
     "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
-      color: HighlightColorSchema.describe("Highlight color"),
-      note: z.string().optional().describe("Optional note for the highlight"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-      textSnapshot: z
-        .string()
-        .optional()
-        .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
-        ),
+      // All params optional so callers omitting them get the DEPRECATED message
+      // rather than a Zod validation error.
+      from: z.number().optional(),
+      to: z.number().optional(),
+      color: HighlightColorSchema.optional(),
+      note: z.string().optional(),
+      documentId: z.string().optional(),
+      textSnapshot: z.string().optional(),
     },
     withErrorBoundary("tandem_highlight", async () =>
       mcpError(
@@ -369,19 +363,13 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_flag",
     "DEPRECATED. Use tandem_comment instead.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
-      note: z.string().optional().describe("Reason for flagging"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
-      textSnapshot: z
-        .string()
-        .optional()
-        .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
-        ),
+      // All params optional so callers omitting them get the DEPRECATED message
+      // rather than a Zod validation error.
+      from: z.number().optional(),
+      to: z.number().optional(),
+      note: z.string().optional(),
+      documentId: z.string().optional(),
+      textSnapshot: z.string().optional(),
     },
     withErrorBoundary("tandem_flag", async () =>
       mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead."),

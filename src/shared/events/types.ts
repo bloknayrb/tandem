@@ -10,13 +10,13 @@
  * server layer boundary.
  */
 
-import type { ReplyAuthor } from "../types.js";
+import type { AnnotationType, ReplyAuthor } from "../types.js";
 
 // --- Per-event payload interfaces ---
 
 export interface AnnotationCreatedPayload {
   annotationId: string;
-  annotationType: string;
+  annotationType: AnnotationType;
   content: string;
   textSnippet: string;
   hasSuggestedText?: boolean;

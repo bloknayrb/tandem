@@ -80,7 +80,9 @@ const RelativeRangeSchema = z
 /**
  * Per-annotation envelope record. Largely mirrors `AnnotationBase` from
  * `src/shared/types.ts`, plus the optional type-discriminator fields
- * (`color` / `suggestedText` / `directedAt`), plus the required `rev`.
+ * (`color` / `suggestedText`), plus the required `rev`. The `directedAt`
+ * field remains in the schema but is deprecated per ADR-027 and stripped
+ * by `sanitizeAnnotation` / the `normalizeAnnotation` fast path on read.
  * Fields not listed here (e.g. `heldInSolo`) are preserved via `.passthrough()`.
  */
 export const AnnotationRecordSchemaV1 = z
