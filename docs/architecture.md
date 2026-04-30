@@ -368,7 +368,7 @@ Each open document has its own Y.Doc (one per Hocuspocus room). Each Y.Doc conta
 | Structure | Type | Purpose |
 |-----------|------|---------|
 | `Y.XmlFragment('default')` | Document content | Paragraphs, headings as Y.XmlElement nodes with Y.XmlText children |
-| `Y.Map('annotations')` | Annotation metadata | Highlights, comments, flags keyed by annotation ID |
+| `Y.Map('annotations')` | Annotation metadata | Highlights, comments, notes keyed by annotation ID |
 | `Y.Map('awareness')` | Claude's presence | Status text, focus paragraph, active flag |
 | `Y.Map('userAwareness')` | User's presence | Selection range, typing state, cursor position |
 | `Y.Map('documentMeta')` | Document metadata | `openDocuments` array, `activeDocumentId`, readOnly flag, format |

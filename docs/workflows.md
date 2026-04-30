@@ -253,7 +253,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 **Setup:** Claude has finished and left 15+ annotations. Bryan wants to process them efficiently.
 
 The editor's side panel shows all pending annotations with filter controls:
-- Filter by type (highlights, comments, flags) — comments with replacement text show as "With replacement", comments with `directedAt` show as "For Claude"
+- Filter by type (highlights, comments, notes) — comments with replacement text show as "With replacement"
 - Filter by author (Claude, You)
 - Filter by status (pending, accepted, dismissed)
 
@@ -330,7 +330,7 @@ A floating tutorial card appears at the bottom-left of the editor with three ste
 
 **Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or using Y/N in keyboard review mode) completes this step.
 
-**Step 2: Ask Claude a question.** The card prompts the user to select text and create an annotation (highlight, comment, or comment with @Claude toggle). Creating any user annotation completes this step.
+**Step 2: Annotate the text.** The card prompts the user to select text and create a Comment (sent to Claude) or a Note (private to the user). Creating any user annotation completes this step.
 
 **Step 3: Try editing.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
 
@@ -344,7 +344,7 @@ After all three steps, the tutorial card disappears and doesn't return (persiste
 
 Each pending annotation card shows a pencil (edit) button. Clicking it enters inline edit mode:
 
-- **For highlights and flags:** A single textarea appears with the current note/text content.
+- **For highlights and notes:** A single textarea appears with the current note/text content.
 - **For comments:** A textarea for the comment text, plus an optional field for `suggestedText` (replacement proposal) if one exists.
 
 Click "Save" to apply the edit or "Cancel" to discard. The annotation card shows "(edited)" after saving, with the `editedAt` timestamp.

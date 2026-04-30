@@ -493,7 +493,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 | `tandem_getContext` | Keep | — |
 | `tandem_removeAnnotation` | Keep | — |
 
-Net result: 25 tools (down from 31; tandem_highlight, tandem_flag, tandem_suggest deprecated to stubs in v0.10.0).
+Net result: 25 tools (down from 31; `tandem_highlight`, `tandem_flag`, `tandem_suggest` deprecated to stubs in v0.9.0; hard-remove targeted for v0.10.0).
 
 ### v1.0.0 Exit Criteria
 
