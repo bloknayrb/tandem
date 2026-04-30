@@ -90,7 +90,11 @@ export function useYjsSync(): YjsSyncResult {
     const annotationObserver = () => {
       const anns: Annotation[] = [];
       annotationsMap.forEach((value) => {
-        anns.push(sanitizeAnnotation(value as Annotation));
+        anns.push(
+          sanitizeAnnotation(value as Annotation, (event) => {
+            console.warn("[sanitize]", event);
+          }),
+        );
       });
       setAnnotations(anns);
     };

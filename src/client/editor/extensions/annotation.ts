@@ -22,7 +22,10 @@ function buildDecorations(
   const maxPos = doc.content.size;
 
   annotationsMap.forEach((value) => {
-    const ann = sanitizeAnnotation(value as Annotation);
+    const ann = sanitizeAnnotation(value as Annotation, (event) => {
+      // Browser DevTools breadcrumb — only forensic trail client-side.
+      console.warn("[sanitize]", event);
+    });
     if (ann.status !== "pending") return;
     if (!ann.range && !ann.relRange) return;
 

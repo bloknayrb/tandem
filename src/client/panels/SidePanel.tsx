@@ -140,7 +140,9 @@ export function SidePanel({
     const map = y.getMap(Y_MAP_ANNOTATIONS);
     const raw = map.get(id) as Annotation | undefined;
     if (!raw) return;
-    const ann = sanitizeAnnotation(raw);
+    const ann = sanitizeAnnotation(raw, (event) => {
+      console.warn("[sanitize]", event);
+    });
 
     // If the annotation has suggestedText, newContent is JSON-encoded
     // {suggestedText, content} from the AnnotationCard edit form.

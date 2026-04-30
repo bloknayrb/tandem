@@ -2,10 +2,16 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
 import { useReviewKeyboard } from "../hooks/useReviewKeyboard";
 import { annotationToPmRange } from "../positions";
+
+/** Browser DevTools breadcrumb — only forensic trail client-side when sanitize coerces. */
+const devSanitizeWarn = (event: SanitizationEvent): void => {
+  console.warn("[sanitize]", event);
+};
 
 /** Apply an annotation's replacement text in the editor */
 function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null): boolean {
@@ -100,7 +106,7 @@ export function useAnnotationReview({
     const map = y.getMap(Y_MAP_ANNOTATIONS);
     const raw = map.get(id) as Annotation | undefined;
     if (!raw) return;
-    const ann = sanitizeAnnotation(raw);
+    const ann = sanitizeAnnotation(raw, devSanitizeWarn);
     map.set(id, { ...ann, status });
     // Only annotations with suggestedText trigger a text replacement when
     // accepted. For plain comments/highlights/flags, accepting is just a
@@ -158,7 +164,7 @@ export function useAnnotationReview({
       removeFromResolved(id);
       return false;
     }
-    const ann = sanitizeAnnotation(raw);
+    const ann = sanitizeAnnotation(raw, devSanitizeWarn);
 
     if (ann.status === "accepted" && ann.suggestedText !== undefined && editorRef.current) {
       try {

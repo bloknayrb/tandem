@@ -59,7 +59,7 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/consta
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
 import { FILE_SYNC_ORIGIN } from "../events/origins.js";
-import { forgetDoc, logLegacyMigration } from "./migration-log.js";
+import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
 import {
   type AnnotationDocV1,
   type AnnotationRecordV1,
@@ -133,7 +133,9 @@ function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1
     logLegacyMigration(docHash, "legacy-type");
   }
 
-  const sanitized = sanitizeAnnotation(obj as unknown as RawAnnotation);
+  const sanitized = sanitizeAnnotation(obj as unknown as RawAnnotation, (event) =>
+    relaySanitizationEvent(docHash, event),
+  );
   return {
     ...sanitized,
     rev: typeof obj.rev === "number" ? obj.rev : 0,

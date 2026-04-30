@@ -4,6 +4,30 @@ import type { Annotation } from "./types.js";
 export type RawAnnotation = Omit<Annotation, "type"> & { type: string };
 
 /**
+ * Discriminated union describing a lossy rewrite performed by
+ * `sanitizeAnnotation`. Reported via the required `onLossy` callback so
+ * callers can route the event to their own observability sink (server:
+ * migration-log; client: dev console).
+ *
+ * NEW kinds added here MUST be handled in `relaySanitizationEvent`
+ * (`src/server/annotations/migration-log.ts`) — extend
+ * `LegacyMigrationKind` in lockstep.
+ */
+export type SanitizationEvent =
+  | { kind: "flag-to-note"; id: string }
+  | { kind: "question-to-comment"; id: string }
+  | { kind: "malformed-suggestion-json"; id: string }
+  | { kind: "unknown-type"; id: string; rawType: string };
+
+/**
+ * Required callback invoked once per lossy rewrite. Sync only — Promise
+ * returns are forbidden at the type level. Errors thrown from the callback
+ * are caught inside `sanitizeAnnotation` and logged to stderr; sanitize
+ * never aborts mid-`.map()` because of a faulty relay.
+ */
+export type OnLossy = (event: SanitizationEvent) => void;
+
+/**
  * Normalize a legacy annotation into the unified shape.
  * - `suggestion` → `comment` with `suggestedText` + `content` (parsed from JSON)
  * - `question` → `comment` (directedAt removed per ADR-027)
@@ -17,8 +41,16 @@ export type RawAnnotation = Omit<Annotation, "type"> & { type: string };
  *   here is load-bearing: without it every sanitize-then-write cycle in the
  *   MCP tools would reset `rev` to undefined and the sync observer would
  *   serialize `rev: 0` forever.
+ *
+ * `onLossy` is REQUIRED. Lossy rewrites — `flag→note`, `question→comment`,
+ * malformed-suggestion-JSON, unknown-type → comment — fire one event each.
+ * Making the callback required is the TS-level enforcement that prevents a
+ * forgotten callsite from silently regressing observability.
  */
-export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotation {
+export function sanitizeAnnotation(
+  input: Annotation | RawAnnotation,
+  onLossy: OnLossy,
+): Annotation {
   const ann = input as RawAnnotation;
 
   // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
@@ -35,6 +67,17 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
     ...(typeof ann.rev === "number" ? { rev: ann.rev } : {}),
   };
 
+  const emit = (event: SanitizationEvent): void => {
+    try {
+      onLossy(event);
+    } catch (err) {
+      // Never abort sanitize because of a faulty relay. The whole point of
+      // the callback is observability — if it throws, log to stderr (which
+      // the server redirects from console.warn) and move on.
+      console.warn(`[sanitizeAnnotation] onLossy threw for ${event.kind}:`, err);
+    }
+  };
+
   if (ann.type === "suggestion") {
     let suggestedText: string | undefined;
     let content: string;
@@ -43,15 +86,14 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
       suggestedText = parsed.newText;
       content = parsed.reason ?? "";
     } catch {
-      console.warn(
-        `[sanitizeAnnotation] Malformed JSON in legacy suggestion ${ann.id}, treating as plain comment`,
-      );
+      emit({ kind: "malformed-suggestion-json", id: ann.id });
       content = ann.content;
     }
     return { ...base, type: "comment", content, suggestedText } as Annotation;
   }
 
   if (ann.type === "question") {
+    emit({ kind: "question-to-comment", id: ann.id });
     return { ...base, type: "comment" } as Annotation;
   }
 
@@ -64,6 +106,9 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
   }
 
   if (ann.type === "flag" || ann.type === "note") {
+    if (ann.type === "flag") {
+      emit({ kind: "flag-to-note", id: ann.id });
+    }
     return { ...base, type: "note" } as Annotation;
   }
 
@@ -75,9 +120,7 @@ export function sanitizeAnnotation(input: Annotation | RawAnnotation): Annotatio
     } as Annotation;
   }
 
-  // Truly unknown type — coerce to comment with warning
-  console.warn(
-    `[sanitizeAnnotation] Unknown type "${ann.type}" for ${ann.id}, coercing to "comment"`,
-  );
+  // Truly unknown type — coerce to comment
+  emit({ kind: "unknown-type", id: ann.id, rawType: ann.type });
   return { ...base, type: "comment" } as Annotation;
 }

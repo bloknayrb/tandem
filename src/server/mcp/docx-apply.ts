@@ -15,6 +15,8 @@ import {
   atomicWriteBuffer,
 } from "../file-io/index.js";
 import { relPosToFlatOffset } from "../positions.js";
+import { docHash } from "../annotations/doc-hash.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { sanitizeAnnotation } from "./annotations.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
@@ -83,8 +85,11 @@ export async function applyChangesCore(
   const suggestions: AcceptedSuggestion[] = [];
   let pendingCount = 0;
 
+  const applyDocHash = docHash(filePath);
   for (const [, raw] of map) {
-    const ann = sanitizeAnnotation(raw as Annotation);
+    const ann = sanitizeAnnotation(raw as Annotation, (event) =>
+      relaySanitizationEvent(applyDocHash, event),
+    );
     if (ann.suggestedText === undefined) continue;
     if (ann.status === "pending") {
       pendingCount++;

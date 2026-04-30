@@ -20,6 +20,7 @@ import { UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
 import {
@@ -636,7 +637,14 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
     const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
     const annotations: Annotation[] = [];
-    annotationMap.forEach((val) => annotations.push(sanitizeAnnotation(val as Annotation)));
+    const reloadDocHash = docHash(filePath);
+    annotationMap.forEach((val) =>
+      annotations.push(
+        sanitizeAnnotation(val as Annotation, (event) =>
+          relaySanitizationEvent(reloadDocHash, event),
+        ),
+      ),
+    );
 
     if (annotations.length > 0) {
       const refreshed = refreshAllRanges(annotations, doc, annotationMap);

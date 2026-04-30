@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
 import { sanitizeAnnotation } from "../../../shared/sanitize.js";
+import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import type { Annotation } from "../../../shared/types.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../origins.js";
 import type { TandemEvent } from "../types.js";
@@ -23,7 +24,7 @@ export function makeAnnotationsObserver(deps: {
 
       let ann: Annotation;
       try {
-        ann = sanitizeAnnotation(raw);
+        ann = sanitizeAnnotation(raw, (event) => relaySanitizationEvent(docName, event));
       } catch (err) {
         console.warn(`[EventQueue] sanitizeAnnotation failed for key=${key}:`, err);
         continue;
