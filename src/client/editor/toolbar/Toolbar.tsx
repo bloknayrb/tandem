@@ -212,6 +212,7 @@ export function Toolbar({
 
       <ToolbarButton
         label="Comment"
+        testId="toolbar-comment-btn"
         disabled={!canAnnotate || inInputMode}
         disabledTitle="Select text first"
         onMouseDown={startComment}
@@ -228,11 +229,13 @@ export function Toolbar({
           submitLabel="Add"
           borderColor="var(--tandem-author-user)"
           canSubmit={!!modeText.trim()}
+          testIdPrefix="toolbar-comment"
         />
       )}
 
       <ToolbarButton
         label="Note"
+        testId="toolbar-note-btn"
         disabled={!canAnnotate || inInputMode}
         disabledTitle="Select text first"
         onMouseDown={startNote}
@@ -249,6 +252,7 @@ export function Toolbar({
           submitLabel="Add"
           borderColor="var(--tandem-fg-muted)"
           canSubmit={true}
+          testIdPrefix="toolbar-note"
         />
       )}
 

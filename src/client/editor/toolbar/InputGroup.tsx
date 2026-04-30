@@ -13,6 +13,10 @@ interface InputGroupProps {
   borderColor: string;
   canSubmit: boolean;
   secondaryInput?: React.ReactNode;
+  /** Optional prefix used to derive `data-testid` values for the input,
+   * submit, and cancel controls (e.g. `"toolbar-comment"` produces
+   * `toolbar-comment-input`, `toolbar-comment-submit`, `toolbar-comment-cancel`). */
+  testIdPrefix?: string;
 }
 
 /** Reusable inline input group for comment/question/suggest modes */
@@ -28,12 +32,14 @@ export function InputGroup({
   borderColor,
   canSubmit,
   secondaryInput,
+  testIdPrefix,
 }: InputGroupProps) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
       <input
         ref={inputRef}
         type="text"
+        data-testid={testIdPrefix ? `${testIdPrefix}-input` : undefined}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
@@ -51,8 +57,18 @@ export function InputGroup({
         }}
       />
       {secondaryInput}
-      <ToolbarButton label={submitLabel} disabled={!canSubmit} onClick={onSubmit} />
-      <ToolbarButton label="Cancel" disabled={false} onClick={onCancel} />
+      <ToolbarButton
+        label={submitLabel}
+        testId={testIdPrefix ? `${testIdPrefix}-submit` : undefined}
+        disabled={!canSubmit}
+        onClick={onSubmit}
+      />
+      <ToolbarButton
+        label="Cancel"
+        testId={testIdPrefix ? `${testIdPrefix}-cancel` : undefined}
+        disabled={false}
+        onClick={onCancel}
+      />
     </div>
   );
 }
