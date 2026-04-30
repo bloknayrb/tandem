@@ -356,6 +356,37 @@ describe("legacy-type sanitize on write", () => {
     errorSpy.mockRestore();
   });
 
+  it("fast-path (canonical type + numeric rev) strips directedAt from disk output", async () => {
+    // Regression for finding #2: pre-ADR-027 comment records with directedAt hit the fast path
+    // in normalizeAnnotation, which returned obj as-is, preserving directedAt on disk.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    ydoc.transact(
+      () =>
+        annMap.set("ann_with_directed", {
+          ...annRecord({ id: "ann_with_directed", rev: 5 }),
+          type: "comment",
+          directedAt: "claude",
+        }),
+      MCP_ORIGIN,
+    );
+
+    await store.flush();
+
+    const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.annotations[0].type).toBe("comment");
+    expect(onDisk.annotations[0].directedAt).toBeUndefined();
+
+    const parsed = parseAnnotationDoc(raw);
+    expect(parsed.ok).toBe(true);
+
+    cleanup();
+  });
+
   it("dedupes the upgrade warning to once per docHash per session", async () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });

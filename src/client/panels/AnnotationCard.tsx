@@ -60,7 +60,7 @@ function getBorderColor(annotation: Annotation): string {
     return HIGHLIGHT_COLORS[annotation.color] || "var(--tandem-border)";
   }
   if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)"; // replacement
-  if (annotation.type === "note") return "var(--tandem-fg-muted)"; // personal note
+  if (annotation.type === "note") return "var(--tandem-warning)"; // personal note — amber signals private
   return "var(--tandem-author-user)"; // plain comment
 }
 
@@ -139,7 +139,11 @@ export const AnnotationCard = React.memo(function AnnotationCard({
         padding: "8px 10px",
         marginBottom: "6px",
         borderLeft: `3px solid ${borderColor}`,
-        background: isReviewTarget ? "var(--tandem-accent-bg)" : "var(--tandem-surface)",
+        background: isReviewTarget
+          ? "var(--tandem-accent-bg)"
+          : annotation.type === "note"
+            ? "var(--tandem-warning-bg)"
+            : "var(--tandem-surface)",
         borderRadius: "0 4px 4px 0",
         fontSize: "13px",
         opacity: isPending ? 1 : 0.6,

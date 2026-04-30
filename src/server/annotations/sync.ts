@@ -119,7 +119,13 @@ function normalizeAnnotation(raw: unknown, docHash?: string): AnnotationRecordV1
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown> & Partial<AnnotationRecordV1>;
   const isCanonical = CANONICAL_TYPES.has(obj.type as string);
-  if (typeof obj.rev === "number" && isCanonical) return obj as AnnotationRecordV1;
+  if (typeof obj.rev === "number" && isCanonical) {
+    // Strip directedAt even on the fast path — pre-ADR-027 comment records may carry it.
+    if (!("directedAt" in obj)) return obj as AnnotationRecordV1;
+
+    const { directedAt: _, ...clean } = obj;
+    return clean as AnnotationRecordV1;
+  }
 
   if (!isCanonical && docHash && !loggedLegacyDocs.has(docHash)) {
     loggedLegacyDocs.add(docHash);

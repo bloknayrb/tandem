@@ -12,7 +12,7 @@ import { InputGroup } from "./InputGroup";
 import { ModeToggle } from "./ModeToggle";
 import { ToolbarButton } from "./ToolbarButton";
 
-type ToolbarMode = "idle" | "comment";
+type ToolbarMode = "idle" | "comment" | "note";
 
 interface ToolbarProps {
   editor: TiptapEditor | null;
@@ -40,6 +40,7 @@ export function Toolbar({
   const [modeText, setModeText] = useState("");
   const capturedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
+  const noteInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!editor) return;
@@ -58,9 +59,8 @@ export function Toolbar({
   }, [editor]);
 
   useEffect(() => {
-    if (mode === "comment" && commentInputRef.current) {
-      commentInputRef.current.focus();
-    }
+    if (mode === "comment") commentInputRef.current?.focus();
+    else if (mode === "note") noteInputRef.current?.focus();
   }, [mode]);
 
   function createAnnotation(
@@ -127,6 +127,7 @@ export function Toolbar({
   );
 
   const startComment = useMemo(() => handleModeStart("comment"), [handleModeStart]);
+  const startNote = useMemo(() => handleModeStart("note"), [handleModeStart]);
 
   function handleModeCancel() {
     setMode("idle");
@@ -135,12 +136,15 @@ export function Toolbar({
   }
 
   function handleModeSubmit() {
-    if (!modeText.trim()) {
-      handleModeCancel();
-      return;
+    if (mode === "note") {
+      createAnnotation("note", modeText.trim());
+    } else {
+      if (!modeText.trim()) {
+        handleModeCancel();
+        return;
+      }
+      createAnnotation("comment", modeText.trim());
     }
-
-    createAnnotation("comment", modeText.trim());
 
     setMode("idle");
     setModeText("");
@@ -154,13 +158,6 @@ export function Toolbar({
     } else if (e.key === "Escape") {
       handleModeCancel();
     }
-  }
-
-  // -- Note --
-
-  function handleNote(e: React.MouseEvent) {
-    e.preventDefault();
-    createAnnotation("note", "");
   }
 
   const canAnnotate = editor && ydoc && hasSelection;
@@ -234,7 +231,26 @@ export function Toolbar({
         />
       )}
 
-      <ToolbarButton label="Note" disabled={!canAnnotate || inInputMode} onMouseDown={handleNote} />
+      <ToolbarButton
+        label="Note"
+        disabled={!canAnnotate || inInputMode}
+        disabledTitle="Select text first"
+        onMouseDown={startNote}
+      />
+      {mode === "note" && (
+        <InputGroup
+          inputRef={noteInputRef}
+          value={modeText}
+          onChange={setModeText}
+          onKeyDown={handleModeKeyDown}
+          onSubmit={handleModeSubmit}
+          onCancel={handleModeCancel}
+          placeholder="Add a note to yourself..."
+          submitLabel="Add"
+          borderColor="var(--tandem-fg-muted)"
+          canSubmit={true}
+        />
+      )}
 
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
