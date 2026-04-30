@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+### Fixed
+
+- **Imported Word reviewer comments now surface to Claude by default (#482)** — `.docx` reviewer comments are imported as `author: "import"`, `type: "comment"` (was `type: "note"` in the unreleased PR #474 plan). Reverts the `tandem_getAnnotations` `includeImports` opt-in introduced in PR #474 — Claude can read imported comments alongside its own without an explicit flag, which matches the .docx review workflow. The opt-in plumbing (`includeImports` parameter, `importsExcluded` response field) is removed. Existing on-disk records with `author: "import", type: "note"` migrate transparently on read via `sanitizeAnnotation` (one-line clause; emits a `import-note-to-comment` migration-log event); on next import the durable record is rewritten in place. Safe because PR #474 was never tagged in a release.
+
 ## \[0.9.0] - 2026-04-28
 
 ### Breaking Changes (MCP)

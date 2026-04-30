@@ -421,17 +421,11 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_getAnnotations",
-    'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox. User notes are private and excluded by default; pass `type: "note"` to read them. Imported Word reviewer comments arrive as `author: "import", type: "note"` for user triage and are also excluded by default; pass `includeImports: true` to read them when the user asks for help with reviewer comments. The `notesExcluded` and `importsExcluded` fields in the response report how many were filtered out so you know when to ask.',
+    'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox. User notes are private and excluded by default; pass `type: "note"` to read them. Imported Word reviewer comments surface as comments (`author: "import", type: "comment"`) by default — filter via `author: "import"` if you want to scope to them. The `notesExcluded` field in the response reports how many notes were filtered out.',
     {
       author: AuthorSchema.optional().describe("Filter by author"),
       type: AnnotationTypeSchema.optional().describe("Filter by type"),
       status: AnnotationStatusSchema.optional().describe("Filter by status"),
-      includeImports: z
-        .boolean()
-        .optional()
-        .describe(
-          "When true, include imported Word reviewer comments (author=import). Defaults to false so users can triage before Claude sees them.",
-        ),
       documentId: z
         .string()
         .optional()
@@ -439,7 +433,7 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_getAnnotations",
-      async ({ author, type, status, includeImports, documentId }) => {
+      async ({ author, type, status, documentId }) => {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
 
@@ -448,24 +442,13 @@ export function registerAnnotationTools(server: McpServer): void {
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
 
-        // Imported Word comments arrive as author=import, type=note. They're
-        // excluded by default so the user can triage before Claude sees them
-        // (ADR-027: "Import (Word) comments enter as notes for user triage").
-        // Claude can opt in via includeImports when the user asks for help.
-        const importsExcluded = includeImports
-          ? 0
-          : results.filter((a) => a.author === "import").length;
-        if (!includeImports) results = results.filter((a) => a.author !== "import");
-
         // User notes are private — exclude them unless explicitly requested.
-        // Imports (already filtered above when !includeImports) are scoped out
-        // here so includeImports surfaces them even though they're type=note.
         const notesIncluded = type === "note";
         const notesExcluded = notesIncluded
           ? 0
-          : results.filter((a) => a.type === "note" && a.author !== "import").length;
+          : results.filter((a) => a.type === "note").length;
         if (!notesIncluded) {
-          results = results.filter((a) => a.type !== "note" || a.author === "import");
+          results = results.filter((a) => a.type !== "note");
         }
 
         const repliesMap = getRepliesMap(da.ydoc);
@@ -478,7 +461,6 @@ export function registerAnnotationTools(server: McpServer): void {
           annotations: annotationsWithReplies,
           count: annotationsWithReplies.length,
           ...(notesExcluded > 0 ? { notesExcluded } : {}),
-          ...(importsExcluded > 0 ? { importsExcluded } : {}),
         });
       },
     ),

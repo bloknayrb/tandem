@@ -17,7 +17,8 @@ export type SanitizationEvent =
   | { kind: "flag-to-note"; id: string }
   | { kind: "question-to-comment"; id: string }
   | { kind: "malformed-suggestion-json"; id: string }
-  | { kind: "unknown-type"; id: string; rawType: string };
+  | { kind: "unknown-type"; id: string; rawType: string }
+  | { kind: "import-note-to-comment"; id: string };
 
 /**
  * Required callback invoked once per lossy rewrite. Sync only — Promise
@@ -103,6 +104,15 @@ export function sanitizeAnnotation(
       type: "highlight",
       color: (ann as Annotation & { color?: string }).color,
     } as Annotation;
+  }
+
+  // Imported Word reviewer comments stored under the unreleased PR #474
+  // model as `type: "note"` need to surface to Claude as comments per
+  // ADR-027 (#482). MUST run before the flag/note clause below — otherwise
+  // the `type === "note"` branch shadows this rewrite into a no-op.
+  if (ann.author === "import" && ann.type === "note") {
+    emit({ kind: "import-note-to-comment", id: ann.id });
+    return { ...base, type: "comment" } as Annotation;
   }
 
   if (ann.type === "flag" || ann.type === "note") {

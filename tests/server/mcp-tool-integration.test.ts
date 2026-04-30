@@ -267,7 +267,7 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.data.notesExcluded ?? 0).toBe(0);
   });
 
-  it("tandem_getAnnotations excludes imported Word comments by default and reports importsExcluded", async () => {
+  it("tandem_getAnnotations surfaces imported Word comments by default (#482)", async () => {
     const ydoc = setupDoc("mcp-ann-imports-1", "Hello world test content");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -277,11 +277,12 @@ describe("MCP tool integration — annotation tools", () => {
       arguments: { from: 0, to: 5, text: "Claude comment" },
     });
 
-    // Seed two imported Word comments (author=import, type=note)
+    // Seed two imported Word comments — post-#482 these are author=import,
+    // type=comment (Claude-visible like any other comment).
     const imported1: Annotation = {
       id: "imp_1",
       author: "import",
-      type: "note",
+      type: "comment",
       range: { from: 6, to: 11 },
       content: "[Reviewer] Reword this",
       status: "pending",
@@ -291,7 +292,7 @@ describe("MCP tool integration — annotation tools", () => {
     const imported2: Annotation = {
       id: "imp_2",
       author: "import",
-      type: "note",
+      type: "comment",
       range: { from: 12, to: 16 },
       content: "[Reviewer] Check fact",
       status: "pending",
@@ -303,29 +304,33 @@ describe("MCP tool integration — annotation tools", () => {
       map.set(imported2.id, imported2);
     }, MCP_ORIGIN);
 
-    // Default call: imports excluded, count surfaced so Claude knows to ask
+    // Default call: imports surface alongside the Claude comment. No
+    // importsExcluded field — the opt-in plumbing was removed in #482.
     const defaultResult = await client.callTool({
       name: "tandem_getAnnotations",
       arguments: {},
     });
     const defaultParsed = parseResult(defaultResult);
-    expect(defaultParsed.data.count).toBe(1);
-    expect(defaultParsed.data.annotations[0].author).toBe("claude");
-    expect(defaultParsed.data.importsExcluded).toBe(2);
-
-    // Opt-in call: imports surfaced
-    const optInResult = await client.callTool({
-      name: "tandem_getAnnotations",
-      arguments: { includeImports: true },
-    });
-    const optInParsed = parseResult(optInResult);
-    expect(optInParsed.data.count).toBe(3);
-    expect(optInParsed.data.importsExcluded ?? 0).toBe(0);
-    const importedAuthors = optInParsed.data.annotations
+    expect(defaultParsed.data.count).toBe(3);
+    expect(defaultParsed.data.importsExcluded).toBeUndefined();
+    const authors = defaultParsed.data.annotations.map((a: Annotation) => a.author).sort();
+    expect(authors).toEqual(["claude", "import", "import"]);
+    const importedIds = defaultParsed.data.annotations
       .filter((a: Annotation) => a.author === "import")
       .map((a: Annotation) => a.id)
       .sort();
-    expect(importedAuthors).toEqual(["imp_1", "imp_2"]);
+    expect(importedIds).toEqual(["imp_1", "imp_2"]);
+
+    // Author filter still scopes to imports for users who want only those.
+    const filteredResult = await client.callTool({
+      name: "tandem_getAnnotations",
+      arguments: { author: "import" },
+    });
+    const filteredParsed = parseResult(filteredResult);
+    expect(filteredParsed.data.count).toBe(2);
+    expect(filteredParsed.data.annotations.every((a: Annotation) => a.author === "import")).toBe(
+      true,
+    );
   });
 });
 

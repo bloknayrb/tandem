@@ -194,8 +194,22 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
 
       const id = importAnnotationId(comment.commentId, comment.from, comment.to, comment.bodyText);
 
-      // Dedup: idempotent re-import. Same .docx → same id → skip the write.
-      if (map.has(id)) continue;
+      // Dedup: idempotent re-import. Same .docx → same id → skip the write,
+      // but if a pre-existing record was stored under the prior PR #474 model
+      // as `type: "note"`, rewrite it in place to `type: "comment"`. The
+      // rewrite triggers the sync observer and lets the on-disk durable
+      // record catch up to the corrected ADR-027 model (#482).
+      if (map.has(id)) {
+        const existing = map.get(id) as Annotation | undefined;
+        if (existing && existing.type === "note" && existing.author === "import") {
+          map.set(id, {
+            ...existing,
+            type: "comment" as const,
+            rev: nextRev(existing),
+          });
+        }
+        continue;
+      }
 
       const content =
         comment.authorName !== "Unknown"
@@ -205,7 +219,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
       const annotation: Annotation = {
         id,
         author: "import" as const,
-        type: "note" as const,
+        type: "comment" as const,
         range: { from: result.range.from, to: result.range.to },
         content,
         status: "pending" as const,

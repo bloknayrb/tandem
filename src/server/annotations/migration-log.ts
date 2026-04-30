@@ -25,7 +25,8 @@ export type LegacyMigrationKind =
   | "flag-to-note"
   | "question-to-comment"
   | "malformed-suggestion-json"
-  | "unknown-type";
+  | "unknown-type"
+  | "import-note-to-comment";
 
 /** Dedup state — `${docHash}:${kind}`. Cleared on doc close via `forgetDoc`. */
 const loggedLegacyMigrations = new Set<string>();
@@ -81,6 +82,7 @@ export function relaySanitizationEvent(
     case "question-to-comment":
     case "malformed-suggestion-json":
     case "unknown-type":
+    case "import-note-to-comment":
       logLegacyMigration(docHash, event.kind);
       return;
   }
