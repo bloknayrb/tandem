@@ -431,39 +431,34 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary(
-      "tandem_getAnnotations",
-      async ({ author, type, status, documentId }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
+    withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
+      const da = getDocAndAnnotations(documentId);
+      if (!da) return noDocumentError();
 
-        let results = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
-        if (author) results = results.filter((a) => a.author === author);
-        if (type) results = results.filter((a) => a.type === type);
-        if (status) results = results.filter((a) => a.status === status);
+      let results = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
+      if (author) results = results.filter((a) => a.author === author);
+      if (type) results = results.filter((a) => a.type === type);
+      if (status) results = results.filter((a) => a.status === status);
 
-        // User notes are private — exclude them unless explicitly requested.
-        const notesIncluded = type === "note";
-        const notesExcluded = notesIncluded
-          ? 0
-          : results.filter((a) => a.type === "note").length;
-        if (!notesIncluded) {
-          results = results.filter((a) => a.type !== "note");
-        }
+      // User notes are private — exclude them unless explicitly requested.
+      const notesIncluded = type === "note";
+      const notesExcluded = notesIncluded ? 0 : results.filter((a) => a.type === "note").length;
+      if (!notesIncluded) {
+        results = results.filter((a) => a.type !== "note");
+      }
 
-        const repliesMap = getRepliesMap(da.ydoc);
-        const annotationsWithReplies = results.map((ann) => ({
-          ...ann,
-          replies: collectRepliesForAnnotation(repliesMap, ann.id),
-        }));
+      const repliesMap = getRepliesMap(da.ydoc);
+      const annotationsWithReplies = results.map((ann) => ({
+        ...ann,
+        replies: collectRepliesForAnnotation(repliesMap, ann.id),
+      }));
 
-        return mcpSuccess({
-          annotations: annotationsWithReplies,
-          count: annotationsWithReplies.length,
-          ...(notesExcluded > 0 ? { notesExcluded } : {}),
-        });
-      },
-    ),
+      return mcpSuccess({
+        annotations: annotationsWithReplies,
+        count: annotationsWithReplies.length,
+        ...(notesExcluded > 0 ? { notesExcluded } : {}),
+      });
+    }),
   );
 
   server.tool(
