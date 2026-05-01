@@ -5,4 +5,6 @@ import type { Component } from "svelte";
  * Each entry is a lazy import: `() => import("../path/to/Component.svelte")`.
  * Subsequent PRs add entries here as components are ported from React.
  */
-export const registry: Record<string, () => Promise<{ default: Component }>> = {};
+export const registry: Record<string, () => Promise<{ default: Component }>> = {
+  HookDebug: () => import("./HookDebug.svelte"),
+};
