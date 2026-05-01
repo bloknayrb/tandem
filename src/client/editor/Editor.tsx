@@ -17,6 +17,7 @@ import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
+import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import "./editor.css";
 
 interface EditorProps {
@@ -56,6 +57,7 @@ export function Editor({
         TableRow,
         TableCell,
         TableHeader,
+        MarkdownHtmlExtension,
         Collaboration.configure({
           document: ydoc,
         }),

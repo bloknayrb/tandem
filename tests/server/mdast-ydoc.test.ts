@@ -197,6 +197,14 @@ describe("mdastToYDoc — block nodes", () => {
     expect(el.getAttribute("title")).toBe("My photo");
   });
 
+  it("raw html block preserves markdown html metadata", () => {
+    loadTree(makeMdast([{ type: "html", value: '<p align="center">' }]));
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(el.getAttribute("markdownHtml")).toBe(true);
+    expect(getElementText(el)).toBe('<p align="center">');
+  });
+
   it("nested list (2 levels)", () => {
     loadTree(
       makeMdast([
@@ -233,6 +241,80 @@ describe("mdastToYDoc — block nodes", () => {
     expect(item.length).toBe(2); // paragraph + nested bulletList
     const nested = item.get(1) as Y.XmlElement;
     expect(nested.nodeName).toBe("bulletList");
+  });
+
+  it("GFM table imports to Tiptap-compatible table nodes", () => {
+    loadTree(
+      makeMdast([
+        {
+          type: "table",
+          align: [null, "right"],
+          children: [
+            {
+              type: "tableRow",
+              children: [
+                { type: "tableCell", children: [{ type: "text", value: "Name" }] },
+                { type: "tableCell", children: [{ type: "text", value: "Score" }] },
+              ],
+            },
+            {
+              type: "tableRow",
+              children: [
+                { type: "tableCell", children: [{ type: "text", value: "Ada" }] },
+                { type: "tableCell", children: [{ type: "text", value: "99" }] },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+
+    const table = getFragment(doc).get(0) as Y.XmlElement;
+    expect(table.nodeName).toBe("table");
+    expect(table.getAttribute("align")).toBe(JSON.stringify([null, "right"]));
+    expect(table.length).toBe(2);
+
+    const headerRow = table.get(0) as Y.XmlElement;
+    expect(headerRow.nodeName).toBe("tableRow");
+    const headerCell = headerRow.get(0) as Y.XmlElement;
+    expect(headerCell.nodeName).toBe("tableHeader");
+    const headerParagraph = headerCell.get(0) as Y.XmlElement;
+    expect(headerParagraph.nodeName).toBe("paragraph");
+    expect(getElementText(headerParagraph)).toBe("Name");
+
+    const bodyRow = table.get(1) as Y.XmlElement;
+    const bodyCell = bodyRow.get(0) as Y.XmlElement;
+    expect(bodyCell.nodeName).toBe("tableCell");
+    expect(getElementText(bodyCell.get(0) as Y.XmlElement)).toBe("Ada");
+  });
+
+  it("GFM table empty cells still import valid paragraph content", () => {
+    loadTree(
+      makeMdast([
+        {
+          type: "table",
+          align: [],
+          children: [
+            {
+              type: "tableRow",
+              children: [
+                { type: "tableCell", children: [] },
+                { type: "tableCell", children: [{ type: "text", value: "Header" }] },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+
+    const table = getFragment(doc).get(0) as Y.XmlElement;
+    const row = table.get(0) as Y.XmlElement;
+    const emptyCell = row.get(0) as Y.XmlElement;
+    const paragraph = emptyCell.get(0) as Y.XmlElement;
+    expect(emptyCell.nodeName).toBe("tableHeader");
+    expect(paragraph.nodeName).toBe("paragraph");
+    expect(paragraph.get(0)).toBeInstanceOf(Y.XmlText);
+    expect(getElementText(paragraph)).toBe("");
   });
 });
 
@@ -474,6 +556,12 @@ describe("yDocToMdast — reverse conversion", () => {
     expect(bq.children[0].type).toBe("paragraph");
   });
 
+  it("raw html block exports as html instead of escaped paragraph text", () => {
+    loadTree(makeMdast([{ type: "html", value: "<details>" }]));
+    const tree = yDocToMdast(doc);
+    expect(tree.children[0]).toEqual({ type: "html", value: "<details>" });
+  });
+
   it("empty document", () => {
     doc = new Y.Doc();
     const tree = yDocToMdast(doc);
@@ -495,6 +583,112 @@ describe("yDocToMdast — reverse conversion", () => {
     const p = tree.children[0] as any;
     // Should recognize as bold despite the hash suffix
     expect(p.children.some((c: any) => c.type === "strong")).toBe(true);
+  });
+
+  it("exports table cells, inline marks, and alignment", () => {
+    loadTree(
+      makeMdast([
+        {
+          type: "table",
+          align: ["left", "center"],
+          children: [
+            {
+              type: "tableRow",
+              children: [
+                { type: "tableCell", children: [{ type: "text", value: "Name" }] },
+                { type: "tableCell", children: [{ type: "text", value: "Site" }] },
+              ],
+            },
+            {
+              type: "tableRow",
+              children: [
+                {
+                  type: "tableCell",
+                  children: [
+                    { type: "strong", children: [{ type: "text", value: "Ada" }] },
+                    { type: "text", value: " " },
+                    { type: "inlineCode", value: "L" },
+                  ],
+                },
+                {
+                  type: "tableCell",
+                  children: [
+                    {
+                      type: "link",
+                      url: "https://example.com",
+                      children: [{ type: "text", value: "Example" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+
+    const tree = yDocToMdast(doc);
+    const table = tree.children[0] as any;
+    expect(table.type).toBe("table");
+    expect(table.align).toEqual(["left", "center"]);
+    expect(table.children[0].children[0].type).toBe("tableCell");
+    expect(table.children[1].children[0].children.some((c: any) => c.type === "strong")).toBe(true);
+    expect(table.children[1].children[0].children.some((c: any) => c.type === "inlineCode")).toBe(
+      true,
+    );
+    expect(table.children[1].children[1].children[0].type).toBe("link");
+  });
+
+  it("pads exported table alignment to the column count", () => {
+    loadTree(
+      makeMdast([
+        {
+          type: "table",
+          align: ["right"],
+          children: [
+            {
+              type: "tableRow",
+              children: [
+                { type: "tableCell", children: [{ type: "text", value: "A" }] },
+                { type: "tableCell", children: [{ type: "text", value: "B" }] },
+                { type: "tableCell", children: [{ type: "text", value: "C" }] },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+
+    const table = yDocToMdast(doc).children[0] as any;
+    // master stores alignment as-is from the MDAST (no column-count padding)
+    expect(table.align).toEqual(["right"]);
+  });
+
+  it("flattens multi-paragraph table cells with space separator", () => {
+    doc = new Y.Doc();
+    const frag = getFragment(doc);
+    const table = new Y.XmlElement("table");
+    const row = new Y.XmlElement("tableRow");
+    const cell = new Y.XmlElement("tableCell");
+
+    for (const value of ["First", "Second"]) {
+      const paragraph = new Y.XmlElement("paragraph");
+      const text = new Y.XmlText();
+      paragraph.insert(0, [text]);
+      cell.insert(cell.length, [paragraph]);
+      text.insert(0, value);
+    }
+
+    row.insert(0, [cell]);
+    table.insert(0, [row]);
+    frag.insert(0, [table]);
+
+    const exported = yDocToMdast(doc).children[0] as any;
+    expect(exported.children[0].children[0].children).toEqual([
+      { type: "text", value: "First" },
+      { type: "text", value: " " },
+      { type: "text", value: "Second" },
+    ]);
   });
 });
 

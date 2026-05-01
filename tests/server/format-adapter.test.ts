@@ -53,4 +53,19 @@ describe("MarkdownAdapter", () => {
     const text = extractText(doc);
     expect(text).toBe("## Sub\nText");
   });
+
+  it("preserves GFM tables through the adapter path", () => {
+    const adapter = getAdapter("md");
+    const doc = new Y.Doc();
+    adapter.load(
+      doc,
+      ["| Name | Score |", "| :--- | ---: |", "| Ada | **99** |", "| Empty |  |"].join("\n"),
+    );
+
+    const output = adapter.save(doc);
+    expect(output).toContain("| Name  |  Score |");
+    expect(output).toContain("| :---- | -----: |");
+    expect(output).toContain("| Ada   | **99** |");
+    expect(output).toContain("| Empty |        |");
+  });
 });
