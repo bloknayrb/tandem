@@ -1,126 +1,126 @@
 <script lang="ts">
-  import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
-  import type { OpenTab } from "../types.js";
+import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import type { OpenTab } from "../types.js";
 
-  interface Props {
-    tab: OpenTab;
-    isActive: boolean;
-    onswitch: (id: string) => void;
-    onclose: (id: string) => void;
-    draggable: boolean;
-    ondragstart: (e: DragEvent, id: string) => void;
-    ondragover: (e: DragEvent, id: string) => void;
-    ondrop: (e: DragEvent, id: string) => void;
-    ondragend: () => void;
-    ondragleave: () => void;
-    dropIndicator: "left" | "right" | null;
-    onkeydown: (e: KeyboardEvent, id: string) => void;
+interface Props {
+  tab: OpenTab;
+  isActive: boolean;
+  onswitch: (id: string) => void;
+  onclose: (id: string) => void;
+  draggable: boolean;
+  ondragstart: (e: DragEvent, id: string) => void;
+  ondragover: (e: DragEvent, id: string) => void;
+  ondrop: (e: DragEvent, id: string) => void;
+  ondragend: () => void;
+  ondragleave: () => void;
+  dropIndicator: "left" | "right" | null;
+  onkeydown: (e: KeyboardEvent, id: string) => void;
+}
+
+const {
+  tab,
+  isActive,
+  onswitch,
+  onclose,
+  draggable,
+  ondragstart,
+  ondragover,
+  ondrop,
+  ondragend,
+  ondragleave,
+  dropIndicator,
+  onkeydown,
+}: Props = $props();
+
+const FORMAT_ICONS: Record<string, string> = {
+  md: "M",
+  txt: "T",
+  html: "H",
+  docx: "W",
+};
+
+// ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
+let dirty = $state(false);
+// These don't drive UI; plain let keeps them non-reactive
+let editCount = 0;
+let baseline: number | null = null;
+
+$effect(() => {
+  // Track tab.ydoc and tab.readOnly
+  const { ydoc, readOnly } = tab;
+
+  if (readOnly) {
+    dirty = false;
+    return;
   }
 
-  const {
-    tab,
-    isActive,
-    onswitch,
-    onclose,
-    draggable,
-    ondragstart,
-    ondragover,
-    ondrop,
-    ondragend,
-    ondragleave,
-    dropIndicator,
-    onkeydown,
-  }: Props = $props();
+  const fragment = ydoc.getXmlFragment("default");
+  const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
 
-  const FORMAT_ICONS: Record<string, string> = {
-    md: "M",
-    txt: "T",
-    html: "H",
-    docx: "W",
+  let armed = false;
+  const armTimer = setTimeout(() => {
+    armed = true;
+    baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
+    editCount = 0;
+    dirty = false;
+  }, 500);
+
+  const onFragmentChange = () => {
+    if (!armed) return;
+    editCount++;
+    dirty = true;
   };
+  fragment.observeDeep(onFragmentChange);
 
-  // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
-  let dirty = $state(false);
-  // These don't drive UI; plain let keeps them non-reactive
-  let editCount = 0;
-  let baseline: number | null = null;
-
-  $effect(() => {
-    // Track tab.ydoc and tab.readOnly
-    const { ydoc, readOnly } = tab;
-
-    if (readOnly) {
-      dirty = false;
-      return;
-    }
-
-    const fragment = ydoc.getXmlFragment("default");
-    const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
-
-    let armed = false;
-    const armTimer = setTimeout(() => {
-      armed = true;
-      baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
+  const onMetaChange = () => {
+    if (!armed) return;
+    const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
+    if (saved !== undefined && saved !== baseline) {
+      baseline = saved;
       editCount = 0;
       dirty = false;
-    }, 500);
+    }
+  };
+  meta.observe(onMetaChange);
 
-    const onFragmentChange = () => {
-      if (!armed) return;
-      editCount++;
-      dirty = true;
-    };
-    fragment.observeDeep(onFragmentChange);
+  return () => {
+    clearTimeout(armTimer);
+    fragment.unobserveDeep(onFragmentChange);
+    meta.unobserve(onMetaChange);
+  };
+});
 
-    const onMetaChange = () => {
-      if (!armed) return;
-      const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
-      if (saved !== undefined && saved !== baseline) {
-        baseline = saved;
-        editCount = 0;
-        dirty = false;
-      }
-    };
-    meta.observe(onMetaChange);
+// Derived styles
+const tabStyle = $derived(
+  [
+    "display: flex",
+    "align-items: center",
+    "gap: 6px",
+    "padding: 4px 12px",
+    "font-size: 13px",
+    "cursor: pointer",
+    `background: ${isActive ? "var(--tandem-surface)" : "transparent"}`,
+    `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-muted)"}`,
+    `border-top: ${isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
+    `border-bottom: ${isActive ? "1px solid var(--tandem-surface)" : "1px solid transparent"}`,
+    `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
+    `border-right: ${dropIndicator === "right" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
+    "margin-bottom: -1px",
+    "user-select: none",
+    "white-space: nowrap",
+    "transition: background 0.15s, color 0.15s",
+    "flex-shrink: 0",
+  ].join("; "),
+);
 
-    return () => {
-      clearTimeout(armTimer);
-      fragment.unobserveDeep(onFragmentChange);
-      meta.unobserve(onMetaChange);
-    };
-  });
+let closeBtn: HTMLButtonElement | undefined = $state();
 
-  // Derived styles
-  const tabStyle = $derived(
-    [
-      "display: flex",
-      "align-items: center",
-      "gap: 6px",
-      "padding: 4px 12px",
-      "font-size: 13px",
-      "cursor: pointer",
-      `background: ${isActive ? "var(--tandem-surface)" : "transparent"}`,
-      `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-muted)"}`,
-      `border-top: ${isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-      `border-bottom: ${isActive ? "1px solid var(--tandem-surface)" : "1px solid transparent"}`,
-      `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-      `border-right: ${dropIndicator === "right" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-      "margin-bottom: -1px",
-      "user-select: none",
-      "white-space: nowrap",
-      "transition: background 0.15s, color 0.15s",
-      "flex-shrink: 0",
-    ].join("; "),
-  );
-
-  let closeBtn: HTMLButtonElement | undefined = $state();
-
-  function handleMouseEnterClose() {
-    if (closeBtn) closeBtn.style.color = "var(--tandem-error)";
-  }
-  function handleMouseLeaveClose() {
-    if (closeBtn) closeBtn.style.color = "var(--tandem-fg-subtle)";
-  }
+function handleMouseEnterClose() {
+  if (closeBtn) closeBtn.style.color = "var(--tandem-error)";
+}
+function handleMouseLeaveClose() {
+  if (closeBtn) closeBtn.style.color = "var(--tandem-fg-subtle)";
+}
 </script>
 
 <!-- svelte-ignore a11y_interactive_supports_focus -->

@@ -1,121 +1,121 @@
 <script lang="ts">
-  import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
-  import {
-    addRecentFile,
-    clearRecentFiles,
-    loadRecentFiles,
-    saveRecentFiles,
-  } from "../utils/recentFiles.js";
+import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
+import {
+  addRecentFile,
+  clearRecentFiles,
+  loadRecentFiles,
+  saveRecentFiles,
+} from "../utils/recentFiles.js";
 
-  interface Props {
-    onClose: () => void;
-  }
+interface Props {
+  onClose: () => void;
+}
 
-  const { onClose }: Props = $props();
+const { onClose }: Props = $props();
 
-  type Mode = "path" | "upload";
+type Mode = "path" | "upload";
 
-  // #478: Default to "upload" (OS file picker) instead of "path"
-  let mode = $state<Mode>("upload");
-  let filePath = $state("");
-  let error = $state<string | null>(null);
-  let loading = $state(false);
-  let dragOver = $state(false);
-  let fileInputEl: HTMLInputElement | undefined = $state();
-  let recentFiles = $state<string[]>(loadRecentFiles());
+// #478: Default to "upload" (OS file picker) instead of "path"
+let mode = $state<Mode>("upload");
+let filePath = $state("");
+let error = $state<string | null>(null);
+let loading = $state(false);
+let dragOver = $state(false);
+let fileInputEl: HTMLInputElement | undefined = $state();
+let recentFiles = $state<string[]>(loadRecentFiles());
 
-  function pushRecent(path: string) {
-    recentFiles = (() => {
-      const updated = addRecentFile(recentFiles, path);
-      saveRecentFiles(updated);
-      return updated;
-    })();
-  }
+function pushRecent(path: string) {
+  recentFiles = (() => {
+    const updated = addRecentFile(recentFiles, path);
+    saveRecentFiles(updated);
+    return updated;
+  })();
+}
 
-  function handleClearRecent() {
-    clearRecentFiles();
-    recentFiles = [];
-  }
+function handleClearRecent() {
+  clearRecentFiles();
+  recentFiles = [];
+}
 
-  async function openByPath(pathToOpen: string) {
-    if (loading) return;
-    error = null;
-    loading = true;
-    try {
-      const res = await fetch(`${API_BASE}/open`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: pathToOpen }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        error = data.message ?? "Failed to open file";
-        return;
-      }
-      pushRecent(pathToOpen);
-      onClose();
-    } catch (err) {
-      console.error("FileOpenDialog: path open failed", err);
-      if (err instanceof SyntaxError) {
-        error = "Server returned an unexpected response";
-      } else if (err instanceof TypeError) {
-        error = "Unexpected response format";
-      } else {
-        error = "Cannot reach server. Is it running?";
-      }
-    } finally {
-      loading = false;
+async function openByPath(pathToOpen: string) {
+  if (loading) return;
+  error = null;
+  loading = true;
+  try {
+    const res = await fetch(`${API_BASE}/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: pathToOpen }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      error = data.message ?? "Failed to open file";
+      return;
     }
-  }
-
-  function handlePathSubmit() {
-    if (!filePath.trim()) return;
-    openByPath(filePath.trim());
-  }
-
-  async function uploadFile(file: File) {
-    if (loading) return;
-    error = null;
-    loading = true;
-    try {
-      const content = await readFileForUpload(file);
-      const res = await fetch(`${API_BASE}/upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, content }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        error = data.message ?? "Failed to open file";
-        return;
-      }
-      onClose();
-    } catch (err) {
-      console.error("FileOpenDialog: upload failed", err);
-      if (err instanceof SyntaxError) {
-        error = "Server returned an unexpected response";
-      } else if (err instanceof TypeError) {
-        error = "Unexpected response format";
-      } else {
-        error = "Cannot reach server. Is it running?";
-      }
-    } finally {
-      loading = false;
+    pushRecent(pathToOpen);
+    onClose();
+  } catch (err) {
+    console.error("FileOpenDialog: path open failed", err);
+    if (err instanceof SyntaxError) {
+      error = "Server returned an unexpected response";
+    } else if (err instanceof TypeError) {
+      error = "Unexpected response format";
+    } else {
+      error = "Cannot reach server. Is it running?";
     }
+  } finally {
+    loading = false;
   }
+}
 
-  function handleFileDrop(e: DragEvent) {
-    e.preventDefault();
-    dragOver = false;
-    const file = e.dataTransfer?.files[0];
-    if (file) uploadFile(file);
-  }
+function handlePathSubmit() {
+  if (!filePath.trim()) return;
+  openByPath(filePath.trim());
+}
 
-  function handleFileSelect(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (file) uploadFile(file);
+async function uploadFile(file: File) {
+  if (loading) return;
+  error = null;
+  loading = true;
+  try {
+    const content = await readFileForUpload(file);
+    const res = await fetch(`${API_BASE}/upload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName: file.name, content }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      error = data.message ?? "Failed to open file";
+      return;
+    }
+    onClose();
+  } catch (err) {
+    console.error("FileOpenDialog: upload failed", err);
+    if (err instanceof SyntaxError) {
+      error = "Server returned an unexpected response";
+    } else if (err instanceof TypeError) {
+      error = "Unexpected response format";
+    } else {
+      error = "Cannot reach server. Is it running?";
+    }
+  } finally {
+    loading = false;
   }
+}
+
+function handleFileDrop(e: DragEvent) {
+  e.preventDefault();
+  dragOver = false;
+  const file = e.dataTransfer?.files[0];
+  if (file) uploadFile(file);
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) uploadFile(file);
+}
 </script>
 
 <div

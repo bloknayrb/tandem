@@ -1,165 +1,171 @@
 <script lang="ts">
-  import type { OpenTab } from "../types.js";
-  import FileOpenDialog from "../components/FileOpenDialog.svelte";
-  import TabItem from "./TabItem.svelte";
+import FileOpenDialog from "../components/FileOpenDialog.svelte";
+import type { OpenTab } from "../types.js";
+import TabItem from "./TabItem.svelte";
 
-  interface Props {
-    tabs: OpenTab[];
-    activeTabId: string | null;
-    onTabSwitch: (tabId: string) => void;
-    onTabClose: (tabId: string) => void;
-    reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
-    reduceMotion?: boolean;
+interface Props {
+  tabs: OpenTab[];
+  activeTabId: string | null;
+  onTabSwitch: (tabId: string) => void;
+  onTabClose: (tabId: string) => void;
+  reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
+  reduceMotion?: boolean;
+}
+
+const {
+  tabs,
+  activeTabId,
+  onTabSwitch,
+  onTabClose,
+  reorder,
+  reduceMotion = false,
+}: Props = $props();
+
+const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+
+let showDialog = $state(false);
+
+// Plain let — not reactive UI; just internal close-dedup guard
+let closingIds = new Set<string>();
+
+// Clean up stale entries when tabs change (closed tab removed from DOM)
+$effect(() => {
+  const currentIds = new Set(tabs.map((t) => t.id));
+  for (const id of closingIds) {
+    if (!currentIds.has(id)) closingIds.delete(id);
   }
+});
 
-  const { tabs, activeTabId, onTabSwitch, onTabClose, reorder, reduceMotion = false }: Props =
-    $props();
+function guardedClose(tabId: string) {
+  if (closingIds.has(tabId)) return;
+  closingIds.add(tabId);
+  onTabClose(tabId);
+}
 
-  const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+let scrollEl: HTMLDivElement | undefined = $state();
+let canScrollLeft = $state(false);
+let canScrollRight = $state(false);
+let draggedId = $state<string | null>(null);
+let dropTarget = $state<{ id: string; side: "left" | "right" } | null>(null);
 
-  let showDialog = $state(false);
+function clearDragState() {
+  draggedId = null;
+  dropTarget = null;
+}
 
-  // Plain let — not reactive UI; just internal close-dedup guard
-  let closingIds = new Set<string>();
+function updateScrollState() {
+  const el = scrollEl;
+  if (!el) return;
+  canScrollLeft = el.scrollLeft > 0;
+  canScrollRight = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
 
-  // Clean up stale entries when tabs change (closed tab removed from DOM)
-  $effect(() => {
-    const currentIds = new Set(tabs.map((t) => t.id));
-    for (const id of closingIds) {
-      if (!currentIds.has(id)) closingIds.delete(id);
-    }
-  });
+// Set up scroll listeners and resize observer
+$effect(() => {
+  const el = scrollEl;
+  if (!el) return;
+  updateScrollState();
+  el.addEventListener("scroll", updateScrollState, { passive: true });
+  const observer = new ResizeObserver(updateScrollState);
+  observer.observe(el);
+  return () => {
+    el.removeEventListener("scroll", updateScrollState);
+    observer.disconnect();
+  };
+});
 
-  function guardedClose(tabId: string) {
-    if (closingIds.has(tabId)) return;
-    closingIds.add(tabId);
-    onTabClose(tabId);
+// Re-check overflow when tabs change
+$effect(() => {
+  // Track tabs.length
+  void tabs.length;
+  updateScrollState();
+});
+
+// Auto-scroll active tab into view
+$effect(() => {
+  if (!activeTabId || !scrollEl) return;
+  const el = scrollEl.querySelector(`[data-testid="tab-${activeTabId}"]`);
+  if (el) {
+    (el as HTMLElement).scrollIntoView({
+      inline: "nearest",
+      block: "nearest",
+      behavior: scrollBehavior,
+    });
   }
+});
 
-  let scrollEl: HTMLDivElement | undefined = $state();
-  let canScrollLeft = $state(false);
-  let canScrollRight = $state(false);
-  let draggedId = $state<string | null>(null);
-  let dropTarget = $state<{ id: string; side: "left" | "right" } | null>(null);
+// Clear drag state when tab list changes mid-drag
+$effect(() => {
+  void tabs.length;
+  clearDragState();
+});
 
-  function clearDragState() {
-    draggedId = null;
+// DnD handlers
+function handleDragStart(e: DragEvent, id: string) {
+  draggedId = id;
+  if (e.dataTransfer) {
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "move";
+  }
+}
+
+function handleDragOver(e: DragEvent, id: string) {
+  e.preventDefault();
+  if (!draggedId || draggedId === id) {
     dropTarget = null;
+    return;
   }
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const midX = rect.left + rect.width / 2;
+  const side = e.clientX < midX ? "left" : "right";
+  dropTarget = { id, side };
+}
 
-  function updateScrollState() {
-    const el = scrollEl;
-    if (!el) return;
-    canScrollLeft = el.scrollLeft > 0;
-    canScrollRight = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-  }
-
-  // Set up scroll listeners and resize observer
-  $effect(() => {
-    const el = scrollEl;
-    if (!el) return;
-    updateScrollState();
-    el.addEventListener("scroll", updateScrollState, { passive: true });
-    const observer = new ResizeObserver(updateScrollState);
-    observer.observe(el);
-    return () => {
-      el.removeEventListener("scroll", updateScrollState);
-      observer.disconnect();
-    };
-  });
-
-  // Re-check overflow when tabs change
-  $effect(() => {
-    // Track tabs.length
-    void tabs.length;
-    updateScrollState();
-  });
-
-  // Auto-scroll active tab into view
-  $effect(() => {
-    if (!activeTabId || !scrollEl) return;
-    const el = scrollEl.querySelector(`[data-testid="tab-${activeTabId}"]`);
-    if (el) {
-      (el as HTMLElement).scrollIntoView({
-        inline: "nearest",
-        block: "nearest",
-        behavior: scrollBehavior,
-      });
-    }
-  });
-
-  // Clear drag state when tab list changes mid-drag
-  $effect(() => {
-    void tabs.length;
-    clearDragState();
-  });
-
-  // DnD handlers
-  function handleDragStart(e: DragEvent, id: string) {
-    draggedId = id;
-    if (e.dataTransfer) {
-      e.dataTransfer.setData("text/plain", id);
-      e.dataTransfer.effectAllowed = "move";
-    }
-  }
-
-  function handleDragOver(e: DragEvent, id: string) {
-    e.preventDefault();
-    if (!draggedId || draggedId === id) {
-      dropTarget = null;
-      return;
-    }
+function handleDrop(e: DragEvent, targetId: string) {
+  e.preventDefault();
+  const fromId = e.dataTransfer?.getData("text/plain");
+  if (fromId && fromId !== targetId && reorder) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midX = rect.left + rect.width / 2;
     const side = e.clientX < midX ? "left" : "right";
-    dropTarget = { id, side };
+    reorder(fromId, targetId, side);
   }
+  clearDragState();
+}
 
-  function handleDrop(e: DragEvent, targetId: string) {
-    e.preventDefault();
-    const fromId = e.dataTransfer?.getData("text/plain");
-    if (fromId && fromId !== targetId && reorder) {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const midX = rect.left + rect.width / 2;
-      const side = e.clientX < midX ? "left" : "right";
-      reorder(fromId, targetId, side);
-    }
-    clearDragState();
+function handleDragEnd() {
+  clearDragState();
+}
+
+function handleDragLeave() {
+  dropTarget = null;
+}
+
+// Keyboard reordering (Alt+Arrow swaps with neighbor)
+function handleKeyDown(e: KeyboardEvent, id: string) {
+  if (!e.altKey || !reorder) return;
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  e.preventDefault();
+
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx === -1) return;
+
+  if (e.key === "ArrowLeft" && idx > 0) {
+    reorder(id, tabs[idx - 1].id);
+  } else if (e.key === "ArrowRight" && idx < tabs.length - 1) {
+    reorder(tabs[idx + 1].id, id);
   }
+}
 
-  function handleDragEnd() {
-    clearDragState();
-  }
+function scrollLeft() {
+  scrollEl?.scrollBy({ left: -150, behavior: scrollBehavior });
+}
 
-  function handleDragLeave() {
-    dropTarget = null;
-  }
+function scrollRight() {
+  scrollEl?.scrollBy({ left: 150, behavior: scrollBehavior });
+}
 
-  // Keyboard reordering (Alt+Arrow swaps with neighbor)
-  function handleKeyDown(e: KeyboardEvent, id: string) {
-    if (!e.altKey || !reorder) return;
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    e.preventDefault();
-
-    const idx = tabs.findIndex((t) => t.id === id);
-    if (idx === -1) return;
-
-    if (e.key === "ArrowLeft" && idx > 0) {
-      reorder(id, tabs[idx - 1].id);
-    } else if (e.key === "ArrowRight" && idx < tabs.length - 1) {
-      reorder(tabs[idx + 1].id, id);
-    }
-  }
-
-  function scrollLeft() {
-    scrollEl?.scrollBy({ left: -150, behavior: scrollBehavior });
-  }
-
-  function scrollRight() {
-    scrollEl?.scrollBy({ left: 150, behavior: scrollBehavior });
-  }
-
-  const singleTab = $derived(tabs.length <= 1);
+const singleTab = $derived(tabs.length <= 1);
 </script>
 
 <div
