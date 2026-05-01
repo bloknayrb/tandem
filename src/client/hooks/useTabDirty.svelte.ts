@@ -50,7 +50,6 @@ export function createTabDirty(getTab: () => OpenTab): TabDirtyState {
       const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
       if (saved !== undefined && saved !== baseline) {
         baseline = saved;
-        editCount = 0;
         dirty = false;
       }
     };
