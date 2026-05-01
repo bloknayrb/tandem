@@ -1,15 +1,15 @@
 <script lang="ts">
-  import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
+import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
 
-  interface Props {
-    settings: TandemSettings;
-    onUpdate: (partial: Partial<TandemSettings>) => void;
-  }
+interface Props {
+  settings: TandemSettings;
+  onUpdate: (partial: Partial<TandemSettings>) => void;
+}
 
-  let { settings, onUpdate }: Props = $props();
+let { settings, onUpdate }: Props = $props();
 
-  const sectionLabelStyle =
-    "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
+const sectionLabelStyle =
+  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 <div>

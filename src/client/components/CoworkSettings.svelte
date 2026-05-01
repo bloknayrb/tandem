@@ -1,117 +1,120 @@
 <script lang="ts">
-  import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
-  import {
-    aggregateWorkspaceStatus,
-    coworkSettingsVariant,
-    formatCoworkError,
-    makeDebouncer,
-    type StatusTokenFamily,
-    workspaceFileStatusFamily,
-    workspaceFileStatusLabel,
-  } from "../cowork/cowork-helpers";
-  import {
-    coworkRescan,
-    coworkSetLanIpOverride,
-    coworkToggleIntegration,
-    type InvokeFn,
-    loadInvoke,
-  } from "../cowork/cowork-invoke";
-  import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
-  import type { CoworkStatus, WorkspaceFileStatus, WorkspaceStatus } from "../types";
+import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
+import {
+  aggregateWorkspaceStatus,
+  coworkSettingsVariant,
+  formatCoworkError,
+  makeDebouncer,
+  type StatusTokenFamily,
+  workspaceFileStatusFamily,
+  workspaceFileStatusLabel,
+} from "../cowork/cowork-helpers";
+import {
+  coworkRescan,
+  coworkSetLanIpOverride,
+  coworkToggleIntegration,
+  type InvokeFn,
+  loadInvoke,
+} from "../cowork/cowork-invoke";
+import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
+import type { CoworkStatus, WorkspaceFileStatus, WorkspaceStatus } from "../types";
 
-  const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
-    success: {
-      bg: "var(--tandem-success-bg)",
-      fg: "var(--tandem-success-fg-strong)",
-      border: "var(--tandem-success-border)",
-    },
-    warning: {
-      bg: "var(--tandem-warning-bg)",
-      fg: "var(--tandem-warning-fg-strong)",
-      border: "var(--tandem-warning-border)",
-    },
-    error: {
-      bg: "var(--tandem-error-bg)",
-      fg: "var(--tandem-error-fg-strong)",
-      border: "var(--tandem-error-border)",
-    },
-  };
+const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
+  success: {
+    bg: "var(--tandem-success-bg)",
+    fg: "var(--tandem-success-fg-strong)",
+    border: "var(--tandem-success-border)",
+  },
+  warning: {
+    bg: "var(--tandem-warning-bg)",
+    fg: "var(--tandem-warning-fg-strong)",
+    border: "var(--tandem-warning-border)",
+  },
+  error: {
+    bg: "var(--tandem-error-bg)",
+    fg: "var(--tandem-error-fg-strong)",
+    border: "var(--tandem-error-border)",
+  },
+};
 
-  const sectionLabelStyle =
-    "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
-  const helpTextStyle = "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;";
-  const infoBannerStyle =
-    "border: 1px solid var(--tandem-info-border); background: var(--tandem-info-bg); color: var(--tandem-info-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;";
-  const errorBannerStyle =
-    "border: 1px solid var(--tandem-error-border); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;";
-  const primaryBtnStyle =
-    "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
-  const secondaryBtnStyle =
-    "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
+const sectionLabelStyle =
+  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
+const helpTextStyle = "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;";
+const infoBannerStyle =
+  "border: 1px solid var(--tandem-info-border); background: var(--tandem-info-bg); color: var(--tandem-info-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;";
+const errorBannerStyle =
+  "border: 1px solid var(--tandem-error-border); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;";
+const primaryBtnStyle =
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
+const secondaryBtnStyle =
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
 
-  // Always active while mounted
-  const coworkState = createCoworkStatus(() => true);
-  const { status, loading, error, refetch } = coworkState;
+// Always active while mounted
+const coworkState = createCoworkStatus(() => true);
+const { status, loading, error, refetch } = coworkState;
 
-  let inlineToastMessage = $state<string | null>(null);
-  let confirming = $state<"enable" | null>(null);
-  let busy = $state(false);
+let inlineToastMessage = $state<string | null>(null);
+let confirming = $state<"enable" | null>(null);
+let busy = $state(false);
 
-  const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
+const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
 
-  const variant = $derived(coworkSettingsVariant(coworkState.status));
+const variant = $derived(coworkSettingsVariant(coworkState.status));
 
-  async function withInvoke(op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<void> {
-    busy = true;
-    try {
-      const invoke = await loadInvoke();
-      await op(invoke);
-      inlineToastMessage = null;
-    } catch (err) {
-      const rawMsg = err instanceof Error ? err.message : String(err);
-      const display = formatCoworkError(rawMsg);
-      inlineToastMessage = `${errorPrefix}: ${display}`;
-    } finally {
-      busy = false;
-    }
+async function withInvoke(
+  op: (invoke: InvokeFn) => Promise<void>,
+  errorPrefix: string,
+): Promise<void> {
+  busy = true;
+  try {
+    const invoke = await loadInvoke();
+    await op(invoke);
+    inlineToastMessage = null;
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const display = formatCoworkError(rawMsg);
+    inlineToastMessage = `${errorPrefix}: ${display}`;
+  } finally {
+    busy = false;
   }
+}
 
-  async function handleToggleOn(): Promise<void> {
-    await withInvoke(async (invoke) => {
-      await coworkToggleIntegration(invoke, true);
+async function handleToggleOn(): Promise<void> {
+  await withInvoke(async (invoke) => {
+    await coworkToggleIntegration(invoke, true);
+    await refetch();
+    confirming = null;
+  }, "Failed to enable Cowork");
+}
+
+async function handleToggleOff(): Promise<void> {
+  await withInvoke(async (invoke) => {
+    await coworkToggleIntegration(invoke, false);
+    await refetch();
+  }, "Failed to disable Cowork");
+}
+
+function handleRescan(): void {
+  debouncer.schedule(() => {
+    void withInvoke(async (invoke) => {
+      await coworkRescan(invoke);
       await refetch();
-      confirming = null;
-    }, "Failed to enable Cowork");
-  }
+    }, "Re-scan failed");
+  });
+}
 
-  async function handleToggleOff(): Promise<void> {
-    await withInvoke(async (invoke) => {
-      await coworkToggleIntegration(invoke, false);
-      await refetch();
-    }, "Failed to disable Cowork");
-  }
+async function handleToggleLanIp(enabled: boolean): Promise<void> {
+  await withInvoke(async (invoke) => {
+    await coworkSetLanIpOverride(invoke, enabled);
+    await refetch();
+  }, "Failed to update LAN-IP override");
+}
 
-  function handleRescan(): void {
-    debouncer.schedule(() => {
-      void withInvoke(async (invoke) => {
-        await coworkRescan(invoke);
-        await refetch();
-      }, "Re-scan failed");
-    });
-  }
-
-  async function handleToggleLanIp(enabled: boolean): Promise<void> {
-    await withInvoke(async (invoke) => {
-      await coworkSetLanIpOverride(invoke, enabled);
-      await refetch();
-    }, "Failed to update LAN-IP override");
-  }
-
-  function workspaceRowStyle(ws: WorkspaceStatus): string {
-    const agg: WorkspaceFileStatus = aggregateWorkspaceStatus(ws);
-    const tokens = STATUS_TOKENS[workspaceFileStatusFamily(agg)];
-    return `display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid ${tokens.border}; background: ${tokens.bg}; color: ${tokens.fg}; border-radius: 4px; font-size: 11px;`;
-  }
+function workspaceRowStyle(ws: WorkspaceStatus): string {
+  const agg: WorkspaceFileStatus = aggregateWorkspaceStatus(ws);
+  const tokens = STATUS_TOKENS[workspaceFileStatusFamily(agg)];
+  return `display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid ${tokens.border}; background: ${tokens.bg}; color: ${tokens.fg}; border-radius: 4px; font-size: 11px;`;
+}
 </script>
 
 <div

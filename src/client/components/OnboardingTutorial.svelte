@@ -1,58 +1,58 @@
 <script lang="ts">
-  import {
-    isTauriRuntime,
-    readCoworkOnboardingSkipped,
-    shouldShowCoworkOnboarding,
-  } from "../cowork/cowork-helpers";
-  import type { CoworkStatus } from "../types";
-  import CoworkOnboardingStep from "./CoworkOnboardingStep.svelte";
+import {
+  isTauriRuntime,
+  readCoworkOnboardingSkipped,
+  shouldShowCoworkOnboarding,
+} from "../cowork/cowork-helpers";
+import type { CoworkStatus } from "../types";
+import CoworkOnboardingStep from "./CoworkOnboardingStep.svelte";
 
-  interface Props {
-    currentStep: number;
-    onNext: () => void;
-    onDismiss: () => void;
-    coworkStatus: CoworkStatus | null;
-  }
+interface Props {
+  currentStep: number;
+  onNext: () => void;
+  onDismiss: () => void;
+  coworkStatus: CoworkStatus | null;
+}
 
-  let { currentStep, onNext, onDismiss, coworkStatus }: Props = $props();
+let { currentStep, onNext, onDismiss, coworkStatus }: Props = $props();
 
-  const BASE_STEPS = [
-    {
-      id: "review",
-      title: "Review an annotation",
-      text: "Open the side panel and accept or dismiss one of the highlighted annotations. Try Review Mode (Ctrl+Shift+R) for keyboard shortcuts.",
-    },
-    {
-      id: "question",
-      title: "Ask a question",
-      text: "Select text and click Comment to send a question to Claude — or click Note to keep a private thought to yourself. You can also use the Chat panel.",
-    },
-    {
-      id: "edit",
-      title: "Make an edit",
-      text: "Click in the document and type something. All changes sync in real-time.",
-    },
-    {
-      id: "cowork",
-      title: "Claude Desktop Cowork detected",
-      text: "",
-    },
-    {
-      id: "complete",
-      title: "You're ready!",
-      text: "You've learned the basics. Press ? anytime to see keyboard shortcuts.",
-    },
-  ] as const;
+const BASE_STEPS = [
+  {
+    id: "review",
+    title: "Review an annotation",
+    text: "Open the side panel and accept or dismiss one of the highlighted annotations. Try Review Mode (Ctrl+Shift+R) for keyboard shortcuts.",
+  },
+  {
+    id: "question",
+    title: "Ask a question",
+    text: "Select text and click Comment to send a question to Claude — or click Note to keep a private thought to yourself. You can also use the Chat panel.",
+  },
+  {
+    id: "edit",
+    title: "Make an edit",
+    text: "Click in the document and type something. All changes sync in real-time.",
+  },
+  {
+    id: "cowork",
+    title: "Claude Desktop Cowork detected",
+    text: "",
+  },
+  {
+    id: "complete",
+    title: "You're ready!",
+    text: "You've learned the basics. Press ? anytime to see keyboard shortcuts.",
+  },
+] as const;
 
-  const tauri = isTauriRuntime();
-  const skipped = readCoworkOnboardingSkipped();
+const tauri = isTauriRuntime();
+const skipped = readCoworkOnboardingSkipped();
 
-  const showCowork = $derived(tauri && shouldShowCoworkOnboarding(coworkStatus, skipped));
-  const activeSteps = $derived(BASE_STEPS.filter((s) => s.id !== "cowork" || showCowork));
-  const totalActionable = $derived(activeSteps.length - 1);
-  const step = $derived(activeSteps[currentStep]);
-  const isComplete = $derived(currentStep >= totalActionable);
-  const isCoworkStep = $derived(step?.id === "cowork");
+const showCowork = $derived(tauri && shouldShowCoworkOnboarding(coworkStatus, skipped));
+const activeSteps = $derived(BASE_STEPS.filter((s) => s.id !== "cowork" || showCowork));
+const totalActionable = $derived(activeSteps.length - 1);
+const step = $derived(activeSteps[currentStep]);
+const isComplete = $derived(currentStep >= totalActionable);
+const isCoworkStep = $derived(step?.id === "cowork");
 </script>
 
 {#if step}

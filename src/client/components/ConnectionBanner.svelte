@@ -1,9 +1,9 @@
 <script lang="ts">
-  interface Props {
-    onDismiss: () => void;
-  }
+interface Props {
+  onDismiss: () => void;
+}
 
-  let { onDismiss }: Props = $props();
+let { onDismiss }: Props = $props();
 </script>
 
 <div

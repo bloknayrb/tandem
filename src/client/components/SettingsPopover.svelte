@@ -1,146 +1,146 @@
 <script lang="ts">
-  import {
-    SELECTION_DWELL_MAX_MS,
-    SELECTION_DWELL_MIN_MS,
-    USER_NAME_MAX_LEN,
-  } from "../../shared/constants";
-  import { isTauriRuntime } from "../cowork/cowork-helpers";
-  import { createAppInfo } from "../hooks/useAppInfo.svelte";
-  import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
-  import { createUserName } from "../hooks/useUserName.svelte";
-  import { API_BASE } from "../utils/fileUpload";
-  import AccessibilitySettings from "./AccessibilitySettings.svelte";
-  import AppearanceSettings from "./AppearanceSettings.svelte";
-  import EditorSettings from "./EditorSettings.svelte";
+import {
+  SELECTION_DWELL_MAX_MS,
+  SELECTION_DWELL_MIN_MS,
+  USER_NAME_MAX_LEN,
+} from "../../shared/constants";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
+import { createAppInfo } from "../hooks/useAppInfo.svelte";
+import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
+import { createUserName } from "../hooks/useUserName.svelte";
+import { API_BASE } from "../utils/fileUpload";
+import AccessibilitySettings from "./AccessibilitySettings.svelte";
+import AppearanceSettings from "./AppearanceSettings.svelte";
+import EditorSettings from "./EditorSettings.svelte";
 
-  const POPOVER_WIDTH = 320;
-  const HEADING_ID = "tandem-settings-heading";
-  const FOCUSABLE_SELECTOR =
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const POPOVER_WIDTH = 320;
+const HEADING_ID = "tandem-settings-heading";
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  interface Props {
-    open: boolean;
-    onClose: () => void;
-    settings: TandemSettings;
-    onUpdate: (partial: Partial<TandemSettings>) => void;
-    returnFocusEl?: HTMLElement | null;
-    anchorEl?: HTMLElement | null;
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  settings: TandemSettings;
+  onUpdate: (partial: Partial<TandemSettings>) => void;
+  returnFocusEl?: HTMLElement | null;
+  anchorEl?: HTMLElement | null;
+}
+
+let { open, onClose, settings, onUpdate, returnFocusEl, anchorEl }: Props = $props();
+
+let popoverEl: HTMLDivElement | undefined = $state();
+let inputEl: HTMLInputElement | undefined = $state();
+
+const { userName, setUserName } = createUserName();
+let nameInput = $state(userName);
+
+const appInfo = createAppInfo(() => open);
+let changelogLoading = $state(false);
+let changelogError = $state<string | null>(null);
+
+// Idle-sync: sync only when NOT focused and value differs
+$effect(() => {
+  const currentUserName = userName;
+  if (nameInput !== currentUserName && document.activeElement !== inputEl) {
+    nameInput = currentUserName;
   }
+});
 
-  let { open, onClose, settings, onUpdate, returnFocusEl, anchorEl }: Props = $props();
+// Initial focus + focus return on close
+$effect(() => {
+  if (!open) return;
+  popoverEl?.focus();
+  return () => {
+    returnFocusEl?.focus();
+  };
+});
 
-  let popoverEl: HTMLDivElement | undefined = $state();
-  let inputEl: HTMLInputElement | undefined = $state();
-
-  const { userName, setUserName } = createUserName();
-  let nameInput = $state(userName);
-
-  const appInfo = createAppInfo(() => open);
-  let changelogLoading = $state(false);
-  let changelogError = $state<string | null>(null);
-
-  // Idle-sync: sync only when NOT focused and value differs
-  $effect(() => {
-    const currentUserName = userName;
-    if (nameInput !== currentUserName && document.activeElement !== inputEl) {
-      nameInput = currentUserName;
+// Outside-dismiss on pointerdown
+$effect(() => {
+  if (!open) return;
+  const handler = (e: PointerEvent) => {
+    const target = e.target as Node;
+    if (anchorEl?.contains(target)) return;
+    if (popoverEl && !popoverEl.contains(target)) {
+      onClose();
     }
-  });
+  };
+  // Defer to avoid immediately firing on the click that opened the popover
+  const timer = setTimeout(() => document.addEventListener("pointerdown", handler), 0);
+  return () => {
+    clearTimeout(timer);
+    document.removeEventListener("pointerdown", handler);
+  };
+});
 
-  // Initial focus + focus return on close
-  $effect(() => {
-    if (!open) return;
-    popoverEl?.focus();
-    return () => {
-      returnFocusEl?.focus();
-    };
-  });
-
-  // Outside-dismiss on pointerdown
-  $effect(() => {
-    if (!open) return;
-    const handler = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (anchorEl?.contains(target)) return;
-      if (popoverEl && !popoverEl.contains(target)) {
-        onClose();
-      }
-    };
-    // Defer to avoid immediately firing on the click that opened the popover
-    const timer = setTimeout(() => document.addEventListener("pointerdown", handler), 0);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("pointerdown", handler);
-    };
-  });
-
-  // Escape to close + focus trap on Tab
-  $effect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab" || !popoverEl) return;
-      const focusables = popoverEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      const active = document.activeElement as HTMLElement | null;
-      if (!popoverEl.contains(active)) {
-        e.preventDefault();
-        first.focus();
-        return;
-      }
-      if (e.shiftKey && active === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  });
-
-  async function handleViewChangelog(): Promise<void> {
-    const changelogPath = appInfo.info?.changelogPath;
-    if (!changelogPath) {
-      changelogError = "Changelog file not found.";
+// Escape to close + focus trap on Tab
+$effect(() => {
+  if (!open) return;
+  const handler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      onClose();
       return;
     }
-    changelogLoading = true;
-    changelogError = null;
-    try {
-      const res = await fetch(`${API_BASE}/open`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: changelogPath, readOnly: true }),
-      });
-      if (!res.ok) {
-        let msg = "Failed to open changelog.";
-        try {
-          const data = (await res.json()) as { message?: string };
-          if (data.message) msg = data.message;
-        } catch {
-          // ignore JSON parse failure
-        }
-        if (res.status === 404) msg = "Changelog file not found.";
-        changelogError = msg;
-        return;
-      }
-      onClose();
-    } catch {
-      changelogError = "Server unavailable.";
-    } finally {
-      changelogLoading = false;
+    if (e.key !== "Tab" || !popoverEl) return;
+    const focusables = popoverEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (!popoverEl.contains(active)) {
+      e.preventDefault();
+      first.focus();
+      return;
     }
-  }
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
+});
 
-  const sectionLabelStyle =
-    "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
+async function handleViewChangelog(): Promise<void> {
+  const changelogPath = appInfo.info?.changelogPath;
+  if (!changelogPath) {
+    changelogError = "Changelog file not found.";
+    return;
+  }
+  changelogLoading = true;
+  changelogError = null;
+  try {
+    const res = await fetch(`${API_BASE}/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: changelogPath, readOnly: true }),
+    });
+    if (!res.ok) {
+      let msg = "Failed to open changelog.";
+      try {
+        const data = (await res.json()) as { message?: string };
+        if (data.message) msg = data.message;
+      } catch {
+        // ignore JSON parse failure
+      }
+      if (res.status === 404) msg = "Changelog file not found.";
+      changelogError = msg;
+      return;
+    }
+    onClose();
+  } catch {
+    changelogError = "Server unavailable.";
+  } finally {
+    changelogLoading = false;
+  }
+}
+
+const sectionLabelStyle =
+  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 {#if open}

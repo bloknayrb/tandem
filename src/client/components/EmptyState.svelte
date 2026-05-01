@@ -1,23 +1,25 @@
 <script lang="ts">
-  import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
+import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
 
-  interface Props {
-    connected: boolean;
-    claudeActive: boolean;
+interface Props {
+  connected: boolean;
+  claudeActive: boolean;
+}
+
+let { connected, claudeActive }: Props = $props();
+
+let showDisconnected = $state(false);
+
+$effect(() => {
+  if (connected) {
+    showDisconnected = false;
+    return;
   }
-
-  let { connected, claudeActive }: Props = $props();
-
-  let showDisconnected = $state(false);
-
-  $effect(() => {
-    if (connected) {
-      showDisconnected = false;
-      return;
-    }
-    const timer = setTimeout(() => { showDisconnected = true; }, DISCONNECT_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  });
+  const timer = setTimeout(() => {
+    showDisconnected = true;
+  }, DISCONNECT_DEBOUNCE_MS);
+  return () => clearTimeout(timer);
+});
 </script>
 
 <div

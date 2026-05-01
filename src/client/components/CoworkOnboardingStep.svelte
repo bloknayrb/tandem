@@ -1,53 +1,56 @@
 <script lang="ts">
-  import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
-  import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
-  import type { CoworkStatus } from "../types";
+import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
+import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
+import type { CoworkStatus } from "../types";
 
-  interface Props {
-    status: CoworkStatus;
-    onAdvance: () => void;
-    onLearnMore?: () => void;
+interface Props {
+  status: CoworkStatus;
+  onAdvance: () => void;
+  onLearnMore?: () => void;
+}
+
+let { status, onAdvance, onLearnMore }: Props = $props();
+
+const primaryBtnStyle =
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
+const secondaryBtnStyle =
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
+
+let confirming = $state(false);
+let busy = $state(false);
+let error = $state<string | null>(null);
+
+async function withInvoke(
+  op: (invoke: InvokeFn) => Promise<void>,
+  errorPrefix: string,
+): Promise<boolean> {
+  busy = true;
+  error = null;
+  try {
+    const invoke = await loadInvoke();
+    await op(invoke);
+    return true;
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const display = formatCoworkError(rawMsg);
+    error = `${errorPrefix}: ${display}`;
+    return false;
+  } finally {
+    busy = false;
   }
+}
 
-  let { status, onAdvance, onLearnMore }: Props = $props();
+async function handleEnable(): Promise<void> {
+  const ok = await withInvoke(async (invoke) => {
+    await coworkToggleIntegration(invoke, true);
+  }, "Failed to enable Cowork");
+  if (ok) onAdvance();
+}
 
-  const primaryBtnStyle =
-    "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
-  const secondaryBtnStyle =
-    "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
-
-  let confirming = $state(false);
-  let busy = $state(false);
-  let error = $state<string | null>(null);
-
-  async function withInvoke(op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<boolean> {
-    busy = true;
-    error = null;
-    try {
-      const invoke = await loadInvoke();
-      await op(invoke);
-      return true;
-    } catch (err) {
-      const rawMsg = err instanceof Error ? err.message : String(err);
-      const display = formatCoworkError(rawMsg);
-      error = `${errorPrefix}: ${display}`;
-      return false;
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function handleEnable(): Promise<void> {
-    const ok = await withInvoke(async (invoke) => {
-      await coworkToggleIntegration(invoke, true);
-    }, "Failed to enable Cowork");
-    if (ok) onAdvance();
-  }
-
-  function handleSkip(): void {
-    writeCoworkOnboardingSkipped();
-    onAdvance();
-  }
+function handleSkip(): void {
+  writeCoworkOnboardingSkipped();
+  onAdvance();
+}
 </script>
 
 <div

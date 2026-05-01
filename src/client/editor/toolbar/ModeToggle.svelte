@@ -1,12 +1,12 @@
 <script lang="ts">
-  import type { TandemMode } from "../../../shared/types";
+import type { TandemMode } from "../../../shared/types";
 
-  interface Props {
-    tandemMode: TandemMode;
-    onModeChange: (mode: TandemMode) => void;
-  }
+interface Props {
+  tandemMode: TandemMode;
+  onModeChange: (mode: TandemMode) => void;
+}
 
-  const { tandemMode, onModeChange }: Props = $props();
+const { tandemMode, onModeChange }: Props = $props();
 </script>
 
 <div

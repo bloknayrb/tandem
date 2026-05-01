@@ -1,31 +1,31 @@
 <script lang="ts">
-  import FilterSelect from "./FilterSelect.svelte";
+import FilterSelect from "./FilterSelect.svelte";
 
-  export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
-  export type FilterAuthor = "all" | "claude" | "user" | "import";
-  export type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
+export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
+export type FilterAuthor = "all" | "claude" | "user" | "import";
+export type FilterStatus = "all" | "pending" | "accepted" | "dismissed";
 
-  interface Props {
-    filterType: FilterType;
-    filterAuthor: FilterAuthor;
-    filterStatus: FilterStatus;
-    hasFilters: boolean;
-    onSetFilterType: (v: FilterType) => void;
-    onSetFilterAuthor: (v: FilterAuthor) => void;
-    onSetFilterStatus: (v: FilterStatus) => void;
-    onClearFilters: () => void;
-  }
+interface Props {
+  filterType: FilterType;
+  filterAuthor: FilterAuthor;
+  filterStatus: FilterStatus;
+  hasFilters: boolean;
+  onSetFilterType: (v: FilterType) => void;
+  onSetFilterAuthor: (v: FilterAuthor) => void;
+  onSetFilterStatus: (v: FilterStatus) => void;
+  onClearFilters: () => void;
+}
 
-  let {
-    filterType,
-    filterAuthor,
-    filterStatus,
-    hasFilters,
-    onSetFilterType,
-    onSetFilterAuthor,
-    onSetFilterStatus,
-    onClearFilters,
-  }: Props = $props();
+let {
+  filterType,
+  filterAuthor,
+  filterStatus,
+  hasFilters,
+  onSetFilterType,
+  onSetFilterAuthor,
+  onSetFilterStatus,
+  onClearFilters,
+}: Props = $props();
 </script>
 
 <div

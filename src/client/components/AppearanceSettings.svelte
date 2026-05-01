@@ -1,86 +1,88 @@
 <script lang="ts">
-  import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
-  import type {
-    LayoutMode,
-    PanelOrder,
-    PrimaryTab,
-    TandemSettings,
-    TextSize,
-    ThemePreference,
-  } from "../hooks/useTandemSettings.svelte";
+import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
+import type {
+  LayoutMode,
+  PanelOrder,
+  PrimaryTab,
+  TandemSettings,
+  TextSize,
+  ThemePreference,
+} from "../hooks/useTandemSettings.svelte";
 
-  interface Props {
-    open: boolean;
-    settings: TandemSettings;
-    onUpdate: (partial: Partial<TandemSettings>) => void;
-  }
+interface Props {
+  open: boolean;
+  settings: TandemSettings;
+  onUpdate: (partial: Partial<TandemSettings>) => void;
+}
 
-  let { open, settings, onUpdate }: Props = $props();
+let { open, settings, onUpdate }: Props = $props();
 
-  const sectionLabelStyle =
-    "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
+const sectionLabelStyle =
+  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 
-  let viewportWidth = $state(window.innerWidth);
-  const threePanelDisabled = $derived(viewportWidth < 768);
+let viewportWidth = $state(window.innerWidth);
+const threePanelDisabled = $derived(viewportWidth < 768);
 
-  $effect(() => {
-    if (!open) return;
+$effect(() => {
+  if (!open) return;
+  viewportWidth = window.innerWidth;
+  const handler = () => {
     viewportWidth = window.innerWidth;
-    const handler = () => { viewportWidth = window.innerWidth; };
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  });
+  };
+  window.addEventListener("resize", handler);
+  return () => window.removeEventListener("resize", handler);
+});
 
-  const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; icon: string }> = [
-    { value: "tabbed", label: "Tabbed", icon: "[=|]" },
-    { value: "tabbed-left", label: "Tabbed-Left", icon: "[|=]" },
-    { value: "three-panel", label: "Three-Panel", icon: "[|||]" },
-  ];
+const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; icon: string }> = [
+  { value: "tabbed", label: "Tabbed", icon: "[=|]" },
+  { value: "tabbed-left", label: "Tabbed-Left", icon: "[|=]" },
+  { value: "three-panel", label: "Three-Panel", icon: "[|||]" },
+];
 
-  function cardStyle(selected: boolean, disabled?: boolean): string {
-    return [
-      "flex: 1;",
-      "padding: 8px;",
-      "min-height: 24px;",
-      `border: 2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"};`,
-      "border-radius: 6px;",
-      `background: ${disabled ? "var(--tandem-surface-muted)" : selected ? "var(--tandem-accent-bg)" : "var(--tandem-surface)"};`,
-      `cursor: ${disabled ? "not-allowed" : "pointer"};`,
-      "text-align: center;",
-      "font-size: 11px;",
-      `color: ${disabled ? "var(--tandem-fg-subtle)" : selected ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)"};`,
-      `font-weight: ${selected ? 600 : 400};`,
-      `opacity: ${disabled ? 0.6 : 1};`,
-      "transition: border-color 0.15s, background 0.15s;",
-    ].join(" ");
-  }
+function cardStyle(selected: boolean, disabled?: boolean): string {
+  return [
+    "flex: 1;",
+    "padding: 8px;",
+    "min-height: 24px;",
+    `border: 2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"};`,
+    "border-radius: 6px;",
+    `background: ${disabled ? "var(--tandem-surface-muted)" : selected ? "var(--tandem-accent-bg)" : "var(--tandem-surface)"};`,
+    `cursor: ${disabled ? "not-allowed" : "pointer"};`,
+    "text-align: center;",
+    "font-size: 11px;",
+    `color: ${disabled ? "var(--tandem-fg-subtle)" : selected ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)"};`,
+    `font-weight: ${selected ? 600 : 400};`,
+    `opacity: ${disabled ? 0.6 : 1};`,
+    "transition: border-color 0.15s, background 0.15s;",
+  ].join(" ");
+}
 
-  const themeRg = createRadioGroup<ThemePreference>(
-    () => settings.theme,
-    ["light", "dark", "system"] as const,
-    (t) => onUpdate({ theme: t }),
-  );
-  const layoutRg = createRadioGroup<LayoutMode>(
-    () => settings.layout,
-    ["tabbed", "tabbed-left", "three-panel"] as const,
-    (l) => onUpdate({ layout: l }),
-    (l) => l === "three-panel" && threePanelDisabled,
-  );
-  const primaryTabRg = createRadioGroup<PrimaryTab>(
-    () => settings.primaryTab,
-    ["chat", "annotations"] as const,
-    (p) => onUpdate({ primaryTab: p }),
-  );
-  const panelOrderRg = createRadioGroup<PanelOrder>(
-    () => settings.panelOrder,
-    ["chat-editor-annotations", "annotations-editor-chat"] as const,
-    (p) => onUpdate({ panelOrder: p }),
-  );
-  const textSizeRg = createRadioGroup<TextSize>(
-    () => settings.textSize,
-    ["s", "m", "l"] as const,
-    (t) => onUpdate({ textSize: t }),
-  );
+const themeRg = createRadioGroup<ThemePreference>(
+  () => settings.theme,
+  ["light", "dark", "system"] as const,
+  (t) => onUpdate({ theme: t }),
+);
+const layoutRg = createRadioGroup<LayoutMode>(
+  () => settings.layout,
+  ["tabbed", "tabbed-left", "three-panel"] as const,
+  (l) => onUpdate({ layout: l }),
+  (l) => l === "three-panel" && threePanelDisabled,
+);
+const primaryTabRg = createRadioGroup<PrimaryTab>(
+  () => settings.primaryTab,
+  ["chat", "annotations"] as const,
+  (p) => onUpdate({ primaryTab: p }),
+);
+const panelOrderRg = createRadioGroup<PanelOrder>(
+  () => settings.panelOrder,
+  ["chat-editor-annotations", "annotations-editor-chat"] as const,
+  (p) => onUpdate({ panelOrder: p }),
+);
+const textSizeRg = createRadioGroup<TextSize>(
+  () => settings.textSize,
+  ["s", "m", "l"] as const,
+  (t) => onUpdate({ textSize: t }),
+);
 </script>
 
 <!-- Theme -->

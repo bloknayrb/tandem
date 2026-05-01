@@ -1,71 +1,71 @@
 <script lang="ts">
-  interface ShortcutRow {
-    keys: string[];
-    description: string;
-  }
+interface ShortcutRow {
+  keys: string[];
+  description: string;
+}
 
-  interface ShortcutSection {
-    title: string;
-    rows: ShortcutRow[];
-  }
+interface ShortcutSection {
+  title: string;
+  rows: ShortcutRow[];
+}
 
-  const SECTIONS: ShortcutSection[] = [
-    {
-      title: "Editor",
-      rows: [
-        { keys: ["Ctrl", "B"], description: "Bold" },
-        { keys: ["Ctrl", "I"], description: "Italic" },
-        { keys: ["Ctrl", "Z"], description: "Undo" },
-        { keys: ["Ctrl", "Y"], description: "Redo" },
-        { keys: ["Ctrl", "S"], description: "Save document" },
-      ],
-    },
-    {
-      title: "Review Mode",
-      rows: [
-        { keys: ["Tab"], description: "Next annotation" },
-        { keys: ["Shift", "Tab"], description: "Previous annotation" },
-        { keys: ["Y"], description: "Accept annotation" },
-        { keys: ["N"], description: "Reject annotation" },
-        { keys: ["Z"], description: "Undo last accept/reject" },
-        { keys: ["E"], description: "Examine (scroll & exit)" },
-        { keys: ["Escape"], description: "Exit review mode" },
-      ],
-    },
-    {
-      title: "Chat",
-      rows: [{ keys: ["Enter"], description: "Send message" }],
-    },
-    {
-      title: "Tabs",
-      rows: [
-        { keys: ["Ctrl", "Tab"], description: "Next tab" },
-        { keys: ["Ctrl", "Shift", "Tab"], description: "Previous tab" },
-        { keys: ["Alt", "←"], description: "Move tab left" },
-        { keys: ["Alt", "→"], description: "Move tab right" },
-      ],
-    },
-    {
-      title: "General",
-      rows: [{ keys: ["?"], description: "Show / hide this help" }],
-    },
-  ];
+const SECTIONS: ShortcutSection[] = [
+  {
+    title: "Editor",
+    rows: [
+      { keys: ["Ctrl", "B"], description: "Bold" },
+      { keys: ["Ctrl", "I"], description: "Italic" },
+      { keys: ["Ctrl", "Z"], description: "Undo" },
+      { keys: ["Ctrl", "Y"], description: "Redo" },
+      { keys: ["Ctrl", "S"], description: "Save document" },
+    ],
+  },
+  {
+    title: "Review Mode",
+    rows: [
+      { keys: ["Tab"], description: "Next annotation" },
+      { keys: ["Shift", "Tab"], description: "Previous annotation" },
+      { keys: ["Y"], description: "Accept annotation" },
+      { keys: ["N"], description: "Reject annotation" },
+      { keys: ["Z"], description: "Undo last accept/reject" },
+      { keys: ["E"], description: "Examine (scroll & exit)" },
+      { keys: ["Escape"], description: "Exit review mode" },
+    ],
+  },
+  {
+    title: "Chat",
+    rows: [{ keys: ["Enter"], description: "Send message" }],
+  },
+  {
+    title: "Tabs",
+    rows: [
+      { keys: ["Ctrl", "Tab"], description: "Next tab" },
+      { keys: ["Ctrl", "Shift", "Tab"], description: "Previous tab" },
+      { keys: ["Alt", "←"], description: "Move tab left" },
+      { keys: ["Alt", "→"], description: "Move tab right" },
+    ],
+  },
+  {
+    title: "General",
+    rows: [{ keys: ["?"], description: "Show / hide this help" }],
+  },
+];
 
-  interface Props {
-    open: boolean;
-    onClose: () => void;
-  }
+interface Props {
+  open: boolean;
+  onClose: () => void;
+}
 
-  let { open, onClose }: Props = $props();
+let { open, onClose }: Props = $props();
 
-  $effect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  });
+$effect(() => {
+  if (!open) return;
+  const handler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") onClose();
+  };
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
+});
 </script>
 
 {#if open}

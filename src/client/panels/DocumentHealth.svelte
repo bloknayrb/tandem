@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Placeholder component — no analysis available yet.
+// Placeholder component — no analysis available yet.
 </script>
 
 <div style="padding: 8px; color: var(--tandem-fg);">

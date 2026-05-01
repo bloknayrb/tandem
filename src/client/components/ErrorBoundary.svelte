@@ -1,15 +1,15 @@
 <script lang="ts">
-  /**
-   * Svelte 5 port of `ErrorBoundary.tsx`.
-   * Uses the native `<svelte:boundary>` element introduced in Svelte 5.
-   */
-  import type { Snippet } from "svelte";
+/**
+ * Svelte 5 port of `ErrorBoundary.tsx`.
+ * Uses the native `<svelte:boundary>` element introduced in Svelte 5.
+ */
+import type { Snippet } from "svelte";
 
-  interface Props {
-    children: Snippet;
-  }
+interface Props {
+  children: Snippet;
+}
 
-  let { children }: Props = $props();
+let { children }: Props = $props();
 </script>
 
 <svelte:boundary>

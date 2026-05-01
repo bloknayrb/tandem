@@ -1,104 +1,106 @@
 <script lang="ts">
-  import { USER_NAME_MAX_LEN } from "../../shared/constants";
-  import { createUserName } from "../hooks/useUserName.svelte";
-  import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
+import { USER_NAME_MAX_LEN } from "../../shared/constants";
+import { createUserName } from "../hooks/useUserName.svelte";
+import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 
-  interface Props {
-    connected: boolean;
-    connectionStatus: ConnectionStatus;
-    reconnectAttempts: number;
-    disconnectedSince: number | null;
-    claudeStatus: string | null;
-    claudeActive: boolean;
-    readOnly?: boolean;
-    documentCount?: number;
-    saving?: boolean;
+interface Props {
+  connected: boolean;
+  connectionStatus: ConnectionStatus;
+  reconnectAttempts: number;
+  disconnectedSince: number | null;
+  claudeStatus: string | null;
+  claudeActive: boolean;
+  readOnly?: boolean;
+  documentCount?: number;
+  saving?: boolean;
+}
+
+let {
+  connected,
+  connectionStatus,
+  reconnectAttempts,
+  disconnectedSince,
+  claudeStatus,
+  claudeActive,
+  readOnly,
+  documentCount = 0,
+  saving = false,
+}: Props = $props();
+
+const RECONNECTED_FLASH_MS = 2_000;
+
+const { userName, setUserName } = createUserName();
+let nameInput = $state(userName);
+let inputEl: HTMLInputElement | undefined = $state();
+
+// Idle-sync: sync only when NOT focused and value differs
+$effect(() => {
+  const currentUserName = userName;
+  if (nameInput !== currentUserName && document.activeElement !== inputEl) {
+    nameInput = currentUserName;
   }
+});
 
-  let {
-    connected,
-    connectionStatus,
-    reconnectAttempts,
-    disconnectedSince,
-    claudeStatus,
-    claudeActive,
-    readOnly,
-    documentCount = 0,
-    saving = false,
-  }: Props = $props();
+let showReconnectedFlash = $state(false);
+let elapsedSeconds = $state(0);
+let prevConnected = connected;
 
-  const RECONNECTED_FLASH_MS = 2_000;
-
-  const { userName, setUserName } = createUserName();
-  let nameInput = $state(userName);
-  let inputEl: HTMLInputElement | undefined = $state();
-
-  // Idle-sync: sync only when NOT focused and value differs
-  $effect(() => {
-    const currentUserName = userName;
-    if (nameInput !== currentUserName && document.activeElement !== inputEl) {
-      nameInput = currentUserName;
-    }
-  });
-
-  let showReconnectedFlash = $state(false);
-  let elapsedSeconds = $state(0);
-  let prevConnected = connected;
-
-  $effect(() => {
-    const was = prevConnected;
-    prevConnected = connected;
-    if (connected && !was) {
-      showReconnectedFlash = true;
-      const timer = setTimeout(() => { showReconnectedFlash = false; }, RECONNECTED_FLASH_MS);
-      return () => clearTimeout(timer);
-    }
-  });
-
-  // Tick elapsed time while disconnected
-  $effect(() => {
-    if (disconnectedSince == null) {
-      elapsedSeconds = 0;
-      return;
-    }
-    elapsedSeconds = Math.floor((Date.now() - disconnectedSince) / 1000);
-    const interval = setInterval(() => {
-      elapsedSeconds = Math.floor((Date.now() - (disconnectedSince ?? 0)) / 1000);
-    }, 1000);
-    return () => clearInterval(interval);
-  });
-
-  const isReconnecting = $derived(connectionStatus === "connecting");
-  const dotColor = $derived(
-    connected
-      ? "var(--tandem-success)"
-      : isReconnecting
-        ? "var(--tandem-warning)"
-        : "var(--tandem-error)"
-  );
-
-  const connLabel = $derived(
-    showReconnectedFlash
-      ? "Reconnected"
-      : connectionStatus === "connected"
-        ? "Connected"
-        : connectionStatus === "connecting"
-          ? (() => {
-              const parts = ["Reconnecting…"];
-              if (reconnectAttempts > 0 || elapsedSeconds > 0) {
-                const details: string[] = [];
-                if (reconnectAttempts > 0) details.push(`attempt ${reconnectAttempts}`);
-                if (elapsedSeconds > 0) details.push(`${elapsedSeconds}s`);
-                parts.push(`(${details.join(", ")})`);
-              }
-              return parts.join(" ");
-            })()
-          : "Disconnected — check that the server is running"
-  );
-
-  function commitName() {
-    setUserName(nameInput);
+$effect(() => {
+  const was = prevConnected;
+  prevConnected = connected;
+  if (connected && !was) {
+    showReconnectedFlash = true;
+    const timer = setTimeout(() => {
+      showReconnectedFlash = false;
+    }, RECONNECTED_FLASH_MS);
+    return () => clearTimeout(timer);
   }
+});
+
+// Tick elapsed time while disconnected
+$effect(() => {
+  if (disconnectedSince == null) {
+    elapsedSeconds = 0;
+    return;
+  }
+  elapsedSeconds = Math.floor((Date.now() - disconnectedSince) / 1000);
+  const interval = setInterval(() => {
+    elapsedSeconds = Math.floor((Date.now() - (disconnectedSince ?? 0)) / 1000);
+  }, 1000);
+  return () => clearInterval(interval);
+});
+
+const isReconnecting = $derived(connectionStatus === "connecting");
+const dotColor = $derived(
+  connected
+    ? "var(--tandem-success)"
+    : isReconnecting
+      ? "var(--tandem-warning)"
+      : "var(--tandem-error)",
+);
+
+const connLabel = $derived(
+  showReconnectedFlash
+    ? "Reconnected"
+    : connectionStatus === "connected"
+      ? "Connected"
+      : connectionStatus === "connecting"
+        ? (() => {
+            const parts = ["Reconnecting…"];
+            if (reconnectAttempts > 0 || elapsedSeconds > 0) {
+              const details: string[] = [];
+              if (reconnectAttempts > 0) details.push(`attempt ${reconnectAttempts}`);
+              if (elapsedSeconds > 0) details.push(`${elapsedSeconds}s`);
+              parts.push(`(${details.join(", ")})`);
+            }
+            return parts.join(" ");
+          })()
+        : "Disconnected — check that the server is running",
+);
+
+function commitName() {
+  setUserName(nameInput);
+}
 </script>
 
 <div

@@ -1,101 +1,104 @@
 <script lang="ts">
-  import { formatCoworkError } from "../cowork/cowork-helpers";
-  import {
-    coworkRetryAdminElevation,
-    coworkToggleIntegration,
-    type InvokeFn,
-    loadInvoke,
-  } from "../cowork/cowork-invoke";
-  import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
+import { formatCoworkError } from "../cowork/cowork-helpers";
+import {
+  coworkRetryAdminElevation,
+  coworkToggleIntegration,
+  type InvokeFn,
+  loadInvoke,
+} from "../cowork/cowork-invoke";
+import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
 
-  const FOCUSABLE_SELECTOR =
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  const coworkState = createCoworkStatus(() => true);
+const coworkState = createCoworkStatus(() => true);
 
-  const uacDeclined = $derived(coworkState.status?.uacDeclined === true);
+const uacDeclined = $derived(coworkState.status?.uacDeclined === true);
 
-  let modalEl: HTMLDivElement | undefined = $state();
-  let confirmingDisable = $state(false);
-  let busy = $state(false);
-  let error = $state<string | null>(null);
+let modalEl: HTMLDivElement | undefined = $state();
+let confirmingDisable = $state(false);
+let busy = $state(false);
+let error = $state<string | null>(null);
 
-  // Title badge — surfaces the warning in the OS window/tab list
-  $effect(() => {
-    if (!uacDeclined) return;
-    const prev = typeof document !== "undefined" ? document.title : null;
-    if (typeof document !== "undefined" && !document.title.startsWith("⚠")) {
-      document.title = `⚠ ${document.title}`;
+// Title badge — surfaces the warning in the OS window/tab list
+$effect(() => {
+  if (!uacDeclined) return;
+  const prev = typeof document !== "undefined" ? document.title : null;
+  if (typeof document !== "undefined" && !document.title.startsWith("⚠")) {
+    document.title = `⚠ ${document.title}`;
+  }
+  return () => {
+    if (typeof document !== "undefined" && prev !== null) {
+      document.title = prev;
     }
-    return () => {
-      if (typeof document !== "undefined" && prev !== null) {
-        document.title = prev;
-      }
-    };
-  });
+  };
+});
 
-  // Focus trap on Tab
-  $effect(() => {
-    if (!uacDeclined) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !modalEl) return;
-      const focusables = modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      const active = document.activeElement as HTMLElement | null;
-      if (!modalEl.contains(active)) {
-        e.preventDefault();
-        first.focus();
-        return;
-      }
-      if (e.shiftKey && active === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  });
-
-  // Move focus into the modal on open
-  $effect(() => {
-    if (!uacDeclined) return;
-    modalEl?.focus();
-  });
-
-  async function withInvoke(op: (invoke: InvokeFn) => Promise<void>, errorPrefix: string): Promise<void> {
-    busy = true;
-    error = null;
-    try {
-      const invoke = await loadInvoke();
-      await op(invoke);
-    } catch (err) {
-      const rawMsg = err instanceof Error ? err.message : String(err);
-      const display = formatCoworkError(rawMsg);
-      error = `${errorPrefix}: ${display}`;
-    } finally {
-      busy = false;
+// Focus trap on Tab
+$effect(() => {
+  if (!uacDeclined) return;
+  const handler = (e: KeyboardEvent) => {
+    if (e.key !== "Tab" || !modalEl) return;
+    const focusables = modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (!modalEl.contains(active)) {
+      e.preventDefault();
+      first.focus();
+      return;
     }
-  }
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
+});
 
-  async function handleRetry(): Promise<void> {
-    await withInvoke(async (invoke) => {
-      await coworkRetryAdminElevation(invoke);
-      await coworkState.refetch();
-    }, "Retry failed");
-  }
+// Move focus into the modal on open
+$effect(() => {
+  if (!uacDeclined) return;
+  modalEl?.focus();
+});
 
-  async function handleDisable(): Promise<void> {
-    await withInvoke(async (invoke) => {
-      await coworkToggleIntegration(invoke, false);
-      await coworkState.refetch();
-    }, "Failed to disable Cowork");
-    confirmingDisable = false;
+async function withInvoke(
+  op: (invoke: InvokeFn) => Promise<void>,
+  errorPrefix: string,
+): Promise<void> {
+  busy = true;
+  error = null;
+  try {
+    const invoke = await loadInvoke();
+    await op(invoke);
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const display = formatCoworkError(rawMsg);
+    error = `${errorPrefix}: ${display}`;
+  } finally {
+    busy = false;
   }
+}
+
+async function handleRetry(): Promise<void> {
+  await withInvoke(async (invoke) => {
+    await coworkRetryAdminElevation(invoke);
+    await coworkState.refetch();
+  }, "Retry failed");
+}
+
+async function handleDisable(): Promise<void> {
+  await withInvoke(async (invoke) => {
+    await coworkToggleIntegration(invoke, false);
+    await coworkState.refetch();
+  }, "Failed to disable Cowork");
+  confirmingDisable = false;
+}
 </script>
 
 {#if coworkState.error && !coworkState.status}

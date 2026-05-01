@@ -1,30 +1,30 @@
 <script lang="ts">
-  import type { Toast } from "../hooks/useNotifications.svelte";
+import type { Toast } from "../hooks/useNotifications.svelte";
 
-  const SEVERITY_TOKENS: Record<Toast["severity"], string> = {
-    error: "var(--tandem-error)",
-    warning: "var(--tandem-warning)",
-    info: "var(--tandem-accent)",
-  };
+const SEVERITY_TOKENS: Record<Toast["severity"], string> = {
+  error: "var(--tandem-error)",
+  warning: "var(--tandem-warning)",
+  info: "var(--tandem-accent)",
+};
 
-  const SEVERITY_BG_TOKENS: Record<Toast["severity"], string> = {
-    error: "var(--tandem-error-bg)",
-    warning: "var(--tandem-warning-bg)",
-    info: "var(--tandem-accent-bg)",
-  };
+const SEVERITY_BG_TOKENS: Record<Toast["severity"], string> = {
+  error: "var(--tandem-error-bg)",
+  warning: "var(--tandem-warning-bg)",
+  info: "var(--tandem-accent-bg)",
+};
 
-  const SEVERITY_TEXT_TOKENS: Record<Toast["severity"], string> = {
-    error: "var(--tandem-error-fg-strong)",
-    warning: "var(--tandem-warning-fg-strong)",
-    info: "var(--tandem-accent-fg-strong)",
-  };
+const SEVERITY_TEXT_TOKENS: Record<Toast["severity"], string> = {
+  error: "var(--tandem-error-fg-strong)",
+  warning: "var(--tandem-warning-fg-strong)",
+  info: "var(--tandem-accent-fg-strong)",
+};
 
-  interface Props {
-    toasts: Toast[];
-    onDismiss: (id: string) => void;
-  }
+interface Props {
+  toasts: Toast[];
+  onDismiss: (id: string) => void;
+}
 
-  let { toasts, onDismiss }: Props = $props();
+let { toasts, onDismiss }: Props = $props();
 </script>
 
 {#if toasts.length > 0}

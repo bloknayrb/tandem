@@ -1,57 +1,57 @@
 <script lang="ts">
-  import { API_BASE } from "../utils/fileUpload";
+import { API_BASE } from "../utils/fileUpload";
 
-  const DISMISS_KEY = "tandem:reviewOnlyBannerDismissed";
+const DISMISS_KEY = "tandem:reviewOnlyBannerDismissed";
 
-  interface Props {
-    visible: boolean;
-    documentId?: string;
+interface Props {
+  visible: boolean;
+  documentId?: string;
+}
+
+let { visible, documentId }: Props = $props();
+
+function readDismissed(): boolean {
+  try {
+    return localStorage.getItem(DISMISS_KEY) === "true";
+  } catch {
+    return false;
   }
+}
 
-  let { visible, documentId }: Props = $props();
+let dismissed = $state(readDismissed());
+let converting = $state(false);
+let error = $state<string | null>(null);
 
-  function readDismissed(): boolean {
-    try {
-      return localStorage.getItem(DISMISS_KEY) === "true";
-    } catch {
-      return false;
+async function handleConvert() {
+  if (!documentId || converting) return;
+  converting = true;
+  error = null;
+  try {
+    const res = await fetch(`${API_BASE}/convert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      error = body?.message ?? `Conversion failed (HTTP ${res.status}).`;
     }
+    // On success the server opens the new .md tab — Hocuspocus sync handles the rest
+  } catch {
+    error = "Could not reach the server.";
+  } finally {
+    converting = false;
   }
+}
 
-  let dismissed = $state(readDismissed());
-  let converting = $state(false);
-  let error = $state<string | null>(null);
-
-  async function handleConvert() {
-    if (!documentId || converting) return;
-    converting = true;
-    error = null;
-    try {
-      const res = await fetch(`${API_BASE}/convert`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentId }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        error = body?.message ?? `Conversion failed (HTTP ${res.status}).`;
-      }
-      // On success the server opens the new .md tab — Hocuspocus sync handles the rest
-    } catch {
-      error = "Could not reach the server.";
-    } finally {
-      converting = false;
-    }
+function handleDismiss() {
+  try {
+    localStorage.setItem(DISMISS_KEY, "true");
+  } catch {
+    // storage unavailable
   }
-
-  function handleDismiss() {
-    try {
-      localStorage.setItem(DISMISS_KEY, "true");
-    } catch {
-      // storage unavailable
-    }
-    dismissed = true;
-  }
+  dismissed = true;
+}
 </script>
 
 {#if visible && !dismissed}
