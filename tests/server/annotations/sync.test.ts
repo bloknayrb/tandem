@@ -53,6 +53,19 @@ import {
 } from "../../helpers/annotation-fixtures.js";
 import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env.js";
 
+/**
+ * Filter `errorSpy.mock.calls` to only the `legacy-type` migration lines.
+ * After #483, `sanitizeAnnotation` also routes `flag-to-note`,
+ * `question-to-comment`, `malformed-suggestion-json`, and `unknown-type`
+ * events through the same migration-log channel — these tests pre-date
+ * #483 and assert the count of the legacy-type umbrella line specifically.
+ */
+function legacyTypeLogs(errorSpy: ReturnType<typeof vi.spyOn>): unknown[][] {
+  return errorSpy.mock.calls.filter((args) =>
+    String(args[0]).includes("legacy migration: legacy-type"),
+  );
+}
+
 function syncCtx(ydoc: Y.Doc, store: DocStore, overrides: Partial<SyncContext> = {}): SyncContext {
   return {
     ydoc,
@@ -321,7 +334,7 @@ describe("legacy-type sanitize on write", () => {
     const parsed = parseAnnotationDoc(raw);
     expect(parsed.ok).toBe(true);
 
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
     cleanup();
     errorSpy.mockRestore();
   });
@@ -459,8 +472,9 @@ describe("legacy-type sanitize on write", () => {
     }, MCP_ORIGIN);
     await store.flush();
 
-    // Two legacy records, one docHash → exactly one warning.
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    // Two legacy records, one docHash → exactly one legacy-type warning
+    // (sanitize-derived events are counted separately).
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
     cleanup();
     errorSpy.mockRestore();
   });
@@ -477,7 +491,7 @@ describe("legacy-type sanitize on write", () => {
       MCP_ORIGIN,
     );
     await store.flush();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
     cleanup1("close");
 
     // Fresh observer for the same docHash — dedupe state should have been
@@ -488,7 +502,7 @@ describe("legacy-type sanitize on write", () => {
       MCP_ORIGIN,
     );
     await store.flush();
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(2);
 
     cleanup2("close");
     errorSpy.mockRestore();
@@ -506,7 +520,7 @@ describe("legacy-type sanitize on write", () => {
       MCP_ORIGIN,
     );
     await store.flush();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
     cleanup1("swap");
 
     const cleanup2 = registerAnnotationObserver(syncCtx(ydoc, store));
@@ -515,8 +529,8 @@ describe("legacy-type sanitize on write", () => {
       MCP_ORIGIN,
     );
     await store.flush();
-    // Same docHash, swap semantics → no additional warning.
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    // Same docHash, swap semantics → no additional legacy-type warning.
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
 
     cleanup2("close");
     errorSpy.mockRestore();
@@ -577,9 +591,9 @@ describe("legacy-type sanitize on write", () => {
     await storeA.flush();
     await storeB.flush();
 
-    // Two different docHashes → two independent log entries.
+    // Two different docHashes → two independent legacy-type log entries.
     // If dedupe collapsed to a single boolean, the second would be suppressed.
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(2);
 
     cleanupA();
     cleanupB();
@@ -620,7 +634,7 @@ describe("legacy-type sanitize on write", () => {
     // Without the docHash fix, normalizeAnnotation is called without docHash
     // and the guard `if (!isCanonical && docHash && ...)` short-circuits → 0.
     // With the fix, docHash is passed and the log fires → 1.
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
 
     cleanup();
     errorSpy.mockRestore();

@@ -9,6 +9,8 @@ import path from "path";
 import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { Annotation } from "../../shared/types.js";
+import { docHash } from "../annotations/doc-hash.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
@@ -83,8 +85,11 @@ export async function applyChangesCore(
   const suggestions: AcceptedSuggestion[] = [];
   let pendingCount = 0;
 
+  const applyDocHash = docHash(filePath);
   for (const [, raw] of map) {
-    const ann = sanitizeAnnotation(raw as Annotation);
+    const ann = sanitizeAnnotation(raw as Annotation, (event) =>
+      relaySanitizationEvent(applyDocHash, event),
+    );
     if (ann.suggestedText === undefined) continue;
     if (ann.status === "pending") {
       pendingCount++;

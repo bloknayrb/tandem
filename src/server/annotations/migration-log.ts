@@ -16,7 +16,16 @@
  * shared dependency-free home both can import from.
  */
 
-export type LegacyMigrationKind = "flag" | "directedAt" | "legacy-type";
+import type { SanitizationEvent } from "../../shared/sanitize.js";
+
+export type LegacyMigrationKind =
+  | "flag"
+  | "directedAt"
+  | "legacy-type"
+  | "flag-to-note"
+  | "question-to-comment"
+  | "malformed-suggestion-json"
+  | "unknown-type";
 
 /** Dedup state — `${docHash}:${kind}`. Cleared on doc close via `forgetDoc`. */
 const loggedLegacyMigrations = new Set<string>();
@@ -51,4 +60,28 @@ export function forgetDoc(docHash: string): void {
 /** Reset all dedup state. Tests only. */
 export function resetMigrationLog(): void {
   loggedLegacyMigrations.clear();
+}
+
+/**
+ * Server-side relay for `sanitizeAnnotation`'s `onLossy` callback. Maps the
+ * shared `SanitizationEvent` discriminated union to a `LegacyMigrationKind`
+ * and routes through the dedup'd `logLegacyMigration` channel so silent
+ * sanitize coercions become visible in the migration trail.
+ *
+ * Imported lazily by callers that already have a docHash/docName in hand.
+ * Callers without one pass `undefined` and accept un-deduped logging.
+ */
+
+export function relaySanitizationEvent(
+  docHash: string | undefined,
+  event: SanitizationEvent,
+): void {
+  switch (event.kind) {
+    case "flag-to-note":
+    case "question-to-comment":
+    case "malformed-suggestion-json":
+    case "unknown-type":
+      logLegacyMigration(docHash, event.kind);
+      return;
+  }
 }

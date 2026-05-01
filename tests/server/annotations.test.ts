@@ -321,7 +321,7 @@ describe("sanitizeAnnotation", () => {
       type: "suggestion",
       content: JSON.stringify({ newText: "Hi", reason: "brevity" }),
     };
-    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    const result = sanitizeAnnotation(legacy as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.suggestedText).toBe("Hi");
     expect(result.content).toBe("brevity");
@@ -329,7 +329,7 @@ describe("sanitizeAnnotation", () => {
 
   it("converts legacy suggestion with malformed JSON to plain comment", () => {
     const legacy = { ...base, type: "suggestion", content: "not-json" };
-    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    const result = sanitizeAnnotation(legacy as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.suggestedText).toBeUndefined();
     expect(result.content).toBe("not-json");
@@ -341,7 +341,7 @@ describe("sanitizeAnnotation", () => {
       type: "suggestion",
       content: JSON.stringify({ newText: "Hi" }),
     };
-    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    const result = sanitizeAnnotation(legacy as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.suggestedText).toBe("Hi");
     expect(result.content).toBe("");
@@ -349,28 +349,28 @@ describe("sanitizeAnnotation", () => {
 
   it("converts legacy question to comment (directedAt stripped per ADR-027)", () => {
     const legacy = { ...base, type: "question" };
-    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    const result = sanitizeAnnotation(legacy as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.directedAt).toBeUndefined();
   });
 
   it("strips stray color from non-highlight entries", () => {
     const withStrayColor = { ...base, type: "comment", color: "yellow" };
-    const result = sanitizeAnnotation(withStrayColor as unknown as Annotation);
+    const result = sanitizeAnnotation(withStrayColor as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.color).toBeUndefined();
   });
 
   it("preserves color on highlight entries", () => {
     const highlight = { ...base, type: "highlight", color: "yellow" };
-    const result = sanitizeAnnotation(highlight as unknown as Annotation);
+    const result = sanitizeAnnotation(highlight as unknown as Annotation, () => {});
     expect(result.type).toBe("highlight");
     expect(result.color).toBe("yellow");
   });
 
   it("passes through valid comment with suggestedText unchanged", () => {
     const comment = { ...base, type: "comment", suggestedText: "replacement" };
-    const result = sanitizeAnnotation(comment as unknown as Annotation);
+    const result = sanitizeAnnotation(comment as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.suggestedText).toBe("replacement");
     expect(result.content).toBe("test");
@@ -378,14 +378,14 @@ describe("sanitizeAnnotation", () => {
 
   it("strips directedAt from comments (ADR-027)", () => {
     const comment = { ...base, type: "comment", directedAt: "claude" as const };
-    const result = sanitizeAnnotation(comment as unknown as Annotation);
+    const result = sanitizeAnnotation(comment as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
     expect(result.directedAt).toBeUndefined();
   });
 
   it("migrates flag to note (ADR-027)", () => {
     const flag = { ...base, type: "flag" };
-    const result = sanitizeAnnotation(flag as unknown as Annotation);
+    const result = sanitizeAnnotation(flag as unknown as Annotation, () => {});
     expect(result.type).toBe("note");
   });
 
@@ -397,37 +397,73 @@ describe("sanitizeAnnotation", () => {
       textSnapshot: "original",
       editedAt: 2000,
     };
-    const result = sanitizeAnnotation(legacy as unknown as Annotation);
+    const result = sanitizeAnnotation(legacy as unknown as Annotation, () => {});
     expect(result.textSnapshot).toBe("original");
     expect(result.editedAt).toBe(2000);
   });
 
-  it("warns and coerces truly unknown types to comment", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("invokes onLossy and coerces truly unknown types to comment", () => {
+    const events: import("../../src/shared/sanitize.js").SanitizationEvent[] = [];
     const unknown = { ...base, type: "foobar" };
-    const result = sanitizeAnnotation(unknown as unknown as Annotation);
+    const result = sanitizeAnnotation(unknown as unknown as Annotation, (e) => events.push(e));
     expect(result.type).toBe("comment");
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown type "foobar"'));
-    warnSpy.mockRestore();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ kind: "unknown-type", id: base.id, rawType: "foobar" });
   });
 
-  it("does not warn for valid comment type", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("invokes onLossy for legacy flag → note migration", () => {
+    const events: import("../../src/shared/sanitize.js").SanitizationEvent[] = [];
+    const flag = { ...base, type: "flag" };
+    const result = sanitizeAnnotation(flag as unknown as Annotation, (e) => events.push(e));
+    expect(result.type).toBe("note");
+    expect(events).toEqual([{ kind: "flag-to-note", id: base.id }]);
+  });
+
+  it("invokes onLossy for legacy question → comment migration", () => {
+    const events: import("../../src/shared/sanitize.js").SanitizationEvent[] = [];
+    const q = { ...base, type: "question" };
+    const result = sanitizeAnnotation(q as unknown as Annotation, (e) => events.push(e));
+    expect(result.type).toBe("comment");
+    expect(events).toEqual([{ kind: "question-to-comment", id: base.id }]);
+  });
+
+  it("invokes onLossy for malformed-suggestion-json", () => {
+    const events: import("../../src/shared/sanitize.js").SanitizationEvent[] = [];
+    const legacy = { ...base, type: "suggestion", content: "not-json" };
+    sanitizeAnnotation(legacy as unknown as Annotation, (e) => events.push(e));
+    expect(events).toEqual([{ kind: "malformed-suggestion-json", id: base.id }]);
+  });
+
+  it("does not invoke onLossy for valid comment type", () => {
+    const events: import("../../src/shared/sanitize.js").SanitizationEvent[] = [];
     const comment = { ...base, type: "comment" };
-    sanitizeAnnotation(comment as unknown as Annotation);
-    expect(warnSpy).not.toHaveBeenCalled();
+    sanitizeAnnotation(comment as unknown as Annotation, (e) => events.push(e));
+    expect(events).toHaveLength(0);
+  });
+
+  it("catches throws inside onLossy without aborting sanitize", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unknown = { ...base, type: "foobar" };
+    const result = sanitizeAnnotation(unknown as unknown as Annotation, () => {
+      throw new Error("relay boom");
+    });
+    expect(result.type).toBe("comment");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[sanitizeAnnotation] onLossy threw"),
+      expect.any(Error),
+    );
     warnSpy.mockRestore();
   });
 
   it("preserves textSnapshot: '' (empty string)", () => {
     const ann = { ...base, type: "comment", textSnapshot: "" };
-    const result = sanitizeAnnotation(ann as unknown as Annotation);
+    const result = sanitizeAnnotation(ann as unknown as Annotation, () => {});
     expect(result.textSnapshot).toBe("");
   });
 
   it("preserves editedAt: 0", () => {
     const ann = { ...base, type: "comment", editedAt: 0 };
-    const result = sanitizeAnnotation(ann as unknown as Annotation);
+    const result = sanitizeAnnotation(ann as unknown as Annotation, () => {});
     expect(result.editedAt).toBe(0);
   });
 

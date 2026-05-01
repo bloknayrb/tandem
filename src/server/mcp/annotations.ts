@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
+import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type {
   Annotation,
@@ -25,6 +26,7 @@ import {
   generateReplyId,
 } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { recordTombstone } from "../annotations/sync.js";
 import { MCP_ORIGIN } from "../events/queue.js";
@@ -38,11 +40,21 @@ import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./resp
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(
   documentId?: string,
-): { ydoc: Y.Doc; map: Y.Map<unknown>; filePath: string } | null {
+): { ydoc: Y.Doc; map: Y.Map<unknown>; filePath: string; docHash: string } | null {
   const doc = getCurrentDoc(documentId);
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
-  return { ydoc, map: ydoc.getMap(Y_MAP_ANNOTATIONS), filePath: doc.filePath };
+  return {
+    ydoc,
+    map: ydoc.getMap(Y_MAP_ANNOTATIONS),
+    filePath: doc.filePath,
+    docHash: docHash(doc.filePath),
+  };
+}
+
+/** Build an `onLossy` callback that relays to the migration-log for the given doc. */
+function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => void {
+  return (event) => relaySanitizationEvent(hash, event);
 }
 
 /** Get the annotation replies Y.Map for a document. */
@@ -112,7 +124,7 @@ export function addReplyToAnnotation(
   const raw = annotationsMap.get(annotationId) as Annotation | undefined;
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
 
-  const ann = sanitizeAnnotation(raw);
+  const ann = sanitizeAnnotation(raw, makeOnLossy(undefined));
   if (ann.status !== "pending") {
     return {
       ok: false,
@@ -260,8 +272,9 @@ export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js
 
 /** Collect all annotations from the Y.Map as an array, skipping malformed entries.
  *  Applies sanitizeAnnotation() to normalize legacy shapes. */
-export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
+export function collectAnnotations(map: Y.Map<unknown>, docHashKey?: string): Annotation[] {
   const result: Annotation[] = [];
+  const onLossy = makeOnLossy(docHashKey);
   map.forEach((value, key) => {
     const ann = value as Record<string, unknown>;
     if (
@@ -274,7 +287,7 @@ export function collectAnnotations(map: Y.Map<unknown>): Annotation[] {
       typeof (ann.range as Record<string, unknown>).from === "number" &&
       typeof (ann.range as Record<string, unknown>).to === "number"
     ) {
-      result.push(sanitizeAnnotation(ann as unknown as Annotation));
+      result.push(sanitizeAnnotation(ann as unknown as Annotation, onLossy));
     } else {
       console.warn(`[Tandem] Skipping malformed annotation entry: ${key}`);
     }
@@ -430,7 +443,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();
 
-        let results = refreshAllRanges(collectAnnotations(da.map), da.ydoc, da.map);
+        let results = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
         if (author) results = results.filter((a) => a.author === author);
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
@@ -489,7 +502,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const raw = da.map.get(id) as Annotation | undefined;
       if (!raw) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
 
-      const ann = sanitizeAnnotation(raw);
+      const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
       const updated = {
         ...ann,
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
@@ -542,7 +555,7 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!raw) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
 
         // Sanitize legacy shapes before editing
-        const ann = sanitizeAnnotation(raw);
+        const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
 
         if (ann.status !== "pending") {
           return mcpError("INVALID_RANGE", `Cannot edit a ${ann.status} annotation`);
@@ -596,7 +609,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      const annotations = refreshAllRanges(collectAnnotations(da.map), da.ydoc, da.map);
+      const annotations = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
       const { ydoc } = da;
 
       const repliesMap = getRepliesMap(ydoc);
