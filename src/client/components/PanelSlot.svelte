@@ -27,10 +27,11 @@ type Props =
 
 let { kind, visible, ...rest }: Props = $props();
 
-const wrapStyle =
+const wrapStyle = $derived(
   visible !== undefined
     ? `display: ${visible ? "flex" : "none"}; flex-direction: column; flex: 1; min-height: 0;`
-    : undefined;
+    : undefined,
+);
 </script>
 
 {#if wrapStyle}

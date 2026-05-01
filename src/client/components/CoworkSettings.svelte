@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
@@ -58,6 +59,7 @@ let confirming = $state<"enable" | null>(null);
 let busy = $state(false);
 
 const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
+onDestroy(() => debouncer.cancel());
 
 const variant = $derived(coworkSettingsVariant(coworkState.status));
 

@@ -32,8 +32,8 @@ let { open, onClose, settings, onUpdate, returnFocusEl, anchorEl }: Props = $pro
 let popoverEl: HTMLDivElement | undefined = $state();
 let inputEl: HTMLInputElement | undefined = $state();
 
-const { userName, setUserName } = createUserName();
-let nameInput = $state(userName);
+const userNameState = createUserName();
+let nameInput = $state(userNameState.userName);
 
 const appInfo = createAppInfo(() => open);
 let changelogLoading = $state(false);
@@ -41,7 +41,7 @@ let changelogError = $state<string | null>(null);
 
 // Idle-sync: sync only when NOT focused and value differs
 $effect(() => {
-  const currentUserName = userName;
+  const currentUserName = userNameState.userName;
   if (nameInput !== currentUserName && document.activeElement !== inputEl) {
     nameInput = currentUserName;
   }
@@ -177,11 +177,11 @@ const sectionLabelStyle =
         type="text"
         value={nameInput}
         oninput={(e) => { nameInput = (e.target as HTMLInputElement).value; }}
-        onblur={() => setUserName(nameInput)}
+        onblur={() => userNameState.setUserName(nameInput)}
         onkeydown={(e) => {
           if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
           if (e.key === "Escape") {
-            nameInput = userName;
+            nameInput = userNameState.userName;
             (e.currentTarget as HTMLInputElement).blur();
           }
         }}

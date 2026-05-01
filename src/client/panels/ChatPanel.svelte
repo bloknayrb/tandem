@@ -153,6 +153,28 @@ async function clearChat() {
 // Anchor expand state — keyed by message id
 let expandedAnchors = $state(new Set<string>());
 
+function renderMarkdown(text: string): string {
+  return (
+    text
+      // headers
+      .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+      .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+      .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+      // bold + italic
+      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      // inline code
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      // unordered lists
+      .replace(/^[*-] (.+)$/gm, "<li>$1</li>")
+      // paragraphs (blank line separation)
+      .replace(/\n\n/g, "</p><p>")
+      // line breaks
+      .replace(/\n/g, "<br>")
+  );
+}
+
 function toggleAnchorExpand(msgId: string) {
   const next = new Set(expandedAnchors);
   if (next.has(msgId)) next.delete(msgId);
@@ -251,10 +273,7 @@ function toggleAnchorExpand(msgId: string) {
         <!-- Message text -->
         {#if msg.author === "claude"}
           <div class="chat-markdown">
-            <!-- Markdown rendering: for Svelte we output as plain text; full markdown
-                 rendering requires @tailwindcss/typography or a Svelte markdown lib.
-                 Plain-text display is functionally equivalent for now. -->
-            <p style="margin: 0; white-space: pre-wrap; word-break: break-word;">{msg.text}</p>
+            {@html renderMarkdown(msg.text)}
           </div>
         {:else}
           <div style="white-space: pre-wrap; word-break: break-word;">{msg.text}</div>
@@ -329,16 +348,45 @@ function toggleAnchorExpand(msgId: string) {
 </div>
 
 <style>
-  @keyframes tandem-typing-bounce {
-    0%,
-    60%,
-    100% {
-      transform: translateY(0);
-      opacity: 0.4;
+  :global {
+    @keyframes tandem-typing-bounce {
+      0%,
+      60%,
+      100% {
+        transform: translateY(0);
+        opacity: 0.4;
+      }
+      30% {
+        transform: translateY(-4px);
+        opacity: 1;
+      }
     }
-    30% {
-      transform: translateY(-4px);
-      opacity: 1;
-    }
+  }
+
+  .chat-markdown :global(h1),
+  .chat-markdown :global(h2),
+  .chat-markdown :global(h3) {
+    margin: 0.5em 0 0.25em;
+    font-weight: 600;
+  }
+  .chat-markdown :global(p) {
+    margin: 0.25em 0;
+  }
+  .chat-markdown :global(code) {
+    font-family: monospace;
+    font-size: 0.9em;
+    background: var(--tandem-surface-muted);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .chat-markdown :global(li) {
+    margin-left: 1.25em;
+    list-style: disc;
+  }
+  .chat-markdown :global(strong) {
+    font-weight: 600;
+  }
+  .chat-markdown :global(em) {
+    font-style: italic;
   }
 </style>
