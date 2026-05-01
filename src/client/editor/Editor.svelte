@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { HocuspocusProvider } from "@hocuspocus/provider";
   import { Editor as TiptapEditor } from "@tiptap/core";
   import Collaboration from "@tiptap/extension-collaboration";
@@ -94,14 +95,14 @@
             "outline: none; min-height: 500px; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
         },
       },
-      editable: !readOnly,
+      editable: untrack(() => !readOnly),
     });
 
     editor = next;
-    onEditorReady?.(next);
+    untrack(() => onEditorReady?.(next));
 
     return () => {
-      onEditorReady?.(null);
+      untrack(() => onEditorReady?.(null));
       next.destroy();
       if (editor === next) editor = null;
     };
