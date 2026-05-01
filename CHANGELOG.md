@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+## \[0.9.1] - 2026-05-01
+
+Hotfix patch bundling ADR-027 surface cleanup and file-I/O correctness fixes before the v0.10.0 Svelte conversion. All changes are patch-class; no MCP API changes.
+
 ### Fixed
 
-- **Imported Word reviewer comments now surface to Claude by default (#482)** — `.docx` reviewer comments are imported as `author: "import"`, `type: "comment"` (was `type: "note"` in the unreleased PR #474 plan). Reverts the `tandem_getAnnotations` `includeImports` opt-in introduced in PR #474 — Claude can read imported comments alongside its own without an explicit flag, which matches the .docx review workflow. The opt-in plumbing (`includeImports` parameter, `importsExcluded` response field) is removed. Existing on-disk records with `author: "import", type: "note"` migrate transparently on read via `sanitizeAnnotation` (one-line clause; emits a `import-note-to-comment` migration-log event); on next import the durable record is rewritten in place. Safe because PR #474 was never tagged in a release.
+- **Imported Word reviewer comments now surface to Claude by default (#482)** — `.docx` reviewer comments are imported as `author: "import"`, `type: "comment"` (was `type: "note"` in the unreleased PR #474 plan). Reverts the `tandem_getAnnotations` `includeImports` opt-in introduced in PR #474 — Claude can read imported comments alongside its own without an explicit flag, which matches the .docx review workflow. The opt-in plumbing (`includeImports` parameter, `importsExcluded` response field) is removed. Existing on-disk records with `author: "import", type: "note"` migrate transparently on read via `sanitizeAnnotation`; on next import the durable record is rewritten in place. Safe because PR #474 was never tagged in a release.
+- **Markdown tables preserved across Tiptap round-trip (#379)** — bidirectional MDAST↔Y.Doc table conversion added to `mdast-ydoc.ts`. Tables with mixed column alignment, inline marks in cells, and empty cells all survive load/save cycles. Flat-offset alignment preserved so annotations anchored after a table resolve correctly.
+- **HTML blocks and insertion-order fixed in mdast-ydoc (#496)** — raw HTML blocks (`<div>`, `<details>`, etc.) now round-trip as `html` nodes instead of being dropped. Insertion-order bug in `blockToYxml` fixed — the two-pass Y.XmlText attach-before-populate pattern now applied uniformly to all block types.
+- **Channel shim per-request timeouts (#364)** — event bridge and `run.ts` now use bounded request-response fetches with split SSE handshake/body watchdogs and a 1 MB SSE frame buffer cap. `tandem_reply` returns a structured timeout error instead of hanging indefinitely.
+- **Sanitize coercions routed to migration-log (#483)** — lossy ADR-027 type coercions in `sanitize.ts` (e.g. `flag` → `note`) now emit a `migration-log.ts` entry (once per doc/kind) instead of silently rewriting records, restoring the forensic trail for ADR-027 transitions.
+- **Doc hash required for collection logs (#495)** — annotation collection log entries now require a `docHash` field, preventing cross-document log pollution from unkeyed writes.
+- **Standalone monitor gated on backend readiness (#491)** — `dev:standalone` waits for the backend health endpoint before starting the monitor, eliminating the startup race that caused spurious connection errors.
+
+### Tests
+
+- **E2E toolbar regression guard (#484)** — Playwright coverage for the redesigned toolbar (ADR-027 note/comment/highlight flow), including a regression guard for the note button empty-annotation bug (#480).
 
 ## \[0.9.0] - 2026-04-28
 

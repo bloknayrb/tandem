@@ -450,7 +450,7 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 
 **Distribution coordination:** v0.9.0 was the first release where three surfaces (npm tarball, Cowork plugin via npx, Tauri desktop) must stay version-coherent. npm publish (GitHub Release trigger) before Tauri build. Rollback strategy per surface documented in `docs/v090-plan.md`.
 
-**v0.9.1 — ADR-027 hotfix patch (planned).** Bundles cleanup of the post-PR #474 surface area before the v0.10.0 Svelte conversion lands. Patch-class scope only:
+**v0.9.1 — RELEASED (2026-05-01).** ADR-027 surface cleanup + file-I/O correctness fixes. Word reviewer comments import as `comment` (not `note`) so Claude sees them without a flag (#482/#489); markdown tables and HTML blocks now survive Tiptap round-trips (#379/#496); channel shim bounded timeouts (#364/#487); sanitize coercions routed to migration-log (#483/#488); doc hash required for collection logs (#495); standalone monitor gated on backend readiness (#491); E2E toolbar regression guard (#484/#490).
 
 | Issue | Concern |
 |-------|---------|
@@ -473,8 +473,8 @@ After PR #474 merges, #473 closes automatically via `closingIssuesReferences`.
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.10.0 | Full Svelte conversion | #312 Phases 2-4: Vite plugin (#465), useYjsSync rune (#466), all hooks (#467), Editor+toolbar (#468), DocumentTabs (#469), panels (#470), settings/modals/misc (#471), App.svelte+React removal (#472). Co-resident polish: #478 (rename "Upload" → "Open" in #469's FileOpenDialog port). Folded into #471 (Svelte SettingsPopover): #383 (bug report link), #457 (documentation in settings) |
-| v0.11.0 | Dark theme + UI polish | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification. Polish bundle: #475 (temporary scratchpad — `priority:high`; introduces in-memory document model, kept out of v0.10.0 to avoid building it twice across React/Svelte), #479 (internal links open within Tandem) |
+| v0.10.0 | Full Svelte conversion | #312 Phases 2-4: Vite plugin (#465), useYjsSync rune (#466), all hooks (#467), Editor+toolbar (#468), DocumentTabs (#469), panels (#470), settings/modals/misc (#471), App.svelte+React removal (#472). Co-resident polish: #478 (rename "Upload" → "Open" in #469's FileOpenDialog port), #494 (silent annotation loss when store is read-only — lock recovery: 30s \`retryStoreLock()\` retry loop in \`index.ts\`, flush open docs on re-acquire, persistent warning banner during read-only window, \`storeReadOnly\` field on \`tandem_status\`/\`tandem_checkInbox\`). Folded into #471 (Svelte SettingsPopover): #383 (bug report link), #457 (documentation in settings) |
+| v0.11.0 | Dark theme + UI polish | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification. Polish bundle: #475 (temporary scratchpad — `priority:high`; introduces in-memory document model, kept out of v0.10.0 to avoid building it twice across React/Svelte), #479 (internal links open within Tandem), #492 (re-highlighting same text toggles the highlight off — behavior change kept out of v0.10.0 to avoid mixing behavioral change into the mechanical Svelte port) |
 | v0.12.0 | Desktop UI Tier 1 + Cowork cross-platform | #269 §1.1-1.5, #316, #317, #319, #322, #378, #380 (PR f already shipped in v0.8.0). Multi-client + installer hardening: #438 (per-client identity spec, prerequisite), #452 (multiple Claude Code chats concurrent, depends on #438), #433 (Cowork installer TOCTOU — sequence **last**, after #316/#317 rewrite `find_cowork_workspaces()` for macOS/Linux), #428 install bug on M1 / 26.1 (distinct from the v1.0 notarization gate) |
 | v0.13.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
