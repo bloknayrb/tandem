@@ -6,6 +6,7 @@ import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { flatOffsetToPmPos } from "../positions";
+import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
@@ -152,28 +153,6 @@ async function clearChat() {
 
 // Anchor expand state — keyed by message id
 let expandedAnchors = $state(new Set<string>());
-
-function renderMarkdown(text: string): string {
-  return (
-    text
-      // headers
-      .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-      .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-      .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-      // bold + italic
-      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.+?)\*/g, "<em>$1</em>")
-      // inline code
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      // unordered lists
-      .replace(/^[*-] (.+)$/gm, "<li>$1</li>")
-      // paragraphs (blank line separation)
-      .replace(/\n\n/g, "</p><p>")
-      // line breaks
-      .replace(/\n/g, "<br>")
-  );
-}
 
 function toggleAnchorExpand(msgId: string) {
   const next = new Set(expandedAnchors);

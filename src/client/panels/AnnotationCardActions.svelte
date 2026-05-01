@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+
 interface Props {
   annotationId: string;
   isPending: boolean;
@@ -16,19 +18,33 @@ let { annotationId, isPending, isEditing, undoable, onAccept, onDismiss, onUndo,
 let undoError = $state(false);
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
 
+function clearUndoTimer() {
+  if (undoTimer) {
+    clearTimeout(undoTimer);
+    undoTimer = null;
+  }
+}
+
 function handleUndo(e: MouseEvent) {
   e.stopPropagation();
   if (!onUndo) return;
   const ok = onUndo(annotationId);
+  if (ok) {
+    clearUndoTimer();
+    undoError = false;
+    return;
+  }
   if (!ok) {
     undoError = true;
-    if (undoTimer) clearTimeout(undoTimer);
+    clearUndoTimer();
     undoTimer = setTimeout(() => {
       undoError = false;
       undoTimer = null;
     }, 3000);
   }
 }
+
+onDestroy(clearUndoTimer);
 </script>
 
 {#if isPending && !isEditing && (onAccept || onDismiss)}
