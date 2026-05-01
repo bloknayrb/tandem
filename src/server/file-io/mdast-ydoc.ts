@@ -1,6 +1,8 @@
 import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
 
+const MARKDOWN_HTML_ATTR = "markdownHtml";
+
 /**
  * Convert an MDAST tree into Y.Doc XmlFragment elements.
  * Block nodes become Y.XmlElements with Tiptap-compatible nodeNames.
@@ -66,10 +68,12 @@ function blockToYxml(
 
     case "blockquote": {
       const el = new Y.XmlElement("blockquote");
+      let insertIndex = 0;
       for (const child of node.children) {
         const childEls = blockToYxml(child, deferred);
         for (const c of childEls) {
-          el.insert(el.length, [c]);
+          el.insert(insertIndex, [c]);
+          insertIndex++;
         }
       }
       return [el];
@@ -81,15 +85,19 @@ function blockToYxml(
       if (node.ordered && node.start != null && node.start !== 1) {
         el.setAttribute("start", node.start as any);
       }
+      let listIndex = 0;
       for (const item of node.children) {
         const listItem = new Y.XmlElement("listItem");
+        let itemIndex = 0;
         for (const child of item.children) {
           const childEls = blockToYxml(child, deferred);
           for (const c of childEls) {
-            listItem.insert(listItem.length, [c]);
+            listItem.insert(itemIndex, [c]);
+            itemIndex++;
           }
         }
-        el.insert(el.length, [listItem]);
+        el.insert(listIndex, [listItem]);
+        listIndex++;
       }
       return [el];
     }
@@ -151,7 +159,16 @@ function blockToYxml(
       return [el];
     }
 
-    // html blocks, definitions, etc. — wrap as paragraphs to avoid data loss
+    case "html": {
+      const el = new Y.XmlElement("paragraph");
+      el.setAttribute(MARKDOWN_HTML_ATTR, true as any);
+      const text = new Y.XmlText();
+      el.insert(0, [text]);
+      deferred.push({ xmlText: text, plainText: node.value });
+      return [el];
+    }
+
+    // definitions, etc. — wrap as paragraphs to avoid data loss
     default: {
       if ("value" in node && typeof node.value === "string") {
         const el = new Y.XmlElement("paragraph");
@@ -271,6 +288,9 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     }
 
     case "paragraph":
+      if (el.getAttribute(MARKDOWN_HTML_ATTR)) {
+        return { type: "html", value: getElementPlainText(el) } as any;
+      }
       return { type: "paragraph", children: deltaToPhrasingContent(el) };
 
     case "blockquote": {
@@ -391,6 +411,15 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
 function stripHashSuffix(key: string): string {
   const dashIdx = key.indexOf("--");
   return dashIdx >= 0 ? key.slice(0, dashIdx) : key;
+}
+
+function getElementPlainText(el: Y.XmlElement): string {
+  let value = "";
+  for (let i = 0; i < el.length; i++) {
+    const child = el.get(i);
+    if (child instanceof Y.XmlText) value += child.toString();
+  }
+  return value;
 }
 
 /**
