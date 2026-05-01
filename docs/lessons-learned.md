@@ -420,7 +420,7 @@ const watchdog = setInterval(() => {
 if (done) throw inactivityTimedOut ? new Error("SSE inactivity timeout") : new Error("SSE stream ended");
 ```
 
-**Key insight:** `AbortSignal` on fetch is an all-or-nothing contract — it doesn't distinguish "connect" from "read" the way curl's `--connect-timeout` vs `--max-time` do. If you want separable timeouts, split handshake and body into two mechanisms (controller + watchdog). Streaming clients always need the split.
+**Key insight:** `AbortSignal` on fetch is an all-or-nothing contract — it doesn't distinguish "connect" from "read" the way curl's `--connect-timeout` vs `--max-time` do. If you want separable timeouts, split handshake and body into two mechanisms (controller + watchdog). Streaming clients always need the split. The same pattern now applies to both the plugin monitor and the legacy channel shim.
 
 ## 43. Fire-and-Forget POSTs Must Be Drained Before process.exit
 

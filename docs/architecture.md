@@ -22,7 +22,7 @@ Tandem is a single Node.js process that serves three roles simultaneously:
 3. **Channel event source** (SSE on port 3479) -- The channel shim connects here to receive real-time push events
 4. **Static file server** (HTTP on port 3479) -- Serves the Vite-built client from `dist/client/` when present (global install mode)
 
-When installed globally (`npm install -g tandem-editor`), the `tandem` CLI starts the server and opens the editor. The `tandem setup` command writes MCP config to Claude Code and/or Claude Desktop. In development, `npm run dev:standalone` runs the server alongside a Vite dev server for hot-reloading.
+When installed globally (`npm install -g tandem-editor`), the `tandem` CLI starts the server and opens the editor. The `tandem setup` command writes MCP config to Claude Code and/or Claude Desktop. In development, `npm run dev:standalone` starts the backend, Vite dev server, and monitor, and waits for the backend to become healthy before launching the monitor.
 
 A separate **channel shim** process (`dist/channel/index.js`) bridges the Tandem server and Claude Code's Channels API. Claude Code spawns it as a stdio subprocess. The shim connects to the server's SSE endpoint and forwards events as `notifications/claude/channel` to Claude Code, enabling push-based communication instead of polling.
 
@@ -342,18 +342,24 @@ On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs 
 
 ### Fetch Timeouts
 
-Outbound HTTP calls use two mechanisms:
+The plugin monitor and legacy channel shim both bound their outbound HTTP calls so a half-open Tandem server cannot wedge the push bridge silently. The shared timeout helper lives in `src/shared/fetch-with-timeout.ts` and is used by `src/monitor/`, `src/channel/event-bridge.ts`, and `src/channel/run.ts`.
 
 1. **`fetchWithTimeout(url, init, ms)`** — wraps `AbortSignal.timeout(ms)` around `fetch`. Used for all request-response routes.
 2. **Split handshake + inactivity watchdog** — used for the streaming `/api/events` route. A local `AbortController` bounds the handshake; once the response headers arrive the controller's timer is cleared, and a separate inactivity watchdog cancels the body stream if no bytes arrive for `SSE_INACTIVITY_TIMEOUT_MS`. See [lesson #42](./lessons-learned.md#42-abortsignal-passed-to-fetch-governs-the-response-body-too).
+3. **SSE frame buffer cap** — the channel shim caps unframed SSE data at 1 MB so a malformed upstream cannot grow memory without a `\n\n` frame boundary.
 
 | Route | Mechanism | Budget |
 |-------|-----------|--------|
 | SSE handshake (`/api/events`) | Local `AbortController` | 10s (handshake only) |
 | SSE body (`/api/events`) | Inactivity watchdog | 60s per-read |
+| SSE parse buffer (`/api/events`) | Frame buffer cap | 1 MB |
 | Mode check (`/api/mode`) | `AbortSignal.timeout` | 2s |
 | Awareness POST (`/api/channel-awareness`) | `AbortSignal.timeout` | 5s |
 | Error report (`/api/channel-error`) | `AbortSignal.timeout` | 3s |
+| Reply POST (`/api/channel-reply`) | `AbortSignal.timeout` | 5s |
+| Permission relay (`/api/channel-permission`) | `AbortSignal.timeout` | 5s |
+
+`tandem_reply` deliberately re-throws `AbortError` / `TimeoutError` while parsing the response body. If the server returns headers but never finishes JSON, Claude receives a structured `isError: true` response such as `/api/channel-reply timed out after 5000ms` instead of a fake-success "Non-JSON response" payload.
 
 ### Why `tandem-channel` Is Now Opt-In
 

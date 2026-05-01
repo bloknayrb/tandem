@@ -921,6 +921,8 @@ data: {"id":"evt_1710936000000_a1b2c3","type":"chat:message","timestamp":1710936
 
 Events are only emitted for editor-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.
 
+**Channel shim bounds:** The shim gives the SSE handshake a 10-second deadline, then clears that handshake timer once response headers arrive. The long-lived response body is governed separately by a 60-second inactivity watchdog. Incoming SSE data is capped at 1 MB without a frame boundary; exceeding the cap is treated as a connection failure and retried.
+
 ### POST /api/channel-awareness
 
 Channel shim reports Claude's current processing status for the editor StatusBar.
@@ -943,6 +945,8 @@ Channel shim forwards Claude's chat reply to the Y.Map('chat') on `__tandem_ctrl
 
 **Response:** `{ "sent": true, "messageId": "msg_1710936000000_x1y2z3" }`
 
+The channel shim applies a 5-second request deadline. If the upstream hangs after response headers but before the JSON body completes, the shim returns a structured tool error to Claude instead of treating the response as successful non-JSON output.
+
 ### DELETE /api/chat
 
 Clear all chat messages from the CTRL_ROOM Y.Map. The change syncs to connected editors in real time.
@@ -962,6 +966,8 @@ Channel shim reports connection errors.
 
 **Response:** `{ "ok": true }`
 
+The shim gives this best-effort report a 3-second deadline before exiting after retry exhaustion.
+
 ### POST /api/channel-permission
 
 Channel shim forwards Claude Code's tool approval prompt for editor-side permission UI.
@@ -972,6 +978,8 @@ Channel shim forwards Claude Code's tool approval prompt for editor-side permiss
 ```
 
 **Response:** `{ "ok": true }`
+
+The permission relay has a 5-second deadline; failures are logged because the browser may not see the approval prompt.
 
 ### GET /api/channel-permission
 
