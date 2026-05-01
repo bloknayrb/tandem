@@ -402,7 +402,7 @@ describe("injectCommentsAsAnnotations", () => {
 
     expect(key).toMatch(/^import-[0-9a-f]{12}$/);
     expect(ann.author).toBe("import");
-    expect(ann.type).toBe("note");
+    expect(ann.type).toBe("comment");
     expect(ann.status).toBe("pending");
     expect(ann.content).toBe("[Alice] Good point");
     expect(ann.range).toEqual({ from: 0, to: 5 });
