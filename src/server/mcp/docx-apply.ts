@@ -9,14 +9,14 @@ import path from "path";
 import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { Annotation } from "../../shared/types.js";
+import { docHash } from "../annotations/doc-hash.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
   atomicWriteBuffer,
 } from "../file-io/index.js";
 import { relPosToFlatOffset } from "../positions.js";
-import { docHash } from "../annotations/doc-hash.js";
-import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { sanitizeAnnotation } from "./annotations.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";

@@ -3,8 +3,8 @@ import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
-import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
+import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type {
   Annotation,
   AnnotationReply,
