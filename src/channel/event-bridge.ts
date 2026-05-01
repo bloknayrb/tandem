@@ -66,11 +66,7 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
         } catch (reportErr) {
           console.error(
             "[Channel] Could not report failure to server:",
-            describeFetchError(
-              reportErr,
-              "/api/channel-error",
-              CHANNEL_ERROR_REPORT_TIMEOUT_MS,
-            ),
+            describeFetchError(reportErr, "/api/channel-error", CHANNEL_ERROR_REPORT_TIMEOUT_MS),
           );
         }
         process.exit(1);
@@ -148,11 +144,7 @@ async function connectAndStream(
     ).catch((err) => {
       console.error(
         "[Channel] clearAwareness failed (non-fatal):",
-        describeFetchError(
-          err,
-          "/api/channel-awareness clear",
-          CHANNEL_AWARENESS_FETCH_TIMEOUT_MS,
-        ),
+        describeFetchError(err, "/api/channel-awareness clear", CHANNEL_AWARENESS_FETCH_TIMEOUT_MS),
       );
     });
   }
@@ -300,11 +292,7 @@ async function getCachedMode(tandemUrl: string): Promise<string> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
   try {
-    const res = await fetchWithTimeout(
-      `${tandemUrl}/api/mode`,
-      {},
-      CHANNEL_MODE_FETCH_TIMEOUT_MS,
-    );
+    const res = await fetchWithTimeout(`${tandemUrl}/api/mode`, {}, CHANNEL_MODE_FETCH_TIMEOUT_MS);
     if (res.ok) {
       const { mode } = (await res.json()) as { mode: string };
       cachedMode = mode;

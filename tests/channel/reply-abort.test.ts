@@ -91,11 +91,7 @@ describe("tandem_reply AbortError handling", () => {
       });
     });
 
-    const p = callReplyLike(
-      "http://localhost/api/channel-reply",
-      { text: "hi" },
-      1_000,
-    );
+    const p = callReplyLike("http://localhost/api/channel-reply", { text: "hi" }, 1_000);
     await vi.advanceTimersByTimeAsync(1_500);
     const result = await p;
 
@@ -130,11 +126,7 @@ describe("tandem_reply AbortError handling", () => {
         headers: { "Content-Type": "application/json" },
       });
     });
-    const result = await callReplyLike(
-      "http://localhost/api/channel-reply",
-      { text: "hi" },
-      5_000,
-    );
+    const result = await callReplyLike("http://localhost/api/channel-reply", { text: "hi" }, 5_000);
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(result.text)).toEqual({ ok: true, id: "abc" });
   });
