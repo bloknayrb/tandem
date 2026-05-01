@@ -1,30 +1,30 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
-  import { createYjsSync } from "../hooks/yjsSync.svelte";
+import { onDestroy } from "svelte";
+import { createYjsSync } from "../hooks/yjsSync.svelte";
 
-  const sync = createYjsSync();
+const sync = createYjsSync();
 
-  onDestroy(() => {
-    sync.destroy();
-  });
+onDestroy(() => {
+  sync.destroy();
+});
 
-  // Build a JSON-safe snapshot of the hook's reactive state.
-  const snapshot = $derived({
-    ready: sync.ready,
-    connected: sync.connected,
-    connectionStatus: sync.connectionStatus,
-    reconnectAttempts: sync.reconnectAttempts,
-    disconnectedSince: sync.disconnectedSince,
-    serverRestarted: sync.serverRestarted,
-    activeTabId: sync.activeTabId,
-    tabIds: sync.tabs.map((t) => t.id),
-    tabCount: sync.tabs.length,
-    annotationCount: sync.annotations.length,
-    claudeStatus: sync.claudeStatus,
-    claudeActive: sync.claudeActive,
-    readOnly: sync.readOnly,
-    hasBootstrapYdoc: sync.bootstrapYdoc !== null,
-  });
+// Build a JSON-safe snapshot of the hook's reactive state.
+const snapshot = $derived({
+  ready: sync.ready,
+  connected: sync.connected,
+  connectionStatus: sync.connectionStatus,
+  reconnectAttempts: sync.reconnectAttempts,
+  disconnectedSince: sync.disconnectedSince,
+  serverRestarted: sync.serverRestarted,
+  activeTabId: sync.activeTabId,
+  tabIds: sync.tabs.map((t) => t.id),
+  tabCount: sync.tabs.length,
+  annotationCount: sync.annotations.length,
+  claudeStatus: sync.claudeStatus,
+  claudeActive: sync.claudeActive,
+  readOnly: sync.readOnly,
+  hasBootstrapYdoc: sync.bootstrapYdoc !== null,
+});
 </script>
 
 <div class="debug">

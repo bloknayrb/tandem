@@ -1,46 +1,46 @@
 <script lang="ts">
-  import type { AnnotationReply } from "../../shared/types";
-  import CommentThread from "./CommentThread.svelte";
-  import { TEXTAREA_STYLE } from "./panel-styles";
+import type { AnnotationReply } from "../../shared/types";
+import CommentThread from "./CommentThread.svelte";
+import { TEXTAREA_STYLE } from "./panel-styles";
 
-  interface Props {
-    annotationId: string;
-    replies: AnnotationReply[];
-    isPending: boolean;
-    isEditing: boolean;
-    onReply?: (id: string, text: string) => Promise<boolean>;
+interface Props {
+  annotationId: string;
+  replies: AnnotationReply[];
+  isPending: boolean;
+  isEditing: boolean;
+  onReply?: (id: string, text: string) => Promise<boolean>;
+}
+
+let { annotationId, replies, isPending, isEditing, onReply }: Props = $props();
+
+let isReplying = $state(false);
+let replyText = $state("");
+let isSendingReply = $state(false);
+
+const hasText = $derived(Boolean(replyText.trim()));
+
+function handleReplyKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    isReplying = false;
+    replyText = "";
   }
+}
 
-  let { annotationId, replies, isPending, isEditing, onReply }: Props = $props();
-
-  let isReplying = $state(false);
-  let replyText = $state("");
-  let isSendingReply = $state(false);
-
-  const hasText = $derived(Boolean(replyText.trim()));
-
-  function handleReplyKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      isReplying = false;
+async function handleSendReply() {
+  const trimmed = replyText.trim();
+  if (!trimmed || isSendingReply) return;
+  isSendingReply = true;
+  try {
+    const ok = await onReply?.(annotationId, trimmed);
+    if (ok !== false) {
       replyText = "";
+      isReplying = false;
     }
+  } finally {
+    isSendingReply = false;
   }
-
-  async function handleSendReply() {
-    const trimmed = replyText.trim();
-    if (!trimmed || isSendingReply) return;
-    isSendingReply = true;
-    try {
-      const ok = await onReply?.(annotationId, trimmed);
-      if (ok !== false) {
-        replyText = "";
-        isReplying = false;
-      }
-    } finally {
-      isSendingReply = false;
-    }
-  }
+}
 </script>
 
 <CommentThread {replies} />

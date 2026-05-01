@@ -1,12 +1,12 @@
 <script lang="ts">
-  export interface FilterSelectProps {
-    value: string;
-    onChange: (v: string) => void;
-    options: Array<{ value: string; label: string }>;
-    testId?: string;
-  }
+export interface FilterSelectProps {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  testId?: string;
+}
 
-  let { value, onChange, options, testId }: FilterSelectProps = $props();
+let { value, onChange, options, testId }: FilterSelectProps = $props();
 </script>
 
 <select

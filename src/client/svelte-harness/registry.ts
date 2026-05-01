@@ -10,6 +10,9 @@ import type { Component } from "svelte";
 // biome-ignore lint/suspicious/noExplicitAny: intentional harness escape hatch
 export const registry: Record<string, () => Promise<{ default: Component<any> }>> = {
   HookDebug: () => import("./HookDebug.svelte"),
+  Editor: () => import("./EditorHarness.svelte"),
+  DocumentTabs: () => import("../tabs/DocumentTabs.svelte"),
+  FileOpenDialog: () => import("../components/FileOpenDialog.svelte"),
   DocumentHealth: () => import("../panels/DocumentHealth.svelte"),
   ReviewSummary: () => import("../panels/ReviewSummary.svelte"),
   FilterSelect: () => import("../panels/FilterSelect.svelte"),
@@ -23,4 +26,21 @@ export const registry: Record<string, () => Promise<{ default: Component<any> }>
   ApplyChangesButton: () => import("../components/ApplyChangesButton.svelte"),
   SidePanel: () => import("../panels/SidePanel.svelte"),
   ChatPanel: () => import("../panels/ChatPanel.svelte"),
+  // Settings & misc components (issue #471)
+  AccessibilitySettings: () => import("../components/AccessibilitySettings.svelte"),
+  AppearanceSettings: () => import("../components/AppearanceSettings.svelte"),
+  EditorSettings: () => import("../components/EditorSettings.svelte"),
+  SettingsPopover: () => import("../components/SettingsPopover.svelte"),
+  CoworkSettings: () => import("../components/CoworkSettings.svelte"),
+  CoworkOnboardingStep: () => import("../components/CoworkOnboardingStep.svelte"),
+  CoworkAdminDeclinedModal: () => import("../components/CoworkAdminDeclinedModal.svelte"),
+  OnboardingTutorial: () => import("../components/OnboardingTutorial.svelte"),
+  HelpModal: () => import("../components/HelpModal.svelte"),
+  ConnectionBanner: () => import("../components/ConnectionBanner.svelte"),
+  EmptyState: () => import("../components/EmptyState.svelte"),
+  ReviewOnlyBanner: () => import("../components/ReviewOnlyBanner.svelte"),
+  ToastContainer: () => import("../components/ToastContainer.svelte"),
+  PanelSlot: () => import("../components/PanelSlot.svelte"),
+  ErrorBoundary: () => import("../components/ErrorBoundary.svelte"),
+  StatusBar: () => import("../status/StatusBar.svelte"),
 };

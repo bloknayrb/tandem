@@ -1,33 +1,33 @@
 <script lang="ts">
-  import { TEXTAREA_STYLE } from "./panel-styles";
+import { TEXTAREA_STYLE } from "./panel-styles";
 
-  interface Props {
-    annotationId: string;
-    hasSuggestedText: boolean;
-    editText: string;
-    editNewText: string;
-    editReason: string;
-    onChangeEditText: (value: string) => void;
-    onChangeEditNewText: (value: string) => void;
-    onChangeEditReason: (value: string) => void;
-    onKeyDown: (e: KeyboardEvent) => void;
-    onSave: () => void;
-    onCancel: () => void;
-  }
+interface Props {
+  annotationId: string;
+  hasSuggestedText: boolean;
+  editText: string;
+  editNewText: string;
+  editReason: string;
+  onChangeEditText: (value: string) => void;
+  onChangeEditNewText: (value: string) => void;
+  onChangeEditReason: (value: string) => void;
+  onKeyDown: (e: KeyboardEvent) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}
 
-  let {
-    annotationId,
-    hasSuggestedText,
-    editText,
-    editNewText,
-    editReason,
-    onChangeEditText,
-    onChangeEditNewText,
-    onChangeEditReason,
-    onKeyDown,
-    onSave,
-    onCancel,
-  }: Props = $props();
+let {
+  annotationId,
+  hasSuggestedText,
+  editText,
+  editNewText,
+  editReason,
+  onChangeEditText,
+  onChangeEditNewText,
+  onChangeEditReason,
+  onKeyDown,
+  onSave,
+  onCancel,
+}: Props = $props();
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

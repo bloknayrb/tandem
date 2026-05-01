@@ -226,6 +226,11 @@ async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
   return true;
 }
 
+/** Returns true while another process holds the store lock and writes are disabled. */
+export function isStoreReadOnly(): boolean {
+  return readOnly;
+}
+
 /** Release the store lock. Safe to call repeatedly; no-op if we don't own it. */
 export async function releaseStoreLock(): Promise<void> {
   if (isFeatureDisabled()) return;

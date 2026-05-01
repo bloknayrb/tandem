@@ -1,268 +1,266 @@
 <script lang="ts">
-  import type { Editor as TiptapEditor } from "@tiptap/core";
-  import * as Y from "yjs";
-  import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
-  import { sanitizeAnnotation } from "../../shared/sanitize";
-  import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
-  import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
-  import { warningStateColors } from "../utils/colors";
-  import { API_BASE } from "../utils/fileUpload";
-  import AnnotationCard from "./AnnotationCard.svelte";
-  import BulkActions from "./BulkActions.svelte";
-  import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar.svelte";
-  import FilterBar from "./FilterBar.svelte";
-  import { useAnnotationReview } from "./useAnnotationReview.svelte";
+import type { Editor as TiptapEditor } from "@tiptap/core";
+import * as Y from "yjs";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { sanitizeAnnotation } from "../../shared/sanitize";
+import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
+import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
+import { warningStateColors } from "../utils/colors";
+import { API_BASE } from "../utils/fileUpload";
+import AnnotationCard from "./AnnotationCard.svelte";
+import BulkActions from "./BulkActions.svelte";
+import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar.svelte";
+import FilterBar from "./FilterBar.svelte";
+import { useAnnotationReview } from "./useAnnotationReview.svelte";
 
-  interface Props {
-    annotations: Annotation[];
-    editor: TiptapEditor | null;
-    ydoc: Y.Doc | null;
-    heldCount?: number;
-    tandemMode?: TandemMode;
-    onModeChange?: (mode: TandemMode) => void;
-    activeDocFormat?: string;
-    documentId?: string;
-    reviewMode: boolean;
-    onToggleReviewMode: () => void;
-    onExitReviewMode: () => void;
-    activeAnnotationId: string | null;
-    onActiveAnnotationChange: (id: string | null) => void;
-    reduceMotion?: boolean;
+interface Props {
+  annotations: Annotation[];
+  editor: TiptapEditor | null;
+  ydoc: Y.Doc | null;
+  heldCount?: number;
+  tandemMode?: TandemMode;
+  onModeChange?: (mode: TandemMode) => void;
+  activeDocFormat?: string;
+  documentId?: string;
+  reviewMode: boolean;
+  onToggleReviewMode: () => void;
+  onExitReviewMode: () => void;
+  activeAnnotationId: string | null;
+  onActiveAnnotationChange: (id: string | null) => void;
+  reduceMotion?: boolean;
+}
+
+let {
+  annotations,
+  editor,
+  ydoc,
+  heldCount = 0,
+  tandemMode: _tandemMode,
+  onModeChange,
+  activeDocFormat,
+  documentId,
+  reviewMode,
+  onToggleReviewMode,
+  onExitReviewMode,
+  activeAnnotationId,
+  onActiveAnnotationChange,
+  reduceMotion,
+}: Props = $props();
+
+const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+
+// Filter state
+let filterType = $state<FilterType>("all");
+let filterAuthor = $state<FilterAuthor>("all");
+let filterStatus = $state<FilterStatus>("all");
+let bulkConfirm = $state<"accept" | "dismiss" | null>(null);
+
+// Scroll container ref
+let scrollContainerEl: HTMLDivElement | undefined = $state();
+
+// Confirm button element (from BulkActions)
+let confirmBtnEl: HTMLButtonElement | null = $state(null);
+
+// Focus confirm button when bulk confirmation appears
+$effect(() => {
+  if (bulkConfirm) confirmBtnEl?.focus();
+});
+
+// Reset bulk confirm when filters change
+$effect(() => {
+  // read filter state to establish reactivity
+  void filterType;
+  void filterAuthor;
+  void filterStatus;
+  bulkConfirm = null;
+});
+
+// Replies: observe Y.Map(annotationReplies)
+let repliesMap = $state(new Map<string, AnnotationReply[]>());
+
+$effect(() => {
+  if (!ydoc) {
+    repliesMap = new Map();
+    return;
   }
 
-  let {
-    annotations,
-    editor,
-    ydoc,
-    heldCount = 0,
-    tandemMode: _tandemMode,
-    onModeChange,
-    activeDocFormat,
-    documentId,
-    reviewMode,
-    onToggleReviewMode,
-    onExitReviewMode,
-    activeAnnotationId,
-    onActiveAnnotationChange,
-    reduceMotion,
-  }: Props = $props();
+  const ymap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
-  const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+  function rebuild() {
+    const grouped = new Map<string, AnnotationReply[]>();
+    ymap.forEach((value) => {
+      const reply = value as AnnotationReply;
+      if (reply && typeof reply === "object" && reply.annotationId) {
+        const list = grouped.get(reply.annotationId) ?? [];
+        list.push(reply);
+        grouped.set(reply.annotationId, list);
+      }
+    });
+    for (const list of grouped.values()) {
+      list.sort((a, b) => a.timestamp - b.timestamp);
+    }
+    repliesMap = grouped;
+  }
 
-  // Filter state
-  let filterType = $state<FilterType>("all");
-  let filterAuthor = $state<FilterAuthor>("all");
-  let filterStatus = $state<FilterStatus>("all");
-  let bulkConfirm = $state<"accept" | "dismiss" | null>(null);
+  rebuild();
+  ymap.observe(rebuild);
+  return () => ymap.unobserve(rebuild);
+});
 
-  // Scroll container ref
-  let scrollContainerEl: HTMLDivElement | undefined = $state();
+// Single-pass filtering + categorization
+const filteredData = $derived.by(() => {
+  const filtered: Annotation[] = [];
+  const allPending: Annotation[] = [];
 
-  // Confirm button element (from BulkActions)
-  let confirmBtnEl: HTMLButtonElement | null = $state(null);
+  for (const a of annotations) {
+    if (a.status === "pending") allPending.push(a);
+    let matchType: boolean;
+    if (filterType === "all") matchType = true;
+    else if (filterType === "with-replacement") matchType = a.suggestedText !== undefined;
+    else matchType = a.type === filterType;
+    const matchAuthor = filterAuthor === "all" || a.author === filterAuthor;
+    const matchStatus = filterStatus === "all" || a.status === filterStatus;
+    if (matchType && matchAuthor && matchStatus) filtered.push(a);
+  }
 
-  // Focus confirm button when bulk confirmation appears
-  $effect(() => {
-    if (bulkConfirm) confirmBtnEl?.focus();
-  });
+  const pending = filtered.filter((a) => a.status === "pending");
+  const resolved = filtered.filter((a) => a.status !== "pending");
 
-  // Reset bulk confirm when filters change
-  $effect(() => {
-    // read filter state to establish reactivity
-    void filterType;
-    void filterAuthor;
-    void filterStatus;
-    bulkConfirm = null;
-  });
+  return { filtered, pending, resolved, allPending };
+});
 
-  // Replies: observe Y.Map(annotationReplies)
-  let repliesMap = $state(new Map<string, AnnotationReply[]>());
+const hasFilters = $derived(
+  filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all",
+);
 
-  $effect(() => {
-    if (!ydoc) {
-      repliesMap = new Map();
+// useAnnotationReview hook
+const review = useAnnotationReview({
+  getYdoc: () => ydoc,
+  getEditor: () => editor,
+  getAnnotations: () => annotations,
+  onActiveAnnotationChange: (id) => onActiveAnnotationChange(id),
+  getReviewMode: () => reviewMode,
+  onToggleReviewMode: () => onToggleReviewMode(),
+  onExitReviewMode: () => onExitReviewMode(),
+  getBulkConfirm: () => bulkConfirm,
+  setBulkConfirm: (v) => (bulkConfirm = v),
+  getScrollBehavior: () => scrollBehavior,
+});
+
+// Scroll container reset on filter change
+let didMountFilters = false;
+$effect(() => {
+  // track filter state
+  void filterType;
+  void filterAuthor;
+  void filterStatus;
+
+  if (!didMountFilters) {
+    didMountFilters = true;
+    return;
+  }
+
+  if (activeAnnotationId) {
+    const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
+    if (card) {
+      card.scrollIntoView({ block: "center" });
       return;
     }
+    console.warn(
+      `[tandem] SidePanel: active annotation ${activeAnnotationId} not found on filter change; scrolling to top`,
+    );
+  }
+  scrollContainerEl?.scrollTo({ top: 0 });
+});
 
-    const ymap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+// Scroll to and flash annotation card when activeAnnotationId changes externally
+$effect(() => {
+  const aid = activeAnnotationId;
+  if (!aid) return;
+  const sb = scrollBehavior;
 
-    function rebuild() {
-      const grouped = new Map<string, AnnotationReply[]>();
-      ymap.forEach((value) => {
-        const reply = value as AnnotationReply;
-        if (reply && typeof reply === "object" && reply.annotationId) {
-          const list = grouped.get(reply.annotationId) ?? [];
-          list.push(reply);
-          grouped.set(reply.annotationId, list);
-        }
-      });
-      for (const list of grouped.values()) {
-        list.sort((a, b) => a.timestamp - b.timestamp);
-      }
-      repliesMap = grouped;
-    }
-
-    rebuild();
-    ymap.observe(rebuild);
-    return () => ymap.unobserve(rebuild);
-  });
-
-  // Single-pass filtering + categorization
-  const filteredData = $derived.by(() => {
-    const filtered: Annotation[] = [];
-    const allPending: Annotation[] = [];
-
-    for (const a of annotations) {
-      if (a.status === "pending") allPending.push(a);
-      let matchType: boolean;
-      if (filterType === "all") matchType = true;
-      else if (filterType === "with-replacement") matchType = a.suggestedText !== undefined;
-      else matchType = a.type === filterType;
-      const matchAuthor = filterAuthor === "all" || a.author === filterAuthor;
-      const matchStatus = filterStatus === "all" || a.status === filterStatus;
-      if (matchType && matchAuthor && matchStatus) filtered.push(a);
-    }
-
-    const pending = filtered.filter((a) => a.status === "pending");
-    const resolved = filtered.filter((a) => a.status !== "pending");
-
-    return { filtered, pending, resolved, allPending };
-  });
-
-  const hasFilters = $derived(
-    filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all",
-  );
-
-  // useAnnotationReview hook
-  const review = useAnnotationReview({
-    getYdoc: () => ydoc,
-    getEditor: () => editor,
-    getAnnotations: () => annotations,
-    onActiveAnnotationChange: (id) => onActiveAnnotationChange(id),
-    getReviewMode: () => reviewMode,
-    onToggleReviewMode: () => onToggleReviewMode(),
-    onExitReviewMode: () => onExitReviewMode(),
-    getBulkConfirm: () => bulkConfirm,
-    setBulkConfirm: (v) => (bulkConfirm = v),
-    getScrollBehavior: () => scrollBehavior,
-  });
-
-  // Scroll container reset on filter change
-  let didMountFilters = false;
-  $effect(() => {
-    // track filter state
-    void filterType;
-    void filterAuthor;
-    void filterStatus;
-
-    if (!didMountFilters) {
-      didMountFilters = true;
-      return;
-    }
-
-    if (activeAnnotationId) {
-      const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
-      if (card) {
-        card.scrollIntoView({ block: "center" });
-        return;
-      }
+  const timer = setTimeout(() => {
+    const card = document.querySelector(`[data-testid="annotation-card-${aid}"]`);
+    if (card) {
+      card.scrollIntoView({ behavior: sb, block: "nearest" });
+      card.classList.add("tandem-annotation-flash");
+      const onEnd = () => card.classList.remove("tandem-annotation-flash");
+      card.addEventListener("animationend", onEnd, { once: true });
+    } else {
       console.warn(
-        `[tandem] SidePanel: active annotation ${activeAnnotationId} not found on filter change; scrolling to top`,
+        `[tandem] SidePanel: active annotation ${aid} not found after 50ms delay; scroll-to-card skipped`,
       );
     }
-    scrollContainerEl?.scrollTo({ top: 0 });
+  }, 50);
+
+  return () => clearTimeout(timer);
+});
+
+function handleEdit(id: string, newContent: string) {
+  if (!ydoc) return;
+  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const raw = map.get(id) as Annotation | undefined;
+  if (!raw) return;
+  const ann = sanitizeAnnotation(raw, (event) => {
+    console.warn("[sanitize]", event);
   });
 
-  // Scroll to and flash annotation card when activeAnnotationId changes externally
-  $effect(() => {
-    const aid = activeAnnotationId;
-    if (!aid) return;
-    const sb = scrollBehavior;
+  if (ann.suggestedText !== undefined) {
+    try {
+      const parsed = JSON.parse(newContent) as { suggestedText: string; content: string };
+      map.set(id, {
+        ...ann,
+        suggestedText: parsed.suggestedText,
+        content: parsed.content,
+        editedAt: Date.now(),
+      });
+    } catch {
+      console.warn(`[SidePanel] Failed to parse edit payload for annotation ${id}`);
+    }
+    return;
+  }
+  map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
+}
 
-    const timer = setTimeout(() => {
-      const card = document.querySelector(`[data-testid="annotation-card-${aid}"]`);
-      if (card) {
-        card.scrollIntoView({ behavior: sb, block: "nearest" });
-        card.classList.add("tandem-annotation-flash");
-        const onEnd = () => card.classList.remove("tandem-annotation-flash");
-        card.addEventListener("animationend", onEnd, { once: true });
-      } else {
-        console.warn(
-          `[tandem] SidePanel: active annotation ${aid} not found after 50ms delay; scroll-to-card skipped`,
-        );
-      }
-    }, 50);
-
-    return () => clearTimeout(timer);
-  });
-
-  function handleEdit(id: string, newContent: string) {
-    if (!ydoc) return;
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const raw = map.get(id) as Annotation | undefined;
-    if (!raw) return;
-    const ann = sanitizeAnnotation(raw, (event) => {
-      console.warn("[sanitize]", event);
+async function handleRemove(annotationId: string): Promise<void> {
+  try {
+    const resp = await fetch(`${API_BASE}/remove-annotation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ annotationId, documentId }),
     });
-
-    if (ann.suggestedText !== undefined) {
-      try {
-        const parsed = JSON.parse(newContent) as { suggestedText: string; content: string };
-        map.set(id, {
-          ...ann,
-          suggestedText: parsed.suggestedText,
-          content: parsed.content,
-          editedAt: Date.now(),
-        });
-      } catch {
-        console.warn(`[SidePanel] Failed to parse edit payload for annotation ${id}`);
-      }
-      return;
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ message: "Unknown error" }));
+      console.error("[Tandem] Remove annotation failed:", err);
     }
-    map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
+  } catch (e) {
+    console.error("[Tandem] Remove annotation failed:", e);
   }
+}
 
-  async function handleRemove(annotationId: string): Promise<void> {
-    try {
-      const resp = await fetch(`${API_BASE}/remove-annotation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ annotationId, documentId }),
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ message: "Unknown error" }));
-        console.error("[Tandem] Remove annotation failed:", err);
-      }
-    } catch (e) {
-      console.error("[Tandem] Remove annotation failed:", e);
-    }
-  }
-
-  async function handleReply(annotationId: string, text: string): Promise<boolean> {
-    try {
-      const res = await fetch(`${API_BASE}/annotation-reply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ annotationId, text, documentId }),
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        console.warn(
-          `[SidePanel] Reply failed (${res.status}): ${data.message ?? "unknown error"}`,
-        );
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.error("[SidePanel] Reply request failed:", err);
+async function handleReply(annotationId: string, text: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/annotation-reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ annotationId, text, documentId }),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      console.warn(`[SidePanel] Reply failed (${res.status}): ${data.message ?? "unknown error"}`);
       return false;
     }
+    return true;
+  } catch (err) {
+    console.error("[SidePanel] Reply request failed:", err);
+    return false;
   }
+}
 
-  function handleBulk(status: "accepted" | "dismissed") {
-    for (const ann of filteredData.pending) review.resolveAnnotation(ann.id, status);
-    bulkConfirm = null;
-  }
+function handleBulk(status: "accepted" | "dismissed") {
+  for (const ann of filteredData.pending) review.resolveAnnotation(ann.id, status);
+  bulkConfirm = null;
+}
 </script>
 
 <div

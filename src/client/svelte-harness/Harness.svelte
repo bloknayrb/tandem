@@ -1,35 +1,35 @@
 <script lang="ts">
-  import type { Component } from "svelte";
-  import { registry } from "./registry.js";
+import type { Component } from "svelte";
+import { registry } from "./registry.js";
 
-  const params = new URLSearchParams(window.location.search);
-  const componentName = params.get("component");
+const params = new URLSearchParams(window.location.search);
+const componentName = params.get("component");
 
-  let status = $state<"idle" | "loading" | "loaded" | "not-found" | "error">("idle");
-  let LoadedComponent = $state<Component | null>(null);
+let status = $state<"idle" | "loading" | "loaded" | "not-found" | "error">("idle");
+let LoadedComponent = $state<Component | null>(null);
 
-  $effect(() => {
-    if (!componentName) {
-      status = "idle";
-      return;
-    }
+$effect(() => {
+  if (!componentName) {
+    status = "idle";
+    return;
+  }
 
-    const loader = registry[componentName];
-    if (!loader) {
-      status = "not-found";
-      return;
-    }
+  const loader = registry[componentName];
+  if (!loader) {
+    status = "not-found";
+    return;
+  }
 
-    status = "loading";
-    loader()
-      .then((mod) => {
-        LoadedComponent = mod.default;
-        status = "loaded";
-      })
-      .catch(() => {
-        status = "error";
-      });
-  });
+  status = "loading";
+  loader()
+    .then((mod) => {
+      LoadedComponent = mod.default;
+      status = "loaded";
+    })
+    .catch(() => {
+      status = "error";
+    });
+});
 </script>
 
 {#if status === "idle"}
