@@ -1,6 +1,4 @@
-import { useCallback, useState } from "react";
 import {
-  AUTHORSHIP_TOGGLE_KEY,
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
@@ -175,24 +173,4 @@ export function mergeAndClampSettings(
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
   };
-}
-
-export function useTandemSettings() {
-  const [settings, setSettingsState] = useState<TandemSettings>(loadSettings);
-
-  const updateSettings = useCallback((partial: Partial<TandemSettings>) => {
-    setSettingsState((prev) => {
-      const next = mergeAndClampSettings(prev, partial);
-      try {
-        localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
-        // Mirror authorship toggle to dedicated key for ProseMirror plugin init
-        localStorage.setItem(AUTHORSHIP_TOGGLE_KEY, String(next.showAuthorship));
-      } catch {
-        // localStorage unavailable (incognito/storage-disabled)
-      }
-      return next;
-    });
-  }, []);
-
-  return { settings, updateSettings };
 }

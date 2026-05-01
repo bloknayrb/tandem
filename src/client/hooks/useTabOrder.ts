@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
 import type { OpenTab } from "../types";
 
 export interface UseTabOrderResult {
@@ -42,43 +41,4 @@ export function applyReorder(
   const insertIdx = side === "right" ? targetIdx + 1 : targetIdx;
   next.splice(insertIdx, 0, fromId);
   return next;
-}
-
-/**
- * Client-local tab ordering hook. Reconciles server-broadcast tabs with a
- * local ordering preference — preserving user reorder operations while
- * tracking additions and removals from the server.
- */
-export function useTabOrder(tabs: OpenTab[]): UseTabOrderResult {
-  const [localOrder, setLocalOrder] = useState<string[]>([]);
-
-  const orderedTabs = useMemo(() => {
-    const tabMap = new Map(tabs.map((t) => [t.id, t]));
-    const tabIds = tabs.map((t) => t.id);
-    const merged = reconcileOrder(localOrder, tabIds);
-    return merged.map((id) => tabMap.get(id)).filter(Boolean) as OpenTab[];
-  }, [tabs, localOrder]);
-
-  // Sync localOrder when tabs change (additions/removals from server).
-  const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
-  useEffect(() => {
-    setLocalOrder((prev) => {
-      const reconciled = reconcileOrder(prev, tabIds);
-      if (prev.length === reconciled.length && prev.every((id, i) => id === reconciled[i])) {
-        return prev;
-      }
-      return reconciled;
-    });
-  }, [tabIds]);
-
-  const reorder = useCallback(
-    function reorder(fromId: string, toId: string, side: "left" | "right" = "left") {
-      if (fromId === toId) return;
-      const validIds = new Set(tabIds);
-      setLocalOrder((prev) => applyReorder(prev, fromId, toId, validIds, side));
-    },
-    [tabIds],
-  );
-
-  return { orderedTabs, reorder };
 }
