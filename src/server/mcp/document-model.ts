@@ -90,7 +90,13 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
 /**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
  * Inserts FLAT_SEPARATOR between nested XmlElement children so offsets are consistent
- * with the document-level separator convention (e.g., list items get \n between them).
+ * with the document-level separator convention (e.g., list items and table cells
+ * get \n between them).
+ *
+ * Separator contract (must stay in sync with getElementTextLength):
+ * every gap between nested block/container XmlElement children contributes one
+ * FLAT_SEPARATOR character. Offset helpers account for that as a one-character
+ * between-element gap.
  */
 export function getElementText(element: Y.XmlElement): string {
   const parts: string[] = [];
@@ -119,7 +125,7 @@ export function getElementText(element: Y.XmlElement): string {
 
 /**
  * Compute the flat text length of a Y.XmlElement without building the string.
- * Uses the same separator predicate as getElementText() so lengths are consistent.
+ * Uses the same one-character separator invariant as getElementText().
  */
 export function getElementTextLength(element: Y.XmlElement): number {
   let len = 0;
@@ -191,7 +197,7 @@ export function findXmlTextAtOffset(
 
 /**
  * Collect all Y.XmlText nodes in a Y.XmlElement with their flat offsets from the
- * element's start. Uses the same separator predicate as getElementText().
+ * element's start. Uses the same one-character separator invariant as getElementText().
  */
 export function collectXmlTexts(
   element: Y.XmlElement,

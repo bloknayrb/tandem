@@ -1,12 +1,14 @@
 import render from "dom-serializer";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it } from "vitest";
+import * as Y from "yjs";
 import {
   applySingleSuggestion,
   applyTrackedChanges,
   buildOffsetMap,
   resolveWordComments,
 } from "../../src/server/file-io/docx-apply.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
 import {
   addDoc,
   getOpenDocs,
@@ -44,6 +46,24 @@ async function createTestDocx(documentXml: string): Promise<Buffer> {
     `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
   );
   return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+}
+
+function makeYTableCell(text: string): Y.XmlElement {
+  const cell = new Y.XmlElement("tableCell");
+  const paragraph = new Y.XmlElement("paragraph");
+  const xmlText = new Y.XmlText();
+  xmlText.insert(0, text);
+  paragraph.insert(0, [xmlText]);
+  cell.insert(0, [paragraph]);
+  return cell;
+}
+
+function makeYParagraph(text: string): Y.XmlElement {
+  const paragraph = new Y.XmlElement("paragraph");
+  const xmlText = new Y.XmlText();
+  xmlText.insert(0, text);
+  paragraph.insert(0, [xmlText]);
+  return paragraph;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +159,20 @@ describe("buildOffsetMap", () => {
     `);
     const map = buildOffsetMap(xml, new Set());
     expect(map.commentParagraphIds.get("42")).toBe("PARA1");
+  });
+
+  it("matches Y.Doc flat text for table cells followed by a paragraph", () => {
+    const xml = wrapBody(`
+      <w:tbl>
+        <w:tr>
+          <w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc>
+        </w:tr>
+      </w:tbl>
+      <w:p><w:r><w:t>After</w:t></w:r></w:p>
+    `);
+    const map = buildOffsetMap(xml, new Set());
+    expect(map.flatText).toBe("A\nB\nAfter");
   });
 
   it("returns undefined for unmapped offsets", () => {
@@ -467,6 +501,39 @@ describe("applyTrackedChanges", () => {
     expect(output.applied).toBe(0);
     expect(output.rejected).toBe(1);
     expect(output.rejectedDetails[0].reason).toContain("Cross-paragraph");
+  });
+
+  it("applies a suggestion after a table without flat-text mismatch", async () => {
+    const xml = wrapBody(`
+      <w:tbl>
+        <w:tr>
+          <w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc>
+        </w:tr>
+      </w:tbl>
+      <w:p><w:r><w:t>After</w:t></w:r></w:p>
+    `);
+    const docxBuffer = await createTestDocx(xml);
+
+    const ydoc = new Y.Doc();
+    const table = new Y.XmlElement("table");
+    const row = new Y.XmlElement("tableRow");
+    row.insert(0, [makeYTableCell("A"), makeYTableCell("B")]);
+    table.insert(0, [row]);
+    ydoc.getXmlFragment("default").insert(0, [table, makeYParagraph("After")]);
+    const ydocFlatText = extractText(ydoc);
+    expect(ydocFlatText).toBe("A\nB\nAfter");
+
+    const from = ydocFlatText.indexOf("After");
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from, to: from + "After".length, newText: "Later" }],
+      { author: "Test", ydocFlatText },
+    );
+
+    expect(output.applied).toBe(1);
+    expect(output.rejected).toBe(0);
+    ydoc.destroy();
   });
 });
 
