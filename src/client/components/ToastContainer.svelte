@@ -27,8 +27,8 @@ interface Props {
 let { toasts, onDismiss }: Props = $props();
 </script>
 
-{#if toasts.length > 0}
-  <style>
+<style>
+  :global {
     @keyframes tandem-toast-slide-in {
       from {
         opacity: 0;
@@ -39,7 +39,10 @@ let { toasts, onDismiss }: Props = $props();
         transform: translateX(0);
       }
     }
-  </style>
+  }
+</style>
+
+{#if toasts.length > 0}
   <div
     data-testid="toast-container"
     style="position: fixed; bottom: 40px; right: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; max-width: 360px; pointer-events: none;"

@@ -15,7 +15,8 @@ let { children }: Props = $props();
 <svelte:boundary>
   {@render children()}
 
-  {#snippet failed(error: unknown, reset: () => void)}
+  {#snippet failed(error: unknown, _reset: () => void)}
+    <!-- _reset would attempt in-place re-render; full reload matches React original behavior -->
     <div style="padding: 2rem; font-family: system-ui, sans-serif; color: var(--tandem-fg);">
       <h2>Something went wrong</h2>
       <p style="color: var(--tandem-fg-muted);">

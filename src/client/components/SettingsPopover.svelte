@@ -266,7 +266,8 @@ const sectionLabelStyle =
           Loading Cowork integration...
         </div>
       {:then mod}
-        <svelte:component this={mod.default} />
+        {@const CoworkSettingsComp = mod.default}
+        <CoworkSettingsComp />
       {/await}
     {/if}
 
