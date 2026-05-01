@@ -99,7 +99,7 @@ claude
 Then pick one of two ways to keep the conversation flowing:
 
 1. **Just chat in the terminal (simplest).** Every time you send Claude a message, it has a chance to call `tandem_checkInbox` and pick up your latest selection, any annotations you accepted or dismissed, and any chat messages from the Tandem sidebar. Zero setup — this is how it works out of the box. With Tandem and the terminal snapped side by side, the loop feels surprisingly natural; Claude just reacts when you nudge it rather than spontaneously.
-2. **Background polling with `/loop` (hands-off).** Ask Claude to check in on its own using the `/loop` skill:
+2. **Background polling with&#x20;****/loop****&#x20;(hands-off).** Ask Claude to check in on its own using the `/loop` skill:
    ```
    /loop 30s check tandem inbox and respond to any new messages
    ```
@@ -129,10 +129,10 @@ curl http://localhost:3479/health
 git clone https://github.com/bloknayrb/tandem.git
 cd tandem
 npm install
-npm run dev:standalone   # starts server (:3478/:3479) + editor client (:5173)
+npm run dev:standalone   # starts backend (:3478/:3479), editor client (:5173), and monitor
 ```
 
-Open http://localhost:5173 — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
+Open <http://localhost:5173> — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
 
 </details>
 
@@ -206,17 +206,17 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 
 ## CLI Commands
 
-| Command | What it does |
-|---------|-------------|
-| `tandem` | Start server and open editor (global install) |
-| `tandem setup` | Register MCP tools with Claude Code / Claude Desktop |
-| `tandem setup --force` | Register to default paths regardless of auto-detection |
-| `tandem --version` | Show installed version |
-| `tandem --help` | Show usage |
-| `tandem setup --with-channel-shim` | Also register the stdio channel shim |
-| `tandem rotate-token` | Rotate auth token (60-second grace window) |
-| `tandem mcp-stdio` | Run as stdio MCP server (proxy to local HTTP, for plugin bridge) |
-| `tandem channel` | Run the channel shim (stdio MCP for plugin's tandem-channel entry) |
+| Command                            | What it does                                                       |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| `tandem`                           | Start server and open editor (global install)                      |
+| `tandem setup`                     | Register MCP tools with Claude Code / Claude Desktop               |
+| `tandem setup --force`             | Register to default paths regardless of auto-detection             |
+| `tandem --version`                 | Show installed version                                             |
+| `tandem --help`                    | Show usage                                                         |
+| `tandem setup --with-channel-shim` | Also register the stdio channel shim                               |
+| `tandem rotate-token`              | Rotate auth token (60-second grace window)                         |
+| `tandem mcp-stdio`                 | Run as stdio MCP server (proxy to local HTTP, for plugin bridge)   |
+| `tandem channel`                   | Run the channel shim (stdio MCP for plugin's tandem-channel entry) |
 
 ## MCP Configuration
 
@@ -248,21 +248,21 @@ Both entries are cross-platform — no platform-specific configuration needed.
 
 All optional — defaults work out of the box.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TANDEM_PORT` | `3478` | Hocuspocus WebSocket port |
-| `TANDEM_MCP_PORT` | `3479` | MCP HTTP + REST API port |
-| `TANDEM_URL` | `http://localhost:3479` | Channel shim server URL |
-| `TANDEM_TRANSPORT` | `http` | Transport mode (`http` or `stdio`) |
-| `TANDEM_NO_SAMPLE` | unset | Set to `1` to skip auto-opening `sample/welcome.md` |
-| `TANDEM_CLAUDE_CMD` | `claude` | Claude Code executable name (for `tandem setup` auto-detection) |
-| `TANDEM_BIND_HOST` | `127.0.0.1` | Bind address for MCP HTTP (`0.0.0.0` for LAN) |
-| `TANDEM_AUTH_TOKEN` | auto-generated | Override auth token (set by Tauri; manual use rare) |
-| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to skip token requirement on LAN bind |
-| `TANDEM_LAN_IP` | auto-detected | Explicit LAN IP for multi-homed machines |
-| `TANDEM_REQUEST_TIMEOUT_MS` | `30000` | Per-request timeout in stdio bridge (ms) |
-| `TANDEM_APP_DATA_DIR` | platform default | Override app-data root (sessions, auth-token, annotations) |
-| `TANDEM_ANNOTATION_STORE` | unset | Set to `off` to disable durable annotation persistence |
+| Variable                           | Default                 | Description                                                     |
+| ---------------------------------- | ----------------------- | --------------------------------------------------------------- |
+| `TANDEM_PORT`                      | `3478`                  | Hocuspocus WebSocket port                                       |
+| `TANDEM_MCP_PORT`                  | `3479`                  | MCP HTTP + REST API port                                        |
+| `TANDEM_URL`                       | `http://localhost:3479` | Channel shim server URL                                         |
+| `TANDEM_TRANSPORT`                 | `http`                  | Transport mode (`http` or `stdio`)                              |
+| `TANDEM_NO_SAMPLE`                 | unset                   | Set to `1` to skip auto-opening `sample/welcome.md`             |
+| `TANDEM_CLAUDE_CMD`                | `claude`                | Claude Code executable name (for `tandem setup` auto-detection) |
+| `TANDEM_BIND_HOST`                 | `127.0.0.1`             | Bind address for MCP HTTP (`0.0.0.0` for LAN)                   |
+| `TANDEM_AUTH_TOKEN`                | auto-generated          | Override auth token (set by Tauri; manual use rare)             |
+| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset                   | Set to `1` to skip token requirement on LAN bind                |
+| `TANDEM_LAN_IP`                    | auto-detected           | Explicit LAN IP for multi-homed machines                        |
+| `TANDEM_REQUEST_TIMEOUT_MS`        | `30000`                 | Per-request timeout in stdio bridge (ms)                        |
+| `TANDEM_APP_DATA_DIR`              | platform default        | Override app-data root (sessions, auth-token, annotations)      |
+| `TANDEM_ANNOTATION_STORE`          | unset                   | Set to `off` to disable durable annotation persistence          |
 
 See `.env.example` for a copy-paste template.
 
@@ -279,6 +279,8 @@ Tandem kills stale processes on :3478/:3479 at startup. If another app uses thos
 **Channel shim fails to start**
 The `tandem-channel` entry spawns a subprocess. For global installs, `tandem setup` writes absolute paths to the bundled `dist/channel/index.js` — re-run `tandem setup` after upgrading. For dev setup, if you see `MODULE_NOT_FOUND` with a production config (`node dist/channel/index.js`), run `npm run build`. The default dev config uses `npx tsx` and doesn't require a build step.
 
+If the shim starts but logs `/api/events timed out after 10000ms`, `SSE inactivity timeout`, or `/api/channel-reply timed out after 5000ms`, the Tandem server accepted a connection but stopped responding on that path. Restart Tandem; the shim reports the timeout instead of hanging silently.
+
 **Editor shows "Cannot reach the Tandem server"**
 The editor connects to the server via WebSocket. For global installs, run `tandem` to start the server. For dev setup, use `npm run dev:standalone` (or `npm run dev:server`). The message appears after 3 seconds of failed connection.
 
@@ -287,17 +289,17 @@ On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or dele
 
 ## Development
 
-| Command | What it does |
-|---------|-------------|
-| `npm run dev:standalone` | **Recommended** — both frontend + backend (via concurrently) |
-| `npm run dev:server` | Backend only: Hocuspocus (:3478) + MCP HTTP (:3479) |
-| `npm run dev:client` | Frontend only: Vite dev server (:5173) |
-| `npm run build` | Production build (`dist/server/` + `dist/channel/` + `dist/cli/` + `dist/client/`) |
-| `npm test` | Run vitest (unit tests) |
-| `npm run test:e2e` | Run Playwright E2E tests |
-| `npm run test:e2e:ui` | Playwright UI mode |
-| `cargo tauri dev` | Tauri desktop app (dev mode with hot-reload) |
-| `cargo tauri build` | Tauri production build (installer output) |
+| Command                  | What it does                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `npm run dev:standalone` | **Recommended** — frontend + backend + monitor                                     |
+| `npm run dev:server`     | Backend only: Hocuspocus (:3478) + MCP HTTP (:3479)                                |
+| `npm run dev:client`     | Frontend only: Vite dev server (:5173)                                             |
+| `npm run build`          | Production build (`dist/server/` + `dist/channel/` + `dist/cli/` + `dist/client/`) |
+| `npm test`               | Run vitest (unit tests)                                                            |
+| `npm run test:e2e`       | Run Playwright E2E tests                                                           |
+| `npm run test:e2e:ui`    | Playwright UI mode                                                                 |
+| `cargo tauri dev`        | Tauri desktop app (dev mode with hot-reload)                                       |
+| `cargo tauri build`      | Tauri production build (installer output)                                          |
 
 **Tauri development** requires the [Rust toolchain](https://www.rust-lang.org/tools/install) and [Tauri CLI](https://v2.tauri.app/start/prerequisites/). Web-only development (`npm run dev:standalone`) does not require Rust.
 

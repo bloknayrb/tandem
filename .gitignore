@@ -17,6 +17,7 @@ gha-creds-*.json
 
 # Claude Code ephemeral
 .agents/
+AGENTS.md
 .claude/worktrees/
 .claude/settings.local.json
 .superpowers/

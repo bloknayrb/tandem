@@ -460,7 +460,12 @@ Additional decisions from #439: highlight palette switches from 5 to 4 colors (y
 | #483 | Route `sanitize.ts` coercion warnings to error tracking — tech-debt on the ADR-027 surface |
 | #484 | E2E smoke test for redesigned toolbar — regression net for #480 |
 | #379 | Tiptap markdown round-trip mangles tables — promoted from v1.0 (data loss on `docs/roadmap.md` itself; `mdast-ydoc.ts` / `remark-stringify` is not in Svelte migration scope) |
-| #364 | Mirror per-request timeout to event-bridge transport — pure stdio infra, paired with v0.6.4 #336 work, not Cowork-gated |
+
+Shipped in the v0.9.1 prep window:
+
+| Issue | Result |
+|-------|--------|
+| #364 | Channel shim now mirrors the stdio/monitor timeout posture: bounded request-response fetches, split `/api/events` handshake/body watchdogs, a 1 MB SSE frame buffer cap, and structured `tandem_reply` timeout errors. |
 
 After PR #474 merges, #473 closes automatically via `closingIssuesReferences`.
 

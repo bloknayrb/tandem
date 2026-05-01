@@ -7,6 +7,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 
 let doc: Y.Doc;
+const DOC_HASH = "sha256:awareness-test";
 
 function makeDoc(text: string): Y.Doc {
   doc = new Y.Doc();
@@ -57,7 +58,7 @@ describe("tandem_checkInbox logic", () => {
       content: "Nice",
     });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const userActions = allAnns.filter((a) => a.author === "user");
 
     expect(userActions.length).toBe(2);
@@ -78,7 +79,7 @@ describe("tandem_checkInbox logic", () => {
     addAnnotation(map, { author: "claude", type: "comment", status: "dismissed" });
     addAnnotation(map, { author: "claude", type: "highlight", status: "pending" }); // Still pending, not a response
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const responses = allAnns.filter((a) => a.author === "claude" && a.status !== "pending");
 
     expect(responses.length).toBe(2);
@@ -95,7 +96,7 @@ describe("tandem_checkInbox logic", () => {
       content: "What does this mean?",
     });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const userComments = allAnns.filter((a) => a.author === "user" && a.type === "comment");
 
     expect(userComments.length).toBe(1);

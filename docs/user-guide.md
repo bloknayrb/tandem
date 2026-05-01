@@ -261,7 +261,7 @@ Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets
 
 ### Connection
 
-Start the Tandem server first (`tandem` for global install, `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available automatically via the MCP configuration written by `tandem setup` (global) or `.mcp.json` (development).
+Start the Tandem server first (`tandem` for global install, or `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available automatically via the MCP configuration written by `tandem setup` (global) or `.mcp.json` (development).
 
 **Desktop app:** The server is already running. Claude Code is auto-configured on every launch — your `tandem_*` tools are available immediately. Skip to [Real-Time Push](#real-time-push-recommended) if you want channel notifications.
 
@@ -350,7 +350,7 @@ For `.docx` files, mammoth.js handles the conversion. Corrupted or password-prot
 
 Make sure Claude Code is running and connected. Check `tandem_status` from Claude Code — if it returns an error, Claude can't reach the server. Run `/mcp` in Claude Code to reconnect.
 
-If using channels, the server must be running before Claude Code starts. If you restarted the server, restart Claude Code or run `/mcp`.
+If using channels, the server must be running before Claude Code starts. If you restarted the server, restart Claude Code or run `/mcp`. Channel timeout messages such as `/api/events timed out after 10000ms`, `SSE inactivity timeout`, or `/api/channel-reply timed out after 5000ms` mean the server accepted a connection but stopped responding; restart Tandem and reconnect Claude.
 
 For server-side and MCP troubleshooting, see the [README](../README.md#troubleshooting).
 

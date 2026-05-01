@@ -11,6 +11,7 @@ import {
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import { docHash } from "../annotations/doc-hash.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
@@ -85,7 +86,7 @@ export function registerAwarenessTools(server: McpServer): void {
 
       const doc = getOrCreateDocument(current.docName);
       const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
-      const allAnnotations = collectAnnotations(annotationsMap);
+      const allAnnotations = collectAnnotations(annotationsMap, docHash(current.filePath));
       const fullText = extractText(doc);
 
       // Bucket 1: new user-created annotations (highlights, comments, questions)

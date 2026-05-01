@@ -224,8 +224,9 @@ PR 6 (distribution) deferred to v0.13.0 — requires macOS/Linux hardware.
 | #311 (forced-colors audit) | Keep in v0.12.0 | Scoped with dark theme work where all token values are reviewed. |
 | #433 (Cowork TOCTOU) | Post-v1.0 | Security edge case. PR 6 must verify new macOS/Linux paths aren't affected (noted above). |
 | #438 (per-client identity) | Post-v1.0 | Enhancement; v1.0 model is single user + Claude. |
-| #364 (stdio timeout mirror) | Post-v1.0 | Not blocking anything. PR 5 CI smoke test exercises the path. |
 | #318 (tombstone GC) | Post-v1.0 | Storage works correctly; disk usage not a reported problem. |
+
+**Shipped after v0.9.0:** #364 moved out of the deferred bucket. The channel shim now has bounded fetches for `/api/channel-*`, split timeout handling for `/api/events`, and structured `tandem_reply` timeout errors.
 
 ---
 

@@ -12,6 +12,7 @@ import { generateAnnotationId } from "../../src/shared/utils.js";
 import { getAnnotationsMap, getFragment, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
+const DOC_HASH = "sha256:annotations-test";
 
 afterEach(() => {
   doc?.destroy();
@@ -60,7 +61,7 @@ describe("collectAnnotations", () => {
   it("returns empty array for empty map", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    expect(collectAnnotations(map)).toEqual([]);
+    expect(collectAnnotations(map, DOC_HASH)).toEqual([]);
   });
 
   it("returns all stored annotations", () => {
@@ -69,7 +70,7 @@ describe("collectAnnotations", () => {
     createAnnotation(map, doc, "comment", rangeOf(0, 2), "first");
     createAnnotation(map, doc, "highlight", rangeOf(2, 4), "second");
 
-    const all = collectAnnotations(map);
+    const all = collectAnnotations(map, DOC_HASH);
     expect(all).toHaveLength(2);
   });
 
@@ -80,7 +81,7 @@ describe("collectAnnotations", () => {
     createAnnotation(map, doc, "highlight", rangeOf(0, 2), "h");
     createAnnotation(map, doc, "note", rangeOf(0, 2), "n");
 
-    const types = collectAnnotations(map).map((a) => a.type);
+    const types = collectAnnotations(map, DOC_HASH).map((a) => a.type);
     expect(types).toContain("comment");
     expect(types).toContain("highlight");
     expect(types).toContain("note");
@@ -101,28 +102,28 @@ describe("filter logic", () => {
 
   it("filters by type", () => {
     const map = setupAnnotations();
-    const comments = collectAnnotations(map).filter((a) => a.type === "comment");
+    const comments = collectAnnotations(map, DOC_HASH).filter((a) => a.type === "comment");
     expect(comments).toHaveLength(2); // plain comment + suggestion-style comment
     expect(comments.find((a) => a.content === "a comment")).toBeTruthy();
   });
 
   it("filters by status", () => {
     const map = setupAnnotations();
-    const pending = collectAnnotations(map).filter((a) => a.status === "pending");
+    const pending = collectAnnotations(map, DOC_HASH).filter((a) => a.status === "pending");
     expect(pending).toHaveLength(3);
   });
 
   it("filters by author", () => {
     const map = setupAnnotations();
-    const claude = collectAnnotations(map).filter((a) => a.author === "claude");
+    const claude = collectAnnotations(map, DOC_HASH).filter((a) => a.author === "claude");
     expect(claude).toHaveLength(3);
-    const user = collectAnnotations(map).filter((a) => a.author === "user");
+    const user = collectAnnotations(map, DOC_HASH).filter((a) => a.author === "user");
     expect(user).toHaveLength(0);
   });
 
   it("compound filter: author + suggestedText", () => {
     const map = setupAnnotations();
-    const result = collectAnnotations(map)
+    const result = collectAnnotations(map, DOC_HASH)
       .filter((a) => a.author === "claude")
       .filter((a) => a.suggestedText !== undefined);
     expect(result).toHaveLength(1);
@@ -482,10 +483,43 @@ describe("sanitizeAnnotation", () => {
       timestamp: 1000,
     });
 
-    const annotations = collectAnnotations(map);
+    const annotations = collectAnnotations(map, DOC_HASH);
     expect(annotations).toHaveLength(1);
     expect(annotations[0].type).toBe("comment");
     expect(annotations[0].suggestedText).toBe("Hello");
     expect(annotations[0].content).toBe("greeting");
+  });
+
+  it("collectAnnotations logs legacy migrations once per document hash", () => {
+    doc = makeDoc("test");
+    const map = getAnnotationsMap(doc);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    map.set("legacy-flag-1", {
+      id: "legacy-flag-1",
+      author: "user",
+      type: "flag",
+      range: { from: 0, to: 4 },
+      content: "",
+      status: "pending",
+      timestamp: 1000,
+    });
+    map.set("legacy-flag-2", {
+      id: "legacy-flag-2",
+      author: "user",
+      type: "flag",
+      range: { from: 5, to: 9 },
+      content: "",
+      status: "pending",
+      timestamp: 1001,
+    });
+
+    const annotations = collectAnnotations(map, DOC_HASH);
+    expect(annotations).toHaveLength(2);
+    const flagLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes(`legacy migration: flag-to-note in ${DOC_HASH}`),
+    );
+    expect(flagLogs).toHaveLength(1);
+    errorSpy.mockRestore();
   });
 });
