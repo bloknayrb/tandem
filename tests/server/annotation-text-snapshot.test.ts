@@ -3,6 +3,8 @@ import * as Y from "yjs";
 import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 
+const DOC_HASH = "sha256:annotation-text-snapshot";
+
 function makeResult(from: number, to: number) {
   return { ok: true as const, fullyAnchored: false as const, range: { from, to } };
 }
@@ -14,7 +16,7 @@ describe("annotation textSnapshot", () => {
     const id = createAnnotation(map, ydoc, "comment", makeResult(0, 10), "Nice paragraph", {
       textSnapshot: "hello worl",
     });
-    const annotations = collectAnnotations(map);
+    const annotations = collectAnnotations(map, DOC_HASH);
     const stored = annotations.find((a) => a.id === id);
     expect(stored).toBeDefined();
     expect(stored?.textSnapshot).toBe("hello worl");
@@ -24,7 +26,7 @@ describe("annotation textSnapshot", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "highlight", makeResult(0, 5), "Looks good");
-    const annotations = collectAnnotations(map);
+    const annotations = collectAnnotations(map, DOC_HASH);
     const stored = annotations.find((a) => a.id === id);
     expect(stored).toBeDefined();
     expect(stored?.textSnapshot).toBeUndefined();
@@ -36,7 +38,7 @@ describe("annotation textSnapshot", () => {
     const id = createAnnotation(map, ydoc, "note", makeResult(5, 20), "Needs review", {
       textSnapshot: "noted text",
     });
-    const annotations = collectAnnotations(map);
+    const annotations = collectAnnotations(map, DOC_HASH);
     const stored = annotations.find((a) => a.id === id);
     expect(stored?.textSnapshot).toBe("noted text");
   });

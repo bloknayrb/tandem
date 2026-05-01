@@ -272,7 +272,7 @@ export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js
 
 /** Collect all annotations from the Y.Map as an array, skipping malformed entries.
  *  Applies sanitizeAnnotation() to normalize legacy shapes. */
-export function collectAnnotations(map: Y.Map<unknown>, docHashKey?: string): Annotation[] {
+export function collectAnnotations(map: Y.Map<unknown>, docHashKey: string): Annotation[] {
   const result: Annotation[] = [];
   const onLossy = makeOnLossy(docHashKey);
   map.forEach((value, key) => {

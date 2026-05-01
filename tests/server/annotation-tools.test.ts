@@ -12,6 +12,8 @@ import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
+const DOC_HASH = "sha256:annotation-tools";
+
 beforeEach(() => {
   clearOpenDocs();
 });
@@ -127,41 +129,43 @@ describe("tandem_getAnnotations tool logic", () => {
   it("returns all annotations unfiltered", () => {
     const ydoc = setupDoc("ga-1", "Hello world test");
     const map = populateAnnotations(ydoc);
-    const all = collectAnnotations(map);
+    const all = collectAnnotations(map, DOC_HASH);
     expect(all).toHaveLength(4);
   });
 
   it("filters by author", () => {
     const ydoc = setupDoc("ga-2", "Hello world test");
     const map = populateAnnotations(ydoc);
-    const claude = collectAnnotations(map).filter((a) => a.author === "claude");
+    const claude = collectAnnotations(map, DOC_HASH).filter((a) => a.author === "claude");
     expect(claude).toHaveLength(3);
-    const user = collectAnnotations(map).filter((a) => a.author === "user");
+    const user = collectAnnotations(map, DOC_HASH).filter((a) => a.author === "user");
     expect(user).toHaveLength(1);
   });
 
   it("filters by type", () => {
     const ydoc = setupDoc("ga-3", "Hello world test");
     const map = populateAnnotations(ydoc);
-    const comments = collectAnnotations(map).filter((a) => a.type === "comment");
+    const comments = collectAnnotations(map, DOC_HASH).filter((a) => a.type === "comment");
     expect(comments).toHaveLength(3); // 2 plain comments + 1 with suggestedText
-    const withSuggestion = collectAnnotations(map).filter((a) => a.suggestedText !== undefined);
+    const withSuggestion = collectAnnotations(map, DOC_HASH).filter(
+      (a) => a.suggestedText !== undefined,
+    );
     expect(withSuggestion).toHaveLength(1);
   });
 
   it("filters by status", () => {
     const ydoc = setupDoc("ga-4", "Hello world test");
     const map = populateAnnotations(ydoc);
-    const pending = collectAnnotations(map).filter((a) => a.status === "pending");
+    const pending = collectAnnotations(map, DOC_HASH).filter((a) => a.status === "pending");
     expect(pending).toHaveLength(3);
-    const accepted = collectAnnotations(map).filter((a) => a.status === "accepted");
+    const accepted = collectAnnotations(map, DOC_HASH).filter((a) => a.status === "accepted");
     expect(accepted).toHaveLength(1);
   });
 
   it("compound filter: author + status", () => {
     const ydoc = setupDoc("ga-5", "Hello world test");
     const map = populateAnnotations(ydoc);
-    const result = collectAnnotations(map)
+    const result = collectAnnotations(map, DOC_HASH)
       .filter((a) => a.author === "claude")
       .filter((a) => a.status === "pending");
     expect(result).toHaveLength(2);
@@ -229,7 +233,7 @@ describe("tandem_exportAnnotations tool logic", () => {
       suggestedText: "Hi",
     });
 
-    const annotations = collectAnnotations(map);
+    const annotations = collectAnnotations(map, DOC_HASH);
     const md = exportAnnotations(ydoc, annotations);
 
     expect(md).toContain("Comments");
@@ -249,7 +253,7 @@ describe("tandem_exportAnnotations tool logic", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Note");
 
-    const annotations = collectAnnotations(map);
+    const annotations = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const enriched = annotations.map((ann) => ({
       ...ann,
@@ -341,9 +345,9 @@ describe("annotation on multi-document", () => {
     createAnnotation(map1, ydoc1, "comment", rangeOf(0, 3), "on doc 1");
     createAnnotation(map2, ydoc2, "highlight", rangeOf(0, 3), "", { color: "yellow" });
 
-    expect(collectAnnotations(map1)).toHaveLength(1);
-    expect(collectAnnotations(map2)).toHaveLength(1);
-    expect(collectAnnotations(map1)[0].type).toBe("comment");
-    expect(collectAnnotations(map2)[0].type).toBe("highlight");
+    expect(collectAnnotations(map1, DOC_HASH)).toHaveLength(1);
+    expect(collectAnnotations(map2, DOC_HASH)).toHaveLength(1);
+    expect(collectAnnotations(map1, DOC_HASH)[0].type).toBe("comment");
+    expect(collectAnnotations(map2, DOC_HASH)[0].type).toBe("highlight");
   });
 });

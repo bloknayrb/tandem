@@ -28,6 +28,8 @@ import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
+const DOC_HASH = "sha256:awareness-tools";
+
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
   populateYDoc(ydoc, text);
@@ -96,7 +98,7 @@ describe("processInboxAnnotations", () => {
     createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "Nice", { author: "user" });
     createAnnotation(map, ydoc, "note", rangeOf(0, 3), "private", { author: "user" });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
@@ -117,7 +119,7 @@ describe("processInboxAnnotations", () => {
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
@@ -131,7 +133,7 @@ describe("processInboxAnnotations", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "A comment"); // author=claude, status=pending
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
@@ -145,7 +147,7 @@ describe("processInboxAnnotations", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test", { author: "user" });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
@@ -161,7 +163,7 @@ describe("processInboxAnnotations", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test", { author: "user" });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
@@ -178,7 +180,7 @@ describe("processInboxAnnotations", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(4, 9), "Note", { author: "user" });
 
-    const allAnns = collectAnnotations(map);
+    const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Set<string>();
 
