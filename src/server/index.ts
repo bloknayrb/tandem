@@ -145,15 +145,62 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
 
-  // Take the durable-annotation store lock before anything else touches
-  // app-data. The port 3479 bind is the primary concurrent-writer guard;
-  // this is a belt-and-braces fallback for port-bind races and edge cases.
-  // `readonly` is tolerable — load() still works; queueWrite becomes a no-op,
-  // but without a user-visible warning a second instance silently drops every
-  // annotation for a whole session. Push a toast so the user sees it.
-  try {
-    const lock = await acquireStoreLock();
-    if (lock === "readonly") {
+  // Take the durable-annotation store lock before accepting connections.
+  // HTTP mode: retry up to 30s when a live PID holds the lock, logging every 5s.
+  // Stdio mode: single attempt only — the MCP init timeout cannot survive a retry loop.
+  {
+    let lock: "locked" | "readonly" = "readonly";
+    let lockErr: unknown;
+
+    if (transportMode === "http") {
+      // HTTP mode: retry up to 30s — browser has no init deadline
+      const RETRY_INTERVAL_MS = 5_000;
+      const RETRY_DEADLINE_MS = 30_000;
+      const retryStart = Date.now();
+      try {
+        lock = await acquireStoreLock();
+      } catch (err) {
+        lockErr = err;
+      }
+      while (
+        lock === "readonly" &&
+        lockErr === undefined &&
+        Date.now() - retryStart < RETRY_DEADLINE_MS
+      ) {
+        const remaining = Math.ceil((RETRY_DEADLINE_MS - (Date.now() - retryStart)) / 1000);
+        process.stderr.write(
+          `[Tandem] store lock held by another process, retrying in 5s... (${remaining}s remaining)\n`,
+        );
+        await new Promise<void>((r) => setTimeout(r, RETRY_INTERVAL_MS));
+        try {
+          lock = await acquireStoreLock();
+        } catch (err) {
+          lockErr = err;
+        }
+      }
+    } else {
+      // Stdio mode: single attempt only — MCP init timeout cannot tolerate a retry loop
+      try {
+        lock = await acquireStoreLock();
+      } catch (err) {
+        lockErr = err;
+      }
+    }
+
+    if (lockErr !== undefined) {
+      // acquireStoreLock is designed to degrade internally, but defend against
+      // future refactors. A hard throw here would lose the same "nothing is
+      // saving" signal, so we still notify.
+      console.error("[Tandem] acquireStoreLock threw:", lockErr);
+      pushNotification({
+        id: `store-lock-error-${Date.now()}`,
+        type: "save-error",
+        severity: "error",
+        message: `Annotation store failed to initialize: ${(lockErr as Error)?.message ?? "unknown error"}. Annotations won't be saved this session.`,
+        dedupKey: "annotation-store:lock-error",
+        timestamp: Date.now(),
+      });
+    } else if (lock === "readonly") {
       console.error(
         "[Tandem] Annotation store is read-only (another process holds the lock); writes disabled for this session.",
       );
@@ -162,24 +209,11 @@ async function main() {
         type: "save-error",
         severity: "warning",
         message:
-          "Another Tandem process is running — annotations won't be saved this session. Close the other instance and restart.",
+          "Annotation store is read-only (another process holds the lock); annotation writes are disabled for this session. Close the other Tandem instance and restart.",
         dedupKey: "annotation-store:readonly",
         timestamp: Date.now(),
       });
     }
-  } catch (err) {
-    // acquireStoreLock is designed to degrade internally, but defend against
-    // future refactors. A hard throw here would lose the same "nothing is
-    // saving" signal, so we still notify.
-    console.error("[Tandem] acquireStoreLock threw:", err);
-    pushNotification({
-      id: `store-lock-error-${Date.now()}`,
-      type: "save-error",
-      severity: "error",
-      message: `Annotation store failed to initialize: ${(err as Error)?.message ?? "unknown error"}. Annotations won't be saved this session.`,
-      dedupKey: "annotation-store:lock-error",
-      timestamp: Date.now(),
-    });
   }
 
   // Clean up sessions older than 30 days

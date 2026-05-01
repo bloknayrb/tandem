@@ -1,164 +1,164 @@
 <script lang="ts">
-  import type { Editor as TiptapEditor } from "@tiptap/core";
-  import * as Y from "yjs";
-  import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
-  import type { FlatOffset } from "../../shared/positions/types";
-  import type { CapturedAnchor, ChatMessage } from "../../shared/types";
-  import { generateMessageId } from "../../shared/utils";
-  import { flatOffsetToPmPos } from "../positions";
+import type { Editor as TiptapEditor } from "@tiptap/core";
+import * as Y from "yjs";
+import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
+import type { FlatOffset } from "../../shared/positions/types";
+import type { CapturedAnchor, ChatMessage } from "../../shared/types";
+import { generateMessageId } from "../../shared/utils";
+import { flatOffsetToPmPos } from "../positions";
 
-  const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
+const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
-  interface Props {
-    ctrlYdoc: Y.Doc | null;
-    editor: TiptapEditor | null;
-    activeDocId: string | null;
-    openDocs: Array<{ id: string; fileName: string }>;
-    claudeActive?: boolean;
-    claudeStatus?: string | null;
-    visible?: boolean;
-    capturedAnchor: CapturedAnchor | null;
-    onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
-    /** Bind to get a reference to the textarea element. */
-    inputEl?: HTMLTextAreaElement | null;
-    reduceMotion?: boolean;
+interface Props {
+  ctrlYdoc: Y.Doc | null;
+  editor: TiptapEditor | null;
+  activeDocId: string | null;
+  openDocs: Array<{ id: string; fileName: string }>;
+  claudeActive?: boolean;
+  claudeStatus?: string | null;
+  visible?: boolean;
+  capturedAnchor: CapturedAnchor | null;
+  onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
+  /** Bind to get a reference to the textarea element. */
+  inputEl?: HTMLTextAreaElement | null;
+  reduceMotion?: boolean;
+}
+
+let {
+  ctrlYdoc,
+  editor,
+  activeDocId,
+  openDocs,
+  claudeActive,
+  claudeStatus,
+  visible,
+  capturedAnchor,
+  onCapturedAnchorChange,
+  inputEl = $bindable(null),
+  reduceMotion,
+}: Props = $props();
+
+const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+
+let messages = $state<ChatMessage[]>([]);
+let inputText = $state("");
+
+let messagesEndEl: HTMLDivElement | undefined = $state();
+let internalInputEl: HTMLTextAreaElement | undefined = $state();
+
+// Keep external binding in sync
+$effect(() => {
+  inputEl = internalInputEl ?? null;
+});
+
+// Observe Y.Map('chat') for changes
+$effect(() => {
+  if (!ctrlYdoc) return;
+  const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
+
+  const observer = () => {
+    const msgs: ChatMessage[] = [];
+    chatMap.forEach((value) => {
+      msgs.push(value as ChatMessage);
+    });
+    msgs.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+    messages = msgs;
+  };
+
+  chatMap.observe(observer);
+  observer(); // initial load
+  return () => chatMap.unobserve(observer);
+});
+
+// Auto-scroll to bottom on new messages or when typing indicator appears
+let prevClaudeActive = false;
+$effect(() => {
+  void messages; // track message changes
+  const active = !!claudeActive;
+  const sb = scrollBehavior;
+
+  if (!active && prevClaudeActive) {
+    prevClaudeActive = false;
+    return;
   }
+  prevClaudeActive = active;
+  messagesEndEl?.scrollIntoView({ behavior: sb });
+});
 
-  let {
-    ctrlYdoc,
-    editor,
-    activeDocId,
-    openDocs,
-    claudeActive,
-    claudeStatus,
-    visible,
-    capturedAnchor,
-    onCapturedAnchorChange,
-    inputEl = $bindable(null),
-    reduceMotion,
-  }: Props = $props();
-
-  const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
-
-  let messages = $state<ChatMessage[]>([]);
-  let inputText = $state("");
-
-  let messagesEndEl: HTMLDivElement | undefined = $state();
-  let internalInputEl: HTMLTextAreaElement | undefined = $state();
-
-  // Keep external binding in sync
-  $effect(() => {
-    inputEl = internalInputEl ?? null;
-  });
-
-  // Observe Y.Map('chat') for changes
-  $effect(() => {
-    if (!ctrlYdoc) return;
-    const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
-
-    const observer = () => {
-      const msgs: ChatMessage[] = [];
-      chatMap.forEach((value) => {
-        msgs.push(value as ChatMessage);
-      });
-      msgs.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
-      messages = msgs;
-    };
-
-    chatMap.observe(observer);
-    observer(); // initial load
-    return () => chatMap.unobserve(observer);
-  });
-
-  // Auto-scroll to bottom on new messages or when typing indicator appears
-  let prevClaudeActive = false;
-  $effect(() => {
-    void messages; // track message changes
-    const active = !!claudeActive;
-    const sb = scrollBehavior;
-
-    if (!active && prevClaudeActive) {
-      prevClaudeActive = false;
-      return;
-    }
-    prevClaudeActive = active;
+// Scroll to bottom when panel becomes visible
+$effect(() => {
+  const vis = visible;
+  const sb = scrollBehavior;
+  if (vis) {
     messagesEndEl?.scrollIntoView({ behavior: sb });
-  });
-
-  // Scroll to bottom when panel becomes visible
-  $effect(() => {
-    const vis = visible;
-    const sb = scrollBehavior;
-    if (vis) {
-      messagesEndEl?.scrollIntoView({ behavior: sb });
-    }
-  });
-
-  const unreadCount = $derived(messages.filter((m) => m.author === "claude" && !m.read).length);
-
-  function sendMessage() {
-    if (!ctrlYdoc || !inputText.trim()) return;
-    const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
-
-    const msg: ChatMessage = {
-      id: generateMessageId(),
-      author: "user",
-      text: inputText.trim(),
-      timestamp: Date.now(),
-      ...(activeDocId ? { documentId: activeDocId } : {}),
-      ...(capturedAnchor ? { anchor: capturedAnchor } : {}),
-      read: false,
-    };
-
-    chatMap.set(msg.id, msg);
-    inputText = "";
-    onCapturedAnchorChange(null);
   }
+});
 
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+const unreadCount = $derived(messages.filter((m) => m.author === "claude" && !m.read).length);
+
+function sendMessage() {
+  if (!ctrlYdoc || !inputText.trim()) return;
+  const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
+
+  const msg: ChatMessage = {
+    id: generateMessageId(),
+    author: "user",
+    text: inputText.trim(),
+    timestamp: Date.now(),
+    ...(activeDocId ? { documentId: activeDocId } : {}),
+    ...(capturedAnchor ? { anchor: capturedAnchor } : {}),
+    read: false,
+  };
+
+  chatMap.set(msg.id, msg);
+  inputText = "";
+  onCapturedAnchorChange(null);
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
   }
+}
 
-  function scrollToAnchor(anchor: { from: FlatOffset; to: FlatOffset }, docId?: string) {
-    if (!editor || (docId && docId !== activeDocId)) return;
-    try {
-      const pmFrom = flatOffsetToPmPos(editor.state.doc, anchor.from);
-      const pmTo = flatOffsetToPmPos(editor.state.doc, anchor.to);
-      editor.chain().focus().setTextSelection({ from: pmFrom, to: pmTo }).scrollIntoView().run();
-    } catch (err) {
-      console.warn(
-        "[ChatPanel] Could not scroll to anchor:",
-        err instanceof Error ? err.message : err,
-      );
-    }
+function scrollToAnchor(anchor: { from: FlatOffset; to: FlatOffset }, docId?: string) {
+  if (!editor || (docId && docId !== activeDocId)) return;
+  try {
+    const pmFrom = flatOffsetToPmPos(editor.state.doc, anchor.from);
+    const pmTo = flatOffsetToPmPos(editor.state.doc, anchor.to);
+    editor.chain().focus().setTextSelection({ from: pmFrom, to: pmTo }).scrollIntoView().run();
+  } catch (err) {
+    console.warn(
+      "[ChatPanel] Could not scroll to anchor:",
+      err instanceof Error ? err.message : err,
+    );
   }
+}
 
-  function getDocFileName(docId?: string): string | null {
-    if (!docId) return null;
-    const doc = openDocs.find((d) => d.id === docId);
-    return doc?.fileName ?? null;
+function getDocFileName(docId?: string): string | null {
+  if (!docId) return null;
+  const doc = openDocs.find((d) => d.id === docId);
+  return doc?.fileName ?? null;
+}
+
+async function clearChat() {
+  try {
+    await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
+  } catch (err) {
+    console.warn("[ChatPanel] Failed to clear chat:", err);
   }
+}
 
-  async function clearChat() {
-    try {
-      await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
-    } catch (err) {
-      console.warn("[ChatPanel] Failed to clear chat:", err);
-    }
-  }
+// Anchor expand state — keyed by message id
+let expandedAnchors = $state(new Set<string>());
 
-  // Anchor expand state — keyed by message id
-  let expandedAnchors = $state(new Set<string>());
-
-  function toggleAnchorExpand(msgId: string) {
-    const next = new Set(expandedAnchors);
-    if (next.has(msgId)) next.delete(msgId);
-    else next.add(msgId);
-    expandedAnchors = next;
-  }
+function toggleAnchorExpand(msgId: string) {
+  const next = new Set(expandedAnchors);
+  if (next.has(msgId)) next.delete(msgId);
+  else next.add(msgId);
+  expandedAnchors = next;
+}
 </script>
 
 <div
