@@ -97,13 +97,19 @@ function toggleSettings() {
 
 createSettingsShortcut(() => toggleSettings);
 
+// Guard: only dispatch when visibility actually changes. Without this, every
+// call to updateSettings() (which replaces the entire settings object even
+// when showAuthorship is unchanged) would dispatch a transaction, causing
+// FormattingToolbar's tick++ listener to fire inside Svelte's effect flush
+// and eventually exceed the 1000-update depth limit.
+let _lastAuthorshipVisible: boolean | undefined;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const tr = ed.state.tr.setMeta(authorshipPluginKey, {
-    type: "toggle",
-    visible: settingsState.settings.showAuthorship,
-  });
+  const visible = settingsState.settings.showAuthorship;
+  if (_lastAuthorshipVisible === visible) return;
+  _lastAuthorshipVisible = visible;
+  const tr = ed.state.tr.setMeta(authorshipPluginKey, { type: "toggle", visible });
   ed.view.dispatch(tr);
 });
 
@@ -133,11 +139,16 @@ let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 
 let panelLayout = $state<PanelLayout>(
-  settingsState.settings.layout === "three-panel"
-    ? { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") }
-    : settingsState.settings.layout === "tabbed-left"
-      ? { kind: "tabbed-left", left: loadPanelWidth("left") }
-      : { kind: "tabbed", right: loadPanelWidth("right") },
+  (() => {
+    const initLayout = settingsState.settings.layout;
+    if (initLayout === "three-panel") {
+      return { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") };
+    } else if (initLayout === "tabbed-left") {
+      return { kind: "tabbed-left", left: loadPanelWidth("left") };
+    } else {
+      return { kind: "tabbed", right: loadPanelWidth("right") };
+    }
+  })(),
 );
 
 $effect(() => {
