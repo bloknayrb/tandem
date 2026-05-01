@@ -1,8 +1,8 @@
 # Design Decisions
 
 ## ADR-001: Tiptap over ProseMirror Direct
-**Decision:** Use Tiptap (React wrapper) instead of raw ProseMirror.
-**Rationale:** Tiptap provides React bindings, extension system, and built-in collaboration support. Reduces boilerplate significantly.
+**Decision:** Use Tiptap instead of raw ProseMirror.
+**Rationale:** Tiptap provides an extension system and built-in collaboration support via `@tiptap/extension-collaboration`. Reduces boilerplate significantly.
 
 ## ADR-002: Hocuspocus for Yjs WebSocket, @hocuspocus/provider on the Client
 **Decision:** Use Hocuspocus (MIT) as the Yjs WebSocket server and `@hocuspocus/provider` as the browser WebSocket provider.
@@ -267,6 +267,8 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 - PR f (Cowork Settings UI) rebuilds in Svelte before v0.13.0.
 - `useYjsSync.ts` (350 LOC, deferred in audit) is replaced rather than decomposed.
 - Tiptap extensions remain unchanged (framework-agnostic, confirmed in Gate 1).
+
+**Status (2026-05-01):** Complete. The atomic switchover shipped in v0.10.0 (PR #508). All 39 `.tsx` files replaced by `.svelte` counterparts; `react`, `react-dom`, `react-markdown`, and `@tiptap/react` removed from package.json. The dual-framework period lasted through v0.9.x only.
 
 ## ADR-026: Redesign Gap Audit Decisions (#439)
 

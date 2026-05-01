@@ -526,3 +526,9 @@ The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `
 **Fix:** New `src/server/annotations/migration-log.ts` module exporting `loggedLegacyMigrations: Set<string>` keyed by `${docHash}:${kind}` for once-per-(doc, kind) dedup. Both `schema.ts` and `sync.ts` import from it (avoids the cycle that would form if either owned the Set directly — `sync.ts` already imports from `schema.ts`). `migrateToV1` logs each dropped record's id + Zod issues; `parseAnnotationDoc` logs JSON-parse failures and non-object payloads; the `directedAt` strip fast-path logs once per doc.
 
 **Key insight:** A migration that silently rewrites data on read is a debugging black hole — operators see effects (data shape changes) but no cause (which migration fired, on which records). Log every silent rewrite at least once per doc per kind, with enough context (record id, error reason) to correlate against bug reports. Dedup is essential — a hot read path will spam logs without it. The shared-state-via-third-module pattern (extracting `loggedLegacyMigrations` to a new file rather than reversing an existing import) is the right way to break circular-import constraints when both modules need access.
+
+## 54. Package Removal in Git Worktrees: Windows Node Resolution Masks CI Failures
+
+When removing an npm package from `package.json` and running `npm install` in a git worktree, Node.js module resolution walks parent directories. On Windows, `tsc` and other tools will silently find the removed package in the main repo's `node_modules`, making local typecheck pass while CI (clean checkout, no parent fallback) fails.
+
+**Rule:** After removing a package, verify it is truly gone by checking `node -e "console.log(require.resolve('<pkg>'))"` from inside the worktree's directory. If it resolves to a path outside the worktree, the removal is masked locally. Always grep for remaining imports (`grep -r "from '<pkg>'"`) and fix them before pushing.
