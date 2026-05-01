@@ -13,6 +13,7 @@ import { headingPrefix } from "../../shared/offsets.js";
 import type { AuthorshipRange } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
+import { isStoreReadOnly } from "../annotations/store.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 // Position system
 import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
@@ -553,6 +554,7 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpSuccess({
           running: true,
           mode,
+          storeReadOnly: isStoreReadOnly(),
           activeDocument: active
             ? { documentId: active.id, filePath: active.filePath, format: active.format }
             : null,

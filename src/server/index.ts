@@ -148,14 +148,57 @@ async function main() {
   // Take the durable-annotation store lock before anything else touches
   // app-data. The port 3479 bind is the primary concurrent-writer guard;
   // this is a belt-and-braces fallback for port-bind races and edge cases.
-  // `readonly` is tolerable — load() still works; queueWrite becomes a no-op,
-  // but without a user-visible warning a second instance silently drops every
-  // annotation for a whole session. Push a toast so the user sees it.
-  try {
-    const lock = await acquireStoreLock();
-    if (lock === "readonly") {
+  //
+  // Retry loop: on a live-PID readonly result we wait up to 30 seconds before
+  // giving up, logging to stderr every 5s. This handles a slow filesystem
+  // unmount or a previous instance that is still shutting down.
+  {
+    const RETRY_INTERVAL_MS = 5_000;
+    const RETRY_DEADLINE_MS = 30_000;
+    const retryStart = Date.now();
+    let lock: "locked" | "readonly" = "readonly";
+    let lockErr: unknown = undefined;
+
+    try {
+      lock = await acquireStoreLock();
+    } catch (err) {
+      lockErr = err;
+    }
+
+    while (
+      lock === "readonly" &&
+      lockErr === undefined &&
+      Date.now() - retryStart < RETRY_DEADLINE_MS
+    ) {
+      const elapsed = Date.now() - retryStart;
+      const remaining = Math.ceil((RETRY_DEADLINE_MS - elapsed) / 1000);
+      process.stderr.write(
+        `[Tandem] store lock held by another process, retrying in 5s... (${remaining}s remaining)\n`,
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+      try {
+        lock = await acquireStoreLock();
+      } catch (err) {
+        lockErr = err;
+      }
+    }
+
+    if (lockErr !== undefined) {
+      // acquireStoreLock is designed to degrade internally, but defend against
+      // future refactors. A hard throw here would lose the same "nothing is
+      // saving" signal, so we still notify.
+      console.error("[Tandem] acquireStoreLock threw:", lockErr);
+      pushNotification({
+        id: `store-lock-error-${Date.now()}`,
+        type: "save-error",
+        severity: "error",
+        message: `Annotation store failed to initialize: ${(lockErr as Error)?.message ?? "unknown error"}. Annotations won't be saved this session.`,
+        dedupKey: "annotation-store:lock-error",
+        timestamp: Date.now(),
+      });
+    } else if (lock === "readonly") {
       console.error(
-        "[Tandem] Annotation store is read-only (another process holds the lock); writes disabled for this session.",
+        "[Tandem] Annotation store is read-only after 30s retry (another process holds the lock); writes disabled for this session.",
       );
       pushNotification({
         id: `store-readonly-${Date.now()}`,
@@ -167,19 +210,6 @@ async function main() {
         timestamp: Date.now(),
       });
     }
-  } catch (err) {
-    // acquireStoreLock is designed to degrade internally, but defend against
-    // future refactors. A hard throw here would lose the same "nothing is
-    // saving" signal, so we still notify.
-    console.error("[Tandem] acquireStoreLock threw:", err);
-    pushNotification({
-      id: `store-lock-error-${Date.now()}`,
-      type: "save-error",
-      severity: "error",
-      message: `Annotation store failed to initialize: ${(err as Error)?.message ?? "unknown error"}. Annotations won't be saved this session.`,
-      dedupKey: "annotation-store:lock-error",
-      timestamp: Date.now(),
-    });
   }
 
   // Clean up sessions older than 30 days

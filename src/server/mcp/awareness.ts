@@ -12,6 +12,7 @@ import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js"
 import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { isStoreReadOnly } from "../annotations/store.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
@@ -190,6 +191,7 @@ export function registerAwarenessTools(server: McpServer): void {
         summary,
         hasNew,
         mode,
+        storeReadOnly: isStoreReadOnly(),
         userActions,
         userResponses,
         chatMessages,
