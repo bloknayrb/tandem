@@ -1,8 +1,8 @@
 import React from "react";
 
 type ToolbarButtonProps = (
-  | { label: string; ariaLabel?: string }
-  | { label: React.ReactNode; ariaLabel: string }
+  | { label: string; ariaLabel?: string; testId?: string }
+  | { label: React.ReactNode; ariaLabel: string; testId?: string }
 ) & {
   shortcut?: string;
   disabled?: boolean;
@@ -16,6 +16,7 @@ type ToolbarButtonProps = (
 export function ToolbarButton({
   label,
   ariaLabel,
+  testId,
   shortcut,
   disabled,
   disabledTitle,
@@ -43,6 +44,7 @@ export function ToolbarButton({
   return (
     <button
       type="button"
+      data-testid={testId}
       disabled={disabled}
       title={
         disabled && disabledTitle

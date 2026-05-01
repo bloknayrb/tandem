@@ -53,12 +53,14 @@ export function HighlightColorPicker({ disabled, onHighlight }: HighlightColorPi
     <div style={{ display: "flex", alignItems: "center", gap: "2px", position: "relative" }}>
       <ToolbarButton
         label="Highlight"
+        testId="toolbar-highlight-btn"
         disabled={disabled}
         disabledTitle="Select text first"
         onMouseDown={handleHighlight}
         style={{ borderRadius: "4px 0 0 4px", borderRight: "none" }}
       />
       <button
+        data-testid="toolbar-highlight-color-toggle"
         disabled={disabled}
         onMouseDown={handleColorPickerToggle}
         title="Choose highlight color"
@@ -105,6 +107,7 @@ export function HighlightColorPicker({ disabled, onHighlight }: HighlightColorPi
           {HIGHLIGHT_COLOR_OPTIONS.map(({ value, label }) => (
             <button
               key={value}
+              data-testid={`toolbar-highlight-color-${value}`}
               title={label}
               onClick={() => handleColorSelect(value)}
               style={{

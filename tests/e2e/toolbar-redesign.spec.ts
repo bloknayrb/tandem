@@ -1,0 +1,269 @@
+import { expect, test } from "@playwright/test";
+import path from "path";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+  switchToAnnotationsTab,
+} from "./helpers";
+
+/**
+ * E2E smoke for the post-PR-#474 (ADR-027) toolbar redesign. Acts as a
+ * regression net for #480 — the "Note button creates an empty annotation
+ * on click" bug — and locks in toolbar control enumeration so future
+ * refactors don't silently drop a button.
+ *
+ * Reference: `.pipeline-state/issue-484/plan.md`. Selection idiom mirrors
+ * `settings-and-filters.spec.ts` (`editor.locator("p").first().selectText()`).
+ *
+ * Negative-assertion strategy: tests that assert "no annotation was created"
+ * dual-assert — `tandem_getAnnotations` is the authoritative server-side
+ * snapshot (Hocuspocus latency can mask a slow-to-render card and produce
+ * false-pass DOM checks); `toHaveCount(0)` with a 2s window is a UI sanity
+ * layer.
+ */
+
+let mcp: McpTestClient;
+let tmpDir: string;
+
+type AnnotationsResponse = {
+  data?: { annotations?: unknown[] };
+};
+
+async function getAnnotationCount(): Promise<number> {
+  const res = (await mcp.callTool("tandem_getAnnotations", {})) as AnnotationsResponse;
+  return res?.data?.annotations?.length ?? 0;
+}
+
+test.beforeEach(async () => {
+  mcp = new McpTestClient();
+  await mcp.connect();
+  // Avoid `sample/welcome.md` — its tutorial annotations would contaminate
+  // the side-panel card count and break the negative assertions below.
+  tmpDir = createFixtureDir("sample.md");
+});
+
+test.afterEach(async () => {
+  // Each test must leave: no annotations, no open tabs, no localStorage drift.
+  // cleanupAllOpenDocuments closes every tab the server thinks is open, which
+  // also drops in-memory annotations for those docs. The temp fixture dir is
+  // unique per test, so disk state is isolated.
+  await cleanupAllOpenDocuments(mcp);
+  await mcp.close();
+  cleanupFixtureDir(tmpDir);
+});
+
+test("toolbar renders all expected controls", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeVisible();
+  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeVisible();
+  await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeVisible();
+  await expect(page.locator("[data-testid='settings-btn']")).toBeVisible();
+});
+
+test("annotation buttons are disabled with no selection", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  // No selection → buttons must report disabled (Playwright reads the native
+  // `disabled` attribute; ToolbarButton sets it directly).
+  await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeDisabled();
+  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeDisabled();
+  await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeDisabled();
+});
+
+test("annotation buttons enable after text selection", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  // Wait for the doc to actually load — `.tiptap` mounts before content does.
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  // `hasSelection` is wired to Tiptap's synchronous `selectionUpdate` event
+  // (no dwell gating involved), so auto-wait on `:not([disabled])` is safe.
+  await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
+    timeout: 3_000,
+  });
+  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+    timeout: 3_000,
+  });
+  await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeEnabled({
+    timeout: 3_000,
+  });
+});
+
+test("Comment flow creates a comment annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const commentBtn = page.locator("[data-testid='toolbar-comment-btn']");
+  await expect(commentBtn).toBeEnabled({ timeout: 3_000 });
+  await commentBtn.click();
+
+  const input = page.locator("[data-testid='toolbar-comment-input']");
+  await expect(input).toBeVisible({ timeout: 2_000 });
+  await input.fill("test comment");
+  await input.press("Enter");
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  await expect(page.locator("[data-testid^='annotation-card-']").first()).toContainText(
+    "test comment",
+  );
+});
+
+test("Note flow creates a note annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
+  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  await noteBtn.click();
+
+  const input = page.locator("[data-testid='toolbar-note-input']");
+  await expect(input).toBeVisible({ timeout: 2_000 });
+  await input.fill("test note");
+  await input.press("Enter");
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  await expect(page.locator("[data-testid^='annotation-card-']").first()).toContainText(
+    "test note",
+  );
+});
+
+test("#480 regression — clicking Note opens input instead of creating an empty annotation", async ({
+  page,
+}) => {
+  // The original #480 bug was: clicking Note immediately created a
+  // `(no note)` annotation with no chance to type. The fix (df6c2b2) made
+  // Note mirror Comment by opening an inline input first. This test pins
+  // that contract: after clicking Note, an input must appear AND no
+  // annotation must exist yet. Dual-assert: server snapshot is the
+  // authoritative truth (Hocuspocus latency can mask a slow card render
+  // and produce false-pass DOM checks); `toHaveCount(0)` is a UI sanity
+  // layer. Empty notes ARE allowed on submit per #480 fix; we don't
+  // exercise that branch here.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
+  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  await noteBtn.click();
+
+  // Input mounts → confirms the inline-flow path, not the regressed
+  // immediate-create path.
+  const input = page.locator("[data-testid='toolbar-note-input']");
+  await expect(input).toBeVisible({ timeout: 2_000 });
+
+  // No annotation yet — this is the actual #480 invariant.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+});
+
+test("Comment empty submit cancels (no annotation created)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const commentBtn = page.locator("[data-testid='toolbar-comment-btn']");
+  await expect(commentBtn).toBeEnabled({ timeout: 3_000 });
+  await commentBtn.click();
+
+  const input = page.locator("[data-testid='toolbar-comment-input']");
+  await expect(input).toBeVisible({ timeout: 2_000 });
+  await input.press("Enter");
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+});
+
+test("Highlight quick-action creates a highlight annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+
+  // Highlights have no input flow; one annotation should appear.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+});
+
+test("Escape cancels Note input without creating annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
+  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  await noteBtn.click();
+
+  const input = page.locator("[data-testid='toolbar-note-input']");
+  await expect(input).toBeVisible({ timeout: 2_000 });
+  await input.fill("draft");
+  await input.press("Escape");
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+});
