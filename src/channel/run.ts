@@ -15,8 +15,17 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { authFetch, redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
-import { DEFAULT_MCP_PORT } from "../shared/constants.js";
+import { redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
+import {
+  CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
+  CHANNEL_REPLY_FETCH_TIMEOUT_MS,
+  DEFAULT_MCP_PORT,
+} from "../shared/constants.js";
+import {
+  describeFetchError,
+  fetchWithTimeout,
+  isAbortOrTimeoutError,
+} from "../shared/fetch-with-timeout.js";
 import { startEventBridge } from "./event-bridge.js";
 
 export interface RunChannelOptions {
@@ -83,15 +92,26 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     if (req.params.name === "tandem_reply") {
       const args = req.params.arguments as Record<string, unknown>;
       try {
-        const res = await authFetch(`${tandemUrl}/api/channel-reply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(args),
-        });
+        const res = await fetchWithTimeout(
+          `${tandemUrl}/api/channel-reply`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(args),
+          },
+          CHANNEL_REPLY_FETCH_TIMEOUT_MS,
+        );
         let data: unknown;
         try {
           data = await res.json();
-        } catch {
+        } catch (parseErr) {
+          // Re-throw timeout/abort errors so they surface as structured
+          // failures to Claude. AbortSignal.timeout fires DURING `res.json()`
+          // (headers landed but body hung); without this re-throw, the bare
+          // catch swallows AbortError and reports a fake-success "Non-JSON
+          // response" payload — exactly the silent-failure pattern #364
+          // exists to prevent.
+          if (isAbortOrTimeoutError(parseErr)) throw parseErr;
           data = { message: "Non-JSON response" };
         }
         if (!res.ok) {
@@ -111,7 +131,11 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
           content: [
             {
               type: "text" as const,
-              text: `Failed to send reply: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Failed to send reply: ${describeFetchError(
+                err,
+                "/api/channel-reply",
+                CHANNEL_REPLY_FETCH_TIMEOUT_MS,
+              )}`,
             },
           ],
           isError: true,
@@ -133,23 +157,30 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
 
   mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     try {
-      const res = await authFetch(`${tandemUrl}/api/channel-permission`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requestId: params.request_id,
-          toolName: params.tool_name,
-          description: params.description,
-          inputPreview: params.input_preview,
-        }),
-      });
+      const res = await fetchWithTimeout(
+        `${tandemUrl}/api/channel-permission`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: params.request_id,
+            toolName: params.tool_name,
+            description: params.description,
+            inputPreview: params.input_preview,
+          }),
+        },
+        CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
+      );
       if (!res.ok) {
         console.error(
           `[Channel] Permission relay got HTTP ${res.status} — browser may not see prompt`,
         );
       }
     } catch (err) {
-      console.error("[Channel] Failed to forward permission request:", err);
+      console.error(
+        "[Channel] Failed to forward permission request:",
+        describeFetchError(err, "/api/channel-permission", CHANNEL_PERMISSION_FETCH_TIMEOUT_MS),
+      );
     }
   });
 
