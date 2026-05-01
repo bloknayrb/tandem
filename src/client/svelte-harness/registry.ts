@@ -10,6 +10,7 @@ import type { Component } from "svelte";
 // biome-ignore lint/suspicious/noExplicitAny: intentional harness escape hatch
 export const registry: Record<string, () => Promise<{ default: Component<any> }>> = {
   HookDebug: () => import("./HookDebug.svelte"),
+  Editor: () => import("./EditorHarness.svelte"),
   DocumentHealth: () => import("../panels/DocumentHealth.svelte"),
   ReviewSummary: () => import("../panels/ReviewSummary.svelte"),
   FilterSelect: () => import("../panels/FilterSelect.svelte"),
