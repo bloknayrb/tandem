@@ -11,6 +11,8 @@ import type { Component } from "svelte";
 export const registry: Record<string, () => Promise<{ default: Component<any> }>> = {
   HookDebug: () => import("./HookDebug.svelte"),
   Editor: () => import("./EditorHarness.svelte"),
+  DocumentTabs: () => import("../tabs/DocumentTabs.svelte"),
+  FileOpenDialog: () => import("../components/FileOpenDialog.svelte"),
   DocumentHealth: () => import("../panels/DocumentHealth.svelte"),
   ReviewSummary: () => import("../panels/ReviewSummary.svelte"),
   FilterSelect: () => import("../panels/FilterSelect.svelte"),
