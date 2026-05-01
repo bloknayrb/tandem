@@ -28,6 +28,7 @@ export interface YjsSyncState {
   readonly claudeStatus: string | null;
   readonly claudeActive: boolean;
   readonly readOnly: boolean;
+  /** @internal Internal CTRL_ROOM connection mechanism — not intended for consumer use. */
   readonly bootstrapYdoc: Y.Doc | null;
   readonly ready: boolean;
   /** Briefly true after the server restarts and the client reconnects. */
@@ -254,7 +255,10 @@ export function createYjsSync(): YjsSyncState {
 
     provider.on("status", ({ status }: { status: string }) => {
       connected = status === "connected";
-      connectionStatus = status as ConnectionStatus;
+      const known: ConnectionStatus[] = ["connected", "connecting", "disconnected"];
+      connectionStatus = known.includes(status as ConnectionStatus)
+        ? (status as ConnectionStatus)
+        : "connecting";
 
       if (status === "connected") {
         hadConnection = true;
@@ -317,15 +321,22 @@ export function createYjsSync(): YjsSyncState {
   }
 
   // ---------- Effect: rewire active-tab observers ----------
-  // Reads BOTH activeTabIdState and identity of the active tab's ydoc so
-  // that a Y.Doc swap (e.g. reload-from-disk) rewires observers even when
-  // the active tab id is unchanged.
+  // Memoize the active tab via $derived so the effect only re-runs when the
+  // active tab's identity changes (tab switch) or its Y.Doc identity changes
+  // (Y.Doc swap). Reading `tabsState.find(...)` directly inside the effect
+  // would re-run on ANY mutation to `tabsState` (open/close of a non-active
+  // tab), tearing down and rebuilding observers unnecessarily.
+  const activeTabDerived = $derived(tabsState.find((t) => t.id === activeTabIdState) ?? null);
+  const activeYdocDerived = $derived(activeTabDerived?.ydoc ?? null);
+
   const stopEffects = $effect.root(() => {
     $effect(() => {
-      // Touch deps explicitly so Svelte tracks them.
-      const id = activeTabIdState;
-      const activeTab = tabsState.find((t) => t.id === id);
-      void activeTab?.ydoc; // identity-tracked dep
+      // In current architecture, reload-from-disk replaces the entire tab
+      // entry (Y.Doc + provider), so activeTabDerived's identity changes too.
+      // The explicit ydoc identity dep below is defensive/future-proof in
+      // case a future code path swaps just the Y.Doc reference.
+      void activeYdocDerived;
+      const activeTab = activeTabDerived;
 
       // Tear down all current observers (only one is ever attached, but match React semantics).
       for (const obs of observers.values()) obs.cleanup();
@@ -342,16 +353,8 @@ export function createYjsSync(): YjsSyncState {
       }
     });
 
-    // ---------- Effect: pending-IDs cleanup (Effect 4) ----------
-    // When real tabs land, drop any pending dedup tracking for them. This is
-    // also done inside handleDocumentList, but a dedicated reactive effect
-    // mirrors the React for-loop that ran on every render.
-    $effect(() => {
-      for (const t of tabsState) {
-        pendingIds.delete(t.id);
-        pendingProviders.delete(t.id);
-      }
-    });
+    // Note: pending-IDs cleanup is handled inside `handleDocumentList` on
+    // every reconcile — no separate $effect needed.
   });
 
   // ---------- Public API methods ----------
@@ -411,6 +414,12 @@ export function createYjsSync(): YjsSyncState {
     }
     // Tear down bootstrap
     bootstrapCleanup?.();
+    // Reset reactive state so consumers that still hold the state object
+    // post-teardown can't read destroyed Y.Doc references.
+    tabsState = [];
+    annotationsState = [];
+    activeTabIdState = null;
+    ready = false;
   };
 
   return {
