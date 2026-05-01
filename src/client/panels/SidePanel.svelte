@@ -18,7 +18,6 @@ interface Props {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
   heldCount?: number;
-  storeReadOnly?: boolean;
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
   activeDocFormat?: string;
@@ -36,7 +35,6 @@ let {
   editor,
   ydoc,
   heldCount = 0,
-  storeReadOnly = false,
   tandemMode: _tandemMode,
   onModeChange,
   activeDocFormat,
@@ -270,16 +268,6 @@ function handleBulk(status: "accepted" | "dismissed") {
   data-testid="annotation-list-scroll-container"
   style="width: 100%; background: var(--tandem-surface-muted); display: flex; flex-direction: column; overflow-y: auto;"
 >
-  <!-- Store read-only banner: shown while another Tandem process holds the annotation lock -->
-  {#if storeReadOnly}
-    <div
-      data-testid="store-readonly-banner"
-      style="padding: 6px 16px; background: {warningStateColors.background}; border-bottom: 1px solid {warningStateColors.border}; font-size: 12px; color: {warningStateColors.color};"
-    >
-      Annotations are read-only — another Tandem process holds the store lock.
-    </div>
-  {/if}
-
   <!-- Held-annotation banner -->
   {#if heldCount > 0}
     <div

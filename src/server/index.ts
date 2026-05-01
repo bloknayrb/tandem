@@ -145,37 +145,41 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
 
-  // Take the durable-annotation store lock before anything else touches
-  // app-data. The port 3479 bind is the primary concurrent-writer guard;
-  // this is a belt-and-braces fallback for port-bind races and edge cases.
-  //
-  // Retry loop: on a live-PID readonly result we wait up to 30 seconds before
-  // giving up, logging to stderr every 5s. This handles a slow filesystem
-  // unmount or a previous instance that is still shutting down.
+  // Take the durable-annotation store lock before accepting connections.
+  // HTTP mode: retry up to 30s when a live PID holds the lock, logging every 5s.
+  // Stdio mode: single attempt only — the MCP init timeout cannot survive a retry loop.
   {
-    const RETRY_INTERVAL_MS = 5_000;
-    const RETRY_DEADLINE_MS = 30_000;
-    const retryStart = Date.now();
     let lock: "locked" | "readonly" = "readonly";
-    let lockErr: unknown = undefined;
+    let lockErr: unknown;
 
-    try {
-      lock = await acquireStoreLock();
-    } catch (err) {
-      lockErr = err;
-    }
-
-    while (
-      lock === "readonly" &&
-      lockErr === undefined &&
-      Date.now() - retryStart < RETRY_DEADLINE_MS
-    ) {
-      const elapsed = Date.now() - retryStart;
-      const remaining = Math.ceil((RETRY_DEADLINE_MS - elapsed) / 1000);
-      process.stderr.write(
-        `[Tandem] store lock held by another process, retrying in 5s... (${remaining}s remaining)\n`,
-      );
-      await new Promise<void>((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+    if (transportMode === "http") {
+      // HTTP mode: retry up to 30s — browser has no init deadline
+      const RETRY_INTERVAL_MS = 5_000;
+      const RETRY_DEADLINE_MS = 30_000;
+      const retryStart = Date.now();
+      try {
+        lock = await acquireStoreLock();
+      } catch (err) {
+        lockErr = err;
+      }
+      while (
+        lock === "readonly" &&
+        lockErr === undefined &&
+        Date.now() - retryStart < RETRY_DEADLINE_MS
+      ) {
+        const remaining = Math.ceil((RETRY_DEADLINE_MS - (Date.now() - retryStart)) / 1000);
+        process.stderr.write(
+          `[Tandem] store lock held by another process, retrying in 5s... (${remaining}s remaining)\n`,
+        );
+        await new Promise<void>((r) => setTimeout(r, RETRY_INTERVAL_MS));
+        try {
+          lock = await acquireStoreLock();
+        } catch (err) {
+          lockErr = err;
+        }
+      }
+    } else {
+      // Stdio mode: single attempt only — MCP init timeout cannot tolerate a retry loop
       try {
         lock = await acquireStoreLock();
       } catch (err) {
@@ -198,14 +202,14 @@ async function main() {
       });
     } else if (lock === "readonly") {
       console.error(
-        "[Tandem] Annotation store is read-only after 30s retry (another process holds the lock); writes disabled for this session.",
+        "[Tandem] Annotation store is read-only (another process holds the lock); writes disabled for this session.",
       );
       pushNotification({
         id: `store-readonly-${Date.now()}`,
         type: "save-error",
         severity: "warning",
         message:
-          "Another Tandem process is running — annotations won't be saved this session. Close the other instance and restart.",
+          "Annotation store is read-only (another process holds the lock); annotation writes are disabled for this session. Close the other Tandem instance and restart.",
         dedupKey: "annotation-store:readonly",
         timestamp: Date.now(),
       });
