@@ -1,38 +1,38 @@
 <script lang="ts">
-  interface Props {
-    bulkConfirm: "accept" | "dismiss" | null;
-    pendingCount: number;
-    allPendingCount: number;
-    onConfirmAccept: () => void;
-    onConfirmDismiss: () => void;
-    onCancel: () => void;
-    onRequestAccept: () => void;
-    onRequestDismiss: () => void;
-    /** Bind to get a reference to the confirm button for programmatic focus. */
-    confirmRef?: HTMLButtonElement | null;
-  }
+interface Props {
+  bulkConfirm: "accept" | "dismiss" | null;
+  pendingCount: number;
+  allPendingCount: number;
+  onConfirmAccept: () => void;
+  onConfirmDismiss: () => void;
+  onCancel: () => void;
+  onRequestAccept: () => void;
+  onRequestDismiss: () => void;
+  /** Bind to get a reference to the confirm button for programmatic focus. */
+  confirmRef?: HTMLButtonElement | null;
+}
 
-  let {
-    bulkConfirm,
-    pendingCount,
-    allPendingCount,
-    onConfirmAccept,
-    onConfirmDismiss,
-    onCancel,
-    onRequestAccept,
-    onRequestDismiss,
-    confirmRef = $bindable(null),
-  }: Props = $props();
+let {
+  bulkConfirm,
+  pendingCount,
+  allPendingCount,
+  onConfirmAccept,
+  onConfirmDismiss,
+  onCancel,
+  onRequestAccept,
+  onRequestDismiss,
+  confirmRef = $bindable(null),
+}: Props = $props();
 
-  const isAccept = $derived(bulkConfirm === "accept");
-  const countLabel = $derived(
-    pendingCount === allPendingCount
-      ? `${pendingCount} annotations?`
-      : `${pendingCount} of ${allPendingCount} pending?`,
-  );
+const isAccept = $derived(bulkConfirm === "accept");
+const countLabel = $derived(
+  pendingCount === allPendingCount
+    ? `${pendingCount} annotations?`
+    : `${pendingCount} of ${allPendingCount} pending?`,
+);
 
-  const smallBtnBase =
-    "padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; cursor: pointer;";
+const smallBtnBase =
+  "padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; cursor: pointer;";
 </script>
 
 {#if pendingCount > 1}

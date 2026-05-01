@@ -1,34 +1,34 @@
 <script lang="ts">
-  interface Props {
-    annotationId: string;
-    isPending: boolean;
-    isEditing: boolean;
-    undoable?: boolean;
-    onAccept?: (id: string) => void;
-    onDismiss?: (id: string) => void;
-    onUndo?: (id: string) => boolean;
-    onRemove?: (id: string) => void;
+interface Props {
+  annotationId: string;
+  isPending: boolean;
+  isEditing: boolean;
+  undoable?: boolean;
+  onAccept?: (id: string) => void;
+  onDismiss?: (id: string) => void;
+  onUndo?: (id: string) => boolean;
+  onRemove?: (id: string) => void;
+}
+
+let { annotationId, isPending, isEditing, undoable, onAccept, onDismiss, onUndo, onRemove }: Props =
+  $props();
+
+let undoError = $state(false);
+let undoTimer: ReturnType<typeof setTimeout> | null = null;
+
+function handleUndo(e: MouseEvent) {
+  e.stopPropagation();
+  if (!onUndo) return;
+  const ok = onUndo(annotationId);
+  if (!ok) {
+    undoError = true;
+    if (undoTimer) clearTimeout(undoTimer);
+    undoTimer = setTimeout(() => {
+      undoError = false;
+      undoTimer = null;
+    }, 3000);
   }
-
-  let { annotationId, isPending, isEditing, undoable, onAccept, onDismiss, onUndo, onRemove }: Props =
-    $props();
-
-  let undoError = $state(false);
-  let undoTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function handleUndo(e: MouseEvent) {
-    e.stopPropagation();
-    if (!onUndo) return;
-    const ok = onUndo(annotationId);
-    if (!ok) {
-      undoError = true;
-      if (undoTimer) clearTimeout(undoTimer);
-      undoTimer = setTimeout(() => {
-        undoError = false;
-        undoTimer = null;
-      }, 3000);
-    }
-  }
+}
 </script>
 
 {#if isPending && !isEditing && (onAccept || onDismiss)}

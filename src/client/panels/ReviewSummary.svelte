@@ -1,15 +1,15 @@
 <script lang="ts">
-  interface Props {
-    accepted: number;
-    dismissed: number;
-    total: number;
-    onDismiss: () => void;
-  }
+interface Props {
+  accepted: number;
+  dismissed: number;
+  total: number;
+  onDismiss: () => void;
+}
 
-  let { accepted, dismissed, total, onDismiss }: Props = $props();
+let { accepted, dismissed, total, onDismiss }: Props = $props();
 
-  const acceptRate = $derived(total > 0 ? Math.round((accepted / total) * 100) : 0);
-  const emoji = $derived(acceptRate >= 80 ? "✅" : acceptRate >= 50 ? "📋" : "🔍");
+const acceptRate = $derived(total > 0 ? Math.round((accepted / total) * 100) : 0);
+const emoji = $derived(acceptRate >= 80 ? "✅" : acceptRate >= 50 ? "📋" : "🔍");
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

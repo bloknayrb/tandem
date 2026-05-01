@@ -1,118 +1,118 @@
 <script lang="ts">
-  import { HIGHLIGHT_COLORS } from "../../shared/constants";
-  import type { Annotation, AnnotationReply } from "../../shared/types";
-  import AnnotationCardActions from "./AnnotationCardActions.svelte";
-  import AnnotationEditForm from "./AnnotationEditForm.svelte";
-  import ReplyThread from "./ReplyThread.svelte";
+import { HIGHLIGHT_COLORS } from "../../shared/constants";
+import type { Annotation, AnnotationReply } from "../../shared/types";
+import AnnotationCardActions from "./AnnotationCardActions.svelte";
+import AnnotationEditForm from "./AnnotationEditForm.svelte";
+import ReplyThread from "./ReplyThread.svelte";
 
-  interface Props {
-    annotation: Annotation;
-    replies?: AnnotationReply[];
-    isReviewTarget?: boolean;
-    onAccept?: (id: string) => void;
-    onDismiss?: (id: string) => void;
-    onUndo?: (id: string) => boolean;
-    onEdit?: (id: string, newContent: string) => void;
-    onReply?: (id: string, text: string) => Promise<boolean>;
-    onRemove?: (id: string) => void;
-    /** Whether this annotation was recently resolved and can be undone */
-    undoable?: boolean;
-    onClick?: () => void;
+interface Props {
+  annotation: Annotation;
+  replies?: AnnotationReply[];
+  isReviewTarget?: boolean;
+  onAccept?: (id: string) => void;
+  onDismiss?: (id: string) => void;
+  onUndo?: (id: string) => boolean;
+  onEdit?: (id: string, newContent: string) => void;
+  onReply?: (id: string, text: string) => Promise<boolean>;
+  onRemove?: (id: string) => void;
+  /** Whether this annotation was recently resolved and can be undone */
+  undoable?: boolean;
+  onClick?: () => void;
+}
+
+let {
+  annotation,
+  replies = [],
+  isReviewTarget,
+  onAccept,
+  onDismiss,
+  onUndo,
+  onEdit,
+  onReply,
+  onRemove,
+  undoable,
+  onClick,
+}: Props = $props();
+
+let isEditing = $state(false);
+let editText = $state("");
+let editNewText = $state("");
+let editReason = $state("");
+
+const isPending = $derived(annotation.status === "pending");
+const hasSuggestedText = $derived(annotation.suggestedText !== undefined);
+
+function getDisplayType(ann: Annotation): string {
+  if (ann.suggestedText !== undefined) return "replacement";
+  return ann.type;
+}
+
+function getAuthorLabel(author: Annotation["author"]): string {
+  if (author === "claude") return "Claude";
+  if (author === "import") return "Imported";
+  return "You";
+}
+
+function getBorderColor(ann: Annotation): string {
+  if (ann.color) {
+    return HIGHLIGHT_COLORS[ann.color] || "var(--tandem-border)";
   }
+  if (ann.suggestedText !== undefined) return "var(--tandem-suggestion)";
+  if (ann.type === "note") return "var(--tandem-warning)";
+  return "var(--tandem-author-user)";
+}
 
-  let {
-    annotation,
-    replies = [],
-    isReviewTarget,
-    onAccept,
-    onDismiss,
-    onUndo,
-    onEdit,
-    onReply,
-    onRemove,
-    undoable,
-    onClick,
-  }: Props = $props();
+function getCardBackground(ann: Annotation, reviewTarget?: boolean): string {
+  if (reviewTarget) return "var(--tandem-accent-bg)";
+  if (ann.type === "note") return "var(--tandem-warning-bg)";
+  return "var(--tandem-surface)";
+}
 
-  let isEditing = $state(false);
-  let editText = $state("");
-  let editNewText = $state("");
-  let editReason = $state("");
+const displayType = $derived(getDisplayType(annotation));
+const borderColor = $derived(getBorderColor(annotation));
+const cardBg = $derived(getCardBackground(annotation, isReviewTarget));
+const isPrivateNote = $derived(annotation.type === "note");
 
-  const isPending = $derived(annotation.status === "pending");
-  const hasSuggestedText = $derived(annotation.suggestedText !== undefined);
+const truncatedContent = $derived(
+  annotation.content
+    ? annotation.content.length > 60
+      ? annotation.content.slice(0, 57) + "..."
+      : annotation.content
+    : "",
+);
 
-  function getDisplayType(ann: Annotation): string {
-    if (ann.suggestedText !== undefined) return "replacement";
-    return ann.type;
+const cardLabel = $derived(
+  `${isPrivateNote ? "private " : ""}${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`,
+);
+
+function enterEditMode() {
+  if (hasSuggestedText) {
+    editNewText = annotation.suggestedText ?? "";
+    editReason = annotation.content;
+  } else {
+    editText = annotation.content;
   }
+  isEditing = true;
+}
 
-  function getAuthorLabel(author: Annotation["author"]): string {
-    if (author === "claude") return "Claude";
-    if (author === "import") return "Imported";
-    return "You";
+function handleSave() {
+  const newContent = hasSuggestedText
+    ? JSON.stringify({ suggestedText: editNewText, content: editReason })
+    : editText;
+  onEdit?.(annotation.id, newContent);
+  isEditing = false;
+}
+
+function handleCancel() {
+  isEditing = false;
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    handleCancel();
   }
-
-  function getBorderColor(ann: Annotation): string {
-    if (ann.color) {
-      return HIGHLIGHT_COLORS[ann.color] || "var(--tandem-border)";
-    }
-    if (ann.suggestedText !== undefined) return "var(--tandem-suggestion)";
-    if (ann.type === "note") return "var(--tandem-warning)";
-    return "var(--tandem-author-user)";
-  }
-
-  function getCardBackground(ann: Annotation, reviewTarget?: boolean): string {
-    if (reviewTarget) return "var(--tandem-accent-bg)";
-    if (ann.type === "note") return "var(--tandem-warning-bg)";
-    return "var(--tandem-surface)";
-  }
-
-  const displayType = $derived(getDisplayType(annotation));
-  const borderColor = $derived(getBorderColor(annotation));
-  const cardBg = $derived(getCardBackground(annotation, isReviewTarget));
-  const isPrivateNote = $derived(annotation.type === "note");
-
-  const truncatedContent = $derived(
-    annotation.content
-      ? annotation.content.length > 60
-        ? annotation.content.slice(0, 57) + "..."
-        : annotation.content
-      : "",
-  );
-
-  const cardLabel = $derived(
-    `${isPrivateNote ? "private " : ""}${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`,
-  );
-
-  function enterEditMode() {
-    if (hasSuggestedText) {
-      editNewText = annotation.suggestedText ?? "";
-      editReason = annotation.content;
-    } else {
-      editText = annotation.content;
-    }
-    isEditing = true;
-  }
-
-  function handleSave() {
-    const newContent = hasSuggestedText
-      ? JSON.stringify({ suggestedText: editNewText, content: editReason })
-      : editText;
-    onEdit?.(annotation.id, newContent);
-    isEditing = false;
-  }
-
-  function handleCancel() {
-    isEditing = false;
-  }
-
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      handleCancel();
-    }
-  }
+}
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

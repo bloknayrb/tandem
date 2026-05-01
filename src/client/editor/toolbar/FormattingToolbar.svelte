@@ -1,143 +1,143 @@
 <script lang="ts">
-  import type { Editor as TiptapEditor } from "@tiptap/core";
-  import { yUndoPluginKey } from "y-prosemirror";
-  import ToolbarButton from "./ToolbarButton.svelte";
+import type { Editor as TiptapEditor } from "@tiptap/core";
+import { yUndoPluginKey } from "y-prosemirror";
+import ToolbarButton from "./ToolbarButton.svelte";
 
-  interface Props {
-    editor: TiptapEditor | null;
-    disabled?: boolean;
-  }
+interface Props {
+  editor: TiptapEditor | null;
+  disabled?: boolean;
+}
 
-  const { editor, disabled = false }: Props = $props();
+const { editor, disabled = false }: Props = $props();
 
-  type HeadingLevel = 1 | 2 | 3;
-  const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3];
-  const HEADING_FONT_WEIGHTS: Record<HeadingLevel, number> = { 1: 700, 2: 600, 3: 500 };
+type HeadingLevel = 1 | 2 | 3;
+const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3];
+const HEADING_FONT_WEIGHTS: Record<HeadingLevel, number> = { 1: 700, 2: 600, 3: 500 };
 
-  // Force-reactive tick — Tiptap's isActive() is imperative; bump on transaction.
-  let tick = $state(0);
-  let showHeadingMenu = $state(false);
-  let headingMenuEl = $state<HTMLDivElement | null>(null);
+// Force-reactive tick — Tiptap's isActive() is imperative; bump on transaction.
+let tick = $state(0);
+let showHeadingMenu = $state(false);
+let headingMenuEl = $state<HTMLDivElement | null>(null);
 
-  $effect(() => {
-    if (!editor) return;
-    const handler = () => {
-      if (!editor.isDestroyed) tick++;
-    };
-    editor.on("transaction", handler);
-    return () => {
-      editor.off("transaction", handler);
-    };
-  });
+$effect(() => {
+  if (!editor) return;
+  const handler = () => {
+    if (!editor.isDestroyed) tick++;
+  };
+  editor.on("transaction", handler);
+  return () => {
+    editor.off("transaction", handler);
+  };
+});
 
-  $effect(() => {
-    if (!showHeadingMenu) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (headingMenuEl && !headingMenuEl.contains(e.target as Node)) {
-        showHeadingMenu = false;
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  });
-
-  function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
-    for (const level of HEADING_LEVELS) {
-      if (ed.isActive("heading", { level })) return level;
-    }
-    return null;
-  }
-
-  // Reactive computations depend on editor + tick (transaction counter).
-  const isEditable = $derived(editor ? editor.isEditable : false);
-  const isDisabled = $derived(!isEditable || !!disabled);
-
-  const undoState = $derived.by(() => {
-    void tick;
-    return editor ? yUndoPluginKey.getState(editor.state) : null;
-  });
-  const canUndo = $derived(!isDisabled && (undoState?.undoManager?.undoStack.length ?? 0) > 0);
-  const canRedo = $derived(!isDisabled && (undoState?.undoManager?.redoStack.length ?? 0) > 0);
-
-  const activeHeading = $derived.by(() => {
-    void tick;
-    return editor ? findActiveHeading(editor) : null;
-  });
-
-  // Reactive isActive readers
-  const isActiveBold = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("bold");
-  });
-  const isActiveItalic = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("italic");
-  });
-  const isActiveStrike = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("strike");
-  });
-  const isActiveCode = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("code");
-  });
-  const isActiveBulletList = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("bulletList");
-  });
-  const isActiveOrderedList = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("orderedList");
-  });
-  const isActiveBlockquote = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("blockquote");
-  });
-  const isActiveCodeBlock = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("codeBlock");
-  });
-  const isActiveLink = $derived.by(() => {
-    void tick;
-    return !!editor?.isActive("link");
-  });
-  const linkDisabled = $derived.by(() => {
-    void tick;
-    if (!editor) return true;
-    return (
-      isDisabled ||
-      (!editor.isActive("link") && editor.state.selection.from === editor.state.selection.to)
-    );
-  });
-
-  const headingLabel = $derived(activeHeading ? `H${activeHeading}` : "H");
-
-  function withPreventDefault(command: () => void) {
-    return (e: MouseEvent) => {
-      e.preventDefault();
-      command();
-    };
-  }
-
-  function handleHeadingToggle(level: HeadingLevel) {
-    return (e: MouseEvent) => {
-      e.preventDefault();
-      if (!editor || editor.isDestroyed) return;
-      editor.chain().focus().toggleHeading({ level }).run();
+$effect(() => {
+  if (!showHeadingMenu) return;
+  function handleClickOutside(e: MouseEvent) {
+    if (headingMenuEl && !headingMenuEl.contains(e.target as Node)) {
       showHeadingMenu = false;
-    };
-  }
-
-  function handleLinkMouseDown(e: MouseEvent) {
-    e.preventDefault();
-    if (!editor) return;
-    if (editor.isActive("link")) {
-      editor.chain().focus().unsetLink().run();
-    } else {
-      const url = window.prompt("Enter URL:");
-      if (url) editor.chain().focus().setLink({ href: url }).run();
     }
   }
+  document.addEventListener("mousedown", handleClickOutside);
+  return () => document.removeEventListener("mousedown", handleClickOutside);
+});
+
+function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
+  for (const level of HEADING_LEVELS) {
+    if (ed.isActive("heading", { level })) return level;
+  }
+  return null;
+}
+
+// Reactive computations depend on editor + tick (transaction counter).
+const isEditable = $derived(editor ? editor.isEditable : false);
+const isDisabled = $derived(!isEditable || !!disabled);
+
+const undoState = $derived.by(() => {
+  void tick;
+  return editor ? yUndoPluginKey.getState(editor.state) : null;
+});
+const canUndo = $derived(!isDisabled && (undoState?.undoManager?.undoStack.length ?? 0) > 0);
+const canRedo = $derived(!isDisabled && (undoState?.undoManager?.redoStack.length ?? 0) > 0);
+
+const activeHeading = $derived.by(() => {
+  void tick;
+  return editor ? findActiveHeading(editor) : null;
+});
+
+// Reactive isActive readers
+const isActiveBold = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("bold");
+});
+const isActiveItalic = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("italic");
+});
+const isActiveStrike = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("strike");
+});
+const isActiveCode = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("code");
+});
+const isActiveBulletList = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("bulletList");
+});
+const isActiveOrderedList = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("orderedList");
+});
+const isActiveBlockquote = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("blockquote");
+});
+const isActiveCodeBlock = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("codeBlock");
+});
+const isActiveLink = $derived.by(() => {
+  void tick;
+  return !!editor?.isActive("link");
+});
+const linkDisabled = $derived.by(() => {
+  void tick;
+  if (!editor) return true;
+  return (
+    isDisabled ||
+    (!editor.isActive("link") && editor.state.selection.from === editor.state.selection.to)
+  );
+});
+
+const headingLabel = $derived(activeHeading ? `H${activeHeading}` : "H");
+
+function withPreventDefault(command: () => void) {
+  return (e: MouseEvent) => {
+    e.preventDefault();
+    command();
+  };
+}
+
+function handleHeadingToggle(level: HeadingLevel) {
+  return (e: MouseEvent) => {
+    e.preventDefault();
+    if (!editor || editor.isDestroyed) return;
+    editor.chain().focus().toggleHeading({ level }).run();
+    showHeadingMenu = false;
+  };
+}
+
+function handleLinkMouseDown(e: MouseEvent) {
+  e.preventDefault();
+  if (!editor) return;
+  if (editor.isActive("link")) {
+    editor.chain().focus().unsetLink().run();
+  } else {
+    const url = window.prompt("Enter URL:");
+    if (url) editor.chain().focus().setLink({ href: url }).run();
+  }
+}
 </script>
 
 {#if editor}

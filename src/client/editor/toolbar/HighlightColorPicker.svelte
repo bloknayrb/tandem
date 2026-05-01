@@ -1,51 +1,51 @@
 <script lang="ts">
-  import { HIGHLIGHT_COLORS } from "../../../shared/constants";
-  import type { HighlightColor } from "../../../shared/types";
-  import ToolbarButton from "./ToolbarButton.svelte";
+import { HIGHLIGHT_COLORS } from "../../../shared/constants";
+import type { HighlightColor } from "../../../shared/types";
+import ToolbarButton from "./ToolbarButton.svelte";
 
-  const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
-    { value: "yellow", label: "Yellow" },
-    { value: "green", label: "Green" },
-    { value: "blue", label: "Blue" },
-    { value: "pink", label: "Pink" },
-  ];
+const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
+  { value: "yellow", label: "Yellow" },
+  { value: "green", label: "Green" },
+  { value: "blue", label: "Blue" },
+  { value: "pink", label: "Pink" },
+];
 
-  interface Props {
-    disabled?: boolean;
-    onHighlight: (color: HighlightColor) => void;
-  }
+interface Props {
+  disabled?: boolean;
+  onHighlight: (color: HighlightColor) => void;
+}
 
-  const { disabled = false, onHighlight }: Props = $props();
+const { disabled = false, onHighlight }: Props = $props();
 
-  let highlightColor = $state<HighlightColor>("yellow");
-  let showColorPicker = $state(false);
-  let colorPickerEl = $state<HTMLDivElement | null>(null);
+let highlightColor = $state<HighlightColor>("yellow");
+let showColorPicker = $state(false);
+let colorPickerEl = $state<HTMLDivElement | null>(null);
 
-  $effect(() => {
-    if (!showColorPicker) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (colorPickerEl && !colorPickerEl.contains(e.target as Node)) {
-        showColorPicker = false;
-      }
+$effect(() => {
+  if (!showColorPicker) return;
+  function handleClickOutside(e: MouseEvent) {
+    if (colorPickerEl && !colorPickerEl.contains(e.target as Node)) {
+      showColorPicker = false;
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  });
-
-  function handleHighlight(e: MouseEvent) {
-    e.preventDefault();
-    onHighlight(highlightColor);
   }
+  document.addEventListener("mousedown", handleClickOutside);
+  return () => document.removeEventListener("mousedown", handleClickOutside);
+});
 
-  function handleColorPickerToggle(e: MouseEvent) {
-    e.preventDefault();
-    showColorPicker = !showColorPicker;
-  }
+function handleHighlight(e: MouseEvent) {
+  e.preventDefault();
+  onHighlight(highlightColor);
+}
 
-  function handleColorSelect(color: HighlightColor) {
-    highlightColor = color;
-    showColorPicker = false;
-  }
+function handleColorPickerToggle(e: MouseEvent) {
+  e.preventDefault();
+  showColorPicker = !showColorPicker;
+}
+
+function handleColorSelect(color: HighlightColor) {
+  highlightColor = color;
+  showColorPicker = false;
+}
 </script>
 
 <div style="display: flex; align-items: center; gap: 2px; position: relative;">

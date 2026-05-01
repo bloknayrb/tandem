@@ -1,164 +1,159 @@
 <script lang="ts">
-  import type { Editor as TiptapEditor } from "@tiptap/core";
-  import * as Y from "yjs";
-  import { Y_MAP_ANNOTATIONS } from "../../../shared/constants";
-  import { toPmPos } from "../../../shared/positions/types";
-  import type {
-    Annotation,
-    AnnotationType,
-    HighlightColor,
-    TandemMode,
-  } from "../../../shared/types";
-  import { generateAnnotationId } from "../../../shared/utils";
-  import { pmPosToFlatOffset } from "../../positions";
-  import FormattingToolbar from "./FormattingToolbar.svelte";
-  import HighlightColorPicker from "./HighlightColorPicker.svelte";
-  import InputGroup from "./InputGroup.svelte";
-  import ModeToggle from "./ModeToggle.svelte";
-  import ToolbarButton from "./ToolbarButton.svelte";
+import type { Editor as TiptapEditor } from "@tiptap/core";
+import * as Y from "yjs";
+import { Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { toPmPos } from "../../../shared/positions/types";
+import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
+import { generateAnnotationId } from "../../../shared/utils";
+import { pmPosToFlatOffset } from "../../positions";
+import FormattingToolbar from "./FormattingToolbar.svelte";
+import HighlightColorPicker from "./HighlightColorPicker.svelte";
+import InputGroup from "./InputGroup.svelte";
+import ModeToggle from "./ModeToggle.svelte";
+import ToolbarButton from "./ToolbarButton.svelte";
 
-  type ToolbarMode = "idle" | "comment" | "note";
+type ToolbarMode = "idle" | "comment" | "note";
 
-  interface Props {
-    editor: TiptapEditor | null;
-    ydoc: Y.Doc | null;
-    onSettingsOpen?: () => void;
-    /** Bindable settings button reference for keyboard-shortcut anchoring. */
-    settingsBtn?: HTMLButtonElement | null;
-    tandemMode?: TandemMode;
-    onModeChange?: (mode: TandemMode) => void;
-    heldCount?: number;
+interface Props {
+  editor: TiptapEditor | null;
+  ydoc: Y.Doc | null;
+  onSettingsOpen?: () => void;
+  /** Bindable settings button reference for keyboard-shortcut anchoring. */
+  settingsBtn?: HTMLButtonElement | null;
+  tandemMode?: TandemMode;
+  onModeChange?: (mode: TandemMode) => void;
+  heldCount?: number;
+}
+
+let {
+  editor,
+  ydoc,
+  onSettingsOpen,
+  settingsBtn = $bindable(null),
+  tandemMode,
+  onModeChange,
+  heldCount,
+}: Props = $props();
+
+let hasSelection = $state(false);
+let mode = $state<ToolbarMode>("idle");
+let modeText = $state("");
+let capturedRange: { from: number; to: number } | null = null;
+let commentInputEl = $state<HTMLInputElement | null>(null);
+let noteInputEl = $state<HTMLInputElement | null>(null);
+
+$effect(() => {
+  if (!editor) return;
+  const ed = editor;
+
+  function onSelectionUpdate() {
+    const { from, to } = ed.state.selection;
+    const next = from !== to;
+    if (hasSelection !== next) hasSelection = next;
   }
 
-  let {
-    editor,
-    ydoc,
-    onSettingsOpen,
-    settingsBtn = $bindable(null),
-    tandemMode,
-    onModeChange,
-    heldCount,
-  }: Props = $props();
+  ed.on("selectionUpdate", onSelectionUpdate);
+  return () => {
+    ed.off("selectionUpdate", onSelectionUpdate);
+  };
+});
 
-  let hasSelection = $state(false);
-  let mode = $state<ToolbarMode>("idle");
-  let modeText = $state("");
-  let capturedRange: { from: number; to: number } | null = null;
-  let commentInputEl = $state<HTMLInputElement | null>(null);
-  let noteInputEl = $state<HTMLInputElement | null>(null);
+$effect(() => {
+  if (mode === "comment") commentInputEl?.focus();
+  else if (mode === "note") noteInputEl?.focus();
+});
 
-  $effect(() => {
-    if (!editor) return;
-    const ed = editor;
+function createAnnotation(
+  type: AnnotationType,
+  content: string,
+  extras?: { color?: HighlightColor },
+) {
+  if (!editor || !ydoc) return;
 
-    function onSelectionUpdate() {
-      const { from, to } = ed.state.selection;
-      const next = from !== to;
-      if (hasSelection !== next) hasSelection = next;
-    }
+  const range = capturedRange ?? editor.state.selection;
+  const { from, to } = range;
+  if (from === to) return;
 
-    ed.on("selectionUpdate", onSelectionUpdate);
-    return () => {
-      ed.off("selectionUpdate", onSelectionUpdate);
-    };
-  });
+  const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
+  const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
 
-  $effect(() => {
-    if (mode === "comment") commentInputEl?.focus();
-    else if (mode === "note") noteInputEl?.focus();
-  });
+  const id = generateAnnotationId();
+  const annotation = {
+    id,
+    author: "user" as const,
+    type,
+    range: { from: flatFrom, to: flatTo },
+    content,
+    status: "pending" as const,
+    timestamp: Date.now(),
+    ...(extras?.color ? { color: extras.color } : {}),
+  } as Annotation;
 
-  function createAnnotation(
-    type: AnnotationType,
-    content: string,
-    extras?: { color?: HighlightColor },
-  ) {
-    if (!editor || !ydoc) return;
+  ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
+  capturedRange = null;
+}
 
-    const range = capturedRange ?? editor.state.selection;
-    const { from, to } = range;
-    if (from === to) return;
+function captureSelectionRange() {
+  if (!editor) return;
+  const { from, to } = editor.state.selection;
+  capturedRange = { from, to };
+}
 
-    const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
-    const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
+function resetAndFocusEditor() {
+  capturedRange = null;
+  editor?.chain().focus().run();
+}
 
-    const id = generateAnnotationId();
-    const annotation = {
-      id,
-      author: "user" as const,
-      type,
-      range: { from: flatFrom, to: flatTo },
-      content,
-      status: "pending" as const,
-      timestamp: Date.now(),
-      ...(extras?.color ? { color: extras.color } : {}),
-    } as Annotation;
+const inInputMode = $derived(mode !== "idle");
 
-    ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
-    capturedRange = null;
-  }
+function handleHighlight(color: HighlightColor) {
+  createAnnotation("highlight", "", { color });
+}
 
-  function captureSelectionRange() {
-    if (!editor) return;
-    const { from, to } = editor.state.selection;
-    capturedRange = { from, to };
-  }
-
-  function resetAndFocusEditor() {
-    capturedRange = null;
-    editor?.chain().focus().run();
-  }
-
-  const inInputMode = $derived(mode !== "idle");
-
-  function handleHighlight(color: HighlightColor) {
-    createAnnotation("highlight", "", { color });
-  }
-
-  function handleModeStart(targetMode: ToolbarMode) {
-    return (e: MouseEvent) => {
-      e.preventDefault();
-      captureSelectionRange();
-      mode = targetMode;
-      modeText = "";
-    };
-  }
-
-  const startComment = handleModeStart("comment");
-  const startNote = handleModeStart("note");
-
-  function handleModeCancel() {
-    mode = "idle";
+function handleModeStart(targetMode: ToolbarMode) {
+  return (e: MouseEvent) => {
+    e.preventDefault();
+    captureSelectionRange();
+    mode = targetMode;
     modeText = "";
-    resetAndFocusEditor();
-  }
+  };
+}
 
-  function handleModeSubmit() {
-    if (mode === "note") {
-      createAnnotation("note", modeText.trim());
-    } else {
-      if (!modeText.trim()) {
-        handleModeCancel();
-        return;
-      }
-      createAnnotation("comment", modeText.trim());
-    }
+const startComment = handleModeStart("comment");
+const startNote = handleModeStart("note");
 
-    mode = "idle";
-    modeText = "";
-    editor?.chain().focus().run();
-  }
+function handleModeCancel() {
+  mode = "idle";
+  modeText = "";
+  resetAndFocusEditor();
+}
 
-  function handleModeKeyDown(e: KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleModeSubmit();
-    } else if (e.key === "Escape") {
+function handleModeSubmit() {
+  if (mode === "note") {
+    createAnnotation("note", modeText.trim());
+  } else {
+    if (!modeText.trim()) {
       handleModeCancel();
+      return;
     }
+    createAnnotation("comment", modeText.trim());
   }
 
-  const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
+  mode = "idle";
+  modeText = "";
+  editor?.chain().focus().run();
+}
+
+function handleModeKeyDown(e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    handleModeSubmit();
+  } else if (e.key === "Escape") {
+    handleModeCancel();
+  }
+}
+
+const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 </script>
 
 <div
