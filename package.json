@@ -38,7 +38,7 @@
     "dev:server": "tsx watch src/server/index.ts",
     "build": "npm run typecheck && vite build && tsup",
     "build:server": "tsup",
-    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --threshold error",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --fail-on-warnings",
     "server": "tsx src/server/index.ts",
     "start:server": "node dist/server/index.js",
     "channel": "tsx src/channel/index.ts",
