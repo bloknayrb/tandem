@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+### Changed
+- Improved accessibility across editor panels: dialog backdrops and close buttons now have correct ARIA roles, radiogroup containers are focusable, form labels are associated with their controls, autofocus inputs use programmatic focus via `$effect`, and the annotation card keyboard interaction is explicit.
+
 ## \[0.9.1] - 2026-05-01
 
 Hotfix patch bundling ADR-027 surface cleanup and file-I/O correctness fixes before the v0.10.0 Svelte conversion. All changes are patch-class; no MCP API changes.
