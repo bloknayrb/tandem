@@ -36,8 +36,8 @@ import { createYjsSync } from "./hooks/yjsSync.svelte";
 import {
   getRightWidth,
   loadPanelWidth,
-  PANEL_MIN_WIDTH,
   PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
   type PanelLayout,
 } from "./panel-layout";
 import ReviewSummary from "./panels/ReviewSummary.svelte";
