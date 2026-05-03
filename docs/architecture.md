@@ -715,10 +715,10 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `panel-layout.ts` -- Panel layout constants (default widths, min/max constraints) shared by `App.svelte` and `useDragResize`
 - `DocListEntry`, `OpenTab`, and `AppInfoData` types live in `src/client/types.ts`
 - `DocumentTabs` -- Tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
-- `hooks/useAppInfo.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by SettingsPopover's ABOUT footer and View Changelog button
-- `hooks/useDragResize.ts` -- Drag-resize handler for the panel divider: pointer event listeners, layout state updates, cleanup. Explicit arm-per-kind handling for all three layout variants
-- `hooks/useTandemModeBroadcast.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
-- `hooks/useConnectionBanner.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
+- `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by SettingsPopover's ABOUT footer and View Changelog button
+- `hooks/useDragResize.svelte.ts` -- Drag-resize handler for the panel divider: pointer event listeners, layout state updates, cleanup. Explicit arm-per-kind handling for all three layout variants
+- `hooks/useTandemModeBroadcast.svelte.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
+- `hooks/useConnectionBanner.svelte.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
 - `ToastContainer` (`src/client/components/`) -- Renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
 - `OnboardingTutorial` (`src/client/components/`) -- Floating card at bottom-left, 3-step progression (review → ask → edit). `useTutorial` hook detects step completion via annotation status, user annotation creation, and editor focus. localStorage persistence, suppressed after completion.
 - `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files

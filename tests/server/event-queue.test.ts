@@ -6,6 +6,7 @@ import {
   attachObservers,
   detachObservers,
   FILE_SYNC_ORIGIN,
+  getAnnotationEditedChannelKey,
   getBufferedSelection,
   MCP_ORIGIN,
   reattachObservers,
@@ -388,6 +389,48 @@ describe("wasEmittedViaChannel (ref-counted dedup)", () => {
 
     detachObservers("dedup-doc");
     doc.destroy();
+  });
+
+  it("tracks edited annotations with the composite edited channel key", () => {
+    const { events, cleanup } = collectEvents();
+    const doc = new Y.Doc();
+    attachObservers("edited-dedup-doc", doc);
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    doc.transact(() => {
+      map.set("ann_edited_dedup", {
+        id: "ann_edited_dedup",
+        type: "comment",
+        author: "user",
+        content: "before",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+        editedAt: 1000,
+      });
+    }, MCP_ORIGIN);
+
+    map.set("ann_edited_dedup", {
+      id: "ann_edited_dedup",
+      type: "comment",
+      author: "user",
+      content: "after",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+      editedAt: 2000,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("annotation:edited");
+    expect(wasEmittedViaChannel("ann_edited_dedup")).toBe(false);
+    expect(wasEmittedViaChannel(getAnnotationEditedChannelKey("ann_edited_dedup", 2000))).toBe(
+      true,
+    );
+
+    detachObservers("edited-dedup-doc");
+    doc.destroy();
+    cleanup();
   });
 
   it("returns false for unknown IDs", () => {

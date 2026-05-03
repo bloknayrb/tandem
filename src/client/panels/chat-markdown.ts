@@ -32,11 +32,14 @@ export function renderMarkdown(text: string): string {
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
     // inline code (single backtick only — triple-backtick blocks already extracted)
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-    // links
-    .replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
-    )
+    // links (protocol-validated: only http(s), mailto, and fragment refs render as clickable)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text: string, url: string) => {
+      const trimmed = url.trim();
+      if (/^(https?:\/\/|mailto:|#)/i.test(trimmed)) {
+        return `<a href="${trimmed}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+      }
+      return text;
+    })
     // unordered lists
     .replace(/^[*-] (.+)$/gm, "<li>$1</li>")
     // paragraphs

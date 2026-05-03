@@ -1,7 +1,11 @@
 /** Observer for CTRL_ROOM's Y.Map('documentMeta'). */
 
 import * as Y from "yjs";
-import { Y_MAP_DOCUMENT_META } from "../../../shared/constants.js";
+import {
+  Y_MAP_ACTIVE_DOCUMENT_ID,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_OPEN_DOCUMENTS,
+} from "../../../shared/constants.js";
 import { getOpenDocs } from "../../mcp/document-service.js";
 import { MCP_ORIGIN } from "../origins.js";
 import type { TandemEvent } from "../types.js";
@@ -20,8 +24,8 @@ export function makeCtrlMetaObserver(deps: {
     if (txn.origin === MCP_ORIGIN) return;
 
     // Check for activeDocumentId change (tab switch)
-    if (event.keysChanged.has("activeDocumentId")) {
-      const activeId = metaMap.get("activeDocumentId") as string | undefined;
+    if (event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)) {
+      const activeId = metaMap.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | undefined;
       if (activeId && activeId !== lastActiveDocId) {
         const openDoc = getOpenDocs().get(activeId);
         pushEvent({
@@ -38,9 +42,9 @@ export function makeCtrlMetaObserver(deps: {
     }
 
     // Check for openDocuments change (doc open/close)
-    if (event.keysChanged.has("openDocuments")) {
+    if (event.keysChanged.has(Y_MAP_OPEN_DOCUMENTS)) {
       const docList =
-        (metaMap.get("openDocuments") as Array<{ id: string; fileName?: string }>) ?? [];
+        (metaMap.get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; fileName?: string }>) ?? [];
       const currentIds = new Set(docList.map((d) => d.id));
 
       // Newly opened

@@ -231,40 +231,13 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.data.notesExcluded).toBe(1);
   });
 
-  it("tandem_getAnnotations returns only notes when type: note is requested", async () => {
-    const ydoc = setupDoc("mcp-ann-notes-2", "Hello world test content");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-
-    // Seed a comment via MCP tool
-    await client.callTool({
-      name: "tandem_comment",
-      arguments: { from: 0, to: 5, text: "A comment" },
-    });
-
-    // Seed a note directly into Y.Map
-    const note: Annotation = {
-      id: "ann_test_note_2",
-      author: "user",
-      type: "note",
-      range: { from: 6, to: 11 },
-      content: "A private note",
-      status: "pending",
-      timestamp: Date.now(),
-      rev: 1,
-    };
-    ydoc.transact(() => map.set(note.id, note), MCP_ORIGIN);
-
+  it("tandem_getAnnotations rejects type: note (ADR-027 privacy)", async () => {
+    setupDoc("mcp-ann-notes-2", "Hello world test content");
     const result = await client.callTool({
       name: "tandem_getAnnotations",
       arguments: { type: "note" },
     });
-    const parsed = parseResult(result);
-    expect(parsed.error).toBe(false);
-    // Only the note is returned
-    expect(parsed.data.count).toBe(1);
-    expect(parsed.data.annotations[0].type).toBe("note");
-    // notesExcluded should not be present (or be 0) when notes are explicitly requested
-    expect(parsed.data.notesExcluded ?? 0).toBe(0);
+    expect(result.isError).toBe(true);
   });
 
   it("tandem_getAnnotations surfaces imported Word comments by default (#482)", async () => {

@@ -51,10 +51,10 @@ export function makeAnnotationsObserver(deps: {
           },
         });
       } else if (change.action === "update" && ann.author === "user" && ann.type === "comment") {
-        // Note promoted to comment via "Send to Claude" — surface it to the channel
-        // so real-time subscribers see it as a new comment event.
         const oldRaw = change.oldValue as Annotation | undefined;
         if (oldRaw?.type === "note") {
+          // Note promoted to comment via "Send to Claude" — surface it to the channel
+          // so real-time subscribers see it as a new comment event.
           pushEvent({
             id: generateEventId(),
             type: "annotation:created",
@@ -67,6 +67,24 @@ export function makeAnnotationsObserver(deps: {
               textSnippet: ann.textSnapshot ?? "",
             },
           });
+        } else {
+          // Comment edited by user — surface edit to channel if editedAt advanced.
+          const newEditedAt = ann.editedAt ?? 0;
+          const oldEditedAt = (oldRaw as Annotation | undefined)?.editedAt ?? 0;
+          if (newEditedAt > oldEditedAt) {
+            pushEvent({
+              id: generateEventId(),
+              type: "annotation:edited",
+              timestamp: Date.now(),
+              documentId: docName,
+              payload: {
+                annotationId: ann.id,
+                content: ann.content,
+                textSnippet: ann.textSnapshot ?? "",
+                editedAt: newEditedAt,
+              },
+            });
+          }
         }
       } else if (change.action === "update" && ann.author === "claude") {
         if (ann.status === "accepted") {
