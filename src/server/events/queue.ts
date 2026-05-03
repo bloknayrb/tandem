@@ -49,6 +49,8 @@ function getTrackableId(event: TandemEvent): string | undefined {
     case "annotation:accepted":
     case "annotation:dismissed":
       return event.payload.annotationId;
+    case "annotation:edited":
+      return `edited:${event.payload.annotationId}:${event.payload.editedAt}`;
     case "annotation:reply":
       return event.payload.replyId;
     case "chat:message":

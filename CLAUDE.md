@@ -50,7 +50,7 @@ Key files for navigation:
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
-- `src/client/` -- Tiptap editor, Svelte 5 components, utility modules (former React hooks stripped to pure exports), types (`types.ts`)
+- `src/client/` -- Tiptap editor, Svelte 5 components, `.svelte.ts` rune-based hooks, types (`types.ts`)
 - `src/shared/` -- Types (`types.ts`), constants (`constants.ts`), offsets (`offsets.ts`), position types (`positions/`)
 
 Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
@@ -64,6 +64,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Communication: `tandem_checkInbox` (poll for user actions + chat) and `tandem_reply` (Claude's chat responses). **Call `tandem_checkInbox` between tasks.** `tandem_status` and `tandem_checkInbox` return `mode: "solo" | "tandem"` — adapt behavior accordingly (in Solo mode, hold annotations)
 - Solo/Tandem mode is stored in CTRL_ROOM's `Y_MAP_USER_AWARENESS` map under the `Y_MAP_MODE` key, not per-document. Mode changes broadcast to all open documents
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
+- ADR-027: notes are user-private; Claude never reads them via MCP tools or channel events
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`. `openFileByPath` accepts an optional `readOnly` flag to force read-only mode (used by the View Changelog button)
 - Three layout modes: `tabbed` (panel right, default), `tabbed-left` (panel left), `three-panel` (annotations left, chat right). Layout state persists in `tandem:settings` localStorage key. `App.svelte` uses inline `{#snippet}` blocks for `ResizeHandle` and `TabbedPanelContainer` across layout arms
 
@@ -135,7 +136,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save.
 
 ## Security
-- Server binds to 127.0.0.1 only
+- Server binds to 127.0.0.1 by default. LAN binding (`TANDEM_BIND_HOST`) requires an auth token; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is an explicit insecure opt-in for development only
 - DNS rebinding protection on all routes (`apiMiddleware` Host-header validation + `createMcpExpressApp`)
 - CORS reflects `http://localhost:*` origins. Rejects UNC paths (Windows NTLM). Extension + 50MB size limits. Atomic saves
 

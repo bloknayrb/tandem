@@ -100,7 +100,7 @@ describe("processInboxAnnotations", () => {
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
-    const surfaced = new Set<string>();
+    const surfaced = new Map<string, number>();
 
     const result = processInboxAnnotations(allAnns, fullText, surfaced, (ann) => ann);
     // Only comments are surfaced; highlights and notes are excluded
@@ -121,7 +121,7 @@ describe("processInboxAnnotations", () => {
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
-    const surfaced = new Set<string>();
+    const surfaced = new Map<string, number>();
 
     const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
     expect(result.userResponses).toHaveLength(1);
@@ -135,7 +135,7 @@ describe("processInboxAnnotations", () => {
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
-    const surfaced = new Set<string>();
+    const surfaced = new Map<string, number>();
 
     const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
     expect(result.userActions).toHaveLength(0);
@@ -149,7 +149,7 @@ describe("processInboxAnnotations", () => {
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
-    const surfaced = new Set<string>();
+    const surfaced = new Map<string, number>();
 
     const first = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
     expect(first.userActions).toHaveLength(1);
@@ -165,7 +165,7 @@ describe("processInboxAnnotations", () => {
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
-    const surfaced = new Set<string>();
+    const surfaced = new Map<string, number>();
 
     let refreshCalled = 0;
     processInboxAnnotations(allAnns, fullText, surfaced, (ann) => {
@@ -182,7 +182,7 @@ describe("processInboxAnnotations", () => {
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
-    const surfaced = new Set<string>();
+    const surfaced = new Map<string, number>();
 
     const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
     expect(result.userActions[0].textSnippet).toBe("quick");

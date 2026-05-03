@@ -4,9 +4,14 @@ import {
   CTRL_ROOM,
   DEFAULT_MCP_PORT,
   DEFAULT_WS_PORT,
+  Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
+  Y_MAP_CLAUDE,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_GENERATION_ID,
+  Y_MAP_OPEN_DOCUMENTS,
+  Y_MAP_READ_ONLY,
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
@@ -108,7 +113,7 @@ export function createYjsSync(): YjsSyncState {
     let prevStatus: string | null = null;
     let prevActive = false;
     const awarenessObserver = () => {
-      const claude = awarenessMap.get("claude") as
+      const claude = awarenessMap.get(Y_MAP_CLAUDE) as
         | { status: string; timestamp: number; active: boolean }
         | undefined;
       const newStatus = claude?.status ?? null;
@@ -129,15 +134,15 @@ export function createYjsSync(): YjsSyncState {
     let prevReadOnly = false;
     const documentMetaObserver = (event: Y.YMapEvent<unknown>) => {
       // keysChanged guard #1 (preserves original line 128)
-      if (!event.keysChanged.has("readOnly")) return;
-      const ro = (documentMetaMap.get("readOnly") as boolean | undefined) === true;
+      if (!event.keysChanged.has(Y_MAP_READ_ONLY)) return;
+      const ro = (documentMetaMap.get(Y_MAP_READ_ONLY) as boolean | undefined) === true;
       if (ro !== prevReadOnly) {
         prevReadOnly = ro;
         readOnly = ro;
       }
     };
     documentMetaMap.observe(documentMetaObserver);
-    const initRo = (documentMetaMap.get("readOnly") as boolean | undefined) === true;
+    const initRo = (documentMetaMap.get(Y_MAP_READ_ONLY) as boolean | undefined) === true;
     if (initRo !== prevReadOnly) {
       prevReadOnly = initRo;
       readOnly = initRo;
@@ -191,10 +196,13 @@ export function createYjsSync(): YjsSyncState {
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
       const metaObserver = (event: Y.YMapEvent<unknown>) => {
         // keysChanged guards #2 + #3 (preserves original line 183)
-        if (!event.keysChanged.has("openDocuments") && !event.keysChanged.has("activeDocumentId"))
+        if (
+          !event.keysChanged.has(Y_MAP_OPEN_DOCUMENTS) &&
+          !event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)
+        )
           return;
-        const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
-        const active = meta.get("activeDocumentId") as string | null | undefined;
+        const docs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
+        const active = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
         if (docs) handleDocumentList(docs, active ?? null);
       };
       meta.observe(metaObserver);
@@ -276,8 +284,8 @@ export function createYjsSync(): YjsSyncState {
     const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
     const bootstrapObserver = (event: Y.YMapEvent<unknown>) => {
       // keysChanged guard #4 (preserves original line 275)
-      if (event.keysChanged.has("generationId")) {
-        const newGenId = meta.get("generationId") as string | undefined;
+      if (event.keysChanged.has(Y_MAP_GENERATION_ID)) {
+        const newGenId = meta.get(Y_MAP_GENERATION_ID) as string | undefined;
         if (newGenId && generationId && newGenId !== generationId) {
           console.warn("[Tandem] Server restarted — refreshing documents");
           serverRestarted = true;
@@ -290,19 +298,22 @@ export function createYjsSync(): YjsSyncState {
       }
 
       // keysChanged guard #5 (preserves original line 286)
-      if (event.keysChanged.has("openDocuments") || event.keysChanged.has("activeDocumentId")) {
-        const docs = meta.get("openDocuments") as DocListEntry[] | undefined;
-        const active = meta.get("activeDocumentId") as string | null | undefined;
+      if (
+        event.keysChanged.has(Y_MAP_OPEN_DOCUMENTS) ||
+        event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)
+      ) {
+        const docs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
+        const active = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
         if (docs) handleDocumentList(docs, active ?? null);
       }
     };
     meta.observe(bootstrapObserver);
 
     // Initial read — process state that synced before observer was wired
-    const initGenId = meta.get("generationId") as string | undefined;
+    const initGenId = meta.get(Y_MAP_GENERATION_ID) as string | undefined;
     if (initGenId) generationId = initGenId;
-    const initDocs = meta.get("openDocuments") as DocListEntry[] | undefined;
-    const initActive = meta.get("activeDocumentId") as string | null | undefined;
+    const initDocs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
+    const initActive = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
     if (initDocs) handleDocumentList(initDocs, initActive ?? null);
 
     // Stash bootstrap cleanup for destroy()

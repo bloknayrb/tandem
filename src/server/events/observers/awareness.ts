@@ -5,6 +5,7 @@ import {
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
   Y_MAP_DWELL_MS,
+  Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../../shared/constants.js";
 import type { FlatOffset } from "../../../shared/types.js";
@@ -52,8 +53,8 @@ export function makeAwarenessObserver(deps: {
   const awarenessObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
     if (txn.origin === MCP_ORIGIN) return;
 
-    if (event.keysChanged.has("selection")) {
-      const selection = userAwareness.get("selection") as
+    if (event.keysChanged.has(Y_MAP_SELECTION)) {
+      const selection = userAwareness.get(Y_MAP_SELECTION) as
         | { from: FlatOffset; to: FlatOffset; selectedText?: string }
         | undefined;
 

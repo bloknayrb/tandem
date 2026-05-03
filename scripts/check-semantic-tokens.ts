@@ -27,7 +27,7 @@ function isNeutralRgba(line: string, matchIndex: number): boolean {
 function collectFiles(dir: string): string[] {
   const entries = readdirSync(dir, { recursive: true, withFileTypes: true });
   return entries
-    .filter((e) => e.isFile() && /\.[tj]sx?$/.test(e.name))
+    .filter((e) => e.isFile() && /\.[tj]sx?$|\.svelte$/.test(e.name))
     .map((e) => toSlash(join(e.parentPath, e.name)));
 }
 
@@ -38,7 +38,11 @@ function checkFile(filePath: string): string[] {
   if (filePath === SKIP_FILE_NORM) return violations;
   if (/\.(test|spec)\.[tj]sx?$/.test(filePath)) return violations;
 
-  const lines = readFileSync(filePath, "utf-8").split("\n");
+  let content = readFileSync(filePath, "utf-8");
+  if (filePath.endsWith(".svelte")) {
+    content = content.replace(/<style[\s\S]*?<\/style>/g, "");
+  }
+  const lines = content.split("\n");
   let inBlockComment = false;
 
   for (let i = 0; i < lines.length; i++) {

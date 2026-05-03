@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
-import { CTRL_ROOM, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ACTIVE_DOCUMENT_ID,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_GENERATION_ID,
+  Y_MAP_OPEN_DOCUMENTS,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../shared/constants.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { closeStore } from "../annotations/store.js";
 import { clearFileSyncContext, MCP_ORIGIN } from "../events/queue.js";
@@ -243,8 +250,8 @@ export function broadcastOpenDocs(): void {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     ctrl.transact(() => {
-      ctrlMeta.set("openDocuments", docList);
-      ctrlMeta.set("activeDocumentId", id);
+      ctrlMeta.set(Y_MAP_OPEN_DOCUMENTS, docList);
+      ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
     }, MCP_ORIGIN);
   } catch (err) {
     console.error("[Tandem] broadcastOpenDocs: failed to update CTRL_ROOM:", err);
@@ -256,8 +263,8 @@ export function broadcastOpenDocs(): void {
       const ydoc = getOrCreateDocument(docId);
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
       ydoc.transact(() => {
-        meta.set("openDocuments", docList);
-        meta.set("activeDocumentId", id);
+        meta.set(Y_MAP_OPEN_DOCUMENTS, docList);
+        meta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
       }, MCP_ORIGIN);
     } catch (err) {
       console.error(`[Tandem] broadcastOpenDocs: failed to update doc ${docId}:`, err);
@@ -347,13 +354,13 @@ export async function restoreCtrlSession(): Promise<string | null> {
 
   // Read the previous active doc before clearing stale tracking
   const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-  const previousActiveDocId = (meta.get("activeDocumentId") as string) ?? null;
+  const previousActiveDocId = (meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string) ?? null;
 
   // Clear stale document tracking — no docs are actually open after a restart.
   // Chat history is preserved; only the document list is wiped.
   ctrlDoc.transact(() => {
-    meta.delete("openDocuments");
-    meta.delete("activeDocumentId");
+    meta.delete(Y_MAP_OPEN_DOCUMENTS);
+    meta.delete(Y_MAP_ACTIVE_DOCUMENT_ID);
   }, MCP_ORIGIN);
 
   console.error("[Tandem] Restored chat history from session (cleared stale doc list)");
@@ -365,7 +372,7 @@ export function writeGenerationId(): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
   const generationId = randomUUID();
-  ctrlDoc.transact(() => meta.set("generationId", generationId), MCP_ORIGIN);
+  ctrlDoc.transact(() => meta.set(Y_MAP_GENERATION_ID, generationId), MCP_ORIGIN);
   console.error(`[Tandem] Server generationId: ${generationId}`);
 }
 

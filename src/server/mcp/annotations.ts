@@ -14,7 +14,6 @@ import type {
 import {
   AnnotationActionSchema,
   AnnotationStatusSchema,
-  AnnotationTypeSchema,
   AuthorSchema,
   ExportFormatSchema,
   HighlightColorSchema,
@@ -421,10 +420,10 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_getAnnotations",
-    'Read all annotations, optionally filtered by author/type/status. For checking new user actions, prefer tandem_checkInbox. User notes are private and excluded by default; pass `type: "note"` to read them. Imported Word reviewer comments surface as comments (`author: "import", type: "comment"`) by default — filter via `author: "import"` if you want to scope to them. The `notesExcluded` field in the response reports how many notes were filtered out.',
+    'Read all annotations, optionally filtered by author/type/status. User notes are always excluded — they are private to the user (ADR-027). For checking new user actions, prefer tandem_checkInbox. Imported Word reviewer comments surface as comments (`author: "import", type: "comment"`) by default — filter via `author: "import"` if you want to scope to them. The `notesExcluded` field in the response reports how many notes were filtered out.',
     {
       author: AuthorSchema.optional().describe("Filter by author"),
-      type: AnnotationTypeSchema.optional().describe("Filter by type"),
+      type: z.enum(["highlight", "comment"]).optional().describe("Filter by type"),
       status: AnnotationStatusSchema.optional().describe("Filter by status"),
       documentId: z
         .string()
@@ -440,12 +439,9 @@ export function registerAnnotationTools(server: McpServer): void {
       if (type) results = results.filter((a) => a.type === type);
       if (status) results = results.filter((a) => a.status === status);
 
-      // User notes are private — exclude them unless explicitly requested.
-      const notesIncluded = type === "note";
-      const notesExcluded = notesIncluded ? 0 : results.filter((a) => a.type === "note").length;
-      if (!notesIncluded) {
-        results = results.filter((a) => a.type !== "note");
-      }
+      // User notes are always excluded — they are private (ADR-027).
+      const notesExcluded = results.filter((a) => a.type === "note").length;
+      results = results.filter((a) => a.type !== "note");
 
       const repliesMap = getRepliesMap(da.ydoc);
       const annotationsWithReplies = results.map((ann) => ({
@@ -587,13 +583,15 @@ export function registerAnnotationTools(server: McpServer): void {
       if (!da) return noDocumentError();
 
       const annotations = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
+      // Notes are user-private (ADR-027) — exclude from exports.
+      const exportable = annotations.filter((a) => a.type !== "note");
       const { ydoc } = da;
 
       const repliesMap = getRepliesMap(ydoc);
 
       if (format === "json") {
         const fullText = extractText(ydoc);
-        const enriched = annotations.map((ann) => ({
+        const enriched = exportable.map((ann) => ({
           ...ann,
           replies: collectRepliesForAnnotation(repliesMap, ann.id),
           textSnippet: fullText.slice(
@@ -604,8 +602,8 @@ export function registerAnnotationTools(server: McpServer): void {
         return mcpSuccess({ annotations: enriched, count: enriched.length });
       }
 
-      const markdown = exportAnnotations(ydoc, annotations);
-      return mcpSuccess({ markdown, count: annotations.length });
+      const markdown = exportAnnotations(ydoc, exportable);
+      return mcpSuccess({ markdown, count: exportable.length });
     }),
   );
 

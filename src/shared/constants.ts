@@ -76,6 +76,16 @@ export const Y_MAP_DOCUMENT_META = "documentMeta";
 export const Y_MAP_ANNOTATION_REPLIES = "annotationReplies";
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";
 export const Y_MAP_AUTHORSHIP = "authorship";
+// Y.Map sub-keys: userAwareness
+export const Y_MAP_SELECTION = "selection";
+export const Y_MAP_ACTIVITY = "activity";
+// Y.Map sub-keys: awareness (Claude focus)
+export const Y_MAP_CLAUDE = "claude";
+// Y.Map sub-keys: documentMeta
+export const Y_MAP_OPEN_DOCUMENTS = "openDocuments";
+export const Y_MAP_ACTIVE_DOCUMENT_ID = "activeDocumentId";
+export const Y_MAP_GENERATION_ID = "generationId";
+export const Y_MAP_READ_ONLY = "readOnly";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 
