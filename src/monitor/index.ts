@@ -20,11 +20,10 @@
 
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { authFetch } from "../shared/cli-runtime.js";
+import { authFetch, resolveTandemUrl } from "../shared/cli-runtime.js";
 import {
   CHANNEL_MAX_RETRIES,
   CHANNEL_RETRY_DELAY_MS,
-  DEFAULT_MCP_PORT,
   TANDEM_MODE_DEFAULT,
 } from "../shared/constants.js";
 import type { TandemEvent } from "../shared/events/types.js";
@@ -40,7 +39,7 @@ if (!IS_VITEST) {
   console.info = console.error;
 }
 
-const TANDEM_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
+const TANDEM_URL = resolveTandemUrl();
 const AWARENESS_DEBOUNCE_MS = 500;
 const AWARENESS_CLEAR_MS = 3000;
 const MODE_CACHE_TTL_MS = 2000;

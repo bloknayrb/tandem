@@ -18,14 +18,31 @@ export function redirectConsoleToStderr(): void {
 }
 
 /**
- * Resolve the Tandem HTTP base URL used by stdio subcommands. Precedence is
- * (1) explicit override, (2) `TANDEM_URL` env var, (3) the default port on
- * localhost. The returned string has no trailing slash so callers can
- * concatenate `/health`, `/mcp`, etc. without double-slash.
+ * Resolve the Tandem HTTP base URL used by stdio subcommands. Precedence:
+ * (1) explicit override (programmatic, e.g. from tests)
+ * (2) CLAUDE_PLUGIN_OPTION_SERVER_URL — injected by plugin host from userConfig
+ * (3) TANDEM_URL — explicit env override
+ * (4) localhost default
+ * The returned string has no trailing slash so callers can concatenate
+ * `/health`, `/mcp`, etc. without double-slash.
  */
 export function resolveTandemUrl(override?: string): string {
-  const raw = override ?? process.env.TANDEM_URL ?? `http://localhost:${DEFAULT_MCP_PORT}`;
+  const raw =
+    override ??
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL ??
+    process.env.TANDEM_URL ??
+    `http://localhost:${DEFAULT_MCP_PORT}`;
   return raw.replace(/\/$/, "");
+}
+
+/**
+ * Resolve the Tandem auth token. Precedence:
+ * (1) explicit override (e.g. CLAUDE_PLUGIN_OPTION_AUTH_TOKEN from plugin userConfig)
+ * (2) TANDEM_AUTH_TOKEN env var
+ * (3) undefined — loopback mode, no Authorization header sent
+ */
+export function resolveAuthToken(override?: string): string | undefined {
+  return override ?? process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN ?? process.env.TANDEM_AUTH_TOKEN;
 }
 
 /** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
@@ -45,7 +62,7 @@ let _warnedInvalidToken = false;
  * so operators know why auth headers are absent.
  */
 export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
-  const token = process.env.TANDEM_AUTH_TOKEN;
+  const token = resolveAuthToken();
   if (token !== undefined && token.trim() !== "") {
     if (VALID_TOKEN_RE.test(token.trim())) {
       const headers = new Headers(init?.headers);

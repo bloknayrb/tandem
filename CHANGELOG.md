@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+## \[0.10.1] - Unreleased
+
+Plugin URL and auth resolution for custom-port and network-remote setups.
+
+### Changed
+
+- **Monitor and channel honor `CLAUDE_PLUGIN_OPTION_SERVER_URL`** — `resolveTandemUrl()` now checks the `CLAUDE_PLUGIN_OPTION_SERVER_URL` environment variable (exported by Claude Code's plugin host from `plugin.json` `userConfig`) before falling back to `TANDEM_URL` and the localhost default. Both the monitor (`src/monitor/index.ts`) and channel shim (`src/channel/run.ts`) benefit automatically. No change for existing installs that don't use `userConfig`.
+- **Monitor and channel honor `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`** — new `resolveAuthToken()` function in `src/shared/cli-runtime.ts` mirrors `resolveTandemUrl()`. Precedence: `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` → `TANDEM_AUTH_TOKEN`. `authFetch` uses it automatically, so all stdio subcommands gain the new lookup without caller changes.
+
 ## \[0.10.0] - 2026-05-03
 
 Complete React → Svelte 5 migration. All 39 client `.tsx` files have been replaced with Svelte 5 rune-based equivalents; `react`, `react-dom`, and `@tiptap/react` are no longer in the bundle. Includes a review-mode correctness fix, accessibility improvements, and follow-on Codex security hardening.
