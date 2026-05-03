@@ -34,6 +34,7 @@ import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
+import { isReviewTarget } from "../shared/types";
 import {
   getRightWidth,
   loadPanelWidth,
@@ -138,7 +139,10 @@ let reviewMode = $state(false);
 let showChat = $state(settingsState.settings.primaryTab === "chat");
 
 const pendingAnnotationBadge = $derived(
-  !showChat ? 0 : modeGate.visibleAnnotations.filter((a) => a.status === "pending").length,
+  !showChat
+    ? 0
+    : modeGate.visibleAnnotations.filter((a) => a.status === "pending" && isReviewTarget(a))
+        .length,
 );
 
 let activeAnnotationId = $state<string | null>(null);

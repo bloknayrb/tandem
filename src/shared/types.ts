@@ -119,6 +119,15 @@ export type Annotation =
     });
 
 /**
+ * Returns true for annotations that should be reviewed (accepted/dismissed).
+ * User-authored notes are personal and never review targets.
+ * Import-authored (.docx Word comments) ARE review targets — the primary docx use case.
+ */
+export function isReviewTarget(a: Annotation): boolean {
+  return a.author !== "user";
+}
+
+/**
  * Authorship tracking range stored in Y.Map('authorship').
  * Uses the same flat-offset coordinate system as annotations.
  * RelativePositions anchor the range to survive concurrent edits.
