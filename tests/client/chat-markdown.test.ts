@@ -25,4 +25,22 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain("<img");
     expect(html).not.toContain('onerror="alert(1)"');
   });
+
+  it("renders fenced code blocks without mangling by the inline-code pass", () => {
+    const html = renderMarkdown("```ts\nconst x = `hello`;\n```");
+
+    expect(html).toContain("<pre><code");
+    expect(html).toContain("const x = `hello`;");
+    // The backtick inside the block must not be wrapped in <code>
+    expect(html).not.toMatch(/<code>[^<]*`hello`[^<]*<\/code>/);
+  });
+
+  it("renders markdown links as anchor tags", () => {
+    const html = renderMarkdown("[docs](https://example.com)");
+
+    expect(html).toContain('<a href="https://example.com"');
+    expect(html).toContain("docs</a>");
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
 });

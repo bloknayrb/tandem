@@ -50,6 +50,24 @@ export function makeAnnotationsObserver(deps: {
             ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
           },
         });
+      } else if (change.action === "update" && ann.author === "user" && ann.type === "comment") {
+        // Note promoted to comment via "Send to Claude" — surface it to the channel
+        // so real-time subscribers see it as a new comment event.
+        const oldRaw = change.oldValue as Annotation | undefined;
+        if (oldRaw?.type === "note") {
+          pushEvent({
+            id: generateEventId(),
+            type: "annotation:created",
+            timestamp: Date.now(),
+            documentId: docName,
+            payload: {
+              annotationId: ann.id,
+              annotationType: ann.type,
+              content: ann.content,
+              textSnippet: ann.textSnapshot ?? "",
+            },
+          });
+        }
       } else if (change.action === "update" && ann.author === "claude") {
         if (ann.status === "accepted") {
           pushEvent({
