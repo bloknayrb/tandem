@@ -37,9 +37,10 @@ export function resolveTandemUrl(override?: string): string {
 
 /**
  * Resolve the Tandem auth token. Precedence:
- * (1) explicit override (e.g. CLAUDE_PLUGIN_OPTION_AUTH_TOKEN from plugin userConfig)
- * (2) TANDEM_AUTH_TOKEN env var
- * (3) undefined — loopback mode, no Authorization header sent
+ * (1) explicit override (programmatic, e.g. from tests)
+ * (2) CLAUDE_PLUGIN_OPTION_AUTH_TOKEN — injected by plugin host from userConfig
+ * (3) TANDEM_AUTH_TOKEN — explicit env override
+ * Returns undefined when all absent (loopback mode, no Authorization header sent).
  */
 export function resolveAuthToken(override?: string): string | undefined {
   return override ?? process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN ?? process.env.TANDEM_AUTH_TOKEN;
