@@ -40,12 +40,14 @@ $effect(() => {
 <div role="group" style="margin-top: 4px;" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
   {#if hasSuggestedText}
     <label
+      for="edit-newtext-{annotationId}"
       style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-bottom: 2px;"
     >
       Replacement text
     </label>
     <textarea
       bind:this={primaryTextareaEl}
+      id="edit-newtext-{annotationId}"
       data-testid="edit-newtext-{annotationId}"
       value={editNewText}
       oninput={(e) => onChangeEditNewText((e.target as HTMLTextAreaElement).value)}
@@ -53,11 +55,13 @@ $effect(() => {
       style={TEXTAREA_STYLE}
     ></textarea>
     <label
+      for="edit-reason-{annotationId}"
       style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-top: 4px; margin-bottom: 2px;"
     >
       Reason
     </label>
     <textarea
+      id="edit-reason-{annotationId}"
       data-testid="edit-reason-{annotationId}"
       value={editReason}
       oninput={(e) => onChangeEditReason((e.target as HTMLTextAreaElement).value)}
