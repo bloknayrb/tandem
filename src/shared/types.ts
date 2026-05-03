@@ -127,6 +127,11 @@ export function isReviewTarget(a: Annotation): boolean {
   return a.author !== "user";
 }
 
+/** Convenience: pending status AND a review target — used at bulk-action and keyboard-nav callsites. */
+export function isPendingReviewTarget(a: Annotation): boolean {
+  return a.status === "pending" && isReviewTarget(a);
+}
+
 /**
  * Authorship tracking range stored in Y.Map('authorship').
  * Uses the same flat-offset coordinate system as annotations.

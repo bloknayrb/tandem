@@ -4,7 +4,7 @@ import { untrack } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import { isReviewTarget } from "../../shared/types";
+import { isPendingReviewTarget, isReviewTarget } from "../../shared/types";
 import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
 import { warningStateColors } from "../utils/colors";
@@ -125,11 +125,9 @@ const filteredData = $derived.by(() => {
     if (matchType && matchAuthor && matchStatus) filtered.push(a);
   }
 
-  const pending = filtered.filter((a) => a.status === "pending" && isReviewTarget(a));
+  const pending = filtered.filter(isPendingReviewTarget);
   const resolved = filtered.filter((a) => a.status !== "pending");
-  const reviewAllPending = annotations.filter(
-    (a) => a.status === "pending" && isReviewTarget(a),
-  );
+  const reviewAllPending = annotations.filter(isPendingReviewTarget);
 
   return { filtered, pending, resolved, allPending, reviewAllPending };
 });
