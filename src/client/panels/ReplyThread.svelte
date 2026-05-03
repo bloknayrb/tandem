@@ -16,8 +16,13 @@ let { annotationId, replies, isPending, isEditing, onReply }: Props = $props();
 let isReplying = $state(false);
 let replyText = $state("");
 let isSendingReply = $state(false);
+let replyTextareaEl: HTMLTextAreaElement | null = $state(null);
 
 const hasText = $derived(Boolean(replyText.trim()));
+
+$effect(() => {
+  if (isReplying) replyTextareaEl?.focus();
+});
 
 function handleReplyKeyDown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -51,13 +56,13 @@ async function handleSendReply() {
     {#if isReplying}
       <div>
         <textarea
+          bind:this={replyTextareaEl}
           data-testid="reply-input-{annotationId}"
           value={replyText}
           oninput={(e) => (replyText = (e.target as HTMLTextAreaElement).value)}
           onkeydown={handleReplyKeyDown}
           placeholder="Write a reply..."
           style={TEXTAREA_STYLE}
-          autofocus
         ></textarea>
         <div style="display: flex; gap: 6px; margin-top: 4px;">
           <button

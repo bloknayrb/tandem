@@ -28,6 +28,12 @@ let {
   onSave,
   onCancel,
 }: Props = $props();
+
+let primaryTextareaEl: HTMLTextAreaElement | null = $state(null);
+
+$effect(() => {
+  primaryTextareaEl?.focus();
+});
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -39,12 +45,12 @@ let {
       Replacement text
     </label>
     <textarea
+      bind:this={primaryTextareaEl}
       data-testid="edit-newtext-{annotationId}"
       value={editNewText}
       oninput={(e) => onChangeEditNewText((e.target as HTMLTextAreaElement).value)}
       onkeydown={onKeyDown}
       style={TEXTAREA_STYLE}
-      autofocus
     ></textarea>
     <label
       style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-top: 4px; margin-bottom: 2px;"
@@ -60,12 +66,12 @@ let {
     ></textarea>
   {:else}
     <textarea
+      bind:this={primaryTextareaEl}
       data-testid="edit-text-{annotationId}"
       value={editText}
       oninput={(e) => onChangeEditText((e.target as HTMLTextAreaElement).value)}
       onkeydown={onKeyDown}
       style={TEXTAREA_STYLE}
-      autofocus
     ></textarea>
   {/if}
   <div style="display: flex; gap: 6px; margin-top: 4px;">
