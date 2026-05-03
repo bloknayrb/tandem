@@ -7,12 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
-### Fixed
+## \[0.10.0] - 2026-05-03
 
-- Review mode, bulk actions, and completion summary now correctly exclude user-authored notes from review targets. "Accept All" count, keyboard navigation, and the "Review Complete" overlay no longer include user notes (which are private and not for Claude). .docx imported comments remain review targets.
+Complete React → Svelte 5 migration. All 39 client `.tsx` files have been replaced with Svelte 5 rune-based equivalents; `react`, `react-dom`, and `@tiptap/react` are no longer in the bundle. Includes a review-mode correctness fix, accessibility improvements, and follow-on Codex security hardening.
+
+### Removed
+
+- **`react`, `react-dom`, `@tiptap/react` dropped (#472, #508)** — the React adapter layer is gone. The editor integrates directly with `@tiptap/core` via Svelte 5 components. Bundle size and startup time both decrease.
+- **`tandem_suggest`, `tandem_flag`, `tandem_highlight` hard-removed** — stub tools deprecated in v0.9.0 (ADR-027) are now fully removed. MCP tool count: 28 → 25.
 
 ### Changed
-- Improved accessibility across editor panels: dialog backdrops and close buttons now have correct ARIA roles, radiogroup containers are focusable, form labels are associated with their controls, autofocus inputs use programmatic focus via `$effect`, and the annotation card keyboard interaction is explicit.
+
+- **React → Svelte 5 migration (#472, #508)** — all client components rewritten with Svelte 5 runes (`$state`, `$derived`, `$effect`). Component APIs, data-testid selectors, and observable behavior are unchanged; only the rendering layer is new.
+- **Note annotation actions** — note cards in the side panel now show **Archive** and **Send to Claude** instead of Remove. "Send to Claude" promotes the note to a comment and fires an `annotation:created` channel event so Claude is notified immediately.
+
+### Fixed
+
+- **Review mode incorrectly treated private notes as review targets (#512, #523)** — Tab/Y/N keyboard navigation, "Accept All" / "Dismiss All" bulk actions, the "Review Complete" overlay trigger, tally counts, and the chat tab badge now all exclude `type: "note"` annotations. Notes remain visible as cards in the side panel. Word-imported comments (`author: "import"`) continue to be review targets.
+- **Note privacy — `tandem_getAnnotations` and channel events never surface notes to Claude** — `type: "note"` entries are filtered from MCP tool responses and SSE channel events (Codex security review).
+- **Y.Map key strings enforced via constants** — raw string literals for Y.Map keys eliminated across the codebase; all access goes through `Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, etc. from `shared/constants.ts` (Codex security review).
+- **Chat message XSS hardening** — link rendering in the chat panel now enforces a protocol allowlist (`https:`, `http:`, `mailto:`), blocking `javascript:` and other unsafe schemes (Codex security review).
+- **`annotation:edited` channel event deduplication** — rapid successive edits no longer emit duplicate events to the channel (Codex security review).
+- **`svelte-check --fail-on-warnings` now gates the build** — 26 pre-existing Svelte type warnings cleared; CI enforces zero-warning policy going forward.
+
+### Added
+
+- **Keyboard-accessible panel resize handles (#511, #524)** — Arrow keys resize by ±16 px, Page Up/Down by ±80 px, Home/End snap to the minimum/maximum width. `aria-valuenow` reflects the live panel width.
+- **ARIA dialog focus management (#511, #524)** — HelpModal and ReviewSummary now trap Tab focus, restore focus on close, and close on Escape. Backdrops carry `role="presentation"`; dialog containers carry `role="dialog" aria-modal="true" tabindex="-1"`.
+- **Form label associations (#511, #524)** — AnnotationEditForm inputs are now properly associated with their `<label>` elements.
+- **AnnotationCard role corrected (#511, #524)** — changed from `role="button"` (nested-button violation) to `role="listitem"`.
 
 ## \[0.9.1] - 2026-05-01
 
