@@ -45,7 +45,7 @@ $effect(() => {
 let showReconnectedFlash = $state(false);
 let elapsedSeconds = $state(0);
 // intentional snapshot — updated inside $effect to detect rising-edge reconnect
-let prevConnected = $state(untrack(() => connected));
+let prevConnected = untrack(() => connected);
 
 $effect(() => {
   const was = prevConnected;
