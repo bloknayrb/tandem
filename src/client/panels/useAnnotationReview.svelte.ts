@@ -5,6 +5,7 @@ import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
+import { isPendingReviewTarget } from "../../shared/types";
 import { annotationToPmRange } from "../positions";
 
 /** Browser DevTools breadcrumb — only forensic trail client-side when sanitize coerces. */
@@ -101,9 +102,8 @@ export function useAnnotationReview({
     pendingRemovalTimers.clear();
   });
 
-  // Derived: review targets — pending only
   function getReviewTargets(): Annotation[] {
-    return getAnnotations().filter((a) => a.status === "pending");
+    return getAnnotations().filter(isPendingReviewTarget);
   }
 
   function getActiveReviewAnn(): Annotation | null {

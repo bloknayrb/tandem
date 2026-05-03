@@ -5,6 +5,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
+import { isPendingReviewTarget } from "../../shared/types";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
 import { warningStateColors } from "../utils/colors";
 import { API_BASE } from "../utils/fileUpload";
@@ -125,9 +126,11 @@ const filteredData = $derived.by(() => {
   }
 
   const pending = filtered.filter((a) => a.status === "pending");
+  const reviewPending = filtered.filter(isPendingReviewTarget);
   const resolved = filtered.filter((a) => a.status !== "pending");
+  const reviewAllPending = annotations.filter(isPendingReviewTarget);
 
-  return { filtered, pending, resolved, allPending };
+  return { filtered, pending, reviewPending, resolved, allPending, reviewAllPending };
 });
 
 const hasFilters = $derived(
@@ -275,7 +278,7 @@ async function handleReply(annotationId: string, text: string): Promise<boolean>
 }
 
 function handleBulk(status: "accepted" | "dismissed") {
-  for (const ann of filteredData.pending) review.resolveAnnotation(ann.id, status);
+  for (const ann of filteredData.reviewPending) review.resolveAnnotation(ann.id, status);
   bulkConfirm = null;
 }
 </script>
@@ -389,8 +392,8 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Bulk actions -->
   <BulkActions
     {bulkConfirm}
-    pendingCount={filteredData.pending.length}
-    allPendingCount={filteredData.allPending.length}
+    pendingCount={filteredData.reviewPending.length}
+    allPendingCount={filteredData.reviewAllPending.length}
     bind:confirmRef={confirmBtnEl}
     onConfirmAccept={() => handleBulk("accepted")}
     onConfirmDismiss={() => handleBulk("dismissed")}

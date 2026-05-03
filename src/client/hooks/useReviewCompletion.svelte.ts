@@ -1,4 +1,5 @@
 import type { Annotation } from "../../shared/types.js";
+import { isReviewTarget } from "../../shared/types.js";
 
 export interface ReviewCompletionState {
   readonly pendingCount: number;
@@ -27,6 +28,7 @@ export function createReviewCompletion(getAnnotations: () => Annotation[]): Revi
     let acceptedCount = 0;
     let dismissedCount = 0;
     for (const a of annotations) {
+      if (!isReviewTarget(a)) continue;
       if (a.status === "pending") pendingCount++;
       else if (a.status === "accepted") acceptedCount++;
       else if (a.status === "dismissed") dismissedCount++;

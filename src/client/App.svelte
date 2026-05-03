@@ -5,6 +5,7 @@ import { PANEL_WIDTH_KEYS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
+import { isPendingReviewTarget } from "../shared/types";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
@@ -138,7 +139,7 @@ let reviewMode = $state(false);
 let showChat = $state(settingsState.settings.primaryTab === "chat");
 
 const pendingAnnotationBadge = $derived(
-  !showChat ? 0 : modeGate.visibleAnnotations.filter((a) => a.status === "pending").length,
+  !showChat ? 0 : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
 );
 
 let activeAnnotationId = $state<string | null>(null);

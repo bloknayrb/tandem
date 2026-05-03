@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+### Fixed
+
+- Review mode, bulk actions, and completion summary now correctly exclude user-authored notes from review targets. "Accept All" count, keyboard navigation, and the "Review Complete" overlay no longer include user notes (which are private and not for Claude). .docx imported comments remain review targets.
+
 ### Changed
 - Improved accessibility across editor panels: dialog backdrops and close buttons now have correct ARIA roles, radiogroup containers are focusable, form labels are associated with their controls, autofocus inputs use programmatic focus via `$effect`, and the annotation card keyboard interaction is explicit.
 
