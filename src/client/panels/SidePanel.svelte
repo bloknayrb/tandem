@@ -391,7 +391,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   <BulkActions
     {bulkConfirm}
     pendingCount={filteredData.pending.length}
-    allPendingCount={filteredData.allPending.length}
+    allPendingCount={filteredData.pending.length}
     bind:confirmRef={confirmBtnEl}
     onConfirmAccept={() => handleBulk("accepted")}
     onConfirmDismiss={() => handleBulk("dismissed")}
