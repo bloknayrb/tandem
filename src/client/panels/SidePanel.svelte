@@ -125,11 +125,12 @@ const filteredData = $derived.by(() => {
     if (matchType && matchAuthor && matchStatus) filtered.push(a);
   }
 
-  const pending = filtered.filter(isPendingReviewTarget);
+  const pending = filtered.filter((a) => a.status === "pending");
+  const reviewPending = filtered.filter(isPendingReviewTarget);
   const resolved = filtered.filter((a) => a.status !== "pending");
   const reviewAllPending = annotations.filter(isPendingReviewTarget);
 
-  return { filtered, pending, resolved, allPending, reviewAllPending };
+  return { filtered, pending, reviewPending, resolved, allPending, reviewAllPending };
 });
 
 const hasFilters = $derived(
@@ -277,7 +278,7 @@ async function handleReply(annotationId: string, text: string): Promise<boolean>
 }
 
 function handleBulk(status: "accepted" | "dismissed") {
-  for (const ann of filteredData.pending) review.resolveAnnotation(ann.id, status);
+  for (const ann of filteredData.reviewPending) review.resolveAnnotation(ann.id, status);
   bulkConfirm = null;
 }
 </script>
@@ -391,7 +392,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Bulk actions -->
   <BulkActions
     {bulkConfirm}
-    pendingCount={filteredData.pending.length}
+    pendingCount={filteredData.reviewPending.length}
     allPendingCount={filteredData.reviewAllPending.length}
     bind:confirmRef={confirmBtnEl}
     onConfirmAccept={() => handleBulk("accepted")}
