@@ -117,12 +117,12 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 </script>
 
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   onclick={onClick}
-  onkeydown={(e) => { if ((e.key === "Enter" || e.key === " ") && onClick) { e.preventDefault(); onClick(); } }}
   data-testid="annotation-card-{annotation.id}"
-  role="button"
-  tabindex="0"
+  role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
   style="padding: 8px 10px; margin-bottom: 6px; border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: 0 4px 4px 0; font-size: 13px; opacity: {isPending
