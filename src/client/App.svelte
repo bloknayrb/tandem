@@ -430,9 +430,12 @@ const tutorial = createTutorial(
 {#snippet resizeHandle(side: "left" | "right", onmousedown: (e: MouseEvent) => void, testId?: string)}
   <div
     data-testid={testId ?? `${side}-panel-resize-handle`}
-    role="separator"
+    role="slider"
     aria-orientation="vertical"
     aria-label={side === "left" ? "Resize left panel" : "Resize right panel"}
+    aria-valuenow={50}
+    aria-valuemin={0}
+    aria-valuemax={100}
     tabindex="0"
     {onmousedown}
     style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s;"
@@ -447,6 +450,8 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
+    role="region"
+    aria-label="Document editor"
     style={`flex: 1; overflow: auto; padding: 24px 48px; border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : ""}; transition: border-color 0.15s, background 0.15s;`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}

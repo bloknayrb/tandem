@@ -46,8 +46,8 @@ async function handleSendReply() {
 <CommentThread {replies} />
 
 {#if isPending && onReply && !isEditing}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div style="margin-top: 6px;" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div role="group" style="margin-top: 6px;" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
     {#if isReplying}
       <div>
         <textarea

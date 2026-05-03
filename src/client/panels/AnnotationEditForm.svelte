@@ -30,8 +30,8 @@ let {
 }: Props = $props();
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div style="margin-top: 4px;" onclick={(e) => e.stopPropagation()}>
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div role="group" style="margin-top: 4px;" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
   {#if hasSuggestedText}
     <label
       style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-bottom: 2px;"

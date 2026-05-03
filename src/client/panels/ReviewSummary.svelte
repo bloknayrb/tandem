@@ -12,15 +12,19 @@ const acceptRate = $derived(total > 0 ? Math.round((accepted / total) * 100) : 0
 const emoji = $derived(acceptRate >= 80 ? "✅" : acceptRate >= 50 ? "📋" : "🔍");
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div
+  role="presentation"
   style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4); z-index: 1000;"
   onclick={onDismiss}
 >
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
+    role="dialog"
+    aria-modal="true"
+    aria-label="Review Complete"
+    tabindex="-1"
     style="background: var(--tandem-surface); border-radius: 12px; padding: 32px 40px; max-width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); text-align: center;"
     onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
   >
     <div style="font-size: 48px; margin-bottom: 8px;">{emoji}</div>
     <h2 style="margin: 0 0 8px; font-size: 20px; font-weight: 600; color: var(--tandem-fg);">

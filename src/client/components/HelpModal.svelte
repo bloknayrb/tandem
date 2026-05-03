@@ -69,16 +69,20 @@ $effect(() => {
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
+    role="presentation"
     style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000;"
     onclick={onClose}
     data-testid="help-modal"
   >
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard Shortcuts"
+      tabindex="-1"
       style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <div
         style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;"
