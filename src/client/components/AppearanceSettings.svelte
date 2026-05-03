@@ -91,6 +91,7 @@ const textSizeRg = createRadioGroup<TextSize>(
   <div
     role="radiogroup"
     aria-labelledby="settings-theme-label"
+    tabindex="0"
     onkeydown={themeRg.handleKeyDown}
     style="display: flex; gap: 8px;"
   >
@@ -115,6 +116,7 @@ const textSizeRg = createRadioGroup<TextSize>(
   <div
     role="radiogroup"
     aria-labelledby="settings-layout-label"
+    tabindex="0"
     onkeydown={layoutRg.handleKeyDown}
     style="display: flex; gap: 8px; flex-wrap: wrap;"
   >
@@ -149,6 +151,7 @@ const textSizeRg = createRadioGroup<TextSize>(
     <div
       role="radiogroup"
       aria-labelledby="settings-default-tab-label"
+      tabindex="0"
       onkeydown={primaryTabRg.handleKeyDown}
       style="display: flex; gap: 8px;"
     >
@@ -183,6 +186,7 @@ const textSizeRg = createRadioGroup<TextSize>(
     <div
       role="radiogroup"
       aria-labelledby="settings-panel-order-label"
+      tabindex="0"
       onkeydown={panelOrderRg.handleKeyDown}
       style="display: flex; gap: 8px;"
     >
@@ -216,6 +220,7 @@ const textSizeRg = createRadioGroup<TextSize>(
   <div
     role="radiogroup"
     aria-labelledby="settings-text-size-label"
+    tabindex="0"
     onkeydown={textSizeRg.handleKeyDown}
     style="display: flex; gap: 8px;"
   >
