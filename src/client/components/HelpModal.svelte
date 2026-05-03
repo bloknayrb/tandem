@@ -58,6 +58,27 @@ interface Props {
 
 let { open, onClose }: Props = $props();
 
+let dialogEl: HTMLElement | null = $state(null);
+let prevFocus: Element | null = null;
+
+$effect(() => {
+  if (!open) return;
+  prevFocus = document.activeElement;
+  dialogEl?.focus();
+  const onFocusIn = (e: FocusEvent) => {
+    if (dialogEl && !dialogEl.contains(e.target as Node)) {
+      dialogEl.focus();
+    }
+  };
+  document.addEventListener("focusin", onFocusIn);
+  return () => {
+    document.removeEventListener("focusin", onFocusIn);
+    if (prevFocus instanceof HTMLElement && document.contains(prevFocus)) {
+      prevFocus.focus();
+    }
+  };
+});
+
 $effect(() => {
   if (!open) return;
   const handler = (e: KeyboardEvent) => {
@@ -80,9 +101,29 @@ $effect(() => {
       aria-modal="true"
       aria-label="Keyboard Shortcuts"
       tabindex="-1"
+      bind:this={dialogEl}
       style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Tab" && dialogEl) {
+          const focusable = Array.from(
+            dialogEl.querySelectorAll<HTMLElement>(
+              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            )
+          ).filter(el => !el.closest('[hidden]'));
+          if (focusable.length === 0) { e.preventDefault(); return; }
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }}
     >
       <div
         style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;"
