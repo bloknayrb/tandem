@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy, onMount } from "svelte";
+
 interface Props {
   accepted: number;
   dismissed: number;
@@ -11,17 +13,23 @@ let { accepted, dismissed, total, onDismiss }: Props = $props();
 const acceptRate = $derived(total > 0 ? Math.round((accepted / total) * 100) : 0);
 const emoji = $derived(acceptRate >= 80 ? "✅" : acceptRate >= 50 ? "📋" : "🔍");
 
-let doneBtn: HTMLButtonElement | null = $state(null);
+// Use a plain (non-reactive) ref so bind:this doesn't trigger $effect re-runs.
+// $state(null) + bind:this + $effect that calls .focus() creates a reactive loop:
+// bind:this writes $state → effect re-runs → cleanup restores prevFocus → focus
+// event may trigger further reactive updates. onMount/onDestroy are the correct
+// primitives for one-shot focus management that does not need reactivity.
+let doneBtn: HTMLButtonElement | null = null;
 let prevFocus: Element | null = null;
 
-$effect(() => {
+onMount(() => {
   prevFocus = document.activeElement;
   doneBtn?.focus();
-  return () => {
-    if (prevFocus instanceof HTMLElement && document.contains(prevFocus)) {
-      prevFocus.focus();
-    }
-  };
+});
+
+onDestroy(() => {
+  if (prevFocus instanceof HTMLElement && document.contains(prevFocus)) {
+    prevFocus.focus();
+  }
 });
 </script>
 
