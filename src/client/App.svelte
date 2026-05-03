@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { PANEL_WIDTH_KEYS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -36,6 +37,7 @@ import { createYjsSync } from "./hooks/yjsSync.svelte";
 import {
   getRightWidth,
   loadPanelWidth,
+  PANEL_DEFAULT_WIDTH,
   PANEL_MAX_WIDTH,
   PANEL_MIN_WIDTH,
   type PanelLayout,
@@ -437,7 +439,7 @@ const tutorial = createTutorial(
   <div
     data-testid={testId ?? `${side}-panel-resize-handle`}
     role="slider"
-    aria-orientation="vertical"
+    aria-orientation="horizontal"
     aria-label={side === "left" ? "Resize left panel" : "Resize right panel"}
     aria-valuenow={widthPx !== undefined
       ? Math.round(((widthPx - PANEL_MIN_WIDTH) / (PANEL_MAX_WIDTH - PANEL_MIN_WIDTH)) * 100)
@@ -446,6 +448,34 @@ const tutorial = createTutorial(
     aria-valuemax={100}
     tabindex="0"
     {onmousedown}
+    onkeydown={(e) => {
+      const STEP = 16;
+      const BIG_STEP = 80;
+      let delta: number | null = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = STEP;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -STEP;
+      else if (e.key === "PageUp") delta = BIG_STEP;
+      else if (e.key === "PageDown") delta = -BIG_STEP;
+      else if (e.key === "Home") delta = PANEL_MIN_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
+      else if (e.key === "End") delta = PANEL_MAX_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
+      if (delta !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        dragResize.handleResizeStep(side, delta);
+      }
+    }}
+    onkeyup={(e) => {
+      const resizeKeys = ["ArrowRight","ArrowLeft","ArrowUp","ArrowDown","PageUp","PageDown","Home","End"];
+      if (!resizeKeys.includes(e.key)) return;
+      const layoutNow = panelLayout;
+      const w = side === "left"
+        ? ("left" in layoutNow ? layoutNow.left : PANEL_DEFAULT_WIDTH)
+        : getRightWidth(layoutNow);
+      const shouldPersist = (side === "left" && "left" in layoutNow) || (side === "right" && "right" in layoutNow);
+      if (shouldPersist) {
+        try { localStorage.setItem(PANEL_WIDTH_KEYS[side], String(w)); } catch {}
+      }
+    }}
     style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s;"
     onmouseenter={(e) => {
       (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
