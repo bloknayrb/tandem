@@ -1,6 +1,9 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+
 interface Props {
   annotationId: string;
+  annotationType?: string;
   isPending: boolean;
   isEditing: boolean;
   undoable?: boolean;
@@ -8,27 +11,52 @@ interface Props {
   onDismiss?: (id: string) => void;
   onUndo?: (id: string) => boolean;
   onRemove?: (id: string) => void;
+  onSendToClaude?: (id: string) => void;
 }
 
-let { annotationId, isPending, isEditing, undoable, onAccept, onDismiss, onUndo, onRemove }: Props =
-  $props();
+let {
+  annotationId,
+  annotationType,
+  isPending,
+  isEditing,
+  undoable,
+  onAccept,
+  onDismiss,
+  onUndo,
+  onRemove,
+  onSendToClaude,
+}: Props = $props();
 
 let undoError = $state(false);
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearUndoTimer() {
+  if (undoTimer) {
+    clearTimeout(undoTimer);
+    undoTimer = null;
+  }
+}
 
 function handleUndo(e: MouseEvent) {
   e.stopPropagation();
   if (!onUndo) return;
   const ok = onUndo(annotationId);
+  if (ok) {
+    clearUndoTimer();
+    undoError = false;
+    return;
+  }
   if (!ok) {
     undoError = true;
-    if (undoTimer) clearTimeout(undoTimer);
+    clearUndoTimer();
     undoTimer = setTimeout(() => {
       undoError = false;
       undoTimer = null;
     }, 3000);
   }
 }
+
+onDestroy(clearUndoTimer);
 </script>
 
 {#if isPending && !isEditing && (onAccept || onDismiss)}
@@ -55,6 +83,33 @@ function handleUndo(e: MouseEvent) {
         style="padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); cursor: pointer;"
       >
         Reject
+      </button>
+    {/if}
+  </div>
+{:else if isPending && !isEditing && annotationType === "note"}
+  <div style="display: flex; gap: 6px; margin-top: 6px;">
+    {#if onRemove}
+      <button
+        data-testid="archive-btn-{annotationId}"
+        onclick={(e) => {
+          e.stopPropagation();
+          onRemove!(annotationId);
+        }}
+        style="padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
+      >
+        Archive
+      </button>
+    {/if}
+    {#if onSendToClaude}
+      <button
+        data-testid="send-to-claude-btn-{annotationId}"
+        onclick={(e) => {
+          e.stopPropagation();
+          onSendToClaude!(annotationId);
+        }}
+        style="padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-accent-border); border-radius: 3px; background: var(--tandem-accent-bg); color: var(--tandem-accent); cursor: pointer;"
+      >
+        Send to Claude
       </button>
     {/if}
   </div>

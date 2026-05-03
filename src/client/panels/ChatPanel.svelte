@@ -6,6 +6,7 @@ import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { flatOffsetToPmPos } from "../positions";
+import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
@@ -251,10 +252,7 @@ function toggleAnchorExpand(msgId: string) {
         <!-- Message text -->
         {#if msg.author === "claude"}
           <div class="chat-markdown">
-            <!-- Markdown rendering: for Svelte we output as plain text; full markdown
-                 rendering requires @tailwindcss/typography or a Svelte markdown lib.
-                 Plain-text display is functionally equivalent for now. -->
-            <p style="margin: 0; white-space: pre-wrap; word-break: break-word;">{msg.text}</p>
+            {@html renderMarkdown(msg.text)}
           </div>
         {:else}
           <div style="white-space: pre-wrap; word-break: break-word;">{msg.text}</div>
@@ -329,16 +327,45 @@ function toggleAnchorExpand(msgId: string) {
 </div>
 
 <style>
-  @keyframes tandem-typing-bounce {
-    0%,
-    60%,
-    100% {
-      transform: translateY(0);
-      opacity: 0.4;
+  :global {
+    @keyframes tandem-typing-bounce {
+      0%,
+      60%,
+      100% {
+        transform: translateY(0);
+        opacity: 0.4;
+      }
+      30% {
+        transform: translateY(-4px);
+        opacity: 1;
+      }
     }
-    30% {
-      transform: translateY(-4px);
-      opacity: 1;
-    }
+  }
+
+  .chat-markdown :global(h1),
+  .chat-markdown :global(h2),
+  .chat-markdown :global(h3) {
+    margin: 0.5em 0 0.25em;
+    font-weight: 600;
+  }
+  .chat-markdown :global(p) {
+    margin: 0.25em 0;
+  }
+  .chat-markdown :global(code) {
+    font-family: monospace;
+    font-size: 0.9em;
+    background: var(--tandem-surface-muted);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .chat-markdown :global(li) {
+    margin-left: 1.25em;
+    list-style: disc;
+  }
+  .chat-markdown :global(strong) {
+    font-weight: 600;
+  }
+  .chat-markdown :global(em) {
+    font-style: italic;
   }
 </style>

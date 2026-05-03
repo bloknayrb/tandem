@@ -15,6 +15,7 @@ interface Props {
   onEdit?: (id: string, newContent: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onRemove?: (id: string) => void;
+  onSendToClaude?: (id: string) => void;
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
@@ -30,6 +31,7 @@ let {
   onEdit,
   onReply,
   onRemove,
+  onSendToClaude,
   undoable,
   onClick,
 }: Props = $props();
@@ -243,6 +245,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
   <AnnotationCardActions
     annotationId={annotation.id}
+    annotationType={annotation.type}
     {isPending}
     {isEditing}
     {undoable}
@@ -250,6 +253,7 @@ function handleKeyDown(e: KeyboardEvent) {
     {onDismiss}
     {onUndo}
     {onRemove}
+    {onSendToClaude}
   />
   <ReplyThread
     annotationId={annotation.id}

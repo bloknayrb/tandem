@@ -304,6 +304,52 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   await expect(tabbedHandle).toHaveCount(0, { timeout: 10_000 });
 });
 
+test("tabbed-left layout mounts left panel handle and keeps tabs visible", async ({ page }) => {
+  // Default is three-panel. This test covers the tabbed-left branch which
+  // had zero E2E coverage — it has a left-side panel with its own resize
+  // handle (left-panel-resize-handle) instead of the right-side tabbed
+  // handle (panel-resize-handle).
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  const tabbedHandle = page.locator("[data-testid='panel-resize-handle']");
+
+  // Open settings and switch to tabbed-left.
+  await page.locator("[data-testid='settings-btn']").click();
+  await expect(page.locator("[data-testid='settings-popover']")).toBeVisible();
+  await page.locator("[data-testid='layout-tabbed-left-btn']").click();
+  // Close the popover so it doesn't obscure subsequent assertions.
+  await page.keyboard.press("Escape");
+
+  // tabbed-left mounts a left-side handle and drops the right tabbed handle.
+  await expect(leftHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(tabbedHandle).toHaveCount(0, { timeout: 10_000 });
+
+  // The tabbed panel is still present — annotations and chat tabs must be visible.
+  await expect(page.locator("[data-testid='annotations-tab']")).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator("[data-testid='chat-tab']")).toBeVisible();
+
+  // Layout must be saved to localStorage.
+  const saved = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as { layout?: string }).layout : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(saved).toBe("tabbed-left");
+
+  // Restore default layout so this test doesn't pollute others via localStorage.
+  await page.locator("[data-testid='settings-btn']").click();
+  await page.locator("[data-testid='layout-three-panel-btn']").click();
+  await page.keyboard.press("Escape");
+  await expect(leftHandle).toHaveCount(1, { timeout: 10_000 });
+  // three-panel also has a left handle, so verify the right handle is back too.
+  await expect(page.locator("[data-testid='right-panel-resize-handle']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+});
+
 test("three-panel layout resizes left/right widths independently", async ({ page }) => {
   // Production wires the left handle to `tandem-left-panel-width` and the
   // right handle to `tandem-panel-width`. The regression this guards against

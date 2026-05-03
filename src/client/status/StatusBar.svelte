@@ -29,13 +29,13 @@ let {
 
 const RECONNECTED_FLASH_MS = 2_000;
 
-const { userName, setUserName } = createUserName();
-let nameInput = $state(userName);
+const userNameState = createUserName();
+let nameInput = $state(userNameState.userName);
 let inputEl: HTMLInputElement | undefined = $state();
 
 // Idle-sync: sync only when NOT focused and value differs
 $effect(() => {
-  const currentUserName = userName;
+  const currentUserName = userNameState.userName;
   if (nameInput !== currentUserName && document.activeElement !== inputEl) {
     nameInput = currentUserName;
   }
@@ -99,7 +99,7 @@ const connLabel = $derived(
 );
 
 function commitName() {
-  setUserName(nameInput);
+  userNameState.setUserName(nameInput);
 }
 </script>
 
@@ -138,7 +138,7 @@ function commitName() {
       onkeydown={(e) => {
         if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
         if (e.key === "Escape") {
-          nameInput = userName;
+          nameInput = userNameState.userName;
           (e.currentTarget as HTMLInputElement).blur();
         }
       }}
@@ -168,6 +168,8 @@ function commitName() {
 </div>
 
 <style>
-  @keyframes tandem-status-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-  @keyframes tandem-reconnect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  :global {
+    @keyframes tandem-status-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+    @keyframes tandem-reconnect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  }
 </style>

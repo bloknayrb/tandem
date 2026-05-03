@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
@@ -17,7 +18,7 @@ import {
   loadInvoke,
 } from "../cowork/cowork-invoke";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
-import type { CoworkStatus, WorkspaceFileStatus, WorkspaceStatus } from "../types";
+import type { WorkspaceFileStatus, WorkspaceStatus } from "../types";
 
 const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
   success: {
@@ -51,13 +52,14 @@ const secondaryBtnStyle =
 
 // Always active while mounted
 const coworkState = createCoworkStatus(() => true);
-const { status, loading, error, refetch } = coworkState;
+const { refetch } = coworkState;
 
 let inlineToastMessage = $state<string | null>(null);
 let confirming = $state<"enable" | null>(null);
 let busy = $state(false);
 
 const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
+onDestroy(() => debouncer.cancel());
 
 const variant = $derived(coworkSettingsVariant(coworkState.status));
 

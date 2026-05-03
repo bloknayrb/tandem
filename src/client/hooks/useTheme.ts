@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import type { ThemePreference } from "./useTandemSettings";
 
 export type ResolvedTheme = "light" | "dark";
@@ -41,12 +40,4 @@ export function applyTheme(pref: ThemePreference): () => void {
   };
 }
 
-/**
- * Apply the resolved theme to <html data-theme="…"> and, when the user's
- * preference is "system", re-apply on OS-level changes. Scoped to <html>
- * (not <body>) so CSS-custom-property overrides cascade into portals and
- * popovers rendered outside the React root.
- */
-export function useTheme(pref: ThemePreference): void {
-  useEffect(() => applyTheme(pref), [pref]);
-}
+// React hook removed — utilities migrated to useTheme.svelte.ts

@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
+import { untrack } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
@@ -150,7 +151,7 @@ const review = useAnnotationReview({
 // Scroll container reset on filter change
 let didMountFilters = false;
 $effect(() => {
-  // track filter state
+  // track filter state — these are the ONLY reactive deps for this effect
   void filterType;
   void filterAuthor;
   void filterStatus;
@@ -160,17 +161,22 @@ $effect(() => {
     return;
   }
 
-  if (activeAnnotationId) {
-    const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
-    if (card) {
-      card.scrollIntoView({ block: "center" });
-      return;
+  // Use untrack so reads of activeAnnotationId and scrollContainerEl don't
+  // make this effect re-fire when an annotation is clicked (only filter
+  // changes should trigger scroll-reset logic).
+  untrack(() => {
+    if (activeAnnotationId) {
+      const card = document.querySelector(`[data-testid="annotation-card-${activeAnnotationId}"]`);
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        return;
+      }
+      console.warn(
+        `[tandem] SidePanel: active annotation ${activeAnnotationId} not found on filter change; scrolling to top`,
+      );
     }
-    console.warn(
-      `[tandem] SidePanel: active annotation ${activeAnnotationId} not found on filter change; scrolling to top`,
-    );
-  }
-  scrollContainerEl?.scrollTo({ top: 0 });
+    scrollContainerEl?.scrollTo({ top: 0 });
+  });
 });
 
 // Scroll to and flash annotation card when activeAnnotationId changes externally
@@ -220,6 +226,17 @@ function handleEdit(id: string, newContent: string) {
     return;
   }
   map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
+}
+
+function handleSendToClaude(annotationId: string): void {
+  if (!ydoc) return;
+  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const raw = map.get(annotationId) as Annotation | undefined;
+  if (!raw) return;
+  const ann = sanitizeAnnotation(raw, (event) => {
+    console.warn("[sanitize]", event);
+  });
+  map.set(annotationId, { ...ann, type: "comment" });
 }
 
 async function handleRemove(annotationId: string): Promise<void> {
@@ -400,6 +417,7 @@ function handleBulk(status: "accepted" | "dismissed") {
           onAccept={ann.author !== "user" ? review.handleAccept : undefined}
           onDismiss={ann.author !== "user" ? review.handleDismiss : undefined}
           onRemove={ann.author === "user" ? handleRemove : undefined}
+          onSendToClaude={ann.type === "note" ? handleSendToClaude : undefined}
           onEdit={handleEdit}
           onReply={handleReply}
           onClick={() => review.scrollToAnnotation(ann)}
