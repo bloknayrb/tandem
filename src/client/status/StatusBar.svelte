@@ -1,4 +1,5 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import { USER_NAME_MAX_LEN } from "../../shared/constants";
 import { createUserName } from "../hooks/useUserName.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
@@ -43,7 +44,8 @@ $effect(() => {
 
 let showReconnectedFlash = $state(false);
 let elapsedSeconds = $state(0);
-let prevConnected = connected;
+// intentional snapshot — updated inside $effect to detect rising-edge reconnect
+let prevConnected = $state(untrack(() => connected));
 
 $effect(() => {
   const was = prevConnected;
