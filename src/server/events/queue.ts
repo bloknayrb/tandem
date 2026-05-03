@@ -43,12 +43,18 @@ const emittedPayloadIds = new Map<string, number>();
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
 
+export function getAnnotationEditedChannelKey(annotationId: string, editedAt: number): string {
+  return `edited:${annotationId}:${editedAt}`;
+}
+
 function getTrackableId(event: TandemEvent): string | undefined {
   switch (event.type) {
     case "annotation:created":
     case "annotation:accepted":
     case "annotation:dismissed":
       return event.payload.annotationId;
+    case "annotation:edited":
+      return getAnnotationEditedChannelKey(event.payload.annotationId, event.payload.editedAt);
     case "annotation:reply":
       return event.payload.replyId;
     case "chat:message":

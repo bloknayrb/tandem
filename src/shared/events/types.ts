@@ -62,6 +62,13 @@ export interface DocumentSwitchedPayload {
   fileName: string;
 }
 
+export interface AnnotationEditedPayload {
+  annotationId: string;
+  content: string;
+  textSnippet: string;
+  editedAt: number;
+}
+
 // --- Discriminated union ---
 
 interface TandemEventBase {
@@ -80,7 +87,8 @@ export type TandemEvent =
   | (TandemEventBase & { type: "chat:message"; payload: ChatMessagePayload })
   | (TandemEventBase & { type: "document:opened"; payload: DocumentOpenedPayload })
   | (TandemEventBase & { type: "document:closed"; payload: DocumentClosedPayload })
-  | (TandemEventBase & { type: "document:switched"; payload: DocumentSwitchedPayload });
+  | (TandemEventBase & { type: "document:switched"; payload: DocumentSwitchedPayload })
+  | (TandemEventBase & { type: "annotation:edited"; payload: AnnotationEditedPayload });
 
 /** Union of all event type discriminants. */
 export type TandemEventType = TandemEvent["type"];
@@ -94,6 +102,7 @@ const VALID_EVENT_TYPES = new Set<TandemEventType>([
   "annotation:created",
   "annotation:accepted",
   "annotation:dismissed",
+  "annotation:edited",
   "annotation:reply",
   "chat:message",
   "document:opened",
@@ -145,6 +154,10 @@ export function formatEventContent(event: TandemEvent): string {
       const { annotationId, textSnippet } = event.payload;
       return `User dismissed annotation ${annotationId}${textSnippet ? ` ("${textSnippet}")` : ""}${doc}`;
     }
+    case "annotation:edited": {
+      const { content } = event.payload;
+      return `User edited annotation: "${content}"${doc}`;
+    }
     case "annotation:reply": {
       const { annotationId, replyAuthor, replyText, textSnippet } = event.payload;
       const who = replyAuthor === "claude" ? "Claude" : "User";
@@ -195,6 +208,10 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
     case "annotation:accepted":
     case "annotation:dismissed":
       meta.annotation_id = event.payload.annotationId;
+      break;
+    case "annotation:edited":
+      meta.annotation_id = event.payload.annotationId;
+      meta.edited_at = String(event.payload.editedAt);
       break;
     case "annotation:reply":
       meta.annotation_id = event.payload.annotationId;

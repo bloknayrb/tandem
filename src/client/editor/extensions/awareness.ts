@@ -3,7 +3,14 @@ import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
-import { TYPING_DEBOUNCE, Y_MAP_AWARENESS, Y_MAP_USER_AWARENESS } from "../../../shared/constants";
+import {
+  TYPING_DEBOUNCE,
+  Y_MAP_ACTIVITY,
+  Y_MAP_AWARENESS,
+  Y_MAP_CLAUDE,
+  Y_MAP_SELECTION,
+  Y_MAP_USER_AWARENESS,
+} from "../../../shared/constants";
 import { toFlatOffset, toPmPos } from "../../../shared/positions/types";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { flatOffsetToPmPos, pmSelectionToFlat } from "../../positions";
@@ -99,12 +106,12 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
 
         state: {
           init(_, state) {
-            const claude = awarenessMap.get("claude") as ClaudeAwareness | undefined;
+            const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
             return buildAwarenessDecorations(state.doc, claude ?? null);
           },
           apply(tr, decorationSet, _oldState, newState) {
             if (tr.getMeta(awarenessPluginKey)) {
-              const claude = awarenessMap.get("claude") as ClaudeAwareness | undefined;
+              const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
               return buildAwarenessDecorations(newState.doc, claude ?? null);
             }
             if (tr.docChanged) {
@@ -163,7 +170,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                     clearTimeout(selectionDebounceTimeout);
                     selectionDebounceTimeout = null;
                   }
-                  userAwareness.set("selection", {
+                  userAwareness.set(Y_MAP_SELECTION, {
                     ...flat,
                     timestamp: Date.now(),
                   });
@@ -180,7 +187,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
                   selectionDebounceTimeout = setTimeout(() => {
                     selectionDebounceTimeout = null;
-                    userAwareness.set("selection", {
+                    userAwareness.set(Y_MAP_SELECTION, {
                       ...flat,
                       selectedText: truncated,
                       timestamp: Date.now(),
@@ -200,7 +207,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   activityWriteTimeout = setTimeout(() => {
                     activityWriteTimeout = null;
                     if (pendingActivity) {
-                      userAwareness.set("activity", {
+                      userAwareness.set(Y_MAP_ACTIVITY, {
                         isTyping: true,
                         cursor: lastCursor,
                         lastEdit: Date.now(),
@@ -213,7 +220,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 if (typingTimeout) clearTimeout(typingTimeout);
                 typingTimeout = setTimeout(() => {
                   pendingActivity = false;
-                  userAwareness.set("activity", {
+                  userAwareness.set(Y_MAP_ACTIVITY, {
                     isTyping: false,
                     cursor: view.state.selection.from,
                     lastEdit: Date.now(),
@@ -239,6 +246,6 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
  */
 export function getClaudeStatus(ydoc: Y.Doc): ClaudeAwareness | null {
   const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
-  const claude = awarenessMap.get("claude") as ClaudeAwareness | undefined;
+  const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
   return claude ?? null;
 }

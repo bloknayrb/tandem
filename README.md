@@ -303,4 +303,4 @@ On first run, `sample/welcome.md` auto-opens. If you've cleared sessions or dele
 
 **Tauri development** requires the [Rust toolchain](https://www.rust-lang.org/tools/install) and [Tauri CLI](https://v2.tauri.app/start/prerequisites/). Web-only development (`npm run dev:standalone`) does not require Rust.
 
-**Tech Stack:** React 19, Tiptap, Vite, TypeScript | Node.js, Hocuspocus (Yjs WebSocket), MCP SDK, Express | Yjs (CRDT), y-prosemirror | mammoth.js (.docx), unified/remark (.md)
+**Tech Stack:** Svelte 5, Tiptap, Vite, TypeScript | Node.js, Hocuspocus (Yjs WebSocket), MCP SDK, Express | Yjs (CRDT), y-prosemirror | mammoth.js (.docx), unified/remark (.md)

@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
 import { USER_NAME_DEFAULT, USER_NAME_EVENT, USER_NAME_KEY } from "../../shared/constants";
 
 export function resolveUserName(stored: string | null | undefined): string {
@@ -49,23 +48,4 @@ export function subscribeToUserName(onChange: (name: string) => void): () => voi
   };
 }
 
-/**
- * Shared display-name state. Persists to localStorage and broadcasts via a
- * custom event so every in-tab subscriber updates together; the `storage`
- * event covers cross-tab.
- */
-export function useUserName(): {
-  userName: string;
-  setUserName: (next: string) => void;
-} {
-  const [userName, setUserNameState] = useState(readStoredName);
-
-  useEffect(() => subscribeToUserName(setUserNameState), []);
-
-  const setUserName = useCallback((next: string) => {
-    const trimmed = persistUserName(next);
-    setUserNameState(trimmed);
-  }, []);
-
-  return { userName, setUserName };
-}
+// React hook removed — utilities migrated to useUserName.svelte.ts
