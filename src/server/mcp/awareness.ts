@@ -15,7 +15,11 @@ import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { MCP_ORIGIN, wasEmittedViaChannel } from "../events/queue.js";
+import {
+  getAnnotationEditedChannelKey,
+  MCP_ORIGIN,
+  wasEmittedViaChannel,
+} from "../events/queue.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
 import { extractText, getCurrentDoc } from "./document.js";
@@ -94,11 +98,6 @@ export function registerAwarenessTools(server: McpServer): void {
       const allAnnotations = collectAnnotations(annotationsMap, docHash(current.filePath));
       const fullText = extractText(doc);
 
-      // Bucket 1: new user-created annotations (highlights, comments, questions)
-      const userActions: Array<Annotation & { textSnippet: string; edited?: boolean }> = [];
-      // Bucket 2: user responses to Claude's annotations (accepted/dismissed)
-      const userResponses: Array<Annotation & { textSnippet: string }> = [];
-
       // Refresh only unsurfaced annotations; batch Y.Map writes
       const unsurfaced: Annotation[] = [];
       doc.transact(() => {
@@ -116,25 +115,12 @@ export function registerAwarenessTools(server: McpServer): void {
         }
       }, MCP_ORIGIN);
 
-      for (const ann of unsurfaced) {
-        const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
-        const alreadySurfaced = surfacedIds.has(ann.id);
-
-        if (ann.author === "user" && ann.type === "comment") {
-          const wasChannelEmitted = wasEmittedViaChannel(ann.id);
-          if (wasChannelEmitted && !alreadySurfaced) {
-            // Already delivered via channel push — mark as seen without re-adding
-            surfacedIds.set(ann.id, ann.editedAt ?? 0);
-          } else {
-            const edited = alreadySurfaced && (ann.editedAt ?? 0) > (surfacedIds.get(ann.id) ?? 0);
-            userActions.push({ ...ann, textSnippet: snippet, ...(edited ? { edited: true } : {}) });
-            surfacedIds.set(ann.id, ann.editedAt ?? 0);
-          }
-        } else if (ann.author === "claude" && ann.status !== "pending") {
-          userResponses.push({ ...ann, textSnippet: snippet });
-          surfacedIds.set(ann.id, ann.editedAt ?? 0);
-        }
-      }
+      const { userActions, userResponses } = processUnsurfacedInboxAnnotations(
+        unsurfaced,
+        fullText,
+        surfacedIds,
+        wasEmittedViaChannel,
+      );
 
       // Bucket 3: unread chat messages from CTRL_ROOM
       const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
@@ -285,13 +271,11 @@ export function processInboxAnnotations(
   fullText: string,
   surfaced: Map<string, number>,
   refreshFn: (ann: Annotation) => Annotation,
+  wasChannelEmitted: (payloadId: string) => boolean = () => false,
 ): {
-  userActions: Array<Annotation & { textSnippet: string }>;
+  userActions: Array<Annotation & { textSnippet: string; edited?: boolean }>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
-  const userActions: Array<Annotation & { textSnippet: string }> = [];
-  const userResponses: Array<Annotation & { textSnippet: string }> = [];
-
   const unsurfaced: Annotation[] = [];
   for (const raw of allAnnotations) {
     const lastSurfacedEditedAt = surfaced.get(raw.id);
@@ -302,10 +286,35 @@ export function processInboxAnnotations(
     }
   }
 
+  return processUnsurfacedInboxAnnotations(unsurfaced, fullText, surfaced, wasChannelEmitted);
+}
+
+function processUnsurfacedInboxAnnotations(
+  unsurfaced: Annotation[],
+  fullText: string,
+  surfaced: Map<string, number>,
+  wasChannelEmitted: (payloadId: string) => boolean,
+): {
+  userActions: Array<Annotation & { textSnippet: string; edited?: boolean }>;
+  userResponses: Array<Annotation & { textSnippet: string }>;
+} {
+  const userActions: Array<Annotation & { textSnippet: string; edited?: boolean }> = [];
+  const userResponses: Array<Annotation & { textSnippet: string }> = [];
+
   for (const ann of unsurfaced) {
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     if (ann.author === "user" && ann.type === "comment") {
-      userActions.push({ ...ann, textSnippet: snippet });
+      const lastSurfacedEditedAt = surfaced.get(ann.id);
+      const alreadySurfaced = lastSurfacedEditedAt !== undefined;
+      const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+      const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
+
+      if (wasChannelEmitted(channelKey)) {
+        surfaced.set(ann.id, ann.editedAt ?? 0);
+        continue;
+      }
+
+      userActions.push({ ...ann, textSnippet: snippet, ...(edited ? { edited: true } : {}) });
       surfaced.set(ann.id, ann.editedAt ?? 0);
     } else if (ann.author === "claude" && ann.status !== "pending") {
       userResponses.push({ ...ann, textSnippet: snippet });

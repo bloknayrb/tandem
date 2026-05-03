@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { getAnnotationEditedChannelKey } from "../../src/server/events/queue.js";
 import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
 import {
   isUserActive,
@@ -156,6 +157,67 @@ describe("processInboxAnnotations", () => {
 
     const second = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
     expect(second.userActions).toHaveLength(0);
+  });
+
+  it("suppresses channel-delivered edits after the original comment was surfaced by polling", () => {
+    const ydoc = setupDoc("inbox-edit-channel", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {
+      author: "user",
+    });
+
+    const surfaced = new Map<string, number>();
+    const first = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      surfaced,
+      (a) => a,
+    );
+    expect(first.userActions).toHaveLength(1);
+
+    const ann = map.get(id) as Annotation;
+    map.set(id, { ...ann, content: "after", editedAt: 2000 });
+
+    const second = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      surfaced,
+      (a) => a,
+      (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
+    );
+
+    expect(second.userActions).toHaveLength(0);
+    expect(surfaced.get(id)).toBe(2000);
+  });
+
+  it("marks polling-discovered edits when no channel event has delivered them", () => {
+    const ydoc = setupDoc("inbox-edit-poll", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {
+      author: "user",
+    });
+
+    const surfaced = new Map<string, number>();
+    processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      surfaced,
+      (a) => a,
+    );
+
+    const ann = map.get(id) as Annotation;
+    map.set(id, { ...ann, content: "after", editedAt: 3000 });
+
+    const second = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      surfaced,
+      (a) => a,
+    );
+
+    expect(second.userActions).toHaveLength(1);
+    expect(second.userActions[0].edited).toBe(true);
+    expect(surfaced.get(id)).toBe(3000);
   });
 
   it("calls refreshFn on each unsurfaced annotation", () => {
