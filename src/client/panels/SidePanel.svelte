@@ -228,6 +228,17 @@ function handleEdit(id: string, newContent: string) {
   map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
 }
 
+function handleSendToClaude(annotationId: string): void {
+  if (!ydoc) return;
+  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const raw = map.get(annotationId) as Annotation | undefined;
+  if (!raw) return;
+  const ann = sanitizeAnnotation(raw, (event) => {
+    console.warn("[sanitize]", event);
+  });
+  map.set(annotationId, { ...ann, type: "comment" });
+}
+
 async function handleRemove(annotationId: string): Promise<void> {
   try {
     const resp = await fetch(`${API_BASE}/remove-annotation`, {
@@ -406,6 +417,7 @@ function handleBulk(status: "accepted" | "dismissed") {
           onAccept={ann.author !== "user" ? review.handleAccept : undefined}
           onDismiss={ann.author !== "user" ? review.handleDismiss : undefined}
           onRemove={ann.author === "user" ? handleRemove : undefined}
+          onSendToClaude={ann.type === "note" ? handleSendToClaude : undefined}
           onEdit={handleEdit}
           onReply={handleReply}
           onClick={() => review.scrollToAnnotation(ann)}
