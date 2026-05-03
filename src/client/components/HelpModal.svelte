@@ -1,4 +1,6 @@
 <script lang="ts">
+import { untrack } from "svelte";
+
 interface ShortcutRow {
   keys: string[];
   description: string;
@@ -57,25 +59,24 @@ interface Props {
 }
 
 let { open, onClose }: Props = $props();
-
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 
 $effect(() => {
   if (!open) return;
+  // untrack: dialogEl must not be a dep — bind:this setting it would re-run the
+  // effect, causing cleanup to restore prevFocus mid-open, then re-open to wrong element.
+  const el = untrack(() => dialogEl);
+  if (!el) return;
   prevFocus = document.activeElement;
-  dialogEl?.focus();
+  el.focus();
   const onFocusIn = (e: FocusEvent) => {
-    if (dialogEl && !dialogEl.contains(e.target as Node)) {
-      dialogEl.focus();
-    }
+    if (el && !el.contains(e.target as Node)) el.focus();
   };
   document.addEventListener("focusin", onFocusIn);
   return () => {
     document.removeEventListener("focusin", onFocusIn);
-    if (prevFocus instanceof HTMLElement && document.contains(prevFocus)) {
-      prevFocus.focus();
-    }
+    if (prevFocus instanceof HTMLElement && document.contains(prevFocus)) prevFocus.focus();
   };
 });
 
