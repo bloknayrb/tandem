@@ -16,8 +16,13 @@ let { annotationId, replies, isPending, isEditing, onReply }: Props = $props();
 let isReplying = $state(false);
 let replyText = $state("");
 let isSendingReply = $state(false);
+let replyTextareaEl: HTMLTextAreaElement | null = $state(null);
 
 const hasText = $derived(Boolean(replyText.trim()));
+
+$effect(() => {
+  if (isReplying) replyTextareaEl?.focus();
+});
 
 function handleReplyKeyDown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -46,18 +51,18 @@ async function handleSendReply() {
 <CommentThread {replies} />
 
 {#if isPending && onReply && !isEditing}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div style="margin-top: 6px;" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div style="margin-top: 6px;" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
     {#if isReplying}
       <div>
         <textarea
+          bind:this={replyTextareaEl}
           data-testid="reply-input-{annotationId}"
           value={replyText}
           oninput={(e) => (replyText = (e.target as HTMLTextAreaElement).value)}
           onkeydown={handleReplyKeyDown}
           placeholder="Write a reply..."
           style={TEXTAREA_STYLE}
-          autofocus
         ></textarea>
         <div style="display: flex; gap: 6px; margin-top: 4px;">
           <button

@@ -232,11 +232,11 @@ function toggleAnchorExpand(msgId: string) {
 
         <!-- Anchor quote -->
         {#if msg.anchor}
-          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-          <div
+          <button
+            type="button"
             onclick={() => scrollToAnchor(msg.anchor!, msg.documentId)}
             class="chat-anchor-quote"
-            style="padding: 4px 8px; margin-bottom: 6px; border-left: 3px solid var(--tandem-accent-border); background: var(--tandem-accent-bg); font-size: 12px; color: var(--tandem-accent-fg-strong); cursor: pointer; border-radius: 0 4px 4px 0; max-height: {expandedAnchors.has(
+            style="background: var(--tandem-accent-bg); border: none; border-left: 3px solid var(--tandem-accent-border); padding: 4px 8px; margin-bottom: 6px; font: inherit; color: var(--tandem-accent-fg-strong); cursor: pointer; text-align: left; width: 100%; font-size: 12px; border-radius: 0 4px 4px 0; max-height: {expandedAnchors.has(
               msg.id,
             )
               ? '500px'
@@ -246,7 +246,7 @@ function toggleAnchorExpand(msgId: string) {
             onmouseleave={() => toggleAnchorExpand(msg.id)}
           >
             {msg.anchor.textSnapshot}
-          </div>
+          </button>
         {/if}
 
         <!-- Message text -->

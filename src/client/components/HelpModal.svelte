@@ -1,4 +1,6 @@
 <script lang="ts">
+import { untrack } from "svelte";
+
 interface ShortcutRow {
   keys: string[];
   description: string;
@@ -57,6 +59,26 @@ interface Props {
 }
 
 let { open, onClose }: Props = $props();
+let dialogEl: HTMLElement | null = $state(null);
+let prevFocus: Element | null = null;
+
+$effect(() => {
+  if (!open) return;
+  // untrack: dialogEl must not be a dep — bind:this setting it would re-run the
+  // effect, causing cleanup to restore prevFocus mid-open, then re-open to wrong element.
+  const el = untrack(() => dialogEl);
+  if (!el) return;
+  prevFocus = document.activeElement;
+  el.focus();
+  const onFocusIn = (e: FocusEvent) => {
+    if (el && !el.contains(e.target as Node)) el.focus();
+  };
+  document.addEventListener("focusin", onFocusIn);
+  return () => {
+    document.removeEventListener("focusin", onFocusIn);
+    if (prevFocus instanceof HTMLElement && document.contains(prevFocus)) prevFocus.focus();
+  };
+});
 
 $effect(() => {
   if (!open) return;
@@ -69,16 +91,40 @@ $effect(() => {
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div
+    role="presentation"
     style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000;"
     onclick={onClose}
     data-testid="help-modal"
   >
-    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard Shortcuts"
+      tabindex="-1"
+      bind:this={dialogEl}
       style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Tab" && dialogEl) {
+          const focusable = Array.from(
+            dialogEl.querySelectorAll<HTMLElement>(
+              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            )
+          ).filter(el => !el.closest('[hidden]'));
+          if (focusable.length === 0) { e.preventDefault(); return; }
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }}
     >
       <div
         style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;"

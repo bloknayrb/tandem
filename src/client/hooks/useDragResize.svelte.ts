@@ -9,6 +9,7 @@ import {
 
 export interface DragResizeState {
   handleResizeStart: (e: MouseEvent, side: PanelSide) => void;
+  handleResizeStep: (side: PanelSide, deltaPx: number) => void;
 }
 
 /**
@@ -91,5 +92,26 @@ export function createDragResize(
     document.addEventListener("mouseup", onMouseUp);
   };
 
-  return { handleResizeStart };
+  const handleResizeStep = (side: PanelSide, deltaPx: number) => {
+    const current = getPanelLayout();
+    const currentWidth =
+      side === "left"
+        ? "left" in current
+          ? current.left
+          : PANEL_DEFAULT_WIDTH
+        : getRightWidth(current);
+    const next = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, currentWidth + deltaPx));
+    setPanelLayout((prev) => {
+      if (side === "right") {
+        if (prev.kind === "three-panel") return { ...prev, right: next };
+        if (prev.kind === "tabbed") return { kind: "tabbed", right: next };
+        return prev;
+      }
+      if (prev.kind === "three-panel") return { ...prev, left: next };
+      if (prev.kind === "tabbed-left") return { ...prev, left: next };
+      return prev;
+    });
+  };
+
+  return { handleResizeStart, handleResizeStep };
 }

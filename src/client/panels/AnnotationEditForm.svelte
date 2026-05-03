@@ -28,30 +28,40 @@ let {
   onSave,
   onCancel,
 }: Props = $props();
+
+let primaryTextareaEl: HTMLTextAreaElement | null = $state(null);
+
+$effect(() => {
+  primaryTextareaEl?.focus();
+});
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div style="margin-top: 4px;" onclick={(e) => e.stopPropagation()}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div style="margin-top: 4px;" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
   {#if hasSuggestedText}
     <label
+      for="edit-newtext-{annotationId}"
       style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-bottom: 2px;"
     >
       Replacement text
     </label>
     <textarea
+      bind:this={primaryTextareaEl}
+      id="edit-newtext-{annotationId}"
       data-testid="edit-newtext-{annotationId}"
       value={editNewText}
       oninput={(e) => onChangeEditNewText((e.target as HTMLTextAreaElement).value)}
       onkeydown={onKeyDown}
       style={TEXTAREA_STYLE}
-      autofocus
     ></textarea>
     <label
+      for="edit-reason-{annotationId}"
       style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-top: 4px; margin-bottom: 2px;"
     >
       Reason
     </label>
     <textarea
+      id="edit-reason-{annotationId}"
       data-testid="edit-reason-{annotationId}"
       value={editReason}
       oninput={(e) => onChangeEditReason((e.target as HTMLTextAreaElement).value)}
@@ -60,12 +70,12 @@ let {
     ></textarea>
   {:else}
     <textarea
+      bind:this={primaryTextareaEl}
       data-testid="edit-text-{annotationId}"
       value={editText}
       oninput={(e) => onChangeEditText((e.target as HTMLTextAreaElement).value)}
       onkeydown={onKeyDown}
       style={TEXTAREA_STYLE}
-      autofocus
     ></textarea>
   {/if}
   <div style="display: flex; gap: 6px; margin-top: 4px;">

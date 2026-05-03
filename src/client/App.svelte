@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { PANEL_WIDTH_KEYS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -33,7 +34,14 @@ import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
-import { getRightWidth, loadPanelWidth, type PanelLayout } from "./panel-layout";
+import {
+  getRightWidth,
+  loadPanelWidth,
+  PANEL_DEFAULT_WIDTH,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
+  type PanelLayout,
+} from "./panel-layout";
 import ReviewSummary from "./panels/ReviewSummary.svelte";
 import { pmSelectionToFlat } from "./positions";
 import StatusBar from "./status/StatusBar.svelte";
@@ -313,9 +321,9 @@ const tutorial = createTutorial(
           </div>
         </div>
 
-        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"))}
+        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
         {@render editorColumn()}
-        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"))}
+        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
 
         <div
           style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border);`}
@@ -366,14 +374,14 @@ const tutorial = createTutorial(
     {:else if panelLayout.kind === "tabbed-left"}
       <div style="display: flex; flex: 1; overflow: hidden;">
         {@render tabbedPanel(panelLayout.left, "left")}
-        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"))}
+        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
         {@render editorColumn()}
       </div>
 
     {:else}
       <div style="display: flex; flex: 1; overflow: hidden;">
         {@render editorColumn()}
-        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle")}
+        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
         {@render tabbedPanel(getRightWidth(panelLayout), "right")}
       </div>
     {/if}
@@ -427,14 +435,47 @@ const tutorial = createTutorial(
   </div>
 {/if}
 
-{#snippet resizeHandle(side: "left" | "right", onmousedown: (e: MouseEvent) => void, testId?: string)}
+{#snippet resizeHandle(side: "left" | "right", onmousedown: (e: MouseEvent) => void, testId?: string, widthPx?: number)}
   <div
     data-testid={testId ?? `${side}-panel-resize-handle`}
-    role="separator"
-    aria-orientation="vertical"
+    role="slider"
+    aria-orientation="horizontal"
     aria-label={side === "left" ? "Resize left panel" : "Resize right panel"}
+    aria-valuenow={widthPx !== undefined
+      ? Math.round(((widthPx - PANEL_MIN_WIDTH) / (PANEL_MAX_WIDTH - PANEL_MIN_WIDTH)) * 100)
+      : 50}
+    aria-valuemin={0}
+    aria-valuemax={100}
     tabindex="0"
     {onmousedown}
+    onkeydown={(e) => {
+      const STEP = 16;
+      const BIG_STEP = 80;
+      let delta: number | null = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = STEP;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -STEP;
+      else if (e.key === "PageUp") delta = BIG_STEP;
+      else if (e.key === "PageDown") delta = -BIG_STEP;
+      else if (e.key === "Home") delta = PANEL_MIN_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
+      else if (e.key === "End") delta = PANEL_MAX_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
+      if (delta !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        dragResize.handleResizeStep(side, delta);
+      }
+    }}
+    onkeyup={(e) => {
+      const resizeKeys = ["ArrowRight","ArrowLeft","ArrowUp","ArrowDown","PageUp","PageDown","Home","End"];
+      if (!resizeKeys.includes(e.key)) return;
+      const layoutNow = panelLayout;
+      const w = side === "left"
+        ? ("left" in layoutNow ? layoutNow.left : PANEL_DEFAULT_WIDTH)
+        : getRightWidth(layoutNow);
+      const shouldPersist = (side === "left" && "left" in layoutNow) || (side === "right" && "right" in layoutNow);
+      if (shouldPersist) {
+        try { localStorage.setItem(PANEL_WIDTH_KEYS[side], String(w)); } catch {}
+      }
+    }}
     style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s;"
     onmouseenter={(e) => {
       (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
@@ -447,6 +488,8 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
+    role="region"
+    aria-label="Document editor"
     style={`flex: 1; overflow: auto; padding: 24px 48px; border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : ""}; transition: border-color 0.15s, background 0.15s;`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
