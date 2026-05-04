@@ -23,16 +23,25 @@ export function redirectConsoleToStderr(): void {
  * (2) CLAUDE_PLUGIN_OPTION_SERVER_URL — injected by plugin host from userConfig
  * (3) TANDEM_URL — explicit env override
  * (4) localhost default
+ * Blank values are treated as absent so a blank plugin option does not mask an
+ * explicit TANDEM_URL or the localhost default.
  * The returned string has no trailing slash so callers can concatenate
  * `/health`, `/mcp`, etc. without double-slash.
  */
 export function resolveTandemUrl(override?: string): string {
-  const raw =
-    override ??
-    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL ??
-    process.env.TANDEM_URL ??
-    `http://localhost:${DEFAULT_MCP_PORT}`;
-  return raw.replace(/\/$/, "");
+  return resolveTandemUrlCandidate(override).replace(/\/+$/, "");
+}
+
+function resolveTandemUrlCandidate(override?: string): string {
+  const candidates = [
+    override,
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL,
+    process.env.TANDEM_URL,
+  ];
+  for (const url of candidates) {
+    if (url !== undefined && url.trim() !== "") return url.trim();
+  }
+  return `http://localhost:${DEFAULT_MCP_PORT}`;
 }
 
 /**

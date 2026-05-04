@@ -34,13 +34,53 @@ describe("resolveTandemUrl precedence", () => {
     expect(resolveTandemUrl()).toBe("http://manual:2222");
   });
 
+  it("uses TANDEM_URL when CLAUDE_PLUGIN_OPTION_SERVER_URL is blank", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "";
+    process.env.TANDEM_URL = "http://manual:2222";
+    expect(resolveTandemUrl()).toBe("http://manual:2222");
+  });
+
+  it("uses TANDEM_URL when CLAUDE_PLUGIN_OPTION_SERVER_URL is whitespace only", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "   ";
+    process.env.TANDEM_URL = "http://manual:2222";
+    expect(resolveTandemUrl()).toBe("http://manual:2222");
+  });
+
   it("falls back to localhost default when all env vars absent", () => {
     expect(resolveTandemUrl()).toBe("http://localhost:3479");
   });
 
-  it("strips trailing slash", () => {
-    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "http://plugin-host:1111/";
+  it("falls back to localhost default when URL env vars are blank", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "   ";
+    process.env.TANDEM_URL = "";
+    expect(resolveTandemUrl()).toBe("http://localhost:3479");
+  });
+
+  it("skips blank explicit override before plugin URL", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "http://plugin-host:1111";
+    process.env.TANDEM_URL = "http://manual:2222";
+    expect(resolveTandemUrl("")).toBe("http://plugin-host:1111");
+  });
+
+  it("skips whitespace explicit override before TANDEM_URL", () => {
+    process.env.TANDEM_URL = "http://manual:2222";
+    expect(resolveTandemUrl("   ")).toBe("http://manual:2222");
+  });
+
+  it("falls back to localhost default when explicit override and env vars are blank", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "   ";
+    process.env.TANDEM_URL = "";
+    expect(resolveTandemUrl("\t")).toBe("http://localhost:3479");
+  });
+
+  it("trims surrounding whitespace and strips trailing slashes", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "  http://plugin-host:1111///  ";
     expect(resolveTandemUrl()).toBe("http://plugin-host:1111");
+  });
+
+  it("preserves pathful base URLs while stripping trailing slashes", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "http://proxy.local/tandem/";
+    expect(resolveTandemUrl()).toBe("http://proxy.local/tandem");
   });
 });
 
