@@ -102,6 +102,31 @@ test("annotation buttons enable after text selection", async ({ page }) => {
   });
 });
 
+test("floating selection toolbar stays within a short viewport", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.setViewportSize({ width: 1024, height: 360 });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+
+  const box = await toolbar.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(48);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+});
+
 test("Comment flow creates a comment annotation", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");

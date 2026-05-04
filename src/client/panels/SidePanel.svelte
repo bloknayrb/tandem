@@ -298,7 +298,7 @@ function handleBulk(status: "accepted" | "dismissed") {
       </span>
       <button
         onclick={() => onModeChange?.("tandem")}
-        style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--tandem-author-claude); border-radius: 5px; background: var(--tandem-author-claude); color: white; cursor: pointer; font-weight: 500;"
+        style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--tandem-author-claude); border-radius: 5px; background: var(--tandem-author-claude); color: var(--tandem-author-claude-fg); cursor: pointer; font-weight: 500;"
       >
         Show all
       </button>

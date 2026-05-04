@@ -66,6 +66,10 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   // Popover mounts with its own testid
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
+  await expect(popover.getByRole("button", { name: "Appearance" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 
   await popover.getByRole("button", { name: "Automation" }).click();
   // Dwell slider is present and adjustable — proves the new slider and its
@@ -82,6 +86,73 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
 
   await popover.getByRole("button", { name: "Editor" }).click();
   await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
+});
+
+test("selection toolbar toggle persists and drives toolbar visibility", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  async function selectFirstParagraph(): Promise<void> {
+    await editor.click();
+    await editor.locator("p").first().selectText();
+  }
+
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible({ timeout: 2_000 });
+  await popover.getByRole("button", { name: "Automation" }).click();
+
+  const toggle = popover.locator("[data-testid='selection-toolbar-toggle'] input");
+  if (await toggle.isChecked()) {
+    await toggle.uncheck();
+  }
+  await expect(toggle).not.toBeChecked();
+  const disabledToolbarSaved = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as { selectionToolbar?: boolean }).selectionToolbar : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(disabledToolbarSaved).toBe(false);
+
+  await page.keyboard.press("Escape");
+
+  await page.reload();
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await selectFirstParagraph();
+  await expect(toolbar).toHaveCount(0, { timeout: 2_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const reopenedPopover = page.locator("[data-testid='settings-popover']");
+  await reopenedPopover.getByRole("button", { name: "Automation" }).click();
+  const reopenedToggle = reopenedPopover.locator("[data-testid='selection-toolbar-toggle'] input");
+  if (!(await reopenedToggle.isChecked())) {
+    await reopenedToggle.check();
+  }
+  await expect(reopenedToggle).toBeChecked();
+  const enabledToolbarSaved = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as { selectionToolbar?: boolean }).selectionToolbar : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(enabledToolbarSaved).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await selectFirstParagraph();
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
 });
 
 test("Ctrl+, opens Settings popover", async ({ page }) => {

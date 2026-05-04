@@ -4,12 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap"
-    />
     <title>Tandem - Collaborative Editor</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -25,6 +19,27 @@
       /* Tandem theme tokens.
          Light is the default; dark overrides via [data-theme="dark"] on <html>.
          Pairs meet WCAG AA (4.5:1 for small text, 3:1 for large/non-text). */
+      @font-face {
+        font-family: "Inter Tight";
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url("/fonts/inter-tight-latin.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Source Serif 4";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/source-serif-4-latin.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-style: normal;
+        font-weight: 400 500;
+        font-display: swap;
+        src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2");
+      }
       :root {
         --tandem-font-sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         --tandem-font-serif: "Source Serif 4", "Source Serif Pro", Charter, "Iowan Old Style", Georgia, serif;
@@ -46,10 +61,7 @@
         --tandem-accent-fg-strong: oklch(0.42 0.18 var(--tandem-accent-h));
         --tandem-author-user: oklch(0.55 0.14 245);
         --tandem-author-claude: #d97757;
-        --tandem-highlight-yellow: color-mix(in srgb, #eab308 45%, transparent);
-        --tandem-highlight-green: color-mix(in srgb, #22c55e 45%, transparent);
-        --tandem-highlight-blue: color-mix(in srgb, #60a5fa 45%, transparent);
-        --tandem-highlight-pink: color-mix(in srgb, #ec4899 45%, transparent);
+        --tandem-author-claude-fg: oklch(0.24 0.03 55);
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
         --tandem-success: oklch(0.55 0.14 150);
@@ -108,6 +120,7 @@
         --tandem-accent-fg-strong: oklch(0.85 0.14 var(--tandem-accent-h));
         --tandem-author-user: oklch(0.72 0.13 245);
         --tandem-author-claude: #e89a78;
+        --tandem-author-claude-fg: oklch(0.24 0.03 55);
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
         --tandem-success: #22c55e;
