@@ -19,6 +19,7 @@ import { isTauriRuntime } from "./cowork/cowork-helpers";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
+import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
@@ -128,6 +129,7 @@ $effect(() => {
 });
 
 createTheme(() => settingsState.settings.theme);
+createAccentHue(() => settingsState.settings.accentHue);
 
 $effect(() => {
   const px = TEXT_SIZE_PX[settingsState.settings.textSize];
@@ -509,6 +511,7 @@ const tutorial = createTutorial(
             readOnly={yjsSync.readOnly}
             {reviewMode}
             {activeAnnotationId}
+            editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
             onAnnotationClick={(id) => {
               showChat = false;
