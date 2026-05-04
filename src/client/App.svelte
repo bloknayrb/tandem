@@ -272,6 +272,7 @@ const tutorial = createTutorial(
       tandemMode={modeState.tandemMode}
       onModeChange={modeState.setTandemMode}
       heldCount={modeGate.heldCount}
+      selectionToolbar={settingsState.settings.selectionToolbar}
     />
 
     <DocumentTabs

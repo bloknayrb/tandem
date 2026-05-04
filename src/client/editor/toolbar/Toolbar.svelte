@@ -24,6 +24,7 @@ interface Props {
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
   heldCount?: number;
+  selectionToolbar?: boolean;
 }
 
 let {
@@ -34,28 +35,79 @@ let {
   tandemMode,
   onModeChange,
   heldCount,
+  selectionToolbar = true,
 }: Props = $props();
 
 let hasSelection = $state(false);
+let selectionPosition = $state<{ left: number; top: number } | null>(null);
 let mode = $state<ToolbarMode>("idle");
 let modeText = $state("");
 let capturedRange: { from: number; to: number } | null = null;
 let commentInputEl = $state<HTMLInputElement | null>(null);
 let noteInputEl = $state<HTMLInputElement | null>(null);
 
+const MINI_HIGHLIGHT_COLORS: HighlightColor[] = ["yellow", "green", "blue", "pink"];
+const MINI_HIGHLIGHT_SWATCHES: Record<HighlightColor, string> = {
+  yellow: "var(--tandem-highlight-yellow)",
+  green: "var(--tandem-highlight-green)",
+  blue: "var(--tandem-highlight-blue)",
+  pink: "var(--tandem-highlight-pink)",
+};
+
+function updateSelectionAffordance(ed: TiptapEditor) {
+  const { from, to } = ed.state.selection;
+  const next = from !== to;
+  hasSelection = next;
+  if (!next) {
+    selectionPosition = null;
+    return;
+  }
+
+  try {
+    const start = ed.view.coordsAtPos(from);
+    const end = ed.view.coordsAtPos(to);
+    selectionPosition = {
+      left: (start.left + end.right) / 2,
+      top: Math.min(start.top, end.top) - 10,
+    };
+  } catch {
+    selectionPosition = null;
+  }
+}
+
 $effect(() => {
   if (!editor) return;
   const ed = editor;
 
   function onSelectionUpdate() {
-    const { from, to } = ed.state.selection;
-    const next = from !== to;
-    if (hasSelection !== next) hasSelection = next;
+    updateSelectionAffordance(ed);
   }
 
   ed.on("selectionUpdate", onSelectionUpdate);
+  ed.on("transaction", onSelectionUpdate);
+  onSelectionUpdate();
   return () => {
     ed.off("selectionUpdate", onSelectionUpdate);
+    ed.off("transaction", onSelectionUpdate);
+  };
+});
+
+$effect(() => {
+  if (!editor || !selectionPosition) return;
+  const ed = editor;
+  let frame = 0;
+
+  function scheduleUpdate() {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => updateSelectionAffordance(ed));
+  }
+
+  window.addEventListener("resize", scheduleUpdate);
+  document.addEventListener("scroll", scheduleUpdate, true);
+  return () => {
+    cancelAnimationFrame(frame);
+    window.removeEventListener("resize", scheduleUpdate);
+    document.removeEventListener("scroll", scheduleUpdate, true);
   };
 });
 
@@ -165,7 +217,88 @@ function handleModeKeyDown(e: KeyboardEvent) {
 }
 
 const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
+const showMiniToolbar = $derived(
+  selectionToolbar && canAnnotate && !inInputMode && selectionPosition !== null,
+);
 </script>
+
+{#if showMiniToolbar && selectionPosition}
+  <div
+    role="toolbar"
+    aria-label="Selection tools"
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translate(-50%, -100%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: 1000; white-space: nowrap;`}
+  >
+    <button
+      type="button"
+      aria-label="Bold"
+      title="Bold"
+      onmousedown={(e) => {
+        e.preventDefault();
+        editor?.chain().focus().toggleBold().run();
+      }}
+      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer;"
+    >
+      B
+    </button>
+    <button
+      type="button"
+      aria-label="Italic"
+      title="Italic"
+      onmousedown={(e) => {
+        e.preventDefault();
+        editor?.chain().focus().toggleItalic().run();
+      }}
+      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-style: italic; cursor: pointer;"
+    >
+      I
+    </button>
+    <button
+      type="button"
+      aria-label="Code"
+      title="Code"
+      onmousedown={(e) => {
+        e.preventDefault();
+        editor?.chain().focus().toggleCode().run();
+      }}
+      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
+    >
+      &lt;/&gt;
+    </button>
+    <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+    <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+      {#each MINI_HIGHLIGHT_COLORS as color}
+        <button
+          type="button"
+          aria-label={`Highlight ${color}`}
+          title={`Highlight ${color}`}
+          onmousedown={(e) => {
+            e.preventDefault();
+            handleHighlight(color);
+            editor?.chain().focus().run();
+          }}
+          style={`width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--tandem-border); background: ${MINI_HIGHLIGHT_SWATCHES[color]}; cursor: pointer; padding: 0;`}
+        ></button>
+      {/each}
+    </div>
+    <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+    <button
+      type="button"
+      title="Comment on selection"
+      onmousedown={startComment}
+      style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
+    >
+      Comment
+    </button>
+    <button
+      type="button"
+      title="Private note on selection"
+      onmousedown={startNote}
+      style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
+    >
+      Note
+    </button>
+  </div>
+{/if}
 
 <div
   style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-3);
