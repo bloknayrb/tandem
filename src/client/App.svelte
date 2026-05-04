@@ -31,6 +31,7 @@ import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
@@ -128,6 +129,7 @@ $effect(() => {
 });
 
 createTheme(() => settingsState.settings.theme);
+createAccentHue(() => settingsState.settings.accentHue);
 
 $effect(() => {
   const px = TEXT_SIZE_PX[settingsState.settings.textSize];
@@ -509,6 +511,7 @@ const tutorial = createTutorial(
             readOnly={yjsSync.readOnly}
             {reviewMode}
             {activeAnnotationId}
+            editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
             onAnnotationClick={(id) => {
               showChat = false;

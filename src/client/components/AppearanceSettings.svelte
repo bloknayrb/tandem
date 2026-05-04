@@ -1,6 +1,7 @@
 <script lang="ts">
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
+  EditorFont,
   LayoutMode,
   PanelOrder,
   PrimaryTab,
@@ -82,6 +83,11 @@ const textSizeRg = createRadioGroup<TextSize>(
   () => settings.textSize,
   ["s", "m", "l"] as const,
   (t) => onUpdate({ textSize: t }),
+);
+const editorFontRg = createRadioGroup<EditorFont>(
+  () => settings.editorFont,
+  ["sans", "serif", "mono"] as const,
+  (f) => onUpdate({ editorFont: f }),
 );
 </script>
 
@@ -239,6 +245,53 @@ const textSizeRg = createRadioGroup<TextSize>(
   </div>
   <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
     Reading density only — use browser zoom (Ctrl + =/−) to scale the whole UI.
+  </div>
+</div>
+
+<!-- Accent Color -->
+<div>
+  <div id="settings-accent-color-label" style={sectionLabelStyle}>Accent Color</div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span
+      aria-hidden="true"
+      style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: 3px; flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
+    ></span>
+    <input
+      data-testid="accent-hue-slider"
+      type="range"
+      min="0"
+      max="360"
+      step="1"
+      aria-labelledby="settings-accent-color-label"
+      value={settings.accentHue}
+      oninput={(e) => onUpdate({ accentHue: Number((e.target as HTMLInputElement).value) })}
+      style="flex: 1; accent-color: var(--tandem-accent);"
+    />
+  </div>
+</div>
+
+<!-- Editor Font -->
+<div>
+  <div id="settings-editor-font-label" style={sectionLabelStyle}>Editor Font</div>
+  <div
+    role="radiogroup"
+    aria-labelledby="settings-editor-font-label"
+    tabindex="0"
+    onkeydown={editorFontRg.handleKeyDown}
+    style="display: flex; gap: 8px;"
+  >
+    {#each ([["sans", "Sans-serif"], ["serif", "Serif"], ["mono", "Monospace"]] as const) as [value, label] (value)}
+      <button
+        data-testid={`editor-font-${value}-btn`}
+        role="radio"
+        aria-checked={settings.editorFont === value}
+        tabindex={editorFontRg.tabIndexFor(value)}
+        onclick={() => onUpdate({ editorFont: value })}
+        style={cardStyle(settings.editorFont === value)}
+      >
+        {label}
+      </button>
+    {/each}
   </div>
 </div>
 
