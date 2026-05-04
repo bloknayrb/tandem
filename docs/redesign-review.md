@@ -384,6 +384,76 @@ Add a warning: "ProseMirror positions are client-only. Server-side annotation da
 
 ---
 
+## GitHub Issue Coverage Reconciliation (May 3, 2026)
+
+The GitHub tracking set created from the Claude Design handoff does not fully agree
+with `Gap Analysis.html` if the gap analysis is treated as the exhaustive redesign
+scope. Issue #513 and child issues #514-#522 are a coherent near-term implementation
+breakdown, but they cover only a subset of the full gap analysis.
+
+Covered by #513-#522:
+
+- Selection mini-toolbar: #516.
+- Slash command menu: #517.
+- Settings/root token plumbing: #514 and #515.
+- About panel using `/api/info`: #515.
+- Authorship gutter and review-mode dimming: #518.
+- Solo held-count and rail behavior: #519.
+- Recent files/tab polish: #520.
+- Broad visual pass and final accessibility/responsive QA: #521 and #522.
+
+Additional `Gap Analysis.html` findings not cleanly represented in #513-#522:
+
+Design needs to update:
+
+- Adopt the repo's `--tandem-*` CSS token namespace; it is more complete and avoids
+  collisions with user document content.
+- Annotation card mockups need to reflect the repo's actual type system, rather than
+  a separate promotion chain that does not match the implementation.
+- Settings dialog needs to reconcile with the repo's current sections and persisted
+  settings surface.
+- Status bar needs a decision on whether inline username editing stays there or moves
+  to Settings only.
+- Reply thread expanded view needs to clarify whether reactions/status badges require
+  a new data model.
+
+Repo needs to implement, roughly in priority order:
+
+- Selection mini-toolbar via Tiptap BubbleMenu; the design is fully specified.
+- Editor font token: add `--tandem-editor-font-family` and wire it to settings.
+- Tab file-type badge plus dirty dot; data already exists, so this is visual polish.
+- Solo-mode held count in the status bar; held count is already computed by
+  `createModeGate`, so this needs prop/click wiring.
+- Slash command menu as a new Tiptap extension.
+- Outline panel with H1-H3 parsing.
+- Paged `.docx` layout using `activeTab.format` as the branch point.
+- Find/replace bar using a Tiptap extension plus overlay component.
+- Command palette with a shared action registry.
+
+Both sides need alignment before implementation:
+
+- Titlebar/toolbar merge; blocked on a design decision about Tauri window decoration
+  configuration.
+- Authorship gutter; design shows a 2px left-margin thread while the repo currently
+  implements inline text coloring/data attributes.
+- Diff/apply-edit view; design needs to clarify its relationship to the existing
+  `ApplyChangesButton` tracked-changes flow.
+- First-run onboarding; existing `OnboardingTutorial.svelte` is tutorial annotations,
+  not a wizard, so decide whether a wizard replaces it or lives alongside it.
+
+Out of current scope:
+
+- Share/export sheet; larger backend/API work.
+- True mobile layout; desktop redesign should stabilize first.
+
+The practical interpretation is that #513-#522 should be treated as the first
+redesign implementation wave, not as exhaustive tracking for every gap identified by
+the design artifact. The umbrella issue should carry this categorized reconciliation,
+and any second-wave issues should be created from the "repo needs to implement" and
+"both sides need alignment" lists once the decisions are made.
+
+---
+
 ## Verification Summary
 
 - Annotation types: 3-type discriminated union confirmed in `src/shared/types.ts` (highlight/comment/flag)
