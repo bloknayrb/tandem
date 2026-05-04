@@ -291,14 +291,14 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Held-annotation banner -->
   {#if heldCount > 0}
     <div
-      style="padding: var(--tandem-space-2) var(--tandem-space-4); background: {warningStateColors.background}; border-bottom: 1px solid {warningStateColors.border}; font-size: 12px; color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center;"
+      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: 8px; font-size: 12px; color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center; gap: 10px;"
     >
       <span data-testid="held-banner">
         {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
       </span>
       <button
         onclick={() => onModeChange?.("tandem")}
-        style="font-size: 11px; padding: 1px 8px; border: 1px solid var(--tandem-warning-border); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-warning-fg-strong); cursor: pointer; font-weight: 500;"
+        style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--tandem-author-claude); border-radius: 5px; background: var(--tandem-author-claude); color: white; cursor: pointer; font-weight: 500;"
       >
         Show all
       </button>
@@ -308,7 +308,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Header -->
   <div style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border);">
     <div style="display: flex; justify-content: space-between; align-items: center;">
-      <h3 style="font-size: 14px; font-weight: 600; margin: 0;">
+      <h3 style="font-size: 13px; font-weight: 600; margin: 0;">
         Annotations
         {#if filteredData.allPending.length > 0}
           <span
@@ -333,7 +333,7 @@ function handleBulk(status: "accepted" | "dismissed") {
             onclick={onToggleReviewMode}
             title="Keyboard review mode (Ctrl+Shift+R)"
             aria-pressed={reviewMode}
-            style="padding: 2px 8px; font-size: 11px; border: 1px solid {reviewMode
+            style="padding: 4px 10px; font-size: 11px; border: 1px solid {reviewMode
               ? 'var(--tandem-accent)'
               : 'var(--tandem-border-strong)'}; border-radius: 3px; background: {reviewMode
               ? 'var(--tandem-accent-bg)'
@@ -403,7 +403,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   />
 
   <!-- Annotation list -->
-  <div style="padding: var(--tandem-space-2) var(--tandem-space-4); flex: 1;" role="list" aria-label="Annotations">
+  <div style="padding: var(--tandem-space-3); flex: 1;" role="list" aria-label="Annotations">
     {#if filteredData.filtered.length === 0}
       <p role="status" style="font-size: 13px; color: var(--tandem-fg-subtle); margin-top: 8px;">
         {hasFilters

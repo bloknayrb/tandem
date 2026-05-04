@@ -168,25 +168,26 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 </script>
 
 <div
-  style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2);
-    min-height: 42px; padding: var(--tandem-space-2) var(--tandem-space-4);
+  style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-3);
+    min-height: 44px; padding: 0 var(--tandem-space-4);
     border-bottom: 1px solid var(--tandem-border);
-    background: var(--tandem-surface-muted); user-select: none;"
+    background: var(--tandem-surface-muted); user-select: none; position: relative; z-index: 5;"
 >
   <span
-    style="font-weight: 700; font-size: 15px;
-      color: var(--tandem-accent); letter-spacing: -0.02em;"
+    style="font-weight: 700; font-size: 14px;
+      color: var(--tandem-fg); letter-spacing: 0; display: inline-flex; align-items: center; gap: 8px; padding-right: var(--tandem-space-3); border-right: 1px solid var(--tandem-border); height: 22px;"
   >
+    <span
+      aria-hidden="true"
+      style="width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(from 210deg, var(--tandem-author-user), var(--tandem-author-user) 44%, transparent 44% 56%, var(--tandem-author-claude) 56%, var(--tandem-author-claude)); display: inline-block;"
+    ></span>
     Tandem
   </span>
-  <div
-    style="width: 1px; height: 20px; background: var(--tandem-border); margin: 0 8px;"
-  ></div>
 
   <FormattingToolbar {editor} disabled={inInputMode} />
 
   <div
-    style="width: 1px; height: 20px; background: var(--tandem-border); margin: 0 8px;"
+    style="width: 1px; height: 18px; background: var(--tandem-border);"
   ></div>
 
   <HighlightColorPicker
@@ -245,10 +246,10 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
     {#if (heldCount ?? 0) > 0}
       <span
         data-testid="held-badge"
-        style="padding: 1px 6px; font-size: 10px; font-weight: 600;
+        style="padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: var(--tandem-font-mono);
           color: var(--tandem-warning-fg-strong);
           background: var(--tandem-warning-bg);
-          border-radius: 9999px;"
+          border: 1px solid var(--tandem-warning-border); border-radius: 9999px;"
       >
         {heldCount} held
       </span>
@@ -264,9 +265,9 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
         title="Settings (Ctrl+,)"
         aria-label="Settings"
         aria-keyshortcuts="Control+Comma"
-        style="background: none; border: 1px solid var(--tandem-border-strong);
-          border-radius: 4px; cursor: pointer; color: var(--tandem-fg-muted);
-          font-size: 13px; padding: var(--tandem-space-1) var(--tandem-space-3); min-height: 24px;"
+        style="background: transparent; border: 1px solid transparent;
+          border-radius: 5px; cursor: pointer; color: var(--tandem-fg-muted);
+          font-size: 12px; padding: 0 var(--tandem-space-3); min-height: 28px;"
       >
         Settings
       </button>

@@ -66,7 +66,7 @@ function getBorderColor(ann: Annotation): string {
 
 function getCardBackground(ann: Annotation, reviewTarget?: boolean): string {
   if (reviewTarget) return "var(--tandem-accent-bg)";
-  if (ann.type === "note") return "var(--tandem-warning-bg)";
+  if (ann.type === "note") return "var(--tandem-surface)";
   return "var(--tandem-surface)";
 }
 
@@ -125,19 +125,31 @@ function handleKeyDown(e: KeyboardEvent) {
   role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
-  style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: 0 4px 4px 0; font-size: 13px; opacity: {isPending
+  style="padding: var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border: 1px solid var(--tandem-border); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: 6px; font-size: 13px; opacity: {isPending
     ? 1
     : 0.6}; cursor: {onClick
     ? 'pointer'
-    : 'default'}; outline: {isReviewTarget
-    ? '2px solid var(--tandem-accent)'
-    : 'none'}; transition: background 0.15s, outline 0.15s;"
+    : 'default'}; box-shadow: {isReviewTarget
+    ? '0 0 0 3px var(--tandem-accent-bg)'
+    : 'none'}; transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;"
 >
-  <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px;">
     <span
-      style="font-weight: 500; text-transform: capitalize; display: flex; align-items: center; gap: 4px;"
+      style="font-weight: 600; text-transform: capitalize; display: flex; align-items: center; gap: 6px; color: var(--tandem-fg-muted); font-size: 11px;"
     >
-      {displayType}
+      <span
+        style="font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; background: {hasSuggestedText
+          ? 'var(--tandem-suggestion-bg)'
+          : annotation.type === 'note'
+            ? 'var(--tandem-warning-bg)'
+            : 'var(--tandem-surface-sunk)'}; color: {hasSuggestedText
+          ? 'var(--tandem-suggestion)'
+          : annotation.type === 'note'
+            ? 'var(--tandem-warning-fg-strong)'
+            : 'var(--tandem-fg-muted)'};"
+      >
+        {displayType}
+      </span>
       {#if isPrivateNote}
         <span
           data-testid="annotation-private-pill"
@@ -209,7 +221,7 @@ function handleKeyDown(e: KeyboardEvent) {
       onCancel={handleCancel}
     />
   {:else}
-    <div style="margin: 0; color: var(--tandem-fg); line-height: 1.4;">
+    <div style="margin: 0; color: var(--tandem-fg); line-height: 1.45;">
       {#if hasSuggestedText}
         <div
           data-testid="suggestion-diff-{annotation.id}"

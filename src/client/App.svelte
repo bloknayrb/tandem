@@ -251,7 +251,7 @@ const tutorial = createTutorial(
     Connecting...
   </div>
 {:else}
-  <div style="display: flex; flex-direction: column; height: 100vh;">
+  <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
     {#if yjsSync.serverRestarted}
       <div
         style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
@@ -284,12 +284,12 @@ const tutorial = createTutorial(
     />
 
     {#if panelLayout.kind === "three-panel"}
-      <div style="display: flex; flex: 1; overflow: hidden;">
+      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
         <div
-          style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border);`}
+          style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
         >
           <div
-            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-size: 11px; font-weight: 600; color: var(--tandem-fg-muted); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.5px;"
+            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
           >
             {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
           </div>
@@ -335,10 +335,10 @@ const tutorial = createTutorial(
         {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
 
         <div
-          style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border);`}
+          style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
         >
           <div
-            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-size: 11px; font-weight: 600; color: var(--tandem-fg-muted); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.5px;"
+            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
           >
             {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
           </div>
@@ -381,14 +381,14 @@ const tutorial = createTutorial(
       </div>
 
     {:else if panelLayout.kind === "tabbed-left"}
-      <div style="display: flex; flex: 1; overflow: hidden;">
+      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
         {@render tabbedPanel(panelLayout.left, "left")}
         {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
         {@render editorColumn()}
       </div>
 
     {:else}
-      <div style="display: flex; flex: 1; overflow: hidden;">
+      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
         {@render editorColumn()}
         {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
         {@render tabbedPanel(getRightWidth(panelLayout), "right")}
@@ -499,7 +499,7 @@ const tutorial = createTutorial(
   <div
     role="region"
     aria-label="Document editor"
-    style={`flex: 1; overflow: auto; padding: 24px 48px; border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : ""}; transition: border-color 0.15s, background 0.15s;`}
+    style={`flex: 1; overflow: auto; padding: var(--tandem-space-7, 48px) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s;`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}
@@ -508,7 +508,7 @@ const tutorial = createTutorial(
       visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
-    <div style={`max-width: ${editorMaxWidth ?? "none"}; margin: ${editorMargin ?? "0"};`}>
+    <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
       {#if activeTab}
         {#key activeTab.id}
           <Editor
@@ -534,15 +534,15 @@ const tutorial = createTutorial(
 
 {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
   <div
-    style={`display: flex; flex-direction: column; width: ${width}px; ${borderSide === "left" ? "border-right" : "border-left"}: 1px solid var(--tandem-border);`}
+    style={`display: flex; flex-direction: column; width: ${width}px; ${borderSide === "left" ? "border-right" : "border-left"}: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
   >
     <div
-      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);"
+      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-3); gap: 2px;"
     >
       <button
         data-testid="annotations-tab"
         onclick={() => (showChat = false)}
-        style={`flex: 1; padding: var(--tandem-space-2); font-size: 12px; font-weight: ${showChat ? 400 : 600}; border: none; border-bottom: ${showChat ? "none" : "2px solid var(--tandem-accent)"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)"}; position: relative;`}
+        style={`flex: 1; padding: 0 var(--tandem-space-3); font-size: 12px; font-weight: 500; border: none; border-bottom: ${showChat ? "2px solid transparent" : "2px solid var(--tandem-accent)"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg-subtle)" : "var(--tandem-fg)"}; position: relative;`}
       >
         Annotations
         {#if showChat && pendingAnnotationBadge > 0}
@@ -557,7 +557,7 @@ const tutorial = createTutorial(
         data-testid="chat-tab"
         onmousedown={captureSelectionForChat}
         onclick={() => (showChat = true)}
-        style={`flex: 1; padding: var(--tandem-space-2); font-size: 12px; font-weight: ${showChat ? 600 : 400}; border: none; border-bottom: ${showChat ? "2px solid var(--tandem-accent)" : "none"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)"}; position: relative;`}
+        style={`flex: 1; padding: 0 var(--tandem-space-3); font-size: 12px; font-weight: 500; border: none; border-bottom: ${showChat ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; position: relative;`}
       >
         Chat
       </button>
