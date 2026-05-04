@@ -30,9 +30,8 @@ describe("findChangelogPath", () => {
   });
 
   it("returns undefined for a deeply nested temp-like dir with no CHANGELOG.md ancestors", () => {
-    // Use a path that is unlikely to have CHANGELOG.md anywhere in its hierarchy
-    const result = findChangelogPath("/tmp/no-such-project/a/b/c/d/e/f");
-    // May return undefined or a path — we only assert it does not throw
-    expect(typeof result === "string" || result === undefined).toBe(true);
+    // Use a path that is unlikely to have CHANGELOG.md anywhere in its hierarchy.
+    // Not throwing is sufficient — no assertion needed.
+    findChangelogPath("/tmp/no-such-project/a/b/c/d/e/f");
   });
 });

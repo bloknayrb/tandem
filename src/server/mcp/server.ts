@@ -23,16 +23,8 @@ import { registerDocumentTools } from "./document.js";
 import { registerApplyTools } from "./docx-apply.js";
 import { registerNavigationTools } from "./navigation.js";
 
-// __APP_VERSION__ is injected by tsup at build time (see tsup.config.ts, server entry).
-// In test environments (Vitest runs .ts directly, no tsup) and tsx dev the global is
-// absent, so we fall back to createRequire. In the packaged Tauri sidecar
-// ../../package.json does not exist relative to the bundle — the baked define is
-// the only reliable source there.
-//
-// Path layout for the createRequire fallback:
-//   bundled prod:  dist/server/index.js  → ../../package.json  (repo root) ✓
-//   dev / vitest:  src/server/mcp/server.ts → ../../../package.json  (repo root) ✓
-//   Tauri pkg:     resource_dir/dist/server/index.js → no package.json (define wins)
+// Injected by tsup at build time; absent in tsx dev and vitest, where createRequire
+// reads ../../package.json. Tauri pkg has no package.json — define is the only source.
 declare const __APP_VERSION__: string;
 const esmRequire = createRequire(import.meta.url);
 function _readVersionFromDisk(): string {
