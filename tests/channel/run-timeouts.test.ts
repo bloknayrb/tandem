@@ -26,6 +26,18 @@ const EVENT_BRIDGE_PATH = fileURLToPath(
   new URL("../../src/channel/event-bridge.ts", import.meta.url),
 );
 
+function countMatches(src: string, re: RegExp): number {
+  return src.match(re)?.length ?? 0;
+}
+
+function expectFetchWithTimeoutEndpoint(src: string, endpoint: string, timeoutConstant: string) {
+  const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTimeout = timeoutConstant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  expect(src).toMatch(
+    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${escapedEndpoint}[\\s\\S]*?${escapedTimeout}`),
+  );
+}
+
 describe("channel/run.ts timeout coverage", () => {
   it("does not import authFetch directly — all HTTP goes through fetchWithTimeout", async () => {
     const src = await readFile(RUN_TS_PATH, "utf8");
@@ -36,14 +48,16 @@ describe("channel/run.ts timeout coverage", () => {
 
   it("wraps /api/channel-reply with fetchWithTimeout", async () => {
     const src = await readFile(RUN_TS_PATH, "utf8");
-    expect(src).toMatch(/fetchWithTimeout\([\s\S]*?\/api\/channel-reply/);
-    expect(src).toMatch(/CHANNEL_REPLY_FETCH_TIMEOUT_MS/);
+    expectFetchWithTimeoutEndpoint(src, "/api/channel-reply", "CHANNEL_REPLY_FETCH_TIMEOUT_MS");
   });
 
   it("wraps /api/channel-permission with fetchWithTimeout", async () => {
     const src = await readFile(RUN_TS_PATH, "utf8");
-    expect(src).toMatch(/fetchWithTimeout\([\s\S]*?\/api\/channel-permission/);
-    expect(src).toMatch(/CHANNEL_PERMISSION_FETCH_TIMEOUT_MS/);
+    expectFetchWithTimeoutEndpoint(
+      src,
+      "/api/channel-permission",
+      "CHANNEL_PERMISSION_FETCH_TIMEOUT_MS",
+    );
   });
 
   it("re-throws AbortError/TimeoutError from the JSON-parse catch", async () => {
@@ -63,6 +77,15 @@ describe("channel/event-bridge.ts timeout coverage", () => {
     const bareAuthFetch = src.match(/\bauthFetch\s*\(/g) ?? [];
     expect(bareAuthFetch.length).toBe(1);
     expect(src).toMatch(/authFetch\(`\$\{tandemUrl\}\/api\/events`/);
+  });
+
+  it("pairs every request-response endpoint with fetchWithTimeout and its timeout budget", async () => {
+    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    expectFetchWithTimeoutEndpoint(src, "/api/channel-error", "CHANNEL_ERROR_REPORT_TIMEOUT_MS");
+    expectFetchWithTimeoutEndpoint(src, "/api/mode", "CHANNEL_MODE_FETCH_TIMEOUT_MS");
+
+    expect(countMatches(src, /fetchWithTimeout\([\s\S]*?\/api\/channel-awareness/g)).toBe(2);
+    expect(countMatches(src, /CHANNEL_AWARENESS_FETCH_TIMEOUT_MS/g)).toBeGreaterThanOrEqual(2);
   });
 
   it("uses split AbortController for the SSE handshake (not AbortSignal.timeout on the body)", async () => {

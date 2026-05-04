@@ -28,6 +28,7 @@ import {
 } from "../shared/constants.js";
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent, parseTandemEvent } from "../shared/events/types.js";
+import { describeFetchError, fetchWithTimeout } from "../shared/fetch-with-timeout.js";
 import { type TandemMode, TandemModeSchema } from "../shared/types.js";
 
 const IS_VITEST = process.env.VITEST === "true";
@@ -53,29 +54,6 @@ const AWARENESS_FETCH_TIMEOUT_MS = 5_000; // /api/channel-awareness POST
 const ERROR_REPORT_TIMEOUT_MS = 3_000; // /api/channel-error POST on exit
 const STABLE_CONNECTION_MS = 60_000; // Reset retries after this much continuous uptime
 const CHANNEL_RETRY_MAX_DELAY_MS = 30_000; // Exponential backoff cap
-
-// AbortSignal.timeout is supported on Node 20+; tsup target is node22.
-// Uses authFetch so TANDEM_AUTH_TOKEN is forwarded automatically when set.
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<Response> {
-  const signal = AbortSignal.timeout(timeoutMs);
-  return authFetch(url, { ...init, signal });
-}
-
-/**
- * Format a fetch error for logging. Timeout aborts throw TimeoutError or
- * AbortError with a generic "The operation was aborted" message; tag them
- * with the endpoint and threshold so logs say which request was hung.
- */
-function describeFetchError(err: unknown, endpoint: string, timeoutMs: number): string {
-  if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-    return `${endpoint} timed out after ${timeoutMs}ms`;
-  }
-  return err instanceof Error ? err.message : String(err);
-}
 
 export async function main(): Promise<void> {
   installShutdownHandlers();
