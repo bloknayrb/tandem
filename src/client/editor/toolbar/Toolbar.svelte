@@ -7,8 +7,8 @@ import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import FormattingToolbar from "./FormattingToolbar.svelte";
-import { toggleHighlight } from "./highlight-toggle";
 import HighlightColorPicker from "./HighlightColorPicker.svelte";
+import { toggleHighlight } from "./highlight-toggle";
 import InputGroup from "./InputGroup.svelte";
 import ModeToggle from "./ModeToggle.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
