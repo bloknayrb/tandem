@@ -16,7 +16,7 @@ const sectionLabelStyle =
   <div style={sectionLabelStyle}>Authorship</div>
   <label
     data-testid="authorship-toggle"
-    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
   >
     <input
       type="checkbox"
@@ -26,7 +26,7 @@ const sectionLabelStyle =
     />
     <span>Show who wrote what</span>
   </label>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Highlights text by author:
     <span style="color: var(--tandem-author-user);">you</span> /
     <span style="color: var(--tandem-author-claude);">Claude</span>
@@ -37,7 +37,7 @@ const sectionLabelStyle =
   <div style={sectionLabelStyle}>Contrast</div>
   <label
     data-testid="high-contrast-toggle"
-    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
   >
     <input
       type="checkbox"
@@ -47,7 +47,7 @@ const sectionLabelStyle =
     />
     <span>High contrast</span>
   </label>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Increases border and text contrast for improved readability.
   </div>
 </div>
@@ -56,7 +56,7 @@ const sectionLabelStyle =
   <div style={sectionLabelStyle}>Annotation Patterns</div>
   <label
     data-testid="annotation-patterns-toggle"
-    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
   >
     <input
       type="checkbox"
@@ -66,7 +66,7 @@ const sectionLabelStyle =
     />
     <span>Use pattern fills for annotations</span>
   </label>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Adds visual patterns to annotation decorations (color-blind friendly).
   </div>
 </div>

@@ -125,7 +125,7 @@ function handleKeyDown(e: KeyboardEvent) {
   role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
-  style="padding: var(--tandem-space-2) 10px; margin-bottom: var(--tandem-space-2); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: 0 4px 4px 0; font-size: 13px; opacity: {isPending
+  style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: 0 4px 4px 0; font-size: 13px; opacity: {isPending
     ? 1
     : 0.6}; cursor: {onClick
     ? 'pointer'
