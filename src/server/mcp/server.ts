@@ -23,17 +23,31 @@ import { registerDocumentTools } from "./document.js";
 import { registerApplyTools } from "./docx-apply.js";
 import { registerNavigationTools } from "./navigation.js";
 
+// __APP_VERSION__ is injected by tsup at build time (see tsup.config.ts, server entry).
+// In test environments (Vitest runs .ts directly, no tsup) and tsx dev the global is
+// absent, so we fall back to createRequire. In the packaged Tauri sidecar
+// ../../package.json does not exist relative to the bundle — the baked define is
+// the only reliable source there.
+//
+// Path layout for the createRequire fallback:
+//   bundled prod:  dist/server/index.js  → ../../package.json  (repo root) ✓
+//   dev / vitest:  src/server/mcp/server.ts → ../../../package.json  (repo root) ✓
+//   Tauri pkg:     resource_dir/dist/server/index.js → no package.json (define wins)
+declare const __APP_VERSION__: string;
 const esmRequire = createRequire(import.meta.url);
-let APP_VERSION = "0.0.0-unknown";
-try {
-  APP_VERSION = (esmRequire("../../package.json") as { version: string }).version;
-} catch (err) {
-  console.error(
-    `[Tandem] Could not read version from package.json: ${err instanceof Error ? err.message : err}`,
-  );
+function _readVersionFromDisk(): string {
+  for (const rel of ["../../package.json", "../../../package.json"]) {
+    try {
+      return (esmRequire(rel) as { version: string }).version;
+    } catch {
+      // try next candidate
+    }
+  }
+  console.error("[Tandem] Could not read version from package.json (all candidates failed)");
+  return "0.0.0-unknown";
 }
-
-export { APP_VERSION };
+export const APP_VERSION: string =
+  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : _readVersionFromDisk();
 
 // __MCP_SDK_VERSION__ is injected by tsup at build time (see tsup.config.ts).
 // In test environments (Vitest runs .ts directly, no tsup), the global is absent.
@@ -46,11 +60,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist/server/ → dist/client/ (tsup bundles server into dist/server/index.js)
 const CLIENT_DIST = join(__dirname, "../client");
 
-// Resolve CHANGELOG.md by walking up from __dirname until we find a directory
-// that contains both package.json and CHANGELOG.md. This works in both dev
-// (src/server/mcp/) and production (dist/server/) without hardcoding depth.
-// Capped at 5 levels to avoid runaway traversal.
-function findChangelogPath(startDir: string): string | undefined {
+// Resolve CHANGELOG.md. Checks direct __dirname-relative paths first so the
+// function works reliably in the packaged Tauri sidecar layout, where package.json
+// does NOT exist alongside the bundle (breaking the walk-based anchor).
+//
+// Layout reference:
+//   dev:        src/server/mcp/  →  ../../CHANGELOG.md  (repo root)
+//   bundled:    dist/server/     →  ../../CHANGELOG.md  (repo root)
+//   Tauri pkg:  resource_dir/dist/server/  →  ../../CHANGELOG.md  (resource_dir root)
+//               CHANGELOG.md IS present in resource_dir via tauri.conf.json resources.
+//
+// Falls back to a package.json-anchored walk for unusual layouts.
+export function findChangelogPath(startDir: string): string | undefined {
+  // Fast direct probes (covers all three layouts above)
+  for (const rel of ["../../CHANGELOG.md", "../CHANGELOG.md"]) {
+    const candidate = join(startDir, rel);
+    if (existsSync(candidate)) return candidate;
+  }
+  // Fallback: walk up looking for package.json + CHANGELOG.md co-located
+  // (covers unusual / monorepo layouts). Capped at 5 levels.
   let dir = startDir;
   for (let i = 0; i < 5; i++) {
     const candidate = join(dir, "CHANGELOG.md");
