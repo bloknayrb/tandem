@@ -20,14 +20,19 @@ import { createFetchStub, installMonitorFakeTimers } from "../monitor/fetch-harn
 
 describe("fetchWithTimeout", () => {
   let stub: ReturnType<typeof createFetchStub>;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.TANDEM_AUTH_TOKEN;
+    delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
     installMonitorFakeTimers();
     stub = createFetchStub();
     stub.install();
   });
   afterEach(() => {
     stub.restore();
+    process.env = { ...originalEnv };
     vi.useRealTimers();
   });
 
@@ -65,6 +70,42 @@ describe("fetchWithTimeout", () => {
     // is built on setTimeout, so the fake-timer surface controls it.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(resolvedAbortFired).toBe(false);
+  });
+
+  it("routes through authFetch so plugin auth wins while headers and timeout signal survive", async () => {
+    process.env.TANDEM_AUTH_TOKEN = "T".repeat(32);
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "P".repeat(32);
+    stub.on("/api/auth", (_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Content-Type")).toBe("application/json");
+      expect(headers.get("Authorization")).toBe(`Bearer ${"P".repeat(32)}`);
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const res = await fetchWithTimeout(
+      "http://localhost/api/auth",
+      { headers: { "Content-Type": "application/json" } },
+      5_000,
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("composes caller abort with the timeout signal", async () => {
+    const ctrl = new AbortController();
+    stub.on("/api/caller-abort", (_url, init) => {
+      const signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    });
+
+    const p = fetchWithTimeout("http://localhost/api/caller-abort", { signal: ctrl.signal }, 5_000);
+    ctrl.abort();
+    await expect(p).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("isAbortOrTimeoutError matches both AbortError and TimeoutError", () => {

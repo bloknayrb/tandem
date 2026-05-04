@@ -12,6 +12,8 @@ describe("authFetch", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
+    delete process.env.TANDEM_AUTH_TOKEN;
+    delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
     fetchSpy = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("fetch", fetchSpy);
   });
@@ -28,9 +30,8 @@ describe("authFetch", () => {
     await authFetch("http://localhost/test");
     expect(fetchSpy).toHaveBeenCalledOnce();
     const [, init] = fetchSpy.mock.calls[0];
-    expect(
-      init?.headers?.get?.("Authorization") ?? (init?.headers as any)?.Authorization,
-    ).toBeUndefined();
+    const headers = new Headers(init?.headers);
+    expect(headers.has("Authorization")).toBe(false);
   });
 
   it("sends no Authorization header when TANDEM_AUTH_TOKEN is empty string", async () => {
@@ -51,6 +52,26 @@ describe("authFetch", () => {
     expect(headers.get("Authorization")).toBe(`Bearer ${"A".repeat(32)}`);
   });
 
+  it("prefers CLAUDE_PLUGIN_OPTION_AUTH_TOKEN over TANDEM_AUTH_TOKEN", async () => {
+    process.env.TANDEM_AUTH_TOKEN = "T".repeat(32);
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "P".repeat(32);
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test");
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe(`Bearer ${"P".repeat(32)}`);
+  });
+
+  it("falls back to TANDEM_AUTH_TOKEN when CLAUDE_PLUGIN_OPTION_AUTH_TOKEN is blank", async () => {
+    process.env.TANDEM_AUTH_TOKEN = "T".repeat(32);
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "  ";
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test");
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe(`Bearer ${"T".repeat(32)}`);
+  });
+
   it("preserves existing Content-Type header when injecting Authorization", async () => {
     process.env.TANDEM_AUTH_TOKEN = "B".repeat(32);
     const authFetch = await importAuthFetch();
@@ -59,6 +80,15 @@ describe("authFetch", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.get("Authorization")).toBe(`Bearer ${"B".repeat(32)}`);
+  });
+
+  it("preserves caller-provided signal when injecting Authorization", async () => {
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "D".repeat(32);
+    const ctrl = new AbortController();
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test", { signal: ctrl.signal });
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init?.signal).toBe(ctrl.signal);
   });
 
   it("logs a warning (once) and sends without auth when TANDEM_AUTH_TOKEN is set but malformed", async () => {
@@ -70,6 +100,20 @@ describe("authFetch", () => {
     expect(errorSpy).toHaveBeenCalledOnce();
     expect(errorSpy.mock.calls[0][0]).toMatch(/invalid/i);
     // Request sent without Authorization header
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.has("Authorization")).toBe(false);
+    errorSpy.mockRestore();
+  });
+
+  it("warns with the selected plugin auth source when the plugin token is malformed", async () => {
+    process.env.TANDEM_AUTH_TOKEN = "T".repeat(32);
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "bad-plugin-token!";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test");
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(errorSpy.mock.calls[0][0]).toContain("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN");
     const [, init] = fetchSpy.mock.calls[0];
     const headers = new Headers(init?.headers);
     expect(headers.has("Authorization")).toBe(false);

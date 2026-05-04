@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
-import { DEFAULT_MCP_PORT } from "../shared/constants.js";
+import { resolveTandemUrl } from "../shared/cli-runtime.js";
 import { applyConfigWithToken } from "./setup.js";
 
 /** SHA-256 fingerprint — first 8 hex chars. Never logs the full token value. */
@@ -53,7 +53,7 @@ export async function rotateToken(): Promise<void> {
     throw err;
   }
 
-  const serverUrl = `http://localhost:${DEFAULT_MCP_PORT}`;
+  const serverUrl = resolveTandemUrl();
 
   // Three distinct outcomes:
   //   graceWindowActive = true  → server accepted the rotation; grace window is live

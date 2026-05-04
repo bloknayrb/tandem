@@ -344,7 +344,7 @@ On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs 
 
 The plugin monitor and legacy channel shim both bound their outbound HTTP calls so a half-open Tandem server cannot wedge the push bridge silently. The shared timeout helper lives in `src/shared/fetch-with-timeout.ts` and is used by `src/monitor/`, `src/channel/event-bridge.ts`, and `src/channel/run.ts`.
 
-1. **`fetchWithTimeout(url, init, ms)`** — wraps `AbortSignal.timeout(ms)` around `fetch`. Used for all request-response routes.
+1. **`fetchWithTimeout(url, init, ms)`** — delegates through `authFetch`, applies `AbortSignal.timeout(ms)`, and composes it with any caller-provided abort signal. Used for all request-response routes.
 2. **Split handshake + inactivity watchdog** — used for the streaming `/api/events` route. A local `AbortController` bounds the handshake; once the response headers arrive the controller's timer is cleared, and a separate inactivity watchdog cancels the body stream if no bytes arrive for `SSE_INACTIVITY_TIMEOUT_MS`. See [lesson #42](./lessons-learned.md#42-abortsignal-passed-to-fetch-governs-the-response-body-too).
 3. **SSE frame buffer cap** — the channel shim caps unframed SSE data at 1 MB so a malformed upstream cannot grow memory without a `\n\n` frame boundary.
 

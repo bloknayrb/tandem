@@ -8,7 +8,7 @@
  *
  * Pure native `fetch` + `AbortSignal.timeout` so it can be imported from any
  * surface without dragging in server deps. Routes through `authFetch` so the
- * `TANDEM_AUTH_TOKEN` header is forwarded automatically when set.
+ * resolved Tandem auth token is forwarded automatically when set.
  *
  * `describeFetchError` formats timeout aborts as `<endpoint> timed out after
  * <ms>ms` so logs name the hung endpoint instead of the generic
@@ -30,7 +30,8 @@ export async function fetchWithTimeout(
   init: RequestInit,
   timeoutMs: number,
 ): Promise<Response> {
-  const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
   return authFetch(url, { ...init, signal });
 }
 

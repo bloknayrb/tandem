@@ -27,7 +27,11 @@
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
+import {
+  redirectConsoleToStderr,
+  resolveAuthToken,
+  resolveTandemUrl,
+} from "../shared/cli-runtime.js";
 import { probeTandemServer } from "./preflight.js";
 
 redirectConsoleToStderr();
@@ -81,14 +85,14 @@ process.once("unhandledRejection", (reason: unknown) => {
 const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
 
 /**
- * Validate TANDEM_AUTH_TOKEN if set.
+ * Validate the configured auth token if present.
  * Rules (invariant 4):
  * - If not set at all, or if empty/whitespace-only after trim → return null (loopback-only mode).
  * - "Bearer " prefix → exit 1 with "double-prefix" message.
  * - Must match /^[A-Za-z0-9_-]{32,}$/ (no whitespace, no newlines, no Bearer prefix).
  */
 export function readAndValidateAuthToken(): string | null {
-  const raw = process.env.TANDEM_AUTH_TOKEN;
+  const raw = resolveAuthToken();
   // Token not set at all, or empty/whitespace-only → loopback-only mode, no auth header, no exit.
   if (raw === undefined) return null;
   const trimmed = raw.trim();
@@ -96,14 +100,14 @@ export function readAndValidateAuthToken(): string | null {
 
   if (trimmed.startsWith("Bearer ")) {
     process.stderr.write(
-      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is invalid (double-prefix: do not include 'Bearer ' prefix — supply the raw token only)\n",
+      "[tandem mcp-stdio] auth token is invalid (double-prefix: do not include 'Bearer ' prefix — supply the raw token only)\n",
     );
     process.exit(1);
   }
 
   if (!VALID_TOKEN_RE.test(trimmed)) {
     process.stderr.write(
-      "[tandem mcp-stdio] TANDEM_AUTH_TOKEN is malformed (must be 32+ URL-safe characters: [A-Za-z0-9_-])\n",
+      "[tandem mcp-stdio] auth token is malformed (must be 32+ URL-safe characters: [A-Za-z0-9_-])\n",
     );
     process.exit(1);
   }

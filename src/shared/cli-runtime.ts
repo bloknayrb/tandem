@@ -18,14 +18,62 @@ export function redirectConsoleToStderr(): void {
 }
 
 /**
- * Resolve the Tandem HTTP base URL used by stdio subcommands. Precedence is
- * (1) explicit override, (2) `TANDEM_URL` env var, (3) the default port on
- * localhost. The returned string has no trailing slash so callers can
- * concatenate `/health`, `/mcp`, etc. without double-slash.
+ * Resolve the Tandem HTTP base URL used by stdio subcommands. Precedence:
+ * (1) explicit override (programmatic, e.g. from tests)
+ * (2) CLAUDE_PLUGIN_OPTION_SERVER_URL — injected by plugin host from userConfig
+ * (3) TANDEM_URL — explicit env override
+ * (4) localhost default
+ * Blank values are treated as absent so a blank plugin option does not mask an
+ * explicit TANDEM_URL or the localhost default.
+ * The returned string has no trailing slash so callers can concatenate
+ * `/health`, `/mcp`, etc. without double-slash.
  */
 export function resolveTandemUrl(override?: string): string {
-  const raw = override ?? process.env.TANDEM_URL ?? `http://localhost:${DEFAULT_MCP_PORT}`;
-  return raw.replace(/\/$/, "");
+  return resolveTandemUrlCandidate(override).replace(/\/+$/, "");
+}
+
+function resolveTandemUrlCandidate(override?: string): string {
+  const candidates = [
+    override,
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL,
+    process.env.TANDEM_URL,
+  ];
+  for (const url of candidates) {
+    if (url !== undefined && url.trim() !== "") return url.trim();
+  }
+  return `http://localhost:${DEFAULT_MCP_PORT}`;
+}
+
+/**
+ * Resolve the Tandem auth token. Precedence:
+ * (1) explicit override (programmatic, e.g. from tests)
+ * (2) CLAUDE_PLUGIN_OPTION_AUTH_TOKEN — injected by plugin host from userConfig
+ * (3) TANDEM_AUTH_TOKEN — explicit env override
+ * Blank values are treated as absent so a blank plugin option does not mask an
+ * explicit TANDEM_AUTH_TOKEN. Returns undefined when all absent (loopback mode,
+ * no Authorization header sent).
+ */
+export function resolveAuthToken(override?: string): string | undefined {
+  return resolveAuthTokenCandidate(override).token;
+}
+
+type AuthTokenSource =
+  | "explicit override"
+  | "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN"
+  | "TANDEM_AUTH_TOKEN";
+
+function resolveAuthTokenCandidate(
+  override?: string,
+): { token: string; source: AuthTokenSource } | { token: undefined; source: undefined } {
+  const candidates: Array<[AuthTokenSource, string | undefined]> = [
+    ["explicit override", override],
+    ["CLAUDE_PLUGIN_OPTION_AUTH_TOKEN", process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN],
+    ["TANDEM_AUTH_TOKEN", process.env.TANDEM_AUTH_TOKEN],
+  ];
+  for (const [source, token] of candidates) {
+    if (token !== undefined && token.trim() !== "") return { token, source };
+  }
+  return { token: undefined, source: undefined };
 }
 
 /** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
@@ -36,7 +84,7 @@ let _warnedInvalidToken = false;
 
 /**
  * Fetch wrapper that automatically injects `Authorization: Bearer <token>`
- * when TANDEM_AUTH_TOKEN is set and valid.
+ * when a resolved Tandem auth token is set and valid.
  *
  * This is the forgiving variant — used by monitor/channel which may run in
  * loopback-only mode without a token. Invalid or absent tokens are silently
@@ -45,18 +93,19 @@ let _warnedInvalidToken = false;
  * so operators know why auth headers are absent.
  */
 export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
-  const token = process.env.TANDEM_AUTH_TOKEN;
-  if (token !== undefined && token.trim() !== "") {
-    if (VALID_TOKEN_RE.test(token.trim())) {
+  const { token, source } = resolveAuthTokenCandidate();
+  if (token !== undefined) {
+    const trimmed = token.trim();
+    if (VALID_TOKEN_RE.test(trimmed)) {
       const headers = new Headers(init?.headers);
-      headers.set("Authorization", `Bearer ${token.trim()}`);
+      headers.set("Authorization", `Bearer ${trimmed}`);
       return fetch(url, { ...init, headers });
     }
     // Token is set but invalid — warn once so operators know why auth fails
     if (!_warnedInvalidToken) {
       _warnedInvalidToken = true;
       console.error(
-        "[tandem] authFetch: TANDEM_AUTH_TOKEN is set but invalid (must be 32+ alphanumeric chars [A-Za-z0-9_-]); sending without Authorization header",
+        `[tandem] authFetch: ${source} is set but invalid (must be 32+ alphanumeric chars [A-Za-z0-9_-]); sending without Authorization header`,
       );
     }
   }
