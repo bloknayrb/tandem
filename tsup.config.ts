@@ -41,6 +41,7 @@ export default defineConfig([
     ...selfContained,
     define: {
       __MCP_SDK_VERSION__: JSON.stringify(mcpSdkPkg.version),
+      __APP_VERSION__: JSON.stringify(pkg.version),
     },
   },
   {

@@ -113,8 +113,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 ### MCP / Server
 - **Channel shim uses low-level `Server`, not `McpServer`.** The Channels spec requires `import { Server } from '@modelcontextprotocol/sdk/server/index.js'` with explicit `setRequestHandler()` calls. The HTTP MCP server uses the high-level `McpServer` wrapper.
 - **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` -- not `document-id`.
-- **`APP_VERSION` is read from `package.json`** via `createRequire` in `src/server/mcp/server.ts`. Don't hardcode version strings. `findChangelogPath()` in the same file walks up from `__dirname` to find `CHANGELOG.md` (handles both `src/server/mcp/` in dev and `dist/server/` in production).
-- **`__MCP_SDK_VERSION__` is injected by tsup at build time.** `require("@modelcontextprotocol/sdk/package.json")` resolves to `dist/cjs/package.json` (a CJS type marker without `version`), not the root. `tsup.config.ts` walks the resolved path back past `dist/` to read the real version. The `typeof` guard in `server.ts` falls back to `"0.0.0-unknown"` in dev/test (no tsup).
+- **`APP_VERSION` is baked at build time** via the `__APP_VERSION__` tsup define in `src/server/mcp/server.ts`. Falls back to `createRequire("../../package.json")` in tsx dev and vitest. `__MCP_SDK_VERSION__` follows the same pattern. `findChangelogPath()` in the same file walks up from `__dirname` to find `CHANGELOG.md` (handles both `src/server/mcp/` in dev and `dist/server/` in production).
 - **MCP must start before Hocuspocus** in stdio mode -- init timeout fires if order is reversed.
 
 ### Client / UI
