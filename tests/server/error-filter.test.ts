@@ -6,9 +6,9 @@ function wsError(
   message: string,
   code: string,
   Ctor: ErrorConstructor | typeof RangeError = RangeError,
-): Error {
-  const err = new Ctor(message);
-  (err as any).code = code;
+): Error & { code: string } {
+  const err = new Ctor(message) as Error & { code: string };
+  err.code = code;
   return err;
 }
 
