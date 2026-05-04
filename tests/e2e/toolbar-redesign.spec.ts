@@ -267,3 +267,109 @@ test("Escape cancels Note input without creating annotation", async ({ page }) =
   });
   expect(await getAnnotationCount()).toBe(0);
 });
+
+test("highlight same range twice removes highlight (toggle off)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+
+  // One annotation after first click.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  expect(await getAnnotationCount()).toBe(1);
+
+  // Re-select the same text and click highlight again — should toggle off.
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+
+  // Toggle off: zero annotations.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 10_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+});
+
+test("highlight same range with different color replaces the highlight (recolor)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  // First highlight: default color (yellow).
+  const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+
+  // Switch to blue via color picker, then click highlight on the same range.
+  const colorToggle = page.locator("[data-testid='toolbar-highlight-color-toggle']");
+  await colorToggle.click();
+  await page.locator("[data-testid='toolbar-highlight-color-blue']").click();
+
+  // Re-select the same text.
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+
+  // Still exactly one annotation (replaced, not added).
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  expect(await getAnnotationCount()).toBe(1);
+});
+
+test("highlights on different ranges produce two separate annotations", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  // Highlight first paragraph.
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+
+  // Highlight a different paragraph (section one content).
+  const secondPara = editor.locator("p").nth(1);
+  await secondPara.click();
+  await secondPara.selectText();
+  await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
+  await highlightBtn.click();
+
+  // Two separate annotations.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
+    timeout: 10_000,
+  });
+  expect(await getAnnotationCount()).toBe(2);
+});

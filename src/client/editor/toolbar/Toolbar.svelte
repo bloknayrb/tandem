@@ -7,6 +7,7 @@ import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import FormattingToolbar from "./FormattingToolbar.svelte";
+import { toggleHighlight } from "./highlight-toggle";
 import HighlightColorPicker from "./HighlightColorPicker.svelte";
 import InputGroup from "./InputGroup.svelte";
 import ModeToggle from "./ModeToggle.svelte";
@@ -107,7 +108,17 @@ function resetAndFocusEditor() {
 const inInputMode = $derived(mode !== "idle");
 
 function handleHighlight(color: HighlightColor) {
-  createAnnotation("highlight", "", { color });
+  if (!editor || !ydoc) return;
+
+  const range = capturedRange ?? editor.state.selection;
+  const { from, to } = range;
+  if (from === to) return;
+
+  const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
+  const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
+
+  toggleHighlight(ydoc, { from: flatFrom, to: flatTo }, color);
+  capturedRange = null;
 }
 
 function handleModeStart(targetMode: ToolbarMode) {
