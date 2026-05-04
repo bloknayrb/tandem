@@ -283,6 +283,7 @@ const showMiniToolbar = $derived(
     <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
     <button
       type="button"
+      aria-label="Comment on selection"
       title="Comment on selection"
       onmousedown={startComment}
       style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
@@ -291,6 +292,7 @@ const showMiniToolbar = $derived(
     </button>
     <button
       type="button"
+      aria-label="Private note on selection"
       title="Private note on selection"
       onmousedown={startNote}
       style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"

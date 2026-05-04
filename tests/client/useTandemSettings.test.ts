@@ -52,8 +52,8 @@ describe("loadSettings — selectionDwellMs clamping", () => {
 
   it("returns default when no settings are stored", () => {
     const settings = loadSettings();
-    expect(settings.layout).toBe("three-panel");
-    expect(settings.editorWidthPercent).toBe(50);
+    expect(settings.layout).toBe("tabbed");
+    expect(settings.editorWidthPercent).toBe(100);
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
 
@@ -257,8 +257,8 @@ describe("useTandemSettings — updateSettings write path", () => {
     reduceMotion: false,
     textSize: "m",
     theme: "system",
-    accentHue: 239,
-    editorFont: "sans",
+    accentHue: 275,
+    editorFont: "serif",
     density: "cozy",
     defaultMode: "tandem",
     highContrast: false,
@@ -315,7 +315,7 @@ describe("useTandemSettings — updateSettings write path", () => {
   });
 
   it("falls back to default accentHue for NaN", () => {
-    expect(mergeAndClampSettings(BASE, { accentHue: NaN }).accentHue).toBe(239);
+    expect(mergeAndClampSettings(BASE, { accentHue: NaN }).accentHue).toBe(275);
   });
 });
 
@@ -358,13 +358,13 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
     expect(loadSettings().accentHue).toBe(0);
   });
 
-  it("defaults accentHue to 239 when absent", () => {
-    expect(loadSettings().accentHue).toBe(239);
+  it("defaults accentHue to 275 when absent", () => {
+    expect(loadSettings().accentHue).toBe(275);
   });
 
   it("falls back to default accentHue for non-numeric values", () => {
     writeRawSettings({ accentHue: "garbage" });
-    expect(loadSettings().accentHue).toBe(239);
+    expect(loadSettings().accentHue).toBe(275);
   });
 
   it.each(["serif", "sans", "mono"] as const)("accepts editorFont '%s'", (font) => {
@@ -372,13 +372,13 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
     expect(loadSettings().editorFont).toBe(font);
   });
 
-  it("falls back to 'sans' for unknown editorFont", () => {
+  it("falls back to 'serif' for unknown editorFont", () => {
     writeRawSettings({ editorFont: "comic-sans" });
-    expect(loadSettings().editorFont).toBe("sans");
+    expect(loadSettings().editorFont).toBe("serif");
   });
 
-  it("defaults editorFont to 'sans' when absent", () => {
-    expect(loadSettings().editorFont).toBe("sans");
+  it("defaults editorFont to 'serif' when absent", () => {
+    expect(loadSettings().editorFont).toBe("serif");
   });
 
   it.each(["compact", "cozy", "spacious"] as const)("accepts density '%s'", (d) => {

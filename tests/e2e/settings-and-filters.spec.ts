@@ -67,6 +67,7 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
 
+  await popover.getByRole("button", { name: "Automation" }).click();
   // Dwell slider is present and adjustable — proves the new slider and its
   // testid are wired up. The actual broadcast into CTRL_ROOM is covered by
   // the event-queue-dwell unit test; here we just verify the UI surface.
@@ -74,9 +75,12 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await expect(dwellSlider).toBeVisible();
   await expect(dwellSlider).toHaveAttribute("type", "range");
 
+  await popover.getByRole("button", { name: "Appearance" }).click();
   // Layout buttons — exercises another batch of new testids from #223
   await expect(popover.locator("[data-testid='layout-tabbed-btn']")).toBeVisible();
   await expect(popover.locator("[data-testid='layout-three-panel-btn']")).toBeVisible();
+
+  await popover.getByRole("button", { name: "Editor" }).click();
   await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
 });
 
@@ -275,12 +279,12 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   const rightHandle = page.locator("[data-testid='right-panel-resize-handle']");
   const tabbedHandle = page.locator("[data-testid='panel-resize-handle']");
 
-  // Three-panel layout (default) mounts separate left and right handles.
-  await expect(leftHandle).toHaveCount(1, { timeout: 10_000 });
-  await expect(rightHandle).toHaveCount(1, { timeout: 10_000 });
-  await expect(tabbedHandle).toHaveCount(0, { timeout: 10_000 });
+  // Tabbed layout is the redesign default.
+  await expect(tabbedHandle).toHaveCount(1, { timeout: 10_000 });
+  await expect(leftHandle).toHaveCount(0, { timeout: 10_000 });
+  await expect(rightHandle).toHaveCount(0, { timeout: 10_000 });
 
-  // Switch to tabbed.
+  // Re-select tabbed to exercise the settings button without changing state.
   await page.locator("[data-testid='settings-btn']").click();
   await expect(page.locator("[data-testid='settings-popover']")).toBeVisible();
   await page.locator("[data-testid='layout-tabbed-btn']").click();
@@ -297,7 +301,7 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   }, TANDEM_SETTINGS_KEY);
   expect(tabbedSaved).toBe("tabbed");
 
-  // Switch back to three-panel.
+  // Switch to three-panel.
   await page.locator("[data-testid='layout-three-panel-btn']").click();
   await expect(leftHandle).toHaveCount(1, { timeout: 10_000 });
   await expect(rightHandle).toHaveCount(1, { timeout: 10_000 });
@@ -305,7 +309,7 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
 });
 
 test("tabbed-left layout mounts left panel handle and keeps tabs visible", async ({ page }) => {
-  // Default is three-panel. This test covers the tabbed-left branch which
+  // This test covers the tabbed-left branch which
   // had zero E2E coverage — it has a left-side panel with its own resize
   // handle (left-panel-resize-handle) instead of the right-side tabbed
   // handle (panel-resize-handle).
@@ -813,7 +817,10 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   await page.locator("[data-testid='settings-btn']").click();
-  const slider = page.locator("[data-testid='dwell-time-slider']");
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible();
+  await popover.getByRole("button", { name: "Automation" }).click();
+  const slider = popover.locator("[data-testid='dwell-time-slider']");
   await expect(slider).toBeVisible({ timeout: 2_000 });
 
   // Set the range input value and fire a React-compatible change event.
@@ -841,7 +848,9 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await page.reload();
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await page.locator("[data-testid='settings-btn']").click();
-  const reloadedSlider = page.locator("[data-testid='dwell-time-slider']");
+  const reloadedPopover = page.locator("[data-testid='settings-popover']");
+  await reloadedPopover.getByRole("button", { name: "Automation" }).click();
+  const reloadedSlider = reloadedPopover.locator("[data-testid='dwell-time-slider']");
   await expect(reloadedSlider).toHaveValue("2000");
 });
 
@@ -864,7 +873,8 @@ test("settings popover stays within viewport on short screens (#306)", async ({ 
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
 
-  const { overflowed, overflowY } = await popover.evaluate((el) => ({
+  const scrollRegion = popover.locator("section > div").first();
+  const { overflowed, overflowY } = await scrollRegion.evaluate((el) => ({
     overflowed: el.scrollHeight > el.clientHeight,
     overflowY: window.getComputedStyle(el).overflowY,
   }));
