@@ -324,8 +324,17 @@ test("highlight same range with different color replaces the highlight (recolor)
   });
 
   // Switch to blue via color picker, then click highlight on the same range.
+  // Re-select first: color-toggle is disabled until canAnnotate is true (requires
+  // an active selection). Without this the click is a no-op and the picker never
+  // opens, causing a 30s timeout on the swatch locator.
+  await editor.click();
+  await editor.locator("p").first().selectText();
   const colorToggle = page.locator("[data-testid='toolbar-highlight-color-toggle']");
+  await expect(colorToggle).toBeEnabled({ timeout: 3_000 });
   await colorToggle.click();
+  await expect(page.locator("[data-testid='toolbar-highlight-color-blue']")).toBeVisible({
+    timeout: 2_000,
+  });
   await page.locator("[data-testid='toolbar-highlight-color-blue']").click();
 
   // Re-select the same text.
