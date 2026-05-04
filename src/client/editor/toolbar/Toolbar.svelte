@@ -168,8 +168,8 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 </script>
 
 <div
-  style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-    min-height: 42px; padding: 8px 16px;
+  style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2);
+    min-height: 42px; padding: var(--tandem-space-2) var(--tandem-space-4);
     border-bottom: 1px solid var(--tandem-border);
     background: var(--tandem-surface-muted); user-select: none;"
 >
@@ -241,7 +241,7 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
   {/if}
 
   <div style="flex: 1;"></div>
-  <div style="display: flex; align-items: center; gap: 12px;">
+  <div style="display: flex; align-items: center; gap: var(--tandem-space-3);">
     {#if (heldCount ?? 0) > 0}
       <span
         data-testid="held-badge"
@@ -266,7 +266,7 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
         aria-keyshortcuts="Control+Comma"
         style="background: none; border: 1px solid var(--tandem-border-strong);
           border-radius: 4px; cursor: pointer; color: var(--tandem-fg-muted);
-          font-size: 13px; padding: 4px 12px; min-height: 24px;"
+          font-size: 13px; padding: var(--tandem-space-1) var(--tandem-space-3); min-height: 24px;"
       >
         Settings
       </button>

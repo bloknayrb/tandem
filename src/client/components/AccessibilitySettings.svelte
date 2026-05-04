@@ -32,3 +32,41 @@ const sectionLabelStyle =
     <span style="color: var(--tandem-author-claude);">Claude</span>
   </div>
 </div>
+
+<div>
+  <div style={sectionLabelStyle}>Contrast</div>
+  <label
+    data-testid="high-contrast-toggle"
+    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+  >
+    <input
+      type="checkbox"
+      checked={settings.highContrast}
+      onchange={(e) => onUpdate({ highContrast: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent);"
+    />
+    <span>High contrast</span>
+  </label>
+  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+    Increases border and text contrast for improved readability.
+  </div>
+</div>
+
+<div>
+  <div style={sectionLabelStyle}>Annotation Patterns</div>
+  <label
+    data-testid="annotation-patterns-toggle"
+    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+  >
+    <input
+      type="checkbox"
+      checked={settings.annotationPatterns}
+      onchange={(e) => onUpdate({ annotationPatterns: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent);"
+    />
+    <span>Use pattern fills for annotations</span>
+  </label>
+  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+    Adds visual patterns to annotation decorations (color-blind friendly).
+  </div>
+</div>

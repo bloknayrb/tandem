@@ -151,7 +151,7 @@ const sectionLabelStyle =
     aria-modal="true"
     aria-labelledby={HEADING_ID}
     tabindex={-1}
-    style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: calc(100vh - 32px); overflow-y: auto; width: {POPOVER_WIDTH}px; background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,0.12); padding: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 14px; outline: none;"
+    style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: calc(100vh - 32px); overflow-y: auto; width: {POPOVER_WIDTH}px; background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,0.12); padding: var(--tandem-space-4); z-index: 9999; display: flex; flex-direction: column; gap: 14px; outline: none;"
   >
     <!-- Header -->
     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -233,7 +233,7 @@ const sectionLabelStyle =
         data-testid="view-changelog-btn"
         onclick={() => void handleViewChangelog()}
         disabled={changelogLoading || appInfo.loading}
-        style="width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: 4px; cursor: {changelogLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {changelogLoading || appInfo.loading ? 0.6 : 1};"
+        style="width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: 4px; cursor: {changelogLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {changelogLoading || appInfo.loading ? 0.6 : 1};"
       >
         {changelogLoading ? "Opening…" : "View Changelog"}
       </button>
@@ -250,7 +250,7 @@ const sectionLabelStyle =
         href="https://github.com/bloknayrb/tandem/issues/new"
         target="_blank"
         rel="noreferrer"
-        style="display: block; width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface-muted); color: var(--tandem-fg); text-align: center; text-decoration: none; box-sizing: border-box;"
+        style="display: block; width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface-muted); color: var(--tandem-fg); text-align: center; text-decoration: none; box-sizing: border-box;"
       >
         Report a bug
       </a>
