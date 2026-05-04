@@ -45,7 +45,7 @@ let { toasts, onDismiss }: Props = $props();
 {#if toasts.length > 0}
   <div
     data-testid="toast-container"
-    style="position: fixed; bottom: 40px; right: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; max-width: 360px; pointer-events: none;"
+    style="position: fixed; bottom: 40px; right: var(--tandem-space-4); z-index: 1000; display: flex; flex-direction: column; gap: var(--tandem-space-2); max-width: 360px; pointer-events: none;"
   >
     {#each toasts as toast (toast.id)}
       {@const borderColor = SEVERITY_TOKENS[toast.severity]}

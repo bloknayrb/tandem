@@ -1,6 +1,7 @@
 <script lang="ts">
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
+  Density,
   EditorFont,
   LayoutMode,
   PanelOrder,
@@ -43,7 +44,7 @@ const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; icon: string }> 
 function cardStyle(selected: boolean, disabled?: boolean): string {
   return [
     "flex: 1;",
-    "padding: 8px;",
+    "padding: var(--tandem-space-2);",
     "min-height: 24px;",
     `border: 2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"};`,
     "border-radius: 6px;",
@@ -89,6 +90,11 @@ const editorFontRg = createRadioGroup<EditorFont>(
   ["sans", "serif", "mono"] as const,
   (f) => onUpdate({ editorFont: f }),
 );
+const densityRg = createRadioGroup<Density>(
+  () => settings.density,
+  ["compact", "cozy", "spacious"] as const,
+  (d) => onUpdate({ density: d }),
+);
 </script>
 
 <!-- Theme -->
@@ -99,7 +105,7 @@ const editorFontRg = createRadioGroup<EditorFont>(
     aria-labelledby="settings-theme-label"
     tabindex="0"
     onkeydown={themeRg.handleKeyDown}
-    style="display: flex; gap: 8px;"
+    style="display: flex; gap: var(--tandem-space-2);"
   >
     {#each (["light", "dark", "system"] as const) as t (t)}
       <button
@@ -159,7 +165,7 @@ const editorFontRg = createRadioGroup<EditorFont>(
       aria-labelledby="settings-default-tab-label"
       tabindex="0"
       onkeydown={primaryTabRg.handleKeyDown}
-      style="display: flex; gap: 8px;"
+      style="display: flex; gap: var(--tandem-space-2);"
     >
       <button
         data-testid="default-tab-chat-btn"
@@ -194,7 +200,7 @@ const editorFontRg = createRadioGroup<EditorFont>(
       aria-labelledby="settings-panel-order-label"
       tabindex="0"
       onkeydown={panelOrderRg.handleKeyDown}
-      style="display: flex; gap: 8px;"
+      style="display: flex; gap: var(--tandem-space-2);"
     >
       <button
         data-testid="panel-order-cea-btn"
@@ -228,7 +234,7 @@ const editorFontRg = createRadioGroup<EditorFont>(
     aria-labelledby="settings-text-size-label"
     tabindex="0"
     onkeydown={textSizeRg.handleKeyDown}
-    style="display: flex; gap: 8px;"
+    style="display: flex; gap: var(--tandem-space-2);"
   >
     {#each (["s", "m", "l"] as const) as size (size)}
       <button
@@ -278,7 +284,7 @@ const editorFontRg = createRadioGroup<EditorFont>(
     aria-labelledby="settings-editor-font-label"
     tabindex="0"
     onkeydown={editorFontRg.handleKeyDown}
-    style="display: flex; gap: 8px;"
+    style="display: flex; gap: var(--tandem-space-2);"
   >
     {#each ([["sans", "Sans-serif"], ["serif", "Serif"], ["mono", "Monospace"]] as const) as [value, label] (value)}
       <button
@@ -288,6 +294,31 @@ const editorFontRg = createRadioGroup<EditorFont>(
         tabindex={editorFontRg.tabIndexFor(value)}
         onclick={() => onUpdate({ editorFont: value })}
         style={cardStyle(settings.editorFont === value)}
+      >
+        {label}
+      </button>
+    {/each}
+  </div>
+</div>
+
+<!-- Density -->
+<div>
+  <div id="settings-density-label" style={sectionLabelStyle}>Spacing Density</div>
+  <div
+    role="radiogroup"
+    aria-labelledby="settings-density-label"
+    tabindex="0"
+    onkeydown={densityRg.handleKeyDown}
+    style="display: flex; gap: var(--tandem-space-2);"
+  >
+    {#each ([["compact", "Compact"], ["cozy", "Cozy"], ["spacious", "Spacious"]] as const) as [value, label] (value)}
+      <button
+        data-testid={`density-${value}-btn`}
+        role="radio"
+        aria-checked={settings.density === value}
+        tabindex={densityRg.tabIndexFor(value)}
+        onclick={() => onUpdate({ density: value })}
+        style={cardStyle(settings.density === value)}
       >
         {label}
       </button>

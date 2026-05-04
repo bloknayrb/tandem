@@ -291,7 +291,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Held-annotation banner -->
   {#if heldCount > 0}
     <div
-      style="padding: 6px 16px; background: {warningStateColors.background}; border-bottom: 1px solid {warningStateColors.border}; font-size: 12px; color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center;"
+      style="padding: var(--tandem-space-2) var(--tandem-space-4); background: {warningStateColors.background}; border-bottom: 1px solid {warningStateColors.border}; font-size: 12px; color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center;"
     >
       <span data-testid="held-banner">
         {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
@@ -306,7 +306,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   {/if}
 
   <!-- Header -->
-  <div style="padding: 12px 16px; border-bottom: 1px solid var(--tandem-border);">
+  <div style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border);">
     <div style="display: flex; justify-content: space-between; align-items: center;">
       <h3 style="font-size: 14px; font-weight: 600; margin: 0;">
         Annotations
@@ -357,7 +357,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Review mode indicator -->
   {#if reviewMode && review.getReviewTargets().length > 0}
     <div
-      style="padding: 8px 16px; background: var(--tandem-accent-bg); border-bottom: 1px solid var(--tandem-border); font-size: 12px; color: var(--tandem-accent-fg-strong);"
+      style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-accent-bg); border-bottom: 1px solid var(--tandem-border); font-size: 12px; color: var(--tandem-accent-fg-strong);"
     >
       <div aria-live="polite" style="font-weight: 600; margin-bottom: 2px;">
         Reviewing {review.getReviewIndex() + 1} / {review.getReviewTargets().length}
@@ -385,7 +385,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   />
 
   <!-- Apply as tracked changes (docx only) -->
-  <div style="padding: 4px 16px 0;">
+  <div style="padding: var(--tandem-space-1) var(--tandem-space-4) 0;">
     <ApplyChangesButton {annotations} {activeDocFormat} {documentId} />
   </div>
 
@@ -403,7 +403,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   />
 
   <!-- Annotation list -->
-  <div style="padding: 8px 16px; flex: 1;" role="list" aria-label="Annotations">
+  <div style="padding: var(--tandem-space-2) var(--tandem-space-4); flex: 1;" role="list" aria-label="Annotations">
     {#if filteredData.filtered.length === 0}
       <p role="status" style="font-size: 13px; color: var(--tandem-fg-subtle); margin-top: 8px;">
         {hasFilters

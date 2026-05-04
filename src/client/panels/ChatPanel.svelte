@@ -167,10 +167,10 @@ function toggleAnchorExpand(msgId: string) {
 >
   <!-- Header -->
   <div
-    style="padding: 12px 16px; border-bottom: 1px solid var(--tandem-border); font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center;"
+    style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center;"
   >
     Chat
-    <div style="display: flex; align-items: center; gap: 8px;">
+    <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
       {#if unreadCount > 0}
         <span
           style="background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: 10px; padding: 2px 8px; font-size: 11px;"
@@ -192,7 +192,7 @@ function toggleAnchorExpand(msgId: string) {
   </div>
 
   <!-- Messages -->
-  <div style="flex: 1; overflow: auto; padding: 12px; min-height: 0;">
+  <div style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;">
     {#if messages.length === 0}
       <div
         style="color: var(--tandem-fg-subtle); font-size: 13px; text-align: center; margin-top: 24px;"
@@ -202,7 +202,7 @@ function toggleAnchorExpand(msgId: string) {
     {/if}
     {#each messages as msg (msg.id)}
       <div
-        style="margin-bottom: 12px; padding: 8px 12px; border-radius: 8px; background: {msg.author ===
+        style="margin-bottom: var(--tandem-space-3); padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: 8px; background: {msg.author ===
         'user'
           ? 'var(--tandem-accent-bg)'
           : 'var(--tandem-surface)'}; border: 1px solid {msg.author === 'user'
@@ -262,7 +262,7 @@ function toggleAnchorExpand(msgId: string) {
 
     {#if claudeActive}
       <div
-        style="padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: var(--tandem-author-claude); display: flex; align-items: center; gap: 8px;"
+        style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-2); font-size: 12px; color: var(--tandem-author-claude); display: flex; align-items: center; gap: var(--tandem-space-2);"
       >
         <span style="display: inline-flex; gap: 3px;">
           {#each TYPING_DOT_DELAYS as delay (delay)}
@@ -280,7 +280,7 @@ function toggleAnchorExpand(msgId: string) {
   <!-- Anchor indicator -->
   {#if capturedAnchor}
     <div
-      style="padding: 4px 12px; background: var(--tandem-accent-bg); border-top: 1px solid var(--tandem-accent-border); font-size: 11px; color: var(--tandem-accent-fg-strong); display: flex; justify-content: space-between; align-items: center;"
+      style="padding: var(--tandem-space-1) var(--tandem-space-3); background: var(--tandem-accent-bg); border-top: 1px solid var(--tandem-accent-border); font-size: 11px; color: var(--tandem-accent-fg-strong); display: flex; justify-content: space-between; align-items: center;"
     >
       <span>
         with selection: &ldquo;{capturedAnchor.textSnapshot.slice(0, 40)}{capturedAnchor.textSnapshot
@@ -299,7 +299,7 @@ function toggleAnchorExpand(msgId: string) {
 
   <!-- Input area -->
   <div
-    style="padding: 8px 12px; border-top: 1px solid var(--tandem-border); display: flex; gap: 8px;"
+    style="padding: var(--tandem-space-2) var(--tandem-space-3); border-top: 1px solid var(--tandem-border); display: flex; gap: var(--tandem-space-2);"
   >
     <textarea
       bind:this={internalInputEl}
@@ -308,12 +308,12 @@ function toggleAnchorExpand(msgId: string) {
       onkeydown={handleKeyDown}
       placeholder="Message Claude..."
       rows={2}
-      style="flex: 1; padding: 8px; border: 1px solid var(--tandem-border-strong); border-radius: 6px; font-size: 13px; resize: none; outline: none; font-family: inherit; background: var(--tandem-surface); color: var(--tandem-fg);"
+      style="flex: 1; padding: var(--tandem-space-2); border: 1px solid var(--tandem-border-strong); border-radius: 6px; font-size: 13px; resize: none; outline: none; font-family: inherit; background: var(--tandem-surface); color: var(--tandem-fg);"
     ></textarea>
     <button
       onclick={sendMessage}
       disabled={!inputText.trim()}
-      style="padding: 8px 12px; background: {inputText.trim()
+      style="padding: var(--tandem-space-2) var(--tandem-space-3); background: {inputText.trim()
         ? 'var(--tandem-accent)'
         : 'var(--tandem-border-strong)'}; color: {inputText.trim()
         ? 'var(--tandem-accent-fg)'

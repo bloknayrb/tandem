@@ -20,9 +20,12 @@ import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
+import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
+import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
+import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createModeGate } from "./hooks/useModeGate.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createReviewCompletion } from "./hooks/useReviewCompletion.svelte";
@@ -130,6 +133,9 @@ $effect(() => {
 
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
+createDensity(() => settingsState.settings.density);
+createHighContrast(() => settingsState.settings.highContrast);
+createAnnotationPatterns(() => settingsState.settings.annotationPatterns);
 
 $effect(() => {
   const px = TEXT_SIZE_PX[settingsState.settings.textSize];
@@ -248,7 +254,7 @@ const tutorial = createTutorial(
   <div style="display: flex; flex-direction: column; height: 100vh;">
     {#if yjsSync.serverRestarted}
       <div
-        style="padding: 8px 16px; background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
+        style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
       >
         Server restarted — refreshing documents
       </div>
@@ -283,7 +289,7 @@ const tutorial = createTutorial(
           style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border);`}
         >
           <div
-            style="padding: 6px 12px; font-size: 11px; font-weight: 600; color: var(--tandem-fg-muted); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.5px;"
+            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-size: 11px; font-weight: 600; color: var(--tandem-fg-muted); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.5px;"
           >
             {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
           </div>
@@ -332,7 +338,7 @@ const tutorial = createTutorial(
           style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border);`}
         >
           <div
-            style="padding: 6px 12px; font-size: 11px; font-weight: 600; color: var(--tandem-fg-muted); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.5px;"
+            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-size: 11px; font-weight: 600; color: var(--tandem-fg-muted); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.5px;"
           >
             {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
           </div>
@@ -536,7 +542,7 @@ const tutorial = createTutorial(
       <button
         data-testid="annotations-tab"
         onclick={() => (showChat = false)}
-        style={`flex: 1; padding: 8px; font-size: 12px; font-weight: ${showChat ? 400 : 600}; border: none; border-bottom: ${showChat ? "none" : "2px solid var(--tandem-accent)"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)"}; position: relative;`}
+        style={`flex: 1; padding: var(--tandem-space-2); font-size: 12px; font-weight: ${showChat ? 400 : 600}; border: none; border-bottom: ${showChat ? "none" : "2px solid var(--tandem-accent)"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg-muted)" : "var(--tandem-accent)"}; position: relative;`}
       >
         Annotations
         {#if showChat && pendingAnnotationBadge > 0}
@@ -551,7 +557,7 @@ const tutorial = createTutorial(
         data-testid="chat-tab"
         onmousedown={captureSelectionForChat}
         onclick={() => (showChat = true)}
-        style={`flex: 1; padding: 8px; font-size: 12px; font-weight: ${showChat ? 600 : 400}; border: none; border-bottom: ${showChat ? "2px solid var(--tandem-accent)" : "none"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)"}; position: relative;`}
+        style={`flex: 1; padding: var(--tandem-space-2); font-size: 12px; font-weight: ${showChat ? 600 : 400}; border: none; border-bottom: ${showChat ? "2px solid var(--tandem-accent)" : "none"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-accent)" : "var(--tandem-fg-muted)"}; position: relative;`}
       >
         Chat
       </button>
