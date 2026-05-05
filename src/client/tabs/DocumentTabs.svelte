@@ -1,6 +1,9 @@
 <script lang="ts">
 import FileOpenDialog from "../components/FileOpenDialog.svelte";
 import type { OpenTab } from "../types.js";
+import { API_BASE } from "../utils/fileUpload.js";
+import { loadRecentFilesCached } from "../utils/recentFiles.js";
+import RecentFilesMenu from "./RecentFilesMenu.svelte";
 import TabItem from "./TabItem.svelte";
 
 interface Props {
@@ -24,6 +27,9 @@ const {
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
 let showDialog = $state(false);
+let showRecent = $state(false);
+let recentFiles = $state<string[]>([]);
+let openBtnEl: HTMLButtonElement | null = $state(null);
 
 // Plain let — not reactive UI; just internal close-dedup guard
 let closingIds = new Set<string>();
@@ -166,6 +172,21 @@ function scrollRight() {
 }
 
 const singleTab = $derived(tabs.length <= 1);
+
+$effect(() => {
+  if (!showRecent) return;
+
+  function handlePointerDown(e: PointerEvent) {
+    const target = e.target as Node | null;
+    if (!target) return;
+    if (openBtnEl?.contains(target)) return;
+    if ((target as Element).closest?.("[data-tauri-drag-region]")) return;
+    showRecent = false;
+  }
+
+  window.addEventListener("pointerdown", handlePointerDown, true);
+  return () => window.removeEventListener("pointerdown", handlePointerDown, true);
+});
 </script>
 
 <div
@@ -218,7 +239,16 @@ const singleTab = $derived(tabs.length <= 1);
   {/if}
 
   <button
-    onclick={() => (showDialog = true)}
+    bind:this={openBtnEl}
+    onclick={() => {
+      const files = loadRecentFilesCached();
+      if (files.length === 0) {
+        showDialog = true;
+      } else {
+        recentFiles = files;
+        showRecent = !showRecent;
+      }
+    }}
     data-testid="open-file-btn"
     title="Open file"
     style="background: none; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
@@ -233,6 +263,35 @@ const singleTab = $derived(tabs.length <= 1);
   >
     +
   </button>
+
+  {#if showRecent}
+    <div style="position: relative;">
+      <RecentFilesMenu
+        {recentFiles}
+        onOpen={async (filePath) => {
+          showRecent = false;
+          try {
+            const res = await fetch(`${API_BASE}/open`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ filePath }),
+            });
+            if (!res.ok) {
+              const err = await res.text();
+              console.warn("[tandem] failed to open recent file:", err);
+            }
+          } catch (err) {
+            console.warn("[tandem] failed to open recent file:", err);
+          }
+        }}
+        onBrowse={() => {
+          showRecent = false;
+          showDialog = true;
+        }}
+        onClose={() => (showRecent = false)}
+      />
+    </div>
+  {/if}
 
   {#if showDialog}
     <FileOpenDialog onClose={() => (showDialog = false)} />
