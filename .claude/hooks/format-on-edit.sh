@@ -18,6 +18,6 @@ FILE_PATH=$(echo "$INPUT" | node -e "
 ")
 
 # Only format files Biome handles
-if [[ -n "$FILE_PATH" && "$FILE_PATH" =~ \.(ts|tsx|json)$ && ! "$FILE_PATH" =~ (node_modules|dist|package-lock) ]]; then
+if [[ -n "$FILE_PATH" && "$FILE_PATH" =~ \.(ts|tsx|svelte|css|html|md|yml|yaml|mjs|json)$ && ! "$FILE_PATH" =~ (node_modules|dist|package-lock) ]]; then
   npx @biomejs/biome format --write "$FILE_PATH" 2>/dev/null || true
 fi

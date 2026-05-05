@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
@@ -11,6 +11,10 @@ import HighlightColorPicker from "./HighlightColorPicker.svelte";
 import { toggleHighlight } from "./highlight-toggle";
 import InputGroup from "./InputGroup.svelte";
 import ModeToggle from "./ModeToggle.svelte";
+import {
+  attachSelectionToolbarListener,
+  computeSelectionToolbarPosition,
+} from "./selection-toolbar";
 import ToolbarButton from "./ToolbarButton.svelte";
 
 type ToolbarMode = "idle" | "comment" | "note";
@@ -40,19 +44,17 @@ let {
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{ left: number; top: number } | null>(null);
+let toolbarEl = $state<HTMLDivElement | null>(null);
 let mode = $state<ToolbarMode>("idle");
 let modeText = $state("");
 let capturedRange: { from: number; to: number } | null = null;
 let commentInputEl = $state<HTMLInputElement | null>(null);
 let noteInputEl = $state<HTMLInputElement | null>(null);
 
-const MINI_HIGHLIGHT_COLORS: HighlightColor[] = ["yellow", "green", "blue", "pink"];
-const MINI_HIGHLIGHT_SWATCHES: Record<HighlightColor, string> = {
-  yellow: "var(--tandem-highlight-yellow)",
-  green: "var(--tandem-highlight-green)",
-  blue: "var(--tandem-highlight-blue)",
-  pink: "var(--tandem-highlight-pink)",
-};
+let toolbarHeight = $state(0);
+let viewportHeight = $state(window.innerHeight);
+
+const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
 function updateSelectionAffordance(ed: TiptapEditor) {
   const { from, to } = ed.state.selection;
@@ -66,10 +68,20 @@ function updateSelectionAffordance(ed: TiptapEditor) {
   try {
     const start = ed.view.coordsAtPos(from);
     const end = ed.view.coordsAtPos(to);
-    selectionPosition = {
-      left: (start.left + end.right) / 2,
-      top: Math.min(start.top, end.top) - 10,
-    };
+    const nextPosition = computeSelectionToolbarPosition({
+      start,
+      end,
+      toolbarHeight,
+      viewportHeight,
+    });
+    if (
+      selectionPosition &&
+      selectionPosition.left === nextPosition.left &&
+      selectionPosition.top === nextPosition.top
+    ) {
+      return;
+    }
+    selectionPosition = nextPosition;
   } catch {
     selectionPosition = null;
   }
@@ -83,13 +95,9 @@ $effect(() => {
     updateSelectionAffordance(ed);
   }
 
-  ed.on("selectionUpdate", onSelectionUpdate);
-  ed.on("transaction", onSelectionUpdate);
+  const cleanup = attachSelectionToolbarListener(ed, onSelectionUpdate);
   onSelectionUpdate();
-  return () => {
-    ed.off("selectionUpdate", onSelectionUpdate);
-    ed.off("transaction", onSelectionUpdate);
-  };
+  return cleanup;
 });
 
 $effect(() => {
@@ -99,7 +107,10 @@ $effect(() => {
 
   function scheduleUpdate() {
     cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => updateSelectionAffordance(ed));
+    frame = requestAnimationFrame(() => {
+      viewportHeight = window.innerHeight;
+      updateSelectionAffordance(ed);
+    });
   }
 
   window.addEventListener("resize", scheduleUpdate);
@@ -109,6 +120,22 @@ $effect(() => {
     window.removeEventListener("resize", scheduleUpdate);
     document.removeEventListener("scroll", scheduleUpdate, true);
   };
+});
+
+$effect(() => {
+  const ed = editor;
+  const el = toolbarEl;
+  if (!ed || !el || !selectionPosition) return;
+
+  const updateToolbarMetrics = () => {
+    toolbarHeight = el.getBoundingClientRect().height;
+    updateSelectionAffordance(ed);
+  };
+
+  updateToolbarMetrics();
+  const observer = new ResizeObserver(updateToolbarMetrics);
+  observer.observe(el);
+  return () => observer.disconnect();
 });
 
 $effect(() => {
@@ -224,9 +251,10 @@ const showMiniToolbar = $derived(
 
 {#if showMiniToolbar && selectionPosition}
   <div
+    bind:this={toolbarEl}
     role="toolbar"
     aria-label="Selection tools"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translate(-50%, -100%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: 1000; white-space: nowrap;`}
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: 1000; white-space: nowrap;`}
   >
     <button
       type="button"
@@ -276,13 +304,14 @@ const showMiniToolbar = $derived(
             handleHighlight(color);
             editor?.chain().focus().run();
           }}
-          style={`width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--tandem-border); background: ${MINI_HIGHLIGHT_SWATCHES[color]}; cursor: pointer; padding: 0;`}
+          style={`width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLORS[color]}; cursor: pointer; padding: 0;`}
         ></button>
       {/each}
     </div>
     <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
     <button
       type="button"
+      aria-label="Comment on selection"
       title="Comment on selection"
       onmousedown={startComment}
       style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
@@ -291,6 +320,7 @@ const showMiniToolbar = $derived(
     </button>
     <button
       type="button"
+      aria-label="Private note on selection"
       title="Private note on selection"
       onmousedown={startNote}
       style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
