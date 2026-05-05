@@ -31,6 +31,7 @@ export interface TandemSettings {
   highContrast: boolean;
   annotationPatterns: boolean;
   selectionToolbar: boolean;
+  soloRailHidden: boolean;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -63,6 +64,7 @@ const DEFAULTS: TandemSettings = {
   highContrast: false,
   annotationPatterns: false,
   selectionToolbar: true,
+  soloRailHidden: true,
 };
 
 /**
@@ -142,6 +144,7 @@ export function loadSettings(): TandemSettings {
         highContrast: parsed.highContrast === true,
         annotationPatterns: parsed.annotationPatterns === true,
         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+        soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead

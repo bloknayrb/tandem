@@ -264,6 +264,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     highContrast: false,
     annotationPatterns: false,
     selectionToolbar: true,
+    soloRailHidden: true,
   };
 
   it("clamps editorWidthPercent above 100 down to 100", () => {
@@ -433,5 +434,34 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
   it("defaults selectionToolbar to true for non-boolean values", () => {
     writeRawSettings({ selectionToolbar: "nope" });
     expect(loadSettings().selectionToolbar).toBe(true);
+  });
+});
+
+describe("soloRailHidden setting", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to true when absent from storage", () => {
+    const s = loadSettings();
+    expect(s.soloRailHidden).toBe(true);
+  });
+
+  it("round-trips false correctly (persists explicit opt-out)", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ soloRailHidden: false }));
+    const s = loadSettings();
+    expect(s.soloRailHidden).toBe(false);
+  });
+
+  it("treats true stored value as true", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ soloRailHidden: true }));
+    const s = loadSettings();
+    expect(s.soloRailHidden).toBe(true);
   });
 });
