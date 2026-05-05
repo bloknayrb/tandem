@@ -4,48 +4,65 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
     <title>Tandem - Collaborative Editor</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body, #root { height: 100%; }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-family: var(--tandem-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
         background: var(--tandem-bg, #fff);
         color: var(--tandem-fg, #111827);
+        font-feature-settings: "cv11", "ss01", "ss03";
+        -webkit-font-smoothing: antialiased;
       }
 
       /* Tandem theme tokens.
          Light is the default; dark overrides via [data-theme="dark"] on <html>.
          Pairs meet WCAG AA (4.5:1 for small text, 3:1 for large/non-text). */
       :root {
-        --tandem-bg: #ffffff;
-        --tandem-fg: #111827;
-        --tandem-surface: #ffffff;
-        --tandem-surface-muted: #f9fafb;
-        --tandem-border: #e5e7eb;
-        --tandem-border-strong: #d1d5db;
-        --tandem-fg-muted: #6b7280;
-        --tandem-fg-subtle: #9ca3af;
-        --tandem-accent-h: 239deg;
-        --tandem-accent: oklch(0.55 0.20 var(--tandem-accent-h));
+        --tandem-font-sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --tandem-font-serif: "Source Serif 4", "Source Serif Pro", Charter, "Iowan Old Style", Georgia, serif;
+        --tandem-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        --tandem-bg: oklch(0.985 0.004 80);
+        --tandem-fg: oklch(0.22 0.012 280);
+        --tandem-surface: oklch(1 0 0);
+        --tandem-surface-muted: oklch(0.975 0.005 80);
+        --tandem-surface-sunk: oklch(0.96 0.006 80);
+        --tandem-border: oklch(0.92 0.005 280);
+        --tandem-border-strong: oklch(0.86 0.006 280);
+        --tandem-fg-muted: oklch(0.48 0.008 280);
+        --tandem-fg-subtle: oklch(0.68 0.006 280);
+        --tandem-fg-faint: oklch(0.82 0.005 280);
+        --tandem-accent-h: 275deg;
+        --tandem-accent: oklch(0.52 0.16 var(--tandem-accent-h));
         --tandem-accent-fg: oklch(0.99 0.005 var(--tandem-accent-h));
-        --tandem-accent-bg: oklch(0.96 0.04 var(--tandem-accent-h));
-        --tandem-accent-fg-strong: oklch(0.40 0.20 var(--tandem-accent-h));
-        --tandem-author-user: #3b82f6;
-        --tandem-author-claude: #ea8a1e;
+        --tandem-accent-bg: oklch(0.95 0.03 var(--tandem-accent-h));
+        --tandem-accent-fg-strong: oklch(0.42 0.18 var(--tandem-accent-h));
+        --tandem-author-user: oklch(0.55 0.14 245);
+        --tandem-author-claude: #d97757;
+        --tandem-highlight-yellow: color-mix(in srgb, #eab308 45%, transparent);
+        --tandem-highlight-green: color-mix(in srgb, #22c55e 45%, transparent);
+        --tandem-highlight-blue: color-mix(in srgb, #60a5fa 45%, transparent);
+        --tandem-highlight-pink: color-mix(in srgb, #ec4899 45%, transparent);
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
-        --tandem-success: #16a34a;
+        --tandem-success: oklch(0.55 0.14 150);
         --tandem-success-fg: #ffffff;
         --tandem-success-fg-strong: #166534;
         --tandem-success-bg: color-mix(in srgb, var(--tandem-success) 10%, var(--tandem-surface));
         --tandem-success-border: color-mix(in srgb, var(--tandem-success) 40%, var(--tandem-border));
-        --tandem-warning: #d97706;
+        --tandem-warning: oklch(0.62 0.16 65);
         --tandem-warning-fg: #ffffff;
         --tandem-warning-fg-strong: #92400e;
         --tandem-warning-bg: color-mix(in srgb, var(--tandem-warning) 10%, var(--tandem-surface));
         --tandem-warning-border: color-mix(in srgb, var(--tandem-warning) 40%, var(--tandem-border));
-        --tandem-error: #dc2626;
+        --tandem-error: oklch(0.55 0.18 25);
         --tandem-error-fg: #ffffff;
         --tandem-error-fg-strong: #991b1b;
         --tandem-error-bg: color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface));
@@ -55,14 +72,14 @@
         --tandem-info-fg-strong: #1e40af;
         --tandem-info-bg: #eff6ff;
         --tandem-info-border: #bfdbfe;
-        --tandem-suggestion: #7c3aed;
+        --tandem-suggestion: oklch(0.52 0.18 305);
         --tandem-suggestion-fg-strong: #5b21b6;
         --tandem-suggestion-bg: color-mix(in srgb, var(--tandem-suggestion) 10%, var(--tandem-surface));
         --tandem-suggestion-border: color-mix(in srgb, var(--tandem-suggestion) 40%, var(--tandem-border));
         --tandem-accent-border: oklch(0.84 0.10 var(--tandem-accent-h));
-        --tandem-editor-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        --tandem-scrollbar-track: #f1f5f9;
-        --tandem-scrollbar-thumb: #cbd5e1;
+        --tandem-editor-font-family: var(--tandem-font-serif);
+        --tandem-scrollbar-track: oklch(0.96 0.006 80);
+        --tandem-scrollbar-thumb: oklch(0.82 0.005 280);
         /* density spacing scale — cozy defaults */
         --tandem-space-1: 4px;
         --tandem-space-2: 8px;
@@ -70,24 +87,27 @@
         --tandem-space-4: 16px;
         --tandem-space-5: 24px;
         --tandem-space-6: 32px;
+        --tandem-space-7: 48px;
       }
 
       [data-theme="dark"] {
-        --tandem-bg: #0f172a;
-        --tandem-fg: #f3f4f6;
-        --tandem-surface: #1e293b;
-        --tandem-surface-muted: #111827;
-        --tandem-border: #334155;
-        --tandem-border-strong: #475569;
-        --tandem-fg-muted: #cbd5e1;
-        --tandem-fg-subtle: #94a3b8;
-        --tandem-accent-h: 239deg;
-        --tandem-accent: oklch(0.72 0.18 var(--tandem-accent-h));
+        --tandem-bg: oklch(0.18 0.012 270);
+        --tandem-fg: oklch(0.94 0.005 80);
+        --tandem-surface: oklch(0.22 0.012 270);
+        --tandem-surface-muted: oklch(0.20 0.012 270);
+        --tandem-surface-sunk: oklch(0.16 0.012 270);
+        --tandem-border: oklch(0.30 0.012 270);
+        --tandem-border-strong: oklch(0.38 0.014 270);
+        --tandem-fg-muted: oklch(0.72 0.008 80);
+        --tandem-fg-subtle: oklch(0.55 0.008 80);
+        --tandem-fg-faint: oklch(0.40 0.010 270);
+        --tandem-accent-h: 275deg;
+        --tandem-accent: oklch(0.72 0.14 var(--tandem-accent-h));
         --tandem-accent-fg: oklch(0.15 0.01 var(--tandem-accent-h));
-        --tandem-accent-bg: oklch(0.28 0.06 var(--tandem-accent-h));
+        --tandem-accent-bg: oklch(0.30 0.05 var(--tandem-accent-h));
         --tandem-accent-fg-strong: oklch(0.85 0.14 var(--tandem-accent-h));
-        --tandem-author-user: #60a5fa;
-        --tandem-author-claude: #fbbf24;
+        --tandem-author-user: oklch(0.72 0.13 245);
+        --tandem-author-claude: #e89a78;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
         --tandem-success: #22c55e;
@@ -115,8 +135,8 @@
         --tandem-suggestion-bg: #2e1065;
         --tandem-suggestion-border: #4c1d95;
         --tandem-accent-border: oklch(0.45 0.14 var(--tandem-accent-h));
-        --tandem-scrollbar-track: #1e293b;
-        --tandem-scrollbar-thumb: #475569;
+        --tandem-scrollbar-track: oklch(0.16 0.012 270);
+        --tandem-scrollbar-thumb: oklch(0.38 0.014 270);
       }
 
       /* density spacing scale — cozy is the default (matches :root values) */
@@ -127,6 +147,7 @@
         --tandem-space-4: 12px;
         --tandem-space-5: 16px;
         --tandem-space-6: 24px;
+        --tandem-space-7: 36px;
       }
 
       [data-density="spacious"] {
@@ -136,6 +157,7 @@
         --tandem-space-4: 24px;
         --tandem-space-5: 32px;
         --tandem-space-6: 48px;
+        --tandem-space-7: 64px;
       }
 
       /* high-contrast overlay — overrides border/fg tokens for WCAG AAA readability.

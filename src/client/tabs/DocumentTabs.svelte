@@ -169,7 +169,7 @@ const singleTab = $derived(tabs.length <= 1);
 </script>
 
 <div
-  style="position: relative; display: flex; align-items: center; background: var(--tandem-surface-muted); border-bottom: 1px solid var(--tandem-border); min-height: 32px;"
+  style="position: relative; display: flex; align-items: stretch; background: var(--tandem-surface-muted); border-bottom: 1px solid var(--tandem-border); min-height: 30px; padding: 0 var(--tandem-space-3); z-index: 4;"
 >
   {#if canScrollLeft}
     <button
@@ -186,7 +186,7 @@ const singleTab = $derived(tabs.length <= 1);
     bind:this={scrollEl}
     data-testid="tab-scroll-container"
     class="tab-scroll-hide"
-    style="display: flex; align-items: center; gap: 1px; flex: 1; overflow-x: auto; overflow-y: hidden; padding: 0 4px;"
+    style="display: flex; align-items: stretch; gap: 2px; flex: 1; overflow-x: auto; overflow-y: hidden;"
   >
     {#each tabs as tab (tab.id)}
       <TabItem
@@ -221,7 +221,7 @@ const singleTab = $derived(tabs.length <= 1);
     onclick={() => (showDialog = true)}
     data-testid="open-file-btn"
     title="Open file"
-    style="background: none; border: 1px solid var(--tandem-border-strong); border-radius: 4px; cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-muted); padding: 2px 8px; margin-left: 4px; margin-right: 8px; flex-shrink: 0;"
+    style="background: none; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
     onmouseenter={(e) => {
       (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-accent)";
       (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-accent)";

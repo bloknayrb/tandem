@@ -32,17 +32,17 @@ const {
 }: Props = $props();
 
 const computed = $derived.by(() => {
-  let border = "1px solid var(--tandem-border)";
-  let background = "var(--tandem-surface)";
-  let color = "var(--tandem-fg)";
+  let border = "1px solid transparent";
+  let background = "transparent";
+  let color = "var(--tandem-fg-muted)";
 
   if (disabled) {
-    background = "var(--tandem-surface-muted)";
+    background = "transparent";
     color = "var(--tandem-fg-subtle)";
   } else if (active) {
-    border = "1px solid var(--tandem-accent)";
     background = "var(--tandem-accent-bg)";
-    color = "var(--tandem-accent)";
+    border = "1px solid var(--tandem-accent-border)";
+    color = "var(--tandem-accent-fg-strong)";
   }
   return { border, background, color };
 });
@@ -53,7 +53,8 @@ const titleAttr = $derived(
   disabled && disabledTitle ? disabledTitle : shortcut ? `${titleText} (${shortcut})` : titleText,
 );
 
-const baseStyle = "padding: 4px 10px; font-size: 13px; border-radius: 4px;";
+const baseStyle =
+  "height: 28px; padding: 0 8px; font-size: 12px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;";
 
 const fullStyle = $derived(
   `${baseStyle} cursor: ${disabled ? "not-allowed" : "pointer"}; ${style}; border: ${computed.border}; background: ${computed.background}; color: ${computed.color};`,

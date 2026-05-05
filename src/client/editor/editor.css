@@ -1,16 +1,41 @@
-.tandem-editor h1 { font-size: 2em; font-weight: 700; margin: 0.67em 0; }
-.tandem-editor h2 { font-size: 1.5em; font-weight: 600; margin: 0.75em 0; }
-.tandem-editor h3 { font-size: 1.17em; font-weight: 600; margin: 0.83em 0; }
-.tandem-editor p { margin: 0.5em 0; }
+.tandem-editor {
+  color: var(--tandem-fg);
+  font-size: var(--tandem-editor-font-size, 17px);
+  line-height: 1.65;
+}
+.tandem-editor h1 {
+  font-family: var(--tandem-editor-font-family);
+  font-size: 2em;
+  font-weight: 600;
+  margin: 0 0 0.5em;
+  line-height: 1.15;
+}
+.tandem-editor h2 {
+  font-size: 1.4em;
+  font-weight: 600;
+  margin: 1.6em 0 0.4em;
+  line-height: 1.2;
+}
+.tandem-editor h3 { font-size: 1.17em; font-weight: 600; margin: 1.2em 0 0.4em; }
+.tandem-editor p { margin: 0 0 0.9em; }
 .tandem-editor ul, .tandem-editor ol { padding-left: 1.5em; }
 .tandem-editor table { border-collapse: collapse; width: 100%; margin: 1em 0; }
 .tandem-editor td, .tandem-editor th { border: 1px solid var(--tandem-border); padding: 8px; }
 .tandem-editor th { background: var(--tandem-surface-muted); font-weight: 600; }
 .tandem-editor blockquote {
-  border-left: 3px solid var(--tandem-border-strong);
-  margin: 0.5em 0;
-  padding-left: 1em;
+  border-left: 2px solid var(--tandem-border-strong);
+  margin: 1em 0;
+  padding: 2px 0 2px 1em;
   color: var(--tandem-fg-muted);
+  font-style: italic;
+}
+.tandem-editor code {
+  font-family: var(--tandem-font-mono);
+  font-size: 0.88em;
+  background: var(--tandem-surface-sunk);
+  border: 1px solid var(--tandem-border);
+  border-radius: 3px;
+  padding: 1px 5px;
 }
 .collaboration-cursor__caret {
   position: relative;
@@ -64,9 +89,16 @@
 }
 
 /* Authorship decorations — user=blue, claude=orange */
-.ProseMirror [data-tandem-author] { transition: color 0.2s; }
-.ProseMirror [data-tandem-author="user"] { color: var(--tandem-author-user); }
-.ProseMirror [data-tandem-author="claude"] { color: var(--tandem-author-claude); }
+.ProseMirror [data-tandem-author] {
+  transition: color 0.2s, background 0.2s;
+  border-radius: 2px;
+}
+.ProseMirror [data-tandem-author="user"] {
+  color: color-mix(in srgb, var(--tandem-author-user) 58%, var(--tandem-fg));
+}
+.ProseMirror [data-tandem-author="claude"] {
+  color: color-mix(in srgb, var(--tandem-author-claude) 64%, var(--tandem-fg));
+}
 
 /* Claude focus paragraph */
 .tandem-claude-focus {

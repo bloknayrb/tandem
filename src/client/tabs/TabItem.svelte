@@ -95,20 +95,21 @@ const tabStyle = $derived(
   [
     "display: flex",
     "align-items: center",
-    "gap: 6px",
-    "padding: 4px 12px",
-    "font-size: 13px",
+    "gap: 8px",
+    "padding: 0 12px",
+    "height: 100%",
+    "font-size: 12px",
     "cursor: pointer",
     `background: ${isActive ? "var(--tandem-surface)" : "transparent"}`,
-    `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-muted)"}`,
-    `border-top: ${isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-    `border-bottom: ${isActive ? "1px solid var(--tandem-surface)" : "1px solid transparent"}`,
+    `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}`,
+    "border-top: 0",
+    `border-bottom: ${isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
     `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
     `border-right: ${dropIndicator === "right" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
     "margin-bottom: -1px",
     "user-select: none",
     "white-space: nowrap",
-    "transition: background 0.15s, color 0.15s",
+    "transition: background 0.15s, color 0.15s, border-color 0.15s",
     "flex-shrink: 0",
   ].join("; "),
 );
@@ -149,7 +150,7 @@ function handleMouseLeaveClose() {
   {/if}
 
   <span
-    style={`font-size: 10px; font-weight: 700; color: ${isActive ? "var(--tandem-accent)" : "var(--tandem-fg-subtle)"}; width: 14px; text-align: center;`}
+    style={`font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: ${isActive ? "var(--tandem-accent)" : "var(--tandem-fg-faint)"}; width: 14px; text-align: center;`}
   >
     {FORMAT_ICONS[tab.format] ?? "?"}
   </span>
@@ -164,7 +165,7 @@ function handleMouseLeaveClose() {
 
   {#if tab.readOnly}
     <span
-      style="font-size: 9px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); padding: 0 3px; border-radius: 2px;"
+      style="font-family: var(--tandem-font-mono); font-size: 9px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); padding: 0 4px; border-radius: 999px;"
     >
       RO
     </span>
@@ -186,7 +187,7 @@ function handleMouseLeaveClose() {
     }}
     onmouseenter={handleMouseEnterClose}
     onmouseleave={handleMouseLeaveClose}
-    style="background: none; border: none; cursor: pointer; font-size: 14px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 2px; border-radius: 2px;"
+    style="background: none; border: none; cursor: pointer; font-size: 14px; line-height: 1; color: var(--tandem-fg-faint); padding: 0 2px; border-radius: 2px; opacity: 0.85;"
     title="Close document"
   >
     ×

@@ -106,7 +106,7 @@ function commitName() {
 </script>
 
 <div
-  style="display: flex; align-items: center; justify-content: space-between; padding: 4px 16px; height: 28px; border-top: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); font-size: 12px; color: var(--tandem-fg-muted); user-select: none;"
+  style="display: flex; align-items: center; justify-content: space-between; padding: 0 var(--tandem-space-4); height: 26px; border-top: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); font-family: var(--tandem-font-mono); font-size: 11px; color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3);"
 >
   <div style="display: flex; align-items: center; gap: 8px;">
     <span
@@ -121,7 +121,7 @@ function commitName() {
     {#if saving}
       <span
         data-testid="save-indicator"
-        style="color: var(--tandem-accent); font-style: italic;"
+        style="color: var(--tandem-accent);"
       >
         Saving...
       </span>
@@ -147,13 +147,13 @@ function commitName() {
       aria-label="Display name"
       title="Your display name"
       maxlength={USER_NAME_MAX_LEN}
-      style="background: transparent; border: none; border-bottom: 1px solid var(--tandem-border); color: var(--tandem-fg-muted); font-size: 11px; width: 80px; outline: none; padding: 0 2px;"
+      style="background: transparent; border: none; border-bottom: 1px dashed transparent; color: var(--tandem-fg-muted); font: inherit; font-family: var(--tandem-font-sans); font-size: 11px; width: 80px; outline: none; padding: 0 2px;"
     />
   </div>
 
   {#if readOnly}
     <span
-      style="padding: 1px 8px; font-size: 11px; font-weight: 600; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border-radius: 9999px; border: 1px solid var(--tandem-warning-border);"
+      style="padding: 1px 8px; font-size: 10px; font-weight: 600; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border-radius: 9999px; border: 1px solid var(--tandem-warning-border);"
     >
       Review Only
     </span>
@@ -164,7 +164,7 @@ function commitName() {
       style="width: 8px; height: 8px; border-radius: 50%; background: var(--tandem-author-claude); opacity: {claudeActive ? 1 : 0.4}; display: inline-block; transition: opacity 0.3s ease; animation: {claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
     ></span>
     <span style="transition: color 0.3s ease; color: {claudeActive ? 'var(--tandem-fg)' : 'var(--tandem-fg-subtle)'};">
-      {claudeStatus ? `Claude -- ${claudeStatus}` : "Claude -- idle"}
+      {claudeStatus ? `Claude · ${claudeStatus}` : "Claude · idle"}
     </span>
   </div>
 </div>

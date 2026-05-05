@@ -47,17 +47,17 @@ function prefersReducedMotion(): boolean {
 }
 
 const DEFAULTS: TandemSettings = {
-  layout: "three-panel",
-  primaryTab: "chat",
+  layout: "tabbed",
+  primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
-  editorWidthPercent: 50,
+  editorWidthPercent: 100,
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   showAuthorship: true,
   reduceMotion: false,
   textSize: "m",
   theme: "system",
-  accentHue: 239,
-  editorFont: "sans",
+  accentHue: 275,
+  editorFont: "serif",
   density: "cozy",
   defaultMode: "tandem",
   highContrast: false,

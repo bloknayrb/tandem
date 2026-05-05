@@ -13,18 +13,17 @@ const { tandemMode, onModeChange }: Props = $props();
   data-testid="mode-toggle"
   role="group"
   aria-label="Claude collaboration mode"
-  style="display: flex; border: 1px solid var(--tandem-border-strong); border-radius: 4px; overflow: hidden;"
+  style="display: inline-flex; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); border-radius: 5px; padding: 2px; gap: 2px;"
 >
   <button
     data-testid="mode-solo-btn"
     title="Write undisturbed — Claude only responds when you message"
     aria-pressed={tandemMode === "solo"}
     onclick={() => onModeChange("solo")}
-    style="padding: 3px 10px; font-size: 12px; border: none; cursor: pointer;
-      background: {tandemMode === 'solo' ? 'var(--tandem-accent)' : 'transparent'};
-      color: {tandemMode === 'solo' ? 'var(--tandem-accent-fg)' : 'var(--tandem-fg-muted)'};
-      font-weight: {tandemMode === 'solo' ? 600 : 400};
-      border-right: 1px solid var(--tandem-border-strong);
+    style="height: 24px; padding: 0 10px; font-size: 12px; border: none; border-radius: 3px; cursor: pointer;
+      background: {tandemMode === 'solo' ? 'var(--tandem-surface)' : 'transparent'};
+      color: {tandemMode === 'solo' ? 'var(--tandem-fg)' : 'var(--tandem-fg-muted)'};
+      font-weight: 500;
       display: flex; align-items: center; gap: 5px;"
   >
     {#if tandemMode === "solo"}
@@ -39,10 +38,10 @@ const { tandemMode, onModeChange }: Props = $props();
     title="Full collaboration — Claude reacts to selections and document changes"
     aria-pressed={tandemMode === "tandem"}
     onclick={() => onModeChange("tandem")}
-    style="padding: 3px 10px; font-size: 12px; border: none; cursor: pointer;
-      background: {tandemMode === 'tandem' ? 'var(--tandem-accent)' : 'transparent'};
-      color: {tandemMode === 'tandem' ? 'var(--tandem-accent-fg)' : 'var(--tandem-fg-muted)'};
-      font-weight: {tandemMode === 'tandem' ? 600 : 400};
+    style="height: 24px; padding: 0 10px; font-size: 12px; border: none; border-radius: 3px; cursor: pointer;
+      background: {tandemMode === 'tandem' ? 'var(--tandem-surface)' : 'transparent'};
+      color: {tandemMode === 'tandem' ? 'var(--tandem-fg)' : 'var(--tandem-fg-muted)'};
+      font-weight: 500;
       display: flex; align-items: center; gap: 5px;"
   >
     {#if tandemMode === "tandem"}
