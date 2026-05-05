@@ -286,8 +286,11 @@ const tutorial = createTutorial(
       reduceMotion={settingsState.settings.reduceMotion}
     />
 
-    {#if panelLayout.kind === "three-panel"}
-      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
+    <!-- Single persistent container — editor column is always rendered in the same
+         DOM position so the Editor component never remounts on layout changes.
+         Panels are conditionally shown/hidden around the stable editor column. -->
+    <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
+      {#if panelLayout.kind === "three-panel"}
         <div
           style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
         >
@@ -332,11 +335,16 @@ const tutorial = createTutorial(
             {/if}
           </div>
         </div>
-
         {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
-        {@render editorColumn()}
-        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
+      {:else if panelLayout.kind === "tabbed-left"}
+        {@render tabbedPanel(panelLayout.left, "left")}
+        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
+      {/if}
 
+      {@render editorColumn()}
+
+      {#if panelLayout.kind === "three-panel"}
+        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
         <div
           style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
         >
@@ -381,22 +389,11 @@ const tutorial = createTutorial(
             {/if}
           </div>
         </div>
-      </div>
-
-    {:else if panelLayout.kind === "tabbed-left"}
-      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
-        {@render tabbedPanel(panelLayout.left, "left")}
-        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
-        {@render editorColumn()}
-      </div>
-
-    {:else}
-      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
-        {@render editorColumn()}
+      {:else if panelLayout.kind === "tabbed"}
         {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
         {@render tabbedPanel(getRightWidth(panelLayout), "right")}
-      </div>
-    {/if}
+      {/if}
+    </div>
 
     <StatusBar
       connected={yjsSync.connected}
