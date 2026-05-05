@@ -66,11 +66,8 @@
       "eslint --fix",
       "biome check --write"
     ],
-    "**/*.svelte": [
+    "**/*.{svelte,css,html}": [
       "biome check --write"
-    ],
-    "src/client/**/*.{ts,tsx,svelte}": [
-      "tsx scripts/check-semantic-tokens.ts"
     ],
     "**/*.mjs": [
       "eslint --fix",
@@ -78,6 +75,9 @@
     ],
     "**/*.json !package-lock.json": [
       "biome check --write"
+    ],
+    "src/client/**/*.{ts,tsx,svelte,css,html}": [
+      "tsx scripts/check-semantic-tokens.ts"
     ],
     "**/*.{yml,yaml,md}": [
       "node scripts/normalize-eol.mjs"
