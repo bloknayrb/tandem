@@ -132,7 +132,7 @@ function handleFileSelect(e: Event) {
   }}
 >
   <div
-    style="background: var(--tandem-surface); border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); width: 440px; padding: 20px;"
+    style="background: var(--tandem-surface); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); width: 440px; padding: 20px;"
     data-testid="file-open-dialog"
   >
     <div style="display: flex; justify-content: space-between; margin-bottom: 16px;">
@@ -151,13 +151,13 @@ function handleFileSelect(e: Event) {
     <div style="display: flex; gap: 8px; margin-bottom: 16px;">
       <button
         onclick={() => (mode = "path")}
-        style={`flex: 1; padding: 6px; font-size: 13px; border: 1px solid var(--tandem-border); border-radius: 4px; cursor: pointer; background: ${mode === "path" ? "var(--tandem-accent)" : "var(--tandem-surface)"}; color: ${mode === "path" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
+        style={`flex: 1; padding: 6px; font-size: 13px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); cursor: pointer; background: ${mode === "path" ? "var(--tandem-accent)" : "var(--tandem-surface)"}; color: ${mode === "path" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
       >
         File Path
       </button>
       <button
         onclick={() => (mode = "upload")}
-        style={`flex: 1; padding: 6px; font-size: 13px; border: 1px solid var(--tandem-border); border-radius: 4px; cursor: pointer; background: ${mode === "upload" ? "var(--tandem-accent)" : "var(--tandem-surface)"}; color: ${mode === "upload" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
+        style={`flex: 1; padding: 6px; font-size: 13px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); cursor: pointer; background: ${mode === "upload" ? "var(--tandem-accent)" : "var(--tandem-surface)"}; color: ${mode === "upload" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
       >
         Open
       </button>
@@ -174,13 +174,13 @@ function handleFileSelect(e: Event) {
           onkeydown={(e) => {
             if (e.key === "Enter") handlePathSubmit();
           }}
-          style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; box-sizing: border-box; background: var(--tandem-surface); color: var(--tandem-fg);"
+          style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); box-sizing: border-box; background: var(--tandem-surface); color: var(--tandem-fg);"
           data-testid="file-path-input"
         />
         <button
           onclick={handlePathSubmit}
           disabled={loading || !filePath.trim()}
-          style={`margin-top: 10px; width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: 4px; cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
+          style={`margin-top: 10px; width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
           data-testid="file-open-submit"
         >
           {loading ? "Opening..." : "Open"}
@@ -220,7 +220,7 @@ function handleFileSelect(e: Event) {
                     filePath = p;
                     openByPath(p);
                   }}
-                  style="background: none; border: none; padding: 6px 8px; border-radius: 4px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 1px;"
+                  style="background: none; border: none; padding: 6px 8px; border-radius: var(--tandem-r-2); cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 1px;"
                   onmouseenter={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.background =
                       "var(--tandem-surface-muted)";
@@ -256,7 +256,7 @@ function handleFileSelect(e: Event) {
         onkeydown={(e) => {
           if (e.key === "Enter" || e.key === " ") fileInputEl?.click();
         }}
-        style={`border: 2px dashed ${dragOver ? "var(--tandem-accent)" : "var(--tandem-border-strong)"}; border-radius: 6px; padding: 32px 16px; text-align: center; cursor: ${loading ? "wait" : "pointer"}; background: ${dragOver ? "var(--tandem-accent-bg)" : "var(--tandem-surface-muted)"}; transition: border-color 0.15s, background 0.15s;`}
+        style={`border: 2px dashed ${dragOver ? "var(--tandem-accent)" : "var(--tandem-border-strong)"}; border-radius: var(--tandem-r-3); padding: 32px 16px; text-align: center; cursor: ${loading ? "wait" : "pointer"}; background: ${dragOver ? "var(--tandem-accent-bg)" : "var(--tandem-surface-muted)"}; transition: border-color 0.15s, background 0.15s;`}
         data-testid="file-upload-zone"
       >
         <input
@@ -277,7 +277,7 @@ function handleFileSelect(e: Event) {
 
     {#if error}
       <div
-        style="margin-top: 10px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: 4px; border: 1px solid var(--tandem-error-border);"
+        style="margin-top: 10px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-error-border);"
         data-testid="file-open-error"
       >
         {error}

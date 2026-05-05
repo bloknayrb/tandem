@@ -280,14 +280,14 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Held-annotation banner -->
   {#if heldCount > 0}
     <div
-      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: 8px; font-size: 12px; color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center; gap: 10px;"
+      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: var(--tandem-r-4); font-size: var(--tandem-text-xs); color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center; gap: 10px;"
     >
       <span data-testid="held-banner">
         {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
       </span>
       <button
         onclick={() => onModeChange?.("tandem")}
-        style="font-size: 11px; padding: 4px 10px; border: 1px solid var(--tandem-author-claude); border-radius: 5px; background: var(--tandem-author-claude); color: var(--tandem-author-claude-fg); cursor: pointer; font-weight: 500;"
+        style="font-size: var(--tandem-text-xs); padding: 4px 10px; border: 1px solid var(--tandem-author-claude); border-radius: var(--tandem-r-2); background: var(--tandem-author-claude); color: var(--tandem-author-claude-fg); cursor: pointer; font-weight: 500;"
       >
         Show all
       </button>
@@ -301,7 +301,7 @@ function handleBulk(status: "accepted" | "dismissed") {
         Annotations
         {#if filteredData.allPending.length > 0}
           <span
-            style="margin-left: 8px; padding: 1px 6px; font-size: 11px; background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: 10px;"
+            style="margin-left: 8px; padding: 1px 6px; font-size: var(--tandem-text-xs); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill);"
           >
             {filteredData.allPending.length}
           </span>
@@ -355,7 +355,7 @@ function handleBulk(status: "accepted" | "dismissed") {
   <!-- Annotation list -->
   <div style="padding: var(--tandem-space-3); flex: 1;" role="list" aria-label="Annotations">
     {#if filteredData.filtered.length === 0}
-      <p role="status" style="font-size: 13px; color: var(--tandem-fg-subtle); margin-top: 8px;">
+      <p role="status" style="font-size: var(--tandem-text-base); color: var(--tandem-fg-subtle); margin-top: 8px;">
         {hasFilters
           ? "No annotations match filters."
           : "No annotations yet. Open a document to get started."}

@@ -12,9 +12,9 @@ interface Props {
 let { status, onAdvance, onLearnMore }: Props = $props();
 
 const primaryBtnStyle =
-  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: var(--tandem-r-2); background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
 const secondaryBtnStyle =
-  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
 
 let confirming = $state(false);
 let busy = $state(false);
@@ -71,7 +71,7 @@ function handleSkip(): void {
     <div
       data-testid="cowork-onboarding-error"
       role="alert"
-      style="font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: 4px; padding: 6px 8px;"
+      style="font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); padding: 6px 8px;"
     >
       {error}
     </div>
@@ -80,7 +80,7 @@ function handleSkip(): void {
   {#if confirming}
     <div
       data-testid="cowork-onboarding-confirm"
-      style="font-size: 12px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: 4px; padding: 8px 10px;"
+      style="font-size: 12px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-2); padding: 8px 10px;"
     >
       <div style="font-weight: 600; margin-bottom: 6px;">Confirm: Enable Cowork</div>
       <div style="margin-bottom: 8px;">

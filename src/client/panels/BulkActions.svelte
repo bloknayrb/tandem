@@ -32,15 +32,15 @@ const countLabel = $derived(
 );
 
 const smallBtnBase =
-  "padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; cursor: pointer;";
+  "padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); cursor: pointer;";
 </script>
 
 {#if pendingCount > 1}
   <div
-    style="padding: 6px 16px; border-bottom: 1px solid var(--tandem-border); display: flex; gap: 6px; align-items: center;"
+    style="padding: 6px var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); display: flex; gap: 4px; align-items: center;"
   >
     {#if bulkConfirm}
-      <span style="font-size: 11px; color: var(--tandem-fg);">
+      <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg);">
         {isAccept ? "Accept" : "Reject"}
         {countLabel}
       </span>

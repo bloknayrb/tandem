@@ -37,7 +37,7 @@ let {
 }: Props = $props();
 
 const inputStyle = $derived(
-  `padding: 3px 8px; font-size: 13px; border: 1px solid ${borderColor}; border-radius: 4px; outline: none; min-width: 120px; flex: 1 1 200px; background: var(--tandem-surface); color: var(--tandem-fg);`,
+  `padding: 3px 8px; font-size: 13px; border: 1px solid ${borderColor}; border-radius: var(--tandem-r-2); outline: none; min-width: 120px; flex: 1 1 200px; background: var(--tandem-surface); color: var(--tandem-fg);`,
 );
 </script>
 

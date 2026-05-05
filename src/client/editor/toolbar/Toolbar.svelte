@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import * as Y from "yjs";
-import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { HIGHLIGHT_COLOR_VARS, HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
@@ -312,7 +312,7 @@ function handleLinkMouseDown(e: MouseEvent) {
     bind:this={toolbarEl}
     role={inInputMode ? "dialog" : "toolbar"}
     aria-label={inInputMode ? (mode === "comment" ? "Add comment" : "Add note") : "Selection tools"}
-    style={`position: fixed; left: ${floatPos.left}px; top: ${floatPos.top}px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: 1000; white-space: nowrap;`}
+    style={`position: fixed; left: ${floatPos.left}px; top: ${floatPos.top}px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: var(--tandem-z-modal); white-space: nowrap;`}
   >
     {#if inInputMode}
       <InputGroup
@@ -337,7 +337,7 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleBold().run();
         }}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer;"
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 700; cursor: pointer;"
       >
         B
       </button>
@@ -349,7 +349,7 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleItalic().run();
         }}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-style: italic; cursor: pointer;"
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-style: italic; cursor: pointer;"
       >
         I
       </button>
@@ -361,7 +361,7 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleStrike().run();
         }}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; text-decoration: line-through; cursor: pointer;"
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; text-decoration: line-through; cursor: pointer;"
       >
         S
       </button>
@@ -373,7 +373,7 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleCode().run();
         }}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
       >
         &lt;/&gt;
       </button>
@@ -382,7 +382,7 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Link"
         title="Link"
         onmousedown={handleLinkMouseDown}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; cursor: pointer;"
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; cursor: pointer;"
       >
         Link
       </button>
@@ -398,7 +398,7 @@ function handleLinkMouseDown(e: MouseEvent) {
               handleHighlight(color);
               editor?.chain().focus().run();
             }}
-            style={`width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLORS[color]}; cursor: pointer; padding: 0;`}
+            style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
           ></button>
         {/each}
       </div>
@@ -408,7 +408,7 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Comment on selection"
         title="Comment on selection"
         onmousedown={startComment}
-        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
+        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
       >
         Comment
       </button>
@@ -417,7 +417,7 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Private note on selection"
         title="Private note on selection"
         onmousedown={startNote}
-        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
+        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
       >
         Note
       </button>
@@ -437,7 +437,7 @@ function handleLinkMouseDown(e: MouseEvent) {
   >
     <span
       aria-hidden="true"
-      style="width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(from 210deg, var(--tandem-author-user), var(--tandem-author-user) 44%, transparent 44% 56%, var(--tandem-author-claude) 56%, var(--tandem-author-claude)); display: inline-block;"
+      style="width: 18px; height: 18px; border-radius: var(--tandem-r-circle); background: conic-gradient(from 210deg, var(--tandem-author-user), var(--tandem-author-user) 44%, transparent 44% 56%, var(--tandem-author-claude) 56%, var(--tandem-author-claude)); display: inline-block;"
     ></span>
     Tandem
   </span>
@@ -477,7 +477,7 @@ function handleLinkMouseDown(e: MouseEvent) {
         style="padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: var(--tandem-font-mono);
           color: var(--tandem-warning-fg-strong);
           background: var(--tandem-warning-bg);
-          border: 1px solid var(--tandem-warning-border); border-radius: 9999px;"
+          border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-pill);"
       >
         {heldCount} held
       </span>
@@ -494,7 +494,7 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Settings"
         aria-keyshortcuts="Control+Comma"
         style="background: transparent; border: 1px solid transparent;
-          border-radius: 5px; cursor: pointer; color: var(--tandem-fg-muted);
+          border-radius: var(--tandem-r-2); cursor: pointer; color: var(--tandem-fg-muted);
           font-size: 12px; padding: 0 var(--tandem-space-3); min-height: 28px;"
       >
         Settings

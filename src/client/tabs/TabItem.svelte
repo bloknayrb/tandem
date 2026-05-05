@@ -98,7 +98,7 @@ const tabStyle = $derived(
     "gap: 8px",
     "padding: 0 12px",
     "height: 100%",
-    "font-size: 12px",
+    "font-size: var(--tandem-text-sm)",
     "cursor: pointer",
     `background: ${isActive ? "var(--tandem-surface)" : "transparent"}`,
     `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}`,
@@ -165,7 +165,7 @@ function handleMouseLeaveClose() {
 
   {#if tab.readOnly}
     <span
-      style="font-family: var(--tandem-font-mono); font-size: 9px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); padding: 0 4px; border-radius: 999px;"
+      style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-2xs); color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); padding: 0 4px; border-radius: var(--tandem-r-pill);"
     >
       RO
     </span>
@@ -187,7 +187,7 @@ function handleMouseLeaveClose() {
     }}
     onmouseenter={handleMouseEnterClose}
     onmouseleave={handleMouseLeaveClose}
-    style="background: none; border: none; cursor: pointer; font-size: 14px; line-height: 1; color: var(--tandem-fg-faint); padding: 0 2px; border-radius: 2px; opacity: 0.85;"
+    style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-md); line-height: 1; color: var(--tandem-fg-faint); padding: 0 2px; border-radius: var(--tandem-r-1); opacity: 0.85;"
     title="Close document"
   >
     ×

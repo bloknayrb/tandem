@@ -77,9 +77,9 @@ async function handleClick() {
     onclick={handleClick}
     disabled={disabled}
     title={accepted.length === 0 ? "No accepted suggestions to apply" : undefined}
-    style="width: 100%; padding: 6px 12px; font-size: 12px; font-weight: 500; border: 1px solid {disabled
+    style="width: 100%; padding: var(--tandem-space-1) var(--tandem-space-3); font-size: var(--tandem-text-xs); font-weight: 500; border: 1px solid {disabled
       ? 'var(--tandem-border)'
-      : 'var(--tandem-info-border)'}; border-radius: 4px; background: {disabled
+      : 'var(--tandem-info-border)'}; border-radius: var(--tandem-r-2); background: {disabled
       ? 'var(--tandem-surface-muted)'
       : 'var(--tandem-info)'}; color: {disabled
       ? 'var(--tandem-fg-subtle)'

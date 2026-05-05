@@ -7,7 +7,8 @@ let { onDismiss }: Props = $props();
 </script>
 
 <div
-  style="padding: 8px 16px; background: var(--tandem-error-bg); border-bottom: 1px solid var(--tandem-error-border); font-size: 13px; color: var(--tandem-error-fg-strong); text-align: center; display: flex; justify-content: center; align-items: center; gap: 12px;"
+  data-testid="connection-banner"
+  style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-error-bg); border-bottom: 1px solid var(--tandem-error-border); font-size: var(--tandem-text-base); color: var(--tandem-error-fg-strong); text-align: center; display: flex; justify-content: center; align-items: center; gap: var(--tandem-space-3);"
 >
   <span>Connection to the Tandem server has been lost. Ensure the server is running.</span>
   <button

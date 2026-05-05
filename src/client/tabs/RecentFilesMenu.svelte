@@ -67,7 +67,7 @@ $effect(() => {
   aria-label="Recent files"
   onkeydown={handleKeyDown}
   tabindex="-1"
-  style="position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 260px; max-width: 400px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 4px 16px color-mix(in srgb, var(--tandem-fg) 12%, transparent); z-index: 200; overflow: hidden;"
+  style="position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 260px; max-width: 400px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-2); z-index: var(--tandem-z-dropdown); overflow: hidden;"
 >
   <div style="padding: 6px 12px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--tandem-fg-subtle);">
     Recent files

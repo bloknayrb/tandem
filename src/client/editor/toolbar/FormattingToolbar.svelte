@@ -228,18 +228,18 @@ function handleLinkMouseDown(e: MouseEvent) {
         <div
           role="menu"
           aria-label="Heading level"
-          style="position: absolute; top: 100%; left: 0; margin-top: 4px;
+            style="position: absolute; top: 100%; left: 0; margin-top: 4px;
             background: var(--tandem-surface); border: 1px solid var(--tandem-border);
-            border-radius: 6px; padding: 4px; display: flex; flex-direction: column;
-            gap: 2px; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"
+            border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;
+            gap: 2px; z-index: 10; box-shadow: var(--tandem-shadow-1);"
         >
           {#each HEADING_LEVELS as level (level)}
             <button
               type="button"
               role="menuitem"
               onmousedown={handleHeadingToggle(level)}
-              style="padding: 4px 12px; font-size: 13px; border: none;
-                border-radius: 4px;
+                style="padding: 4px 12px; font-size: 13px; border: none;
+                border-radius: var(--tandem-r-2);
                 background: {activeHeading === level ? 'var(--tandem-accent-bg)' : 'transparent'};
                 color: {activeHeading === level ? 'var(--tandem-accent)' : 'var(--tandem-fg)'};
                 cursor: pointer; text-align: left;

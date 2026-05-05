@@ -38,4 +38,24 @@ describe("check-semantic-tokens", () => {
 
     expect(violations).toEqual([]);
   });
+
+  it("flags raw border radius pixels", () => {
+    const violations = checkContent(
+      `<div style="border-radius: 6px; background: var(--tandem-surface);"></div>`,
+      "src/client/components/RadiusExample.svelte",
+    );
+
+    expect(violations).toEqual(["src/client/components/RadiusExample.svelte:1: border-radius: 6px"]);
+  });
+
+  it("flags inline box-shadow rgba so surfaces migrate to shadow tokens", () => {
+    const violations = checkContent(
+      `<div style="box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);"></div>`,
+      "src/client/components/ShadowExample.svelte",
+    );
+
+    expect(violations).toEqual([
+      "src/client/components/ShadowExample.svelte:1: box-shadow: 0 4px 12px rgba(",
+    ]);
+  });
 });

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## \[Unreleased]
 
+### Added
+
+- **Redesign bundle checked into `docs/redesign-bundle/` (#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
+- **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
+
+### Changed
+
+- **Semantic token foundation expanded for redesign wave 2 (#521)** — added radius, font-size, shadow, z-index, editor-font-size, and highlight-color token families in `index.html`, plus checker rules that now flag raw `border-radius: <n>px` and inline `box-shadow: ... rgba(...)` in `src/client/`.
+- **Read-only/info surfaces now use the shared info token family (#521)** — `ReviewOnlyBanner`, `ConnectionBanner`, `ToastContainer`, `StatusBar`, and related chrome now consume the shared token scales instead of hardcoded radius/text/shadow values.
+
+### Removed
+
+- **`ReviewSummary` overlay removed with review mode already gone (#521)** — the dead component and `App.svelte` mount path are deleted rather than carried forward as unreachable redesign debt.
+
 ## \[0.10.1] - Unreleased
 
 Plugin URL and auth resolution for custom-port and network-remote setups.

@@ -23,11 +23,11 @@ let { children }: Props = $props();
         The editor encountered an unexpected error. Reload the page to continue.
       </p>
       <pre
-        style="background: var(--tandem-surface-muted); padding: 1rem; border-radius: 4px; font-size: 12px; overflow: auto; max-height: 200px; color: var(--tandem-fg); border: 1px solid var(--tandem-border);"
+        style="background: var(--tandem-surface-muted); padding: 1rem; border-radius: var(--tandem-r-2); font-size: 12px; overflow: auto; max-height: 200px; color: var(--tandem-fg); border: 1px solid var(--tandem-border);"
       >{error instanceof Error ? error.message : String(error)}</pre>
       <button
         onclick={() => window.location.reload()}
-        style="margin-top: 1rem; padding: 8px 16px; cursor: pointer; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg);"
+        style="margin-top: 1rem; padding: 8px 16px; cursor: pointer; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg);"
       >
         Reload
       </button>

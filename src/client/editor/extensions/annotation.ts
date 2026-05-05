@@ -3,7 +3,7 @@ import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
-import { HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
 import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";
@@ -48,11 +48,11 @@ function buildDecorations(
 
     switch (ann.type) {
       case "highlight": {
-        const color = ann.color || "yellow";
-        const bg = HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.yellow;
+        const color = normalizeHighlightColor(ann.color);
+        const bg = HIGHLIGHT_COLOR_VARS[color];
         attrs = {
           class: `tandem-highlight tandem-highlight--${color}`,
-          style: `background: ${bg}; border-radius: 2px; padding: 1px 0;`,
+          style: `background: ${bg}; border-radius: var(--tandem-r-1); padding: 1px 0;`,
           "data-annotation-id": ann.id,
           "aria-label": `Highlight annotation (${color})`,
         };

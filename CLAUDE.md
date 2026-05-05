@@ -76,6 +76,8 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **`--tandem-info-*`** — blue. Informational banners, review-only mode. `--tandem-info`, `-fg`, `-fg-strong`, `-bg`, `-border`.
 - **`--tandem-suggestion-*`** — violet. Replacement/suggestion annotations. `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`. Visually distinct from indigo accent.
 - **`--tandem-accent-border`** — single token for accent-family bordered elements.
+- **Spacing / radius / type / elevation / stacking scales** — use `--tandem-space-1..7`, `--tandem-r-1..5`, `--tandem-r-pill`, `--tandem-r-circle`, `--tandem-text-2xs..3xl`, `--tandem-shadow-1..4`, and `--tandem-z-base..tooltip` instead of raw px literals in client surfaces.
+- **Highlight tokens** — CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep `HIGHLIGHT_COLORS` raw rgba values for non-CSS export/runtime paths; Svelte surfaces should use `HIGHLIGHT_COLOR_VARS`.
 - **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark. Authorship decorations use `data-tandem-author` attributes (not CSS classes) per ADR-026.
 - **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). Used in `awareness.ts` for the paragraph gutter decoration.
 - **Light mode:** `--tandem-success-bg`, `--tandem-warning-bg`, and `--tandem-error-bg` are derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` (`#eef2ff`) and `--tandem-info-bg` (`#eff6ff`) use hand-picked hex. `--tandem-suggestion-bg` uses `color-mix` like the other status families.

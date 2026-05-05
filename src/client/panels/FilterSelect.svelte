@@ -13,7 +13,7 @@ let { value, onChange, options, testId }: FilterSelectProps = $props();
   data-testid={testId}
   {value}
   onchange={(e) => onChange((e.target as HTMLSelectElement).value)}
-  style="padding: 2px 4px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer; outline: none;"
+  style="padding: 2px 4px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer; outline: none;"
 >
   {#each options as o (o.value)}
     <option value={o.value}>{o.label}</option>

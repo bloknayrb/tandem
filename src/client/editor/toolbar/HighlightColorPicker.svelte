@@ -1,5 +1,5 @@
 <script lang="ts">
-import { HIGHLIGHT_COLORS } from "../../../shared/constants";
+import { HIGHLIGHT_COLOR_VARS } from "../../../shared/constants";
 import type { HighlightColor } from "../../../shared/types";
 import ToolbarButton from "./ToolbarButton.svelte";
 
@@ -55,7 +55,7 @@ function handleColorSelect(color: HighlightColor) {
     {disabled}
     disabledTitle="Select text first"
     onMouseDown={handleHighlight}
-    style="border-radius: 4px 0 0 4px; border-right: none;"
+    style="border-radius: var(--tandem-r-2) 0 0 var(--tandem-r-2); border-right: none;"
   />
   <button
     data-testid="toolbar-highlight-color-toggle"
@@ -63,14 +63,14 @@ function handleColorSelect(color: HighlightColor) {
     onmousedown={handleColorPickerToggle}
     title="Choose highlight color"
     style="padding: 4px 6px; font-size: 13px; border: 1px solid var(--tandem-border);
-      border-radius: 0 4px 4px 0;
+      border-radius: 0 var(--tandem-r-2) var(--tandem-r-2) 0;
       background: {disabled ? 'var(--tandem-surface-muted)' : 'var(--tandem-surface)'};
       cursor: {disabled ? 'not-allowed' : 'pointer'};
       display: flex; align-items: center;"
   >
     <span
-      style="display: inline-block; width: 12px; height: 12px; border-radius: 2px;
-        background: {HIGHLIGHT_COLORS[highlightColor]};
+      style="display: inline-block; width: 12px; height: 12px; border-radius: var(--tandem-r-1);
+        background: {HIGHLIGHT_COLOR_VARS[highlightColor]};
         border: 1px solid rgba(0,0,0,0.15);"
     ></span>
   </button>
@@ -79,8 +79,8 @@ function handleColorSelect(color: HighlightColor) {
       bind:this={colorPickerEl}
       style="position: absolute; top: 100%; left: 0; margin-top: 4px;
         background: var(--tandem-surface); border: 1px solid var(--tandem-border);
-        border-radius: 6px; padding: 6px; display: flex; gap: 4px; z-index: 10;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);"
+        border-radius: var(--tandem-r-3); padding: 6px; display: flex; gap: 4px;
+        z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-2);"
     >
       {#each HIGHLIGHT_COLOR_OPTIONS as { value, label } (value)}
         <button
@@ -88,11 +88,11 @@ function handleColorSelect(color: HighlightColor) {
           title={label}
           aria-label={label}
           onclick={() => handleColorSelect(value)}
-          style="width: 24px; height: 24px; border-radius: 4px;
+          style="width: 24px; height: 24px; border-radius: var(--tandem-r-2);
             border: {value === highlightColor
               ? '2px solid var(--tandem-fg)'
               : '1px solid rgba(0,0,0,0.15)'};
-            background: {HIGHLIGHT_COLORS[value]};
+            background: {HIGHLIGHT_COLOR_VARS[value]};
             cursor: pointer; padding: 0;"
         ></button>
       {/each}
@@ -101,7 +101,7 @@ function handleColorSelect(color: HighlightColor) {
         title="Close"
         aria-label="Close color picker"
         onclick={() => (showColorPicker = false)}
-        style="width: 24px; height: 24px; border-radius: 4px;
+        style="width: 24px; height: 24px; border-radius: var(--tandem-r-2);
           border: 1px solid var(--tandem-border);
           background: var(--tandem-surface-muted); cursor: pointer; padding: 0;
           font-size: 13px; color: var(--tandem-fg-muted);

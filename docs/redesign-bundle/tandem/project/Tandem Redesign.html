@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tandem — Editor Redesign</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="settings.css?v=2">
+<link rel="stylesheet" href="surfaces.css?v=1">
+<link rel="stylesheet" href="annotation-redesign.css?v=2">
+<style>
+  html, body { height: 100%; background: #ECECE6; }
+  body { font-family: 'Inter Tight', sans-serif; }
+
+  /* Settings: force swatch rows horizontal even when parent is column flex */
+  .settings-row-control .swatch-row {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .canvas-bg {
+    min-height: 100vh;
+    padding: 56px 56px 120px;
+    background:
+      radial-gradient(circle at 10% 10%, oklch(0.97 0.012 80) 0, transparent 50%),
+      radial-gradient(circle at 90% 30%, oklch(0.96 0.014 30) 0, transparent 55%),
+      oklch(0.95 0.008 80);
+  }
+  .hero {
+    max-width: 1240px;
+    margin: 0 auto 48px;
+    color: oklch(0.22 0.012 280);
+  }
+  .hero h1 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 56px;
+    font-weight: 500;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0 0 16px;
+  }
+  .hero h1 em {
+    font-style: italic;
+    color: oklch(0.52 0.16 275);
+  }
+  .hero p {
+    font-size: 16px;
+    line-height: 1.55;
+    color: oklch(0.40 0.010 280);
+    max-width: 720px;
+    margin: 0 0 8px;
+  }
+  .hero .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: oklch(0.55 0.008 280);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 24px;
+  }
+  .legend {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    padding: 20px 24px;
+    background: white;
+    border: 1px solid oklch(0.92 0.005 280);
+    border-radius: 10px;
+    max-width: 1240px;
+    margin: 0 auto 56px;
+  }
+  .legend .item {
+    display: flex; gap: 10px; align-items: flex-start;
+    font-size: 13px;
+    color: oklch(0.40 0.010 280);
+    line-height: 1.4;
+    flex: 1;
+    min-width: 200px;
+  }
+  .legend .item strong {
+    color: oklch(0.22 0.012 280);
+    font-weight: 600;
+  }
+  .legend .num {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    background: oklch(0.95 0.03 275);
+    color: oklch(0.42 0.18 275);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* Each artboard frame mimics a Windows app window — square top edges,
+     no native chrome (the inner app draws its own titlebar). */
+  .frame {
+    width: 100%;
+    height: 100%;
+    background: oklch(0.985 0.004 80);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  .frame-body { flex: 1; min-height: 0; }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" fill="#ECECE6"/>
+    <rect x="20" y="35" width="30" height="3" fill="#5B5BD6"/>
+    <rect x="20" y="42" width="40" height="3" fill="#D97757"/>
+    <rect x="20" y="49" width="35" height="3" fill="#222"/>
+    <rect x="20" y="56" width="38" height="3" fill="#222"/>
+    <rect x="65" y="35" width="20" height="24" rx="2" fill="white" stroke="#222"/>
+  </svg>
+</template>
+
+<div class="canvas-bg">
+  <div class="hero">
+    <div class="meta">Tandem · interface redesign · 2026</div>
+    <h1>A document <em>in conversation</em><br/>with the writer beside you.</h1>
+    <p>The current Tandem chrome is workmanlike but loud — buttons live far from where the writing happens, and Claude's presence reads as a side panel rather than a co-author. This redesign brings tools to the cursor, settles the chrome down, and lets the prose breathe. Every artboard below is an actual desktop window state.</p>
+  </div>
+
+  <div class="legend">
+    <div class="item"><span class="num">01</span><div><strong>Selection mini-toolbar.</strong> Highlight any text and the formatting + Highlight / Comment / Ask Claude / Flag tools surface in place. The cursor never has to leave the page.</div></div>
+    <div class="item"><span class="num">02</span><div><strong>Authorship gutter.</strong> A 2px thread to the left of every paragraph shows who last touched it — blue for you, coral for Claude. Pulses softly when Claude is reading.</div></div>
+    <div class="item"><span class="num">03</span><div><strong>Quieter chrome.</strong> A single thin top bar with brand, doc title, mode toggle, and panel controls. Tabs are a 30px secondary row. No shadows except things that float.</div></div>
+    <div class="item"><span class="num">04</span><div><strong>Editorial typography.</strong> Source Serif 4 for prose, Inter Tight for chrome, JetBrains Mono for status and timestamps. All overrideable in Tweaks.</div></div>
+  </div>
+
+  <design-canvas></design-canvas>
+</div>
+
+<!-- Pinned React + Babel -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel" src="settings.jsx"></script>
+<script type="text/babel" src="surfaces.jsx"></script>
+<script type="text/babel" src="annotation-redesign.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "#5B5BD6",
+  "theme": "dark",
+  "density": "cozy",
+  "panelLayout": "right",
+  "editorFont": "serif",
+  "editorSize": 17,
+  "railWidth": 340
+}/*EDITMODE-END*/;
+
+function Frame({ title, children, platform = 'mac' }) {
+  return (
+    <div className={'frame plat-' + platform}>
+      <div className="frame-body">{children}</div>
+    </div>
+  );
+}
+
+// ---------- Variation: Empty document ----------
+function EmptyDoc({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent,
+      '--editor-font': 'var(--font-serif)',
+    }}>
+      <TopToolbar docName="untitled.md" dirty={false} panelLayout="hidden" theme={tw.theme || 'light'} mode="tandem"/>
+      <DocTabs
+        docs={[{ id: 'd1', name: 'untitled.md', ext: 'M' }]}
+        active="d1"
+      />
+      <div className="main" data-rail="hidden">
+        <div className="editor-wrap">
+          <div className="editor-scroll">
+            <div className="editor-doc" style={{ position: 'relative', minHeight: 200 }}>
+              <h1 style={{ color: 'var(--ink-faint)' }}>Untitled</h1>
+              <p className="para" data-tandem-author="user" style={{ color: 'var(--ink-faint)', position: 'relative' }}>
+                Start writing, or press <code style={{ background: 'var(--surface)', border: '1px solid var(--hair)' }}>/</code> for a block — or paste from a draft. Claude joins as soon as you select text.
+              </p>
+              <SlashMenu x={0} y={120}/>
+            </div>
+          </div>
+        </div>
+      </div>
+      <StatusBar claudeState="idle" docName="untitled.md" dirty={false}/>
+    </div>
+  );
+}
+
+// ---------- Variation: Chat-focused ----------
+function ChatFocus({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '420px',
+    }}>
+      <TopToolbar docName="q2-dashboard-review.md" dirty={true} panelLayout="right" theme={tw.theme || 'light'} mode="tandem"/>
+      <DocTabs
+        docs={[
+          { id: 'd1', name: 'q2-dashboard-review.md', ext: 'M', dirty: true },
+          { id: 'd2', name: 'rfc-007-readlayer.md', ext: 'M' },
+        ]}
+        active="d1"
+      />
+      <div className="main" data-rail="right">
+        <EditorBody showMini={false} showCursor={true}/>
+        <SideRail mode="chat" annotations={ANNOS} chat={CHAT}/>
+      </div>
+      <StatusBar claudeState="thinking" docName="q2-dashboard-review.md" dirty={true}/>
+    </div>
+  );
+}
+
+// ---------- Variation: Dark + left panel ----------
+function DarkLeft({ tw }) {
+  return (
+    <div className="app" data-theme="dark" data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '340px',
+    }}>
+      <TopToolbar docName="rfc-007-readlayer.md" dirty={true} panelLayout="left" theme="dark" mode="tandem"/>
+      <DocTabs
+        docs={[
+          { id: 'd2', name: 'rfc-007-readlayer.md', ext: 'M', dirty: true },
+          { id: 'd1', name: 'q2-dashboard-review.md', ext: 'M' },
+        ]}
+        active="d2"
+      />
+      <div className="main" data-rail="left">
+        <EditorBody showMini={true} showCursor={true}/>
+        <SideRail mode="annotations" annotations={ANNOS} chat={CHAT}/>
+      </div>
+      <StatusBar claudeState="writing" docName="rfc-007-readlayer.md" dirty={true}/>
+    </div>
+  );
+}
+
+// ---------- Variation: Outline panel ----------
+function OutlineFocus({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '300px',
+    }}>
+      <TopToolbar docName="q2-dashboard-review.md" dirty={true} panelLayout="right" theme={tw.theme || 'light'} mode="tandem"/>
+      <DocTabs
+        docs={[{ id: 'd1', name: 'q2-dashboard-review.md', ext: 'M', dirty: true }]}
+        active="d1"
+      />
+      <div className="main" data-rail="right">
+        <EditorBody showMini={false} showCursor={true}/>
+        <SideRail mode="outline" annotations={ANNOS} chat={CHAT}/>
+      </div>
+      <StatusBar claudeState="reading" docName="q2-dashboard-review.md" dirty={true}/>
+    </div>
+  );
+}
+
+// ---------- Variation: Solo mode (default — rail hidden) ----------
+function SoloRailHidden({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)',
+    }}>
+      <TopToolbar docName="q2-dashboard-review.md" dirty={true} panelLayout="hidden" theme={tw.theme || 'light'} mode="solo"/>
+      <DocTabs
+        docs={[
+          { id: 'd1', name: 'q2-dashboard-review.md', ext: 'M', dirty: true },
+          { id: 'd2', name: 'rfc-007-readlayer.md', ext: 'M' },
+        ]}
+        active="d1"
+      />
+      <div className="main" data-rail="hidden">
+        <EditorBody showMini={false} showCursor={false}/>
+      </div>
+      <StatusBar claudeState="idle" mode="solo" heldCount={3} docName="q2-dashboard-review.md" dirty={true}/>
+    </div>
+  );
+}
+
+// ---------- Variation: Solo mode (rail visible — opt-in) ----------
+function SoloMode({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '360px',
+    }}>
+      <TopToolbar docName="q2-dashboard-review.md" dirty={true} panelLayout="right" theme={tw.theme || 'light'} mode="solo"/>
+      <DocTabs
+        docs={[
+          { id: 'd1', name: 'q2-dashboard-review.md', ext: 'M', dirty: true },
+          { id: 'd2', name: 'rfc-007-readlayer.md', ext: 'M' },
+        ]}
+        active="d1"
+      />
+      <div className="main" data-rail="right">
+        <EditorBody showMini={false} showCursor={false}/>
+        <SideRail
+          mode="annotations"
+          annotations={ANNOS.filter(a => a.author === 'user')}
+          chat={CHAT}
+          heldCount={3}
+          onShowAll={() => {}}
+        />
+      </div>
+      <StatusBar claudeState="idle" mode="solo" heldCount={3} docName="q2-dashboard-review.md" dirty={true}/>
+    </div>
+  );
+}
+
+function WordDoc({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '320px',
+    }}>
+      <TopToolbar docName="q2-board-memo.docx" dirty={true} panelLayout="right" theme={tw.theme || 'light'} mode="tandem"/>
+      <DocTabs
+        docs={[
+          { id: 'd3', name: 'q2-board-memo.docx', ext: 'W', dirty: true },
+          { id: 'd1', name: 'q2-dashboard-review.md', ext: 'M' },
+        ]}
+        active="d3"
+      />
+      <div className="main" data-rail="right">
+        <EditorBody showMini={false} showCursor={true} docType="docx"/>
+        <SideRail mode="annotations" annotations={ANNOS} chat={CHAT}/>
+      </div>
+      <StatusBar claudeState="idle" paged={true} docName="q2-board-memo.docx" dirty={true}/>
+    </div>
+  );
+}
+
+// ---------- Variation: Compact / dense ----------
+function Compact({ tw }) {
+  return (
+    <div className="app" data-theme={tw.theme || 'light'} data-density="compact" style={{
+      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '320px',
+    }}>
+      <TopToolbar docName="partner-update.docx" dirty={false} panelLayout="right" theme={tw.theme || 'light'} mode="solo"/>
+      <DocTabs
+        docs={[{ id: 'd3', name: 'partner-update.docx', ext: 'W', readOnly: true }]}
+        active="d3"
+      />
+      <div className="main" data-rail="right">
+        <EditorBody showMini={false} showCursor={false} docType="docx"/>
+        <SideRail mode="annotations" annotations={ANNOS.slice(0,3)} chat={CHAT} readOnly={true}/>
+      </div>
+      <StatusBar claudeState="idle" paged={true} docName="partner-update.docx" dirty={false}/>
+    </div>
+  );
+}
+
+// ---------- Standalone showcase: mini-toolbar + slash menu ----------
+function ToolsCloseUp() {
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: 'oklch(0.96 0.008 80)',
+      padding: 60,
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 40,
+      fontFamily: 'Inter Tight, sans-serif',
+    }}>
+      <div>
+        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'oklch(0.55 0.008 280)', marginBottom: 16 }}>
+          01 — Selection mini-toolbar
+        </div>
+        <div style={{
+          background: 'white',
+          border: '1px solid oklch(0.92 0.005 280)',
+          borderRadius: 10,
+          padding: '40px 48px',
+          fontFamily: 'Source Serif 4, serif',
+          fontSize: 17,
+          lineHeight: 1.65,
+          color: 'oklch(0.22 0.012 280)',
+          position: 'relative',
+          paddingTop: 120,
+        }}>
+          <p style={{ margin: 0 }}>The team completed the first two milestones ahead of schedule, but the dashboard timeline <span style={{ background: 'oklch(0.85 0.10 245 / 0.35)', borderRadius: 2 }}>slipped due to an unexpected API redesign</span> in May.</p>
+          <SelectionMiniToolbar x={310} y={170}/>
+        </div>
+        <div style={{ fontSize: 13, color: 'oklch(0.48 0.008 280)', marginTop: 16, lineHeight: 1.5, maxWidth: 480 }}>
+          Anchored to the selection, dismisses on click-away. Format on the left, semantic actions on the right. <strong style={{ color: 'oklch(0.22 0.012 280)' }}>Ask Claude</strong> is the only colored button — it&rsquo;s the action that matters.
+        </div>
+      </div>
+      <div>
+        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'oklch(0.55 0.008 280)', marginBottom: 16 }}>
+          02 — Slash command menu
+        </div>
+        <div style={{
+          background: 'white',
+          border: '1px solid oklch(0.92 0.005 280)',
+          borderRadius: 10,
+          padding: '40px 48px',
+          fontFamily: 'Source Serif 4, serif',
+          fontSize: 17,
+          lineHeight: 1.65,
+          color: 'oklch(0.22 0.012 280)',
+          position: 'relative',
+          minHeight: 280,
+        }}>
+          <p style={{ margin: 0, color: 'oklch(0.68 0.006 280)' }}>/<span style={{ borderLeft: '1.5px solid oklch(0.22 0.012 280)', marginLeft: 1, height: '1em', display: 'inline-block', verticalAlign: 'middle', animation: 'blink 1.2s step-end infinite' }}/></p>
+          <SlashMenu x={32} y={50}/>
+        </div>
+        <div style={{ fontSize: 13, color: 'oklch(0.48 0.008 280)', marginTop: 16, lineHeight: 1.5, maxWidth: 480 }}>
+          Type <code style={{ background: 'oklch(0.96 0.006 80)', border: '1px solid oklch(0.92 0.005 280)', padding: '1px 5px', borderRadius: 3, fontFamily: 'JetBrains Mono', fontSize: 12 }}>/</code> on a fresh line. Same kbd shortcuts that markdown gives you, but visible.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Annotation card states close-up ----------
+function CardStates({ tw }) {
+  const variants = [
+    { ...ANNOS[0], _label: 'Suggestion · active' },
+    { ...ANNOS[1], _label: 'Question from Claude' },
+    { ...ANNOS[2], _label: 'Flag from you' },
+    { ...ANNOS[3], _label: 'Comment with anchor' },
+    { ...ANNOS[0], resolved: true, _label: 'Resolved' },
+  ];
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      padding: 50, background: 'oklch(0.96 0.008 80)',
+      fontFamily: 'Inter Tight, sans-serif',
+      overflow: 'auto',
+    }}>
+      <div className="app" data-theme="light" data-density="cozy" style={{
+        '--accent': tw.accent,
+        height: 'auto',
+        background: 'transparent',
+        gridTemplateRows: 'auto',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, 1fr)',
+        gap: 16,
+      }}>
+        {variants.map((a, i) => (
+          <div key={i}>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'oklch(0.55 0.008 280)', marginBottom: 8 }}>{a._label}</div>
+            <AnnotationCard a={a} active={i === 0}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Render ----------
+function Page() {
+  const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  return (
+    <>
+      <DCSection id="main" title="Main editor — full window">
+        <DCArtboard id="primary" label="Default editing — selection mini-toolbar visible" width={1280} height={820}>
+          <Frame title="Tandem — q2-dashboard-review.md"><TandemApp tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="dark" label="Dark mode · panel on left" width={1280} height={820}>
+          <Frame title="Tandem — rfc-007-readlayer.md"><DarkLeft tw={tw}/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="states" title="Workflow states">
+        <DCArtboard id="chat" label="Chat conversation with text anchor" width={1280} height={820}>
+          <Frame title="Tandem — chat focus"><ChatFocus tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="solo" label="Solo mode — Claude paused, rail hidden, 3 held in status bar" width={1280} height={820}>
+          <Frame title="Tandem — q2-dashboard-review.md (Solo)"><SoloRailHidden tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="solo-rail" label="Solo mode — rail open, held annotations only" width={1280} height={820}>
+          <Frame title="Tandem — q2-dashboard-review.md (Solo, rail)"><SoloMode tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="outline" label="Outline panel — H1–H3 nav with annotation counts" width={1280} height={820}>
+          <Frame title="Tandem — outline view"><OutlineFocus tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="empty" label="Empty document — slash menu" width={1280} height={620}>
+          <Frame title="Tandem — untitled.md"><EmptyDoc tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="word" label="Word document (.docx) — paged sheets with drop shadow" width={1280} height={1100}>
+          <Frame title="Tandem — q2-board-memo.docx"><WordDoc tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="compact" label="Compact density · solo mode" width={1100} height={620}>
+          <Frame title="Tandem — partner-update.docx"><Compact tw={tw}/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="closeup" title="Close-ups">
+        <DCArtboard id="settings" label="Settings dialog · Appearance section" width={1000} height={700}>
+          <div style={{ width: '100%', height: '100%', background: 'oklch(0.96 0.008 80)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
+            <SettingsDialog/>
+          </div>
+        </DCArtboard>
+        <DCArtboard id="tools" label="Selection toolbar & slash menu" width={1280} height={520}>
+          <ToolsCloseUp/>
+        </DCArtboard>
+        <DCArtboard id="cards" label="Annotation card variants" width={900} height={780}>
+          <CardStates tw={tw}/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="surfaces" title="Modes, overlays & meta-surfaces — newly added">
+        <DCArtboard id="find" label="Find/Replace bar — overlay above editor, 7/47 matches" width={1280} height={820}>
+          <Frame title="Tandem — find / replace"><FindReplaceFrame tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="diff" label="Apply edit — split diff view, 2/3 hunks accepted" width={1280} height={820}>
+          <Frame title="Tandem — apply Claude's edit"><DiffFrame tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="palette" label="Command palette ⌘K — searchable actions, recents, results" width={1280} height={820}>
+          <Frame title="Tandem — command palette"><PaletteFrame tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="thread" label="Expanded annotation thread — 4 replies, reactions, status" width={1280} height={820}>
+          <Frame title="Tandem — annotation thread"><ThreadFrame tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="onboarding" label="First-run — model select, default mode, key shortcuts" width={1280} height={820}>
+          <Frame title="Tandem — welcome"><OnboardingFrame tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="share" label="Share & export — link, role, formats, embed" width={1280} height={820}>
+          <Frame title="Tandem — share q2-dashboard-review.md"><ShareFrame tw={tw}/></Frame>
+        </DCArtboard>
+        <DCArtboard id="settings-network" label="Settings → Network — sidecar config, retries, telemetry" width={1000} height={700}>
+          <div style={{ width: '100%', height: '100%', background: 'oklch(0.96 0.008 80)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
+            <SettingsNetworkFrame tw={tw}/>
+          </div>
+        </DCArtboard>
+        <DCArtboard id="mobile" label="Narrow-window / mobile — single column, sheet drawer" width={420} height={820}>
+          <MobileFrame tw={tw}/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="annotations" title="Annotation system — audience-not-type model">
+        <DCArtboard id="ar-popup" label="Selection popup — the audience choice IS the design" width={1280} height={620}>
+          <ARPopupCloseup/>
+        </DCArtboard>
+        <DCArtboard id="ar-decorations" label="Editor decorations — five visual languages, ranked by loudness" width={1280} height={620}>
+          <ARDecorationsCloseup/>
+        </DCArtboard>
+        <DCArtboard id="ar-sidebar" label="Sidebar cards — note → comment promotion chain" width={1280} height={820}>
+          <ARSidebarFrame tw={tw}/>
+        </DCArtboard>
+        <DCArtboard id="ar-states" label="Card states — five canonical variants + selection + resolved" width={1100} height={780}>
+          <ARCardStatesFrame/>
+        </DCArtboard>
+        <DCArtboard id="ar-import" label="Word import — comments arrive as private notes, batch convert" width={1280} height={780}>
+          <ARImportFrame/>
+        </DCArtboard>
+        <DCArtboard id="ar-tutorial" label="Tutorial annotations — welcome.md teaches the vocabulary" width={1280} height={680}>
+          <ARTutorialFrame/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="future" title="Future surfaces — reserved for roadmap items">
+        <DCArtboard id="conn-banner" label="Connection-degradation banner · sidecar offline >30s" width={1280} height={820}>
+          <Frame title="Tandem — q2-dashboard-review.md (offline)"><TandemApp tw={tw} connection="degraded"/></Frame>
+        </DCArtboard>
+        <DCArtboard id="shortcuts" label="Keyboard shortcuts modal · ⌘/ from titlebar" width={1280} height={820}>
+          <Frame title="Tandem — keyboard shortcuts"><TandemApp tw={tw} initialShortcutsOpen={true}/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <TweaksPanel title="Tweaks" defaultPosition={{ right: 24, bottom: 24 }}>
+        <TweakSection title="Theme">
+          <TweakRadio label="Mode" value={tw.theme} options={[
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]} onChange={v => setTweak('theme', v)}/>
+          <TweakColor label="Accent" value={tw.accent} onChange={v => setTweak('accent', v)}/>
+        </TweakSection>
+        <TweakSection title="Layout">
+          <TweakRadio label="Side panel" value={tw.panelLayout} options={[
+            { value: 'left', label: 'Left' },
+            { value: 'right', label: 'Right' },
+            { value: 'hidden', label: 'Hidden' },
+          ]} onChange={v => setTweak('panelLayout', v)}/>
+          <TweakRadio label="Density" value={tw.density} options={[
+            { value: 'compact', label: 'Compact' },
+            { value: 'cozy', label: 'Cozy' },
+            { value: 'spacious', label: 'Spacious' },
+          ]} onChange={v => setTweak('density', v)}/>
+          <TweakSlider label="Rail width" min={280} max={480} step={10} value={tw.railWidth} onChange={v => setTweak('railWidth', v)} suffix="px"/>
+        </TweakSection>
+        <TweakSection title="Editor type">
+          <TweakRadio label="Family" value={tw.editorFont} options={[
+            { value: 'serif', label: 'Serif' },
+            { value: 'sans', label: 'Sans' },
+            { value: 'mono', label: 'Mono' },
+          ]} onChange={v => setTweak('editorFont', v)}/>
+          <TweakSlider label="Size" min={14} max={22} step={1} value={tw.editorSize} onChange={v => setTweak('editorSize', v)} suffix="px"/>
+        </TweakSection>
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.querySelector('design-canvas')).render(<Page/>);
+</script>
+
+</body>
+</html>
