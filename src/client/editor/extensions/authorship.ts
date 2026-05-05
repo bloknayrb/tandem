@@ -74,8 +74,8 @@ export function buildAuthorshipDecorations(
     resolvedRanges.push({ author: entry.author as "user" | "claude", from, to });
   });
 
-  // Per-block dominant-author gutter decoration
-  doc.forEach((node, offset) => {
+  // Per-block dominant-author gutter decoration — descendants() visits nested blocks too
+  doc.descendants((node, offset) => {
     if (!GUTTER_NODE_TYPES.has(node.type.name)) return;
 
     const blockFrom = offset;

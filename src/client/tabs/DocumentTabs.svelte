@@ -30,6 +30,7 @@ let showDialog = $state(false);
 let showRecent = $state(false);
 let recentFiles = $state<string[]>([]);
 let openBtnEl: HTMLButtonElement | null = $state(null);
+let recentMenuEl: HTMLDivElement | null = $state(null);
 
 // Plain let — not reactive UI; just internal close-dedup guard
 let closingIds = new Set<string>();
@@ -180,6 +181,7 @@ $effect(() => {
     const target = e.target as Node | null;
     if (!target) return;
     if (openBtnEl?.contains(target)) return;
+    if (recentMenuEl?.contains(target)) return;
     if ((target as Element).closest?.("[data-tauri-drag-region]")) return;
     showRecent = false;
   }
@@ -265,7 +267,7 @@ $effect(() => {
   </button>
 
   {#if showRecent}
-    <div style="position: relative;">
+    <div bind:this={recentMenuEl} style="position: relative;">
       <RecentFilesMenu
         {recentFiles}
         onOpen={async (filePath) => {

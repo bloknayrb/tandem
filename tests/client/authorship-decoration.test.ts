@@ -88,6 +88,18 @@ function makeMockDoc(
         );
       });
     },
+    descendants(cb: (node: unknown, offset: number) => boolean | void) {
+      blocks.forEach(({ typeName, size, offset }) => {
+        cb(
+          {
+            type: { name: typeName },
+            nodeSize: size + 2,
+            content: { size },
+          },
+          offset,
+        );
+      });
+    },
   } as unknown as import("@tiptap/pm/model").Node;
 }
 
