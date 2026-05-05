@@ -26,8 +26,6 @@ describe("slash command filtering", () => {
 
   it("matches labels and aliases", () => {
     expect(filterSlashCommands("h2").map((command) => command.id)).toEqual(["heading-2"]);
-    expect(filterSlashCommands("ordered").map((command) => command.id)).toEqual([
-      "numbered-list",
-    ]);
+    expect(filterSlashCommands("ordered").map((command) => command.id)).toEqual(["numbered-list"]);
   });
 });
