@@ -73,6 +73,57 @@ export function buildAuthorshipDecorations(
     }
   });
 
+  // --- Pass 2: per-block dominant-author gutter decoration ---
+  const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
+
+  // Pre-resolve all authorship ranges once so the forEach loop is O(blocks * entries)
+  // rather than re-resolving per block.
+  type ResolvedEntry = { author: "user" | "claude"; from: number; to: number };
+  const resolved: ResolvedEntry[] = [];
+  authorshipMap.forEach((value) => {
+    const entry = value as AuthorshipRange;
+    if (!entry.author || !entry.range) return;
+    if (entry.author !== "user" && entry.author !== "claude") return;
+    const r = resolveAuthorshipRange(entry, doc, ydoc);
+    if (!r || r.from >= r.to) return;
+    resolved.push({ author: entry.author as "user" | "claude", from: r.from, to: r.to });
+  });
+
+  doc.forEach((node, offset) => {
+    if (!GUTTER_NODE_TYPES.has(node.type.name)) return;
+
+    // Block spans [offset, offset + nodeSize) in PM positions.
+    const blockFrom = offset;
+    const blockTo = offset + node.nodeSize;
+
+    let userChars = 0;
+    let claudeChars = 0;
+
+    for (const r of resolved) {
+      // Compute overlap between authorship range and block
+      const overlapFrom = Math.max(r.from, blockFrom);
+      const overlapTo = Math.min(r.to, blockTo);
+      if (overlapTo <= overlapFrom) continue;
+      const chars = overlapTo - overlapFrom;
+      if (r.author === "user") userChars += chars;
+      else claudeChars += chars;
+    }
+
+    if (userChars === 0 && claudeChars === 0) return;
+
+    // Ties go to user
+    const dominant: "user" | "claude" = userChars >= claudeChars ? "user" : "claude";
+
+    try {
+      decorations.push(
+        Decoration.node(blockFrom, blockTo, { "data-tandem-author-block": dominant }),
+      );
+    } catch (err) {
+      if (!(err instanceof RangeError)) throw err;
+      console.warn("[authorship] node Decoration RangeError at offset", offset, err);
+    }
+  });
+
   return DecorationSet.create(doc, decorations);
 }
 
