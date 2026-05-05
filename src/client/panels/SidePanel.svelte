@@ -137,8 +137,6 @@ const review = useAnnotationReview({
   getEditor: () => editor,
   getAnnotations: () => annotations,
   onActiveAnnotationChange: (id) => onActiveAnnotationChange(id),
-  getBulkConfirm: () => bulkConfirm,
-  setBulkConfirm: (v) => (bulkConfirm = v),
   getScrollBehavior: () => scrollBehavior,
 });
 

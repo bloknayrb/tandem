@@ -43,6 +43,13 @@ function getFocusableItems(): HTMLElement[] {
   return Array.from(menuEl?.querySelectorAll<HTMLElement>("[role='menuitem']") ?? []);
 }
 
+function hoverOn(e: MouseEvent) {
+  (e.currentTarget as HTMLElement).style.background = "var(--tandem-surface-muted)";
+}
+function hoverOff(e: MouseEvent) {
+  (e.currentTarget as HTMLElement).style.background = "transparent";
+}
+
 let menuEl: HTMLDivElement | null = $state(null);
 
 $effect(() => {
@@ -73,8 +80,8 @@ $effect(() => {
       onclick={() => onOpen(filePath)}
       title={filePath}
       style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 12px; border: none; background: transparent; cursor: pointer; text-align: left; color: var(--tandem-fg); font-size: 13px;"
-      onmouseenter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--tandem-surface-hover, var(--tandem-surface-muted))"; }}
-      onmouseleave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+      onmouseenter={hoverOn}
+      onmouseleave={hoverOff}
     >
       <span style="font-size: 10px; font-weight: 700; font-family: var(--tandem-font-mono); color: var(--tandem-fg-muted); min-width: 14px; text-align: center;">
         {extBadge(filePath)}

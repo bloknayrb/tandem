@@ -11,6 +11,8 @@ import { flatOffsetToPmPos, pmPosToFlatOffset, relRangeToPmPositions } from "../
 
 export const authorshipPluginKey = new PluginKey("tandemAuthorship");
 
+const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
+
 /**
  * Resolve an AuthorshipRange to ProseMirror positions.
  * Prefers relRange (CRDT-anchored) with flat-offset fallback.
@@ -47,60 +49,42 @@ export function buildAuthorshipDecorations(
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
 
-  authorshipMap.forEach((value) => {
-    const entry = value as AuthorshipRange;
-    if (!entry.author || !entry.range) return;
-
-    // Defensive guard: skip entries with unexpected author values (Y.Map is untyped at runtime)
-    const validAuthors: ReadonlyArray<string> = ["user", "claude"];
-    if (!validAuthors.includes(entry.author)) return;
-
-    const resolved = resolveAuthorshipRange(entry, doc, ydoc);
-    if (!resolved) return;
-
-    const { from, to } = resolved;
-    if (from >= to || from < 0 || to > maxPos) return;
-
-    const attrs: Record<string, string> = {
-      "data-tandem-author": entry.author,
-    };
-
-    try {
-      decorations.push(Decoration.inline(from, to, attrs));
-    } catch (err) {
-      if (!(err instanceof RangeError)) throw err;
-      console.warn("[authorship] Decoration RangeError for entry", entry.id, err);
-    }
-  });
-
-  // --- Pass 2: per-block dominant-author gutter decoration ---
-  const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
-
-  // Pre-resolve all authorship ranges once so the forEach loop is O(blocks * entries)
-  // rather than re-resolving per block.
+  // Single pass: build inline spans and collect resolved ranges for the block gutter pass.
   type ResolvedEntry = { author: "user" | "claude"; from: number; to: number };
-  const resolved: ResolvedEntry[] = [];
+  const resolvedRanges: ResolvedEntry[] = [];
+
   authorshipMap.forEach((value) => {
     const entry = value as AuthorshipRange;
     if (!entry.author || !entry.range) return;
     if (entry.author !== "user" && entry.author !== "claude") return;
+
     const r = resolveAuthorshipRange(entry, doc, ydoc);
-    if (!r || r.from >= r.to) return;
-    resolved.push({ author: entry.author as "user" | "claude", from: r.from, to: r.to });
+    if (!r) return;
+
+    const { from, to } = r;
+    if (from >= to || from < 0 || to > maxPos) return;
+
+    try {
+      decorations.push(Decoration.inline(from, to, { "data-tandem-author": entry.author }));
+    } catch (err) {
+      if (!(err instanceof RangeError)) throw err;
+      console.warn("[authorship] Decoration RangeError for entry", entry.id, err);
+    }
+
+    resolvedRanges.push({ author: entry.author as "user" | "claude", from, to });
   });
 
+  // Per-block dominant-author gutter decoration
   doc.forEach((node, offset) => {
     if (!GUTTER_NODE_TYPES.has(node.type.name)) return;
 
-    // Block spans [offset, offset + nodeSize) in PM positions.
     const blockFrom = offset;
     const blockTo = offset + node.nodeSize;
 
     let userChars = 0;
     let claudeChars = 0;
 
-    for (const r of resolved) {
-      // Compute overlap between authorship range and block
+    for (const r of resolvedRanges) {
       const overlapFrom = Math.max(r.from, blockFrom);
       const overlapTo = Math.min(r.to, blockTo);
       if (overlapTo <= overlapFrom) continue;
@@ -111,7 +95,6 @@ export function buildAuthorshipDecorations(
 
     if (userChars === 0 && claudeChars === 0) return;
 
-    // Ties go to user
     const dominant: "user" | "claude" = userChars >= claudeChars ? "user" : "claude";
 
     try {

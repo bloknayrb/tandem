@@ -2,7 +2,7 @@
 import FileOpenDialog from "../components/FileOpenDialog.svelte";
 import type { OpenTab } from "../types.js";
 import { API_BASE } from "../utils/fileUpload.js";
-import { loadRecentFilesCached } from "../utils/recentFiles.js";
+import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
 import RecentFilesMenu from "./RecentFilesMenu.svelte";
 import TabItem from "./TabItem.svelte";
 
@@ -276,7 +276,9 @@ $effect(() => {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ filePath }),
             });
-            if (!res.ok) {
+            if (res.ok) {
+              saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
+            } else {
               const err = await res.text();
               console.warn("[tandem] failed to open recent file:", err);
             }

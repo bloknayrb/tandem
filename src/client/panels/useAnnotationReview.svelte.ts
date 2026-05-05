@@ -46,8 +46,6 @@ export interface UseAnnotationReviewParams {
   /** Reactive annotations array. */
   getAnnotations: () => Annotation[];
   onActiveAnnotationChange: (id: string | null) => void;
-  getBulkConfirm: () => "accept" | "dismiss" | null;
-  setBulkConfirm: (v: "accept" | "dismiss" | null) => void;
   getScrollBehavior: () => ScrollBehavior;
 }
 
@@ -65,13 +63,6 @@ export interface UseAnnotationReviewReturn {
   confirmEl: HTMLButtonElement | null;
 }
 
-/**
- * Svelte 5 port of useAnnotationReview.ts.
- *
- * Uses getter functions instead of React RefObjects to avoid stale-closure
- * issues. Internal state is Svelte $state runes; reactive derivations are
- * computed inline within returned getters.
- */
 export function useAnnotationReview({
   getYdoc,
   getEditor,
