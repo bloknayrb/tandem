@@ -53,7 +53,8 @@ const titleAttr = $derived(
   disabled && disabledTitle ? disabledTitle : shortcut ? `${titleText} (${shortcut})` : titleText,
 );
 
-const baseStyle = "height: 28px; padding: 0 8px; font-size: 12px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;";
+const baseStyle =
+  "height: 28px; padding: 0 8px; font-size: 12px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;";
 
 const fullStyle = $derived(
   `${baseStyle} cursor: ${disabled ? "not-allowed" : "pointer"}; ${style}; border: ${computed.border}; background: ${computed.background}; color: ${computed.color};`,

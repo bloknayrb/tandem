@@ -16,7 +16,13 @@ import EditorSettings from "./EditorSettings.svelte";
 const HEADING_ID = "tandem-settings-heading";
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-type SettingsSection = "profile" | "appearance" | "editor" | "accessibility" | "automation" | "about";
+type SettingsSection =
+  | "profile"
+  | "appearance"
+  | "editor"
+  | "accessibility"
+  | "automation"
+  | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "profile", label: "Profile" },

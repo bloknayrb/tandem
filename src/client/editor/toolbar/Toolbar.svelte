@@ -9,12 +9,12 @@ import { pmPosToFlatOffset } from "../../positions";
 import FormattingToolbar from "./FormattingToolbar.svelte";
 import HighlightColorPicker from "./HighlightColorPicker.svelte";
 import { toggleHighlight } from "./highlight-toggle";
+import InputGroup from "./InputGroup.svelte";
+import ModeToggle from "./ModeToggle.svelte";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
 } from "./selection-toolbar";
-import InputGroup from "./InputGroup.svelte";
-import ModeToggle from "./ModeToggle.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
 
 type ToolbarMode = "idle" | "comment" | "note";

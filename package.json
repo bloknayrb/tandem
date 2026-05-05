@@ -62,21 +62,24 @@
     "node": ">=22"
   },
   "lint-staged": {
-    "*.{ts,tsx}": [
+    "**/*.{ts,tsx}": [
       "eslint --fix",
+      "biome check --write"
+    ],
+    "**/*.svelte": [
       "biome check --write"
     ],
     "src/client/**/*.{ts,tsx,svelte}": [
       "tsx scripts/check-semantic-tokens.ts"
     ],
-    "*.mjs": [
+    "**/*.mjs": [
       "eslint --fix",
       "biome check --write"
     ],
-    "*.json !package-lock.json": [
+    "**/*.json !package-lock.json": [
       "biome check --write"
     ],
-    "*.{yml,yaml,md}": [
+    "**/*.{yml,yaml,md}": [
       "node scripts/normalize-eol.mjs"
     ]
   },
