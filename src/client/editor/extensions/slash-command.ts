@@ -1,5 +1,5 @@
 import { Extension, type Editor as TiptapEditor } from "@tiptap/core";
-import { Plugin, PluginKey, type EditorState, type Transaction } from "@tiptap/pm/state";
+import { type EditorState, Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
 
 export type SlashCommandId =
   | "heading-1"
@@ -118,7 +118,10 @@ function activeKey(active: ActiveSlashCommand): string {
   return `${active.from}:${active.to}:${active.query}`;
 }
 
-function resolveActiveSlashCommand(state: EditorState, selectedIndex = 0): ActiveSlashCommand | null {
+function resolveActiveSlashCommand(
+  state: EditorState,
+  selectedIndex = 0,
+): ActiveSlashCommand | null {
   const { selection } = state;
   if (!selection.empty) return null;
 
@@ -279,20 +282,24 @@ export const SlashCommandExtension = Extension.create<SlashCommandOptions>({
             if (event.key === "ArrowDown") {
               event.preventDefault();
               const selectedIndex = (active.selectedIndex + 1) % commands.length;
-              view.dispatch(view.state.tr.setMeta(slashCommandPluginKey, {
-                type: "select",
-                selectedIndex,
-              }));
+              view.dispatch(
+                view.state.tr.setMeta(slashCommandPluginKey, {
+                  type: "select",
+                  selectedIndex,
+                }),
+              );
               return true;
             }
 
             if (event.key === "ArrowUp") {
               event.preventDefault();
               const selectedIndex = (active.selectedIndex - 1 + commands.length) % commands.length;
-              view.dispatch(view.state.tr.setMeta(slashCommandPluginKey, {
-                type: "select",
-                selectedIndex,
-              }));
+              view.dispatch(
+                view.state.tr.setMeta(slashCommandPluginKey, {
+                  type: "select",
+                  selectedIndex,
+                }),
+              );
               return true;
             }
 
@@ -341,10 +348,12 @@ export const SlashCommandExtension = Extension.create<SlashCommandOptions>({
               active,
               editor,
               (selectedIndex) => {
-                view.dispatch(view.state.tr.setMeta(slashCommandPluginKey, {
-                  type: "select",
-                  selectedIndex,
-                }));
+                view.dispatch(
+                  view.state.tr.setMeta(slashCommandPluginKey, {
+                    type: "select",
+                    selectedIndex,
+                  }),
+                );
               },
               (command) => {
                 editor.chain().focus().deleteRange({ from: active.from, to: active.to }).run();
