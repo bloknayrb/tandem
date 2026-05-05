@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
-import { cleanupAllOpenDocuments, cleanupFixtureDir, createFixtureDir, McpTestClient, switchToAnnotationsTab } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+  switchToAnnotationsTab,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -33,7 +39,9 @@ test("accepted docx annotations can be applied as tracked changes", async ({ pag
 
   await page.goto("/");
   await switchToAnnotationsTab(page);
-  await expect(page.locator("[data-testid^='accept-btn-']").first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("[data-testid^='accept-btn-']").first()).toBeVisible({
+    timeout: 10_000,
+  });
   await page.locator("[data-testid^='accept-btn-']").first().click();
 
   const applyButton = page.locator("[data-testid='apply-changes-btn']");

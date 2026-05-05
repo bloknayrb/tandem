@@ -1,7 +1,12 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
 import { LEFT_PANEL_WIDTH_KEY, PANEL_WIDTH_KEY } from "../../src/shared/constants";
-import { cleanupAllOpenDocuments, cleanupFixtureDir, createFixtureDir, McpTestClient } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;

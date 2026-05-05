@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
-import { cleanupAllOpenDocuments, cleanupFixtureDir, createFixtureDir, McpTestClient } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;

@@ -1,7 +1,12 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
-import { cleanupAllOpenDocuments, cleanupFixtureDir, createFixtureDir, McpTestClient } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+} from "./helpers";
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -37,9 +42,9 @@ test("layout switching preserves the mounted editor and persisted layout", async
 
   const secondEditorHandle = await editor.elementHandle();
   if (!secondEditorHandle) throw new Error("editor handle missing after layout switch");
-  expect(await firstEditorHandle.evaluate((node, other) => node === other, secondEditorHandle)).toBe(
-    true,
-  );
+  expect(
+    await firstEditorHandle.evaluate((node, other) => node === other, secondEditorHandle),
+  ).toBe(true);
 
   const savedLayout = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);

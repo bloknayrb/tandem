@@ -176,6 +176,9 @@ test("Comment flow creates a comment annotation", async ({ page }) => {
   });
   await editor.click();
   await editor.locator("p").first().selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").includes("first paragraph"),
+  );
 
   const commentBtn = page.locator("[data-testid='toolbar-comment-btn']");
   await expect(commentBtn).toBeEnabled({ timeout: 3_000 });
@@ -204,6 +207,9 @@ test("Note flow creates a note annotation", async ({ page }) => {
   });
   await editor.click();
   await editor.locator("p").first().selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").includes("first paragraph"),
+  );
 
   const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
   await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
@@ -270,6 +276,9 @@ test("Comment empty submit cancels (no annotation created)", async ({ page }) =>
   });
   await editor.click();
   await editor.locator("p").first().selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").includes("first paragraph"),
+  );
 
   const commentBtn = page.locator("[data-testid='toolbar-comment-btn']");
   await expect(commentBtn).toBeEnabled({ timeout: 3_000 });
@@ -289,12 +298,14 @@ test("Highlight quick-action creates a highlight annotation", async ({ page }) =
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await switchToAnnotationsTab(page);
+  const selectionToolbar = page.getByRole("toolbar", { name: "Selection tools" });
   const editor = page.locator(".tiptap");
   await expect(editor.locator("p").first()).toContainText("first paragraph", {
     timeout: 10_000,
   });
   await editor.click();
   await editor.locator("p").first().selectText();
+  await expect(selectionToolbar).toBeVisible({ timeout: 5_000 });
 
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
@@ -342,6 +353,9 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   });
   await editor.click();
   await editor.locator("p").first().selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").includes("first paragraph"),
+  );
 
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
@@ -356,6 +370,9 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   // Re-select the same text and click highlight again — should toggle off.
   await editor.click();
   await editor.locator("p").first().selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").includes("first paragraph"),
+  );
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
@@ -388,6 +405,9 @@ test("highlights on different ranges produce two separate annotations", async ({
   // Highlight first paragraph.
   await editor.click();
   await editor.locator("p").first().selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").includes("first paragraph"),
+  );
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
@@ -399,6 +419,9 @@ test("highlights on different ranges produce two separate annotations", async ({
   const secondPara = editor.locator("p").nth(1);
   await secondPara.click();
   await secondPara.selectText();
+  await page.waitForFunction(
+    () => (window.getSelection()?.toString() ?? "").length > 0,
+  );
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 

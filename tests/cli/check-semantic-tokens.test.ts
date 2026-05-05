@@ -45,7 +45,9 @@ describe("check-semantic-tokens", () => {
       "src/client/components/RadiusExample.svelte",
     );
 
-    expect(violations).toEqual(["src/client/components/RadiusExample.svelte:1: border-radius: 6px"]);
+    expect(violations).toEqual([
+      "src/client/components/RadiusExample.svelte:1: border-radius: 6px",
+    ]);
   });
 
   it("flags inline box-shadow rgba so surfaces migrate to shadow tokens", () => {

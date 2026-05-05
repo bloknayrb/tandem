@@ -26,7 +26,7 @@ import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
-import { createModeGate } from "./hooks/useModeGate.svelte";
+import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createSaveShortcut } from "./hooks/useSaveShortcut.svelte";
 import { createSettingsShortcut } from "./hooks/useSettingsShortcut.svelte";
@@ -85,10 +85,19 @@ const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
   () => settingsState.settings.selectionDwellMs,
 );
-const modeGate = createModeGate(
-  () => yjsSync.annotations,
-  () => modeState.tandemMode,
-);
+const modeGate = $derived.by(() => {
+  const annotations = yjsSync.annotations;
+  const mode = modeState.tandemMode;
+  const visibleAnnotations = [];
+  let heldCount = 0;
+
+  for (const ann of annotations) {
+    if (shouldShowInMode(ann, mode)) visibleAnnotations.push(ann);
+    else if (ann.status === "pending") heldCount++;
+  }
+
+  return { visibleAnnotations, heldCount };
+});
 const connectionBanner = createConnectionBanner(() => yjsSync.disconnectedSince);
 createWebViewZoom();
 

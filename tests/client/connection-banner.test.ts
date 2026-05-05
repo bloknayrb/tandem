@@ -3,8 +3,8 @@
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PROLONGED_DISCONNECT_MS } from "../../src/shared/constants.js";
 import ConnectionBannerHarness from "../../src/client/svelte-harness/ConnectionBannerHarness.svelte";
+import { PROLONGED_DISCONNECT_MS } from "../../src/shared/constants.js";
 
 describe("createConnectionBanner", () => {
   beforeEach(() => {

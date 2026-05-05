@@ -1,7 +1,11 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import * as Y from "yjs";
-import { HIGHLIGHT_COLOR_VARS, HIGHLIGHT_COLORS, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import {
+  HIGHLIGHT_COLOR_VARS,
+  HIGHLIGHT_COLORS,
+  Y_MAP_ANNOTATIONS,
+} from "../../../shared/constants";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";

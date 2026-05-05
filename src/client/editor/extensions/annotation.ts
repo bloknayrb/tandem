@@ -3,7 +3,11 @@ import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
-import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor, Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import {
+  HIGHLIGHT_COLOR_VARS,
+  normalizeHighlightColor,
+  Y_MAP_ANNOTATIONS,
+} from "../../../shared/constants";
 import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";

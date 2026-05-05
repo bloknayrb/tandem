@@ -381,6 +381,17 @@ test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await switchToAnnotationsTab(page);
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  const settingsBtn = page.locator("[data-testid='settings-btn']");
+  await settingsBtn.click();
+  await page.getByRole("button", { name: "Collaboration" }).click();
+  const soloRailHiddenToggle = page.locator("[data-testid='solo-rail-hidden-toggle'] input");
+  await expect(soloRailHiddenToggle).toBeChecked();
+  await soloRailHiddenToggle.click();
+  await expect(soloRailHiddenToggle).not.toBeChecked();
+  await page.getByLabel("Close settings").click();
 
   const soloBtn = page.locator("[data-testid='mode-solo-btn']");
   const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
