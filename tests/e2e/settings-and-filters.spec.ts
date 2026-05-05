@@ -71,7 +71,7 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
     "page",
   );
 
-  await popover.getByRole("button", { name: "Automation" }).click();
+  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   // Dwell slider is present and adjustable — proves the new slider and its
   // testid are wired up. The actual broadcast into CTRL_ROOM is covered by
   // the event-queue-dwell unit test; here we just verify the UI surface.
@@ -86,6 +86,91 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
 
   await popover.getByRole("button", { name: "Editor" }).click();
   await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
+});
+
+test("settings dialog surfaces default mode and persists it", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible({ timeout: 2_000 });
+
+  await popover.getByRole("button", { name: "Collaboration" }).click();
+  const soloDefault = popover.locator("[data-testid='default-mode-solo-btn']");
+  await expect(soloDefault).toBeVisible();
+  await soloDefault.click();
+  await expect(soloDefault).toHaveAttribute("aria-checked", "true");
+
+  const savedDefaultMode = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as { defaultMode?: string }).defaultMode : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(savedDefaultMode).toBe("solo");
+
+  await page.reload();
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await page.locator("[data-testid='settings-btn']").click();
+  const reloadedPopover = page.locator("[data-testid='settings-popover']");
+  await reloadedPopover.getByRole("button", { name: "Collaboration" }).click();
+  await expect(reloadedPopover.locator("[data-testid='default-mode-solo-btn']")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+});
+
+test("settings dialog sections and About panel reflect the redesign closeout", async ({ page }) => {
+  await page.route("**/api/info", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        version: "9.9.9",
+        toolCount: 31,
+        mcpSdkVersion: "1.17.0",
+        transport: "http",
+        storagePath: "C:\\Users\\test\\AppData\\Local\\tandem\\Data\\sessions",
+        tokenRotatedAt: 1_700_000_000_000,
+        changelogPath: "C:\\repo\\CHANGELOG.md",
+      }),
+    });
+  });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible({ timeout: 2_000 });
+
+  for (const section of [
+    "Appearance",
+    "Editor",
+    "Accessibility",
+    "Collaboration",
+    "Claude Code/Cowork",
+    "Shortcuts",
+    "About",
+  ]) {
+    await expect(popover.getByRole("button", { name: section })).toBeVisible();
+  }
+
+  await popover.getByRole("button", { name: "Shortcuts" }).click();
+  await expect(popover.locator("[data-testid='settings-shortcuts-list']")).toContainText("Ctrl+,");
+
+  await popover.getByRole("button", { name: "About" }).click();
+  const about = popover.locator("[data-testid='app-info-footer']");
+  await expect(about).toContainText("Tandem v9.9.9");
+  await expect(about).toContainText("31 tools");
+  await expect(about).toContainText("MCP SDK 1.17.0");
+  await expect(about).toContainText("HTTP");
+  await expect(about).toContainText("sessions");
+  await expect(about).toContainText("Token rotated");
+  await expect(popover.locator("[data-testid='view-changelog-btn']")).toBeVisible();
+  await expect(popover.getByRole("link", { name: "Report a bug" })).toBeVisible();
 });
 
 test("selection toolbar toggle persists and drives toolbar visibility", async ({ page }) => {
@@ -108,7 +193,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
-  await popover.getByRole("button", { name: "Automation" }).click();
+  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
 
   const toggle = popover.locator("[data-testid='selection-toolbar-toggle'] input");
   if (await toggle.isChecked()) {
@@ -133,7 +218,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
 
   await page.locator("[data-testid='settings-btn']").click();
   const reopenedPopover = page.locator("[data-testid='settings-popover']");
-  await reopenedPopover.getByRole("button", { name: "Automation" }).click();
+  await reopenedPopover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   const reopenedToggle = reopenedPopover.locator("[data-testid='selection-toolbar-toggle'] input");
   if (!(await reopenedToggle.isChecked())) {
     await reopenedToggle.check();
@@ -890,7 +975,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible();
-  await popover.getByRole("button", { name: "Automation" }).click();
+  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   const slider = popover.locator("[data-testid='dwell-time-slider']");
   await expect(slider).toBeVisible({ timeout: 2_000 });
 
@@ -920,7 +1005,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await page.locator("[data-testid='settings-btn']").click();
   const reloadedPopover = page.locator("[data-testid='settings-popover']");
-  await reloadedPopover.getByRole("button", { name: "Automation" }).click();
+  await reloadedPopover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   const reloadedSlider = reloadedPopover.locator("[data-testid='dwell-time-slider']");
   await expect(reloadedSlider).toHaveValue("2000");
 });

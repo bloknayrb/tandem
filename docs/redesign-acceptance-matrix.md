@@ -73,7 +73,7 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 | Issue | Current state | Acceptance status | Next action |
 | --- | --- | --- | --- |
 | #514 Redesign foundation | Closed | Complete. Root attributes/classes, accent token family, editor font token, density spacing, high contrast, annotation patterns, persisted settings, and unit tests are present. | Treat as done. Future PRs should not reopen token namespace or density/text-size decisions unless a regression is found. |
-| #515 Settings dialog/About | Open, partial | Partial. The app has a centered multi-section settings shell and surfaces most persisted settings, but `defaultMode` is not visibly surfaced, the section taxonomy differs from the issue, Shortcuts is missing, About only shows version/MCP SDK, and dynamic `/api/info` fields are underused. | Close out the actual gaps: `defaultMode`, section naming/content, Shortcuts, richer About fields, and targeted E2E for newly added controls. Keep View Changelog and Report a bug. |
+| #515 Settings dialog/About | Open, closeout implemented on `fix/issue-515-settings-dialog-closeout` | Complete after this branch lands. The dialog has the issue-aligned section taxonomy, all persisted settings including `defaultMode` are visible, About renders dynamic `/api/info` fields beyond version/MCP SDK, View Changelog and Report a bug remain, and focused E2E coverage pins the new controls/About surface. | Merge the closeout branch, attach verification evidence, then close #515. |
 | #516 Selection mini-toolbar | Open, partial | Partial. Selection toolbar gating, positioning, bold, italic, code, highlight swatches, Comment, Note, Y.Map comment creation, and focused tests exist. Missing first-pass criteria: strike, link, horizontal edge clamping, explicit Escape/blur dismissal, and overlay suppression with slash menu. | Finish as a closeout PR. Do not add Ask Claude or Flag unless the issue is expanded. |
 | #517 Slash command menu | Open, not started | Not implemented. No slash menu, command registry, keyboard flow, pointer selection, or mini-toolbar suppression exists. | Implement after #516 overlay coordination. Prefer a Tiptap suggestion/menu pattern if adding the dependency deliberately. |
 | #518 Authorship/review decorations | Open, partial foundation only | Inline authorship decorations already use `data-tandem-author` with relRange-first/flat fallback, but paragraph dominant-author gutter and annotation-aware review dimming are not implemented. | Align paragraph gutter semantics before coding. Extend the existing decoration plugins; do not change annotation or authorship coordinate models. |
@@ -97,8 +97,6 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 
 ### Repo Needs To Implement
 
-- #515 closeout: defaultMode control, settings dialog section/content gaps,
-  Shortcuts, and richer About.
 - #516 closeout: strike, link, edge/dismissal hardening, and overlay coordination.
 - #517 slash command menu.
 - #518 paragraph authorship gutter and annotation-aware review dimming.
