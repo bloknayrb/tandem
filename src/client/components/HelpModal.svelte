@@ -23,18 +23,6 @@ const SECTIONS: ShortcutSection[] = [
     ],
   },
   {
-    title: "Review Mode",
-    rows: [
-      { keys: ["Tab"], description: "Next annotation" },
-      { keys: ["Shift", "Tab"], description: "Previous annotation" },
-      { keys: ["Y"], description: "Accept annotation" },
-      { keys: ["N"], description: "Reject annotation" },
-      { keys: ["Z"], description: "Undo last accept/reject" },
-      { keys: ["E"], description: "Examine (scroll & exit)" },
-      { keys: ["Escape"], description: "Exit review mode" },
-    ],
-  },
-  {
     title: "Chat",
     rows: [{ keys: ["Enter"], description: "Send message" }],
   },

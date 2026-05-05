@@ -47,16 +47,6 @@ const SHORTCUT_SECTIONS = [
     ],
   },
   {
-    title: "Review",
-    rows: [
-      { keys: "Tab", description: "Next annotation" },
-      { keys: "Shift+Tab", description: "Previous annotation" },
-      { keys: "Y", description: "Accept annotation" },
-      { keys: "N", description: "Reject annotation" },
-      { keys: "Escape", description: "Exit review mode or close dialogs" },
-    ],
-  },
-  {
     title: "General",
     rows: [
       { keys: "Ctrl+,", description: "Open settings" },
@@ -223,7 +213,8 @@ function aboutRows() {
     { label: "Version", value: `Tandem v${info.version}` },
     {
       label: "Tools",
-      value: info.toolCount === null ? "Tool count unavailable" : `${info.toolCount} tools available`,
+      value:
+        info.toolCount === null ? "Tool count unavailable" : `${info.toolCount} tools available`,
     },
     { label: "MCP SDK", value: `MCP SDK ${info.mcpSdkVersion}` },
     { label: "Transport", value: info.transport.toUpperCase() },
