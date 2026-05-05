@@ -366,7 +366,7 @@ test("bulk-confirm resets when filter-status changes", async ({ page }) => {
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
 
-test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations", async ({
+test("Solo/Tandem mode toggle switches via toolbar and surfaces held annotations in status", async ({
   page,
 }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
@@ -391,9 +391,9 @@ test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
 
-  // In Tandem mode the held banner is absent — the annotation is visible.
-  const heldBanner = page.getByTestId("held-banner");
-  await expect(heldBanner).toHaveCount(0);
+  // In Tandem mode the held affordance is absent — the annotation is visible.
+  const heldButton = page.getByTestId("sb-held");
+  await expect(heldButton).toHaveCount(0);
 
   // Switch to solo. Assert via localStorage (race-free) + aria-pressed
   // (visible state). Avoid asserting through tandem_status because Y.Map
@@ -404,22 +404,20 @@ test("Solo/Tandem mode toggle switches via toolbar and holds pending annotations
   const soloSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
   expect(soloSaved).toBe("solo");
 
-  // The held banner must appear in Solo mode — this is the feature's actual
-  // contract, not just the localStorage bit. Catches regressions where the
-  // toggle updates storage but fails to drive the useModeGate hook.
-  await expect(heldBanner).toBeVisible({ timeout: 2_000 });
-  // Preserve the count + pluralization contract the old regex locator asserted.
-  await expect(heldBanner).toHaveText(/\d+ annotation(s)? held/);
+  // The held affordance must appear in Solo mode and expose the actionable
+  // count in the status bar, which is the contract called for by #519.
+  await expect(heldButton).toBeVisible({ timeout: 2_000 });
+  await expect(heldButton).toHaveText(/\d+ held/);
+  await heldButton.click();
 
-  // Switch back.
-  await tandemBtn.click();
+  // Switch back through the status bar affordance.
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
   const tandemSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
   expect(tandemSaved).toBe("tandem");
 
-  // Banner must clear when back in Tandem.
-  await expect(heldBanner).toHaveCount(0, { timeout: 2_000 });
+  // The held affordance clears when back in Tandem.
+  await expect(heldButton).toHaveCount(0, { timeout: 2_000 });
 });
 
 test("layout switches between tabbed and three-panel", async ({ page }) => {
