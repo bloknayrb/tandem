@@ -116,8 +116,14 @@ test("floating selection toolbar stays within a short viewport", async ({ page }
   await editor.click();
   await editor.locator("p").first().selectText();
 
+  // Wait for the toolbar to mount before measuring its position — on a short
+  // viewport the toolbar can lag the selection event by a frame or two under CI.
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  // Confirm interactive state before reading boundingBox().
+  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+    timeout: 5_000,
+  });
 
   const box = await toolbar.boundingBox();
   const viewport = page.viewportSize();
@@ -140,6 +146,9 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+    timeout: 5_000,
+  });
   await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Italic" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Strike" })).toBeVisible();
@@ -211,8 +220,10 @@ test("Note flow creates a note annotation", async ({ page }) => {
     (window.getSelection()?.toString() ?? "").includes("first paragraph"),
   );
 
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 10_000 });
   const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
-  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  await expect(noteBtn).toBeEnabled({ timeout: 5_000 });
   await noteBtn.click();
 
   const input = page.locator("[data-testid='toolbar-note-input']");
@@ -250,8 +261,10 @@ test("#480 regression — clicking Note opens input instead of creating an empty
   await editor.click();
   await editor.locator("p").first().selectText();
 
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 10_000 });
   const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
-  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  await expect(noteBtn).toBeEnabled({ timeout: 5_000 });
   await noteBtn.click();
 
   // Input mounts → confirms the inline-flow path, not the regressed
@@ -307,6 +320,8 @@ test("Highlight quick-action creates a highlight annotation", async ({ page }) =
   await editor.locator("p").first().selectText();
   await expect(selectionToolbar).toBeVisible({ timeout: 5_000 });
 
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 10_000 });
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
@@ -328,14 +343,17 @@ test("Escape cancels Note input without creating annotation", async ({ page }) =
   await editor.click();
   await editor.locator("p").first().selectText();
 
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 10_000 });
   const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
-  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  await expect(noteBtn).toBeEnabled({ timeout: 5_000 });
   await noteBtn.click();
 
   const input = page.locator("[data-testid='toolbar-note-input']");
   await expect(input).toBeVisible({ timeout: 2_000 });
   await input.fill("draft");
   await input.press("Escape");
+  await expect(input).toBeHidden({ timeout: 5_000 });
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
     timeout: 2_000,
