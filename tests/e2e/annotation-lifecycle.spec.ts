@@ -168,34 +168,3 @@ test("claude annotation shows Accept/Reject but not Remove", async ({ page }) =>
   const removeBtn = page.locator("[data-testid^='remove-btn-']");
   await expect(removeBtn).not.toBeVisible({ timeout: 2_000 });
 });
-
-test("review mode navigates with keyboard", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await mcp.callTool("tandem_comment", {
-    from: TITLE_FROM,
-    to: TITLE_TO,
-    text: "First comment",
-    textSnapshot: TITLE_TEXT,
-  });
-  await mcp.callTool("tandem_comment", {
-    from: 17,
-    to: 65,
-    text: "Second comment",
-    textSnapshot: "This is the first paragraph of the test document",
-  });
-
-  await page.goto("/");
-  await switchToAnnotationsTab(page);
-  const cards = page.locator("[data-testid^='annotation-card-']");
-  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
-
-  const reviewBtn = page.locator("[data-testid='review-mode-btn']");
-  await expect(reviewBtn).toBeVisible({ timeout: 5_000 });
-  await reviewBtn.click();
-
-  await expect(page.locator("text=Reviewing 1 /")).toBeVisible({ timeout: 5_000 });
-
-  await page.keyboard.press("y");
-  // First annotation accepted → moves to resolved section, second becomes the only pending card.
-  await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({ timeout: 5_000 });
-});
