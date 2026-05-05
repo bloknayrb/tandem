@@ -26,9 +26,8 @@ import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
-import { createModeGate } from "./hooks/useModeGate.svelte";
+import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
-import { createReviewCompletion } from "./hooks/useReviewCompletion.svelte";
 import { createSaveShortcut } from "./hooks/useSaveShortcut.svelte";
 import { createSettingsShortcut } from "./hooks/useSettingsShortcut.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
@@ -47,7 +46,6 @@ import {
   PANEL_MIN_WIDTH,
   type PanelLayout,
 } from "./panel-layout";
-import ReviewSummary from "./panels/ReviewSummary.svelte";
 import { pmSelectionToFlat } from "./positions";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
@@ -87,10 +85,19 @@ const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
   () => settingsState.settings.selectionDwellMs,
 );
-const modeGate = createModeGate(
-  () => yjsSync.annotations,
-  () => modeState.tandemMode,
-);
+const modeGate = $derived.by(() => {
+  const annotations = yjsSync.annotations;
+  const mode = modeState.tandemMode;
+  const visibleAnnotations = [];
+  let heldCount = 0;
+
+  for (const ann of annotations) {
+    if (shouldShowInMode(ann, mode)) visibleAnnotations.push(ann);
+    else if (ann.status === "pending") heldCount++;
+  }
+
+  return { visibleAnnotations, heldCount };
+});
 const connectionBanner = createConnectionBanner(() => yjsSync.disconnectedSince);
 createWebViewZoom();
 
@@ -99,7 +106,6 @@ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileN
 const saveShortcut = createSaveShortcut(() => yjsSync.activeTabId);
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
-const reviewCompletion = createReviewCompletion(() => yjsSync.annotations);
 
 let settingsOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
@@ -418,15 +424,6 @@ const tutorial = createTutorial(
       onShowHeld={() => modeState.setTandemMode("tandem")}
     />
 
-    {#if reviewCompletion.showReviewSummary && reviewCompletion.reviewSummaryData}
-      <ReviewSummary
-        accepted={reviewCompletion.reviewSummaryData.accepted}
-        dismissed={reviewCompletion.reviewSummaryData.dismissed}
-        total={reviewCompletion.reviewSummaryData.total}
-        onDismiss={reviewCompletion.dismissReviewSummary}
-      />
-    {/if}
-
     <SettingsPopover
       open={settingsOpen}
       onClose={() => (settingsOpen = false)}
@@ -496,7 +493,7 @@ const tutorial = createTutorial(
         try { localStorage.setItem(PANEL_WIDTH_KEYS[side], String(w)); } catch {}
       }
     }}
-    style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s;"
+    style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; position: relative; z-index: var(--tandem-z-base);"
     onmouseenter={(e) => {
       (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
     }}
@@ -510,7 +507,7 @@ const tutorial = createTutorial(
   <div
     role="region"
     aria-label="Document editor"
-    style={`flex: 1; overflow: auto; padding: var(--tandem-space-7, 48px) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s;`}
+    style={`flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}

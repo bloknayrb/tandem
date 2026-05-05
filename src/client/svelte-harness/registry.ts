@@ -14,7 +14,6 @@ export const registry: Record<string, () => Promise<{ default: Component<any> }>
   DocumentTabs: () => import("../tabs/DocumentTabs.svelte"),
   FileOpenDialog: () => import("../components/FileOpenDialog.svelte"),
   DocumentHealth: () => import("../panels/DocumentHealth.svelte"),
-  ReviewSummary: () => import("../panels/ReviewSummary.svelte"),
   FilterSelect: () => import("../panels/FilterSelect.svelte"),
   FilterBar: () => import("../panels/FilterBar.svelte"),
   CommentThread: () => import("../panels/CommentThread.svelte"),

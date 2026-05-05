@@ -191,7 +191,7 @@ function navButtonStyle(section: SettingsSection): string {
     "min-height: 34px;",
     "padding: 0 var(--tandem-space-3);",
     "border: 1px solid transparent;",
-    "border-radius: 6px;",
+    "border-radius: var(--tandem-r-3);",
     "background: " + (active ? "var(--tandem-accent-bg)" : "transparent") + ";",
     "color: " + (active ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)") + ";",
     "font-size: 13px;",
@@ -249,7 +249,7 @@ function aboutRows() {
     aria-modal="true"
     aria-labelledby={HEADING_ID}
     tabindex={-1}
-    style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(900px, calc(100vw - 32px)); height: min(680px, calc(100vh - 32px)); background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 8px 36px color-mix(in srgb, var(--tandem-fg) 16%, transparent); z-index: 9999; display: grid; grid-template-columns: 188px minmax(0, 1fr); outline: none; overflow: hidden;"
+    style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(900px, calc(100vw - 32px)); height: min(680px, calc(100vh - 32px)); background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); z-index: 9999; display: grid; grid-template-columns: 188px minmax(0, 1fr); outline: none; overflow: hidden;"
   >
     <aside
       style="display: flex; flex-direction: column; gap: var(--tandem-space-4); padding: var(--tandem-space-5) var(--tandem-space-3); border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);"
@@ -286,7 +286,7 @@ function aboutRows() {
         </h2>
         <button
           onclick={onClose}
-          style="background: none; border: 1px solid transparent; cursor: pointer; color: var(--tandem-fg-subtle); font-size: 18px; line-height: 1; padding: 4px 8px; min-width: 30px; min-height: 30px; border-radius: 5px;"
+          style="background: none; border: 1px solid transparent; cursor: pointer; color: var(--tandem-fg-subtle); font-size: 18px; line-height: 1; padding: 4px 8px; min-width: 30px; min-height: 30px; border-radius: var(--tandem-r-2);"
           aria-label="Close settings"
         >
           ×
@@ -314,7 +314,7 @@ function aboutRows() {
                   }
                 }}
                 maxlength={USER_NAME_MAX_LEN}
-                style="width: 100%; padding: 8px 10px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: 5px; outline: none;"
+                style="width: 100%; padding: 8px 10px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); outline: none;"
               />
             </div>
 
@@ -331,7 +331,7 @@ function aboutRows() {
                   role="radio"
                   aria-checked={settings.defaultMode === "tandem"}
                   onclick={() => onUpdate({ defaultMode: "tandem" })}
-                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: 6px; background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
                 >
                   Tandem
                 </button>
@@ -341,7 +341,7 @@ function aboutRows() {
                   role="radio"
                   aria-checked={settings.defaultMode === "solo"}
                   onclick={() => onUpdate({ defaultMode: "solo" })}
-                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: 6px; background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
                 >
                   Solo
                 </button>
@@ -436,7 +436,7 @@ function aboutRows() {
                   <div style={sectionLabelStyle}>{section.title}</div>
                   <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
                     {#each section.rows as row (row.keys + row.description)}
-                      <kbd style="justify-self: start; padding: 1px 6px; font-family: var(--tandem-font-mono); font-size: 11px; color: var(--tandem-fg); background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom-width: 2px; border-radius: 4px;">
+                      <kbd style="justify-self: start; padding: 1px 6px; font-family: var(--tandem-font-mono); font-size: 11px; color: var(--tandem-fg); background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom-width: 2px; border-radius: var(--tandem-r-2);">
                         {row.keys}
                       </kbd>
                       <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
@@ -451,7 +451,7 @@ function aboutRows() {
                 data-testid="view-changelog-btn"
                 onclick={() => void handleViewChangelog()}
                 disabled={changelogLoading || appInfo.loading}
-                style="width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: 5px; cursor: {changelogLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {changelogLoading || appInfo.loading ? 0.6 : 1};"
+                style="width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: {changelogLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {changelogLoading || appInfo.loading ? 0.6 : 1};"
               >
                 {changelogLoading ? "Opening…" : "View Changelog"}
               </button>
@@ -467,7 +467,7 @@ function aboutRows() {
                 href="https://github.com/bloknayrb/tandem/issues/new"
                 target="_blank"
                 rel="noreferrer"
-                style="display: block; width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: 5px; background: var(--tandem-surface-muted); color: var(--tandem-fg); text-align: center; text-decoration: none; box-sizing: border-box;"
+                style="display: block; width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface-muted); color: var(--tandem-fg); text-align: center; text-decoration: none; box-sizing: border-box;"
               >
                 Report a bug
               </a>

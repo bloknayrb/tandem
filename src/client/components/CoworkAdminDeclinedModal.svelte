@@ -105,7 +105,7 @@ async function handleDisable(): Promise<void> {
   <div
     data-testid="cowork-admin-declined-status-error"
     role="alert"
-    style="position: fixed; bottom: 16px; right: 16px; z-index: 10000; max-width: 400px; border: 1px solid var(--tandem-error-border); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); border-radius: 6px; padding: 10px 14px; font-size: 12px; line-height: 1.5;"
+    style="position: fixed; bottom: 16px; right: 16px; z-index: 10000; max-width: 400px; border: 1px solid var(--tandem-error-border); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); border-radius: var(--tandem-r-3); padding: 10px 14px; font-size: 12px; line-height: 1.5;"
   >
     Cowork status check failed: unable to determine if admin elevation was declined. Please
     restart Tandem to restore normal operation.
@@ -122,7 +122,7 @@ async function handleDisable(): Promise<void> {
       aria-modal="true"
       aria-labelledby="cowork-admin-declined-heading"
       tabindex={-1}
-      style="width: 440px; max-width: calc(100vw - 32px); background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-error-border); border-radius: 8px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.24); outline: none; display: flex; flex-direction: column; gap: 12px;"
+      style="width: 440px; max-width: calc(100vw - 32px); background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-4); padding: 20px; box-shadow: var(--tandem-shadow-3); outline: none; display: flex; flex-direction: column; gap: 12px;"
     >
       <h2
         id="cowork-admin-declined-heading"
@@ -141,7 +141,7 @@ async function handleDisable(): Promise<void> {
         <div
           data-testid="cowork-admin-declined-error"
           role="alert"
-          style="font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: 4px; padding: 6px 8px;"
+          style="font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); padding: 6px 8px;"
         >
           {error}
         </div>
@@ -150,7 +150,7 @@ async function handleDisable(): Promise<void> {
       {#if confirmingDisable}
         <div
           data-testid="cowork-admin-declined-confirm-disable"
-          style="font-size: 12px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: 4px; padding: 8px 10px;"
+          style="font-size: 12px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-2); padding: 8px 10px;"
         >
           <div style="font-weight: 600; margin-bottom: 6px;">Disable Cowork integration?</div>
           <div style="margin-bottom: 8px;">
@@ -162,7 +162,7 @@ async function handleDisable(): Promise<void> {
               type="button"
               onclick={() => void handleDisable()}
               disabled={busy}
-              style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-error-border); border-radius: 4px; background: var(--tandem-error); color: var(--tandem-error-fg); cursor: pointer; font-weight: 600;"
+              style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); background: var(--tandem-error); color: var(--tandem-error-fg); cursor: pointer; font-weight: 600;"
             >
               Disable
             </button>
@@ -171,7 +171,7 @@ async function handleDisable(): Promise<void> {
               type="button"
               onclick={() => { confirmingDisable = false; }}
               disabled={busy}
-              style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
+              style="padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
             >
               Cancel
             </button>
@@ -184,7 +184,7 @@ async function handleDisable(): Promise<void> {
             type="button"
             onclick={() => { confirmingDisable = true; }}
             disabled={busy}
-            style="padding: 6px 12px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
+            style="padding: 6px 12px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
           >
             Disable Cowork
           </button>
@@ -193,7 +193,7 @@ async function handleDisable(): Promise<void> {
             type="button"
             onclick={() => void handleRetry()}
             disabled={busy}
-            style="padding: 6px 12px; font-size: 13px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;"
+            style="padding: 6px 12px; font-size: 13px; border: 1px solid var(--tandem-accent); border-radius: var(--tandem-r-2); background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;"
           >
             Retry with admin
           </button>

@@ -532,3 +532,11 @@ The `.finally()` alone is enough — `Set.delete` cannot throw, so no trailing `
 When removing an npm package from `package.json` and running `npm install` in a git worktree, Node.js module resolution walks parent directories. On Windows, `tsc` and other tools will silently find the removed package in the main repo's `node_modules`, making local typecheck pass while CI (clean checkout, no parent fallback) fails.
 
 **Rule:** After removing a package, verify it is truly gone by checking `node -e "console.log(require.resolve('<pkg>'))"` from inside the worktree's directory. If it resolves to a path outside the worktree, the removal is masked locally. Always grep for remaining imports (`grep -r "from '<pkg>'"`) and fix them before pushing.
+
+## 55. Restart Long-Lived Backend State Before Browser Verification
+
+**Problem:** Re-running the browser regression subset against an already-live Tandem backend surfaced intermittent MCP `Internal error` failures on open calls even though the code changes themselves were fine. The stale server, WebSocket, and browser processes from earlier runs were holding onto state that made the next suite execution noisy and misleading.
+
+**Fix:** Before re-running browser smoke after a failure, identify and restart the long-lived Tandem server and dev server processes, then re-run the exact changed specs instead of assuming the old backend state is still trustworthy.
+
+**Key insight:** Browser tests that depend on MCP/Yjs state are only as reliable as the backend session they attach to. If a run starts acting nondeterministic, restart the shared processes first; do not treat stale transport state as a product regression until you have a clean backend.

@@ -42,13 +42,13 @@ const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 const helpTextStyle = "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;";
 const infoBannerStyle =
-  "border: 1px solid var(--tandem-info-border); background: var(--tandem-info-bg); color: var(--tandem-info-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;";
+  "border: 1px solid var(--tandem-info-border); background: var(--tandem-info-bg); color: var(--tandem-info-fg-strong); border-radius: var(--tandem-r-3); padding: 8px 10px; font-size: 12px;";
 const errorBannerStyle =
-  "border: 1px solid var(--tandem-error-border); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;";
+  "border: 1px solid var(--tandem-error-border); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); border-radius: var(--tandem-r-3); padding: 8px 10px; font-size: 12px;";
 const primaryBtnStyle =
-  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: 4px; background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: var(--tandem-r-2); background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
 const secondaryBtnStyle =
-  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
+  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
 
 // Always active while mounted
 const coworkState = createCoworkStatus(() => true);
@@ -115,7 +115,7 @@ async function handleToggleLanIp(enabled: boolean): Promise<void> {
 function workspaceRowStyle(ws: WorkspaceStatus): string {
   const agg: WorkspaceFileStatus = aggregateWorkspaceStatus(ws);
   const tokens = STATUS_TOKENS[workspaceFileStatusFamily(agg)];
-  return `display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid ${tokens.border}; background: ${tokens.bg}; color: ${tokens.fg}; border-radius: 4px; font-size: 11px;`;
+  return `display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid ${tokens.border}; background: ${tokens.bg}; color: ${tokens.fg}; border-radius: var(--tandem-r-2); font-size: 11px;`;
 }
 </script>
 
@@ -175,7 +175,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       <div
         data-testid="cowork-enable-confirm"
         role="dialog"
-        style="border: 1px solid var(--tandem-warning-border); background: var(--tandem-warning-bg); color: var(--tandem-warning-fg-strong); border-radius: 6px; padding: 8px 10px; font-size: 12px;"
+        style="border: 1px solid var(--tandem-warning-border); background: var(--tandem-warning-bg); color: var(--tandem-warning-fg-strong); border-radius: var(--tandem-r-3); padding: 8px 10px; font-size: 12px;"
       >
         <div style="font-weight: 600; margin-bottom: 4px;">Confirm: Enable Cowork</div>
         <div style="margin-bottom: 8px;">

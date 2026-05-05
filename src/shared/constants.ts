@@ -22,6 +22,17 @@ export const HIGHLIGHT_COLORS: Record<HighlightColor, string> = {
   pink: "rgba(236, 72, 153, 0.3)",
 };
 
+export const HIGHLIGHT_COLOR_VARS: Record<HighlightColor, string> = {
+  yellow: "var(--tandem-highlight-yellow)",
+  green: "var(--tandem-highlight-green)",
+  blue: "var(--tandem-highlight-blue)",
+  pink: "var(--tandem-highlight-pink)",
+};
+
+export function normalizeHighlightColor(color: string | null | undefined): HighlightColor {
+  return color && color in HIGHLIGHT_COLORS ? (color as HighlightColor) : "yellow";
+}
+
 export const TANDEM_MODE_DEFAULT = "tandem" as const;
 export const TANDEM_MODE_KEY = "tandem:mode";
 export const TANDEM_SETTINGS_KEY = "tandem:settings";

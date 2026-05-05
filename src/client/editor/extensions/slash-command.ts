@@ -191,7 +191,7 @@ function renderSlashCommandMenu(
     button.textContent = command.label;
     button.dataset.commandId = command.id;
     button.style.cssText =
-      "display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 4px; " +
+      "display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--tandem-r-2); " +
       "background: transparent; color: var(--tandem-fg); font: inherit; font-size: 13px; " +
       "text-align: left; cursor: pointer;";
 

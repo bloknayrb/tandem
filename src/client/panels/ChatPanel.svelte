@@ -167,13 +167,13 @@ function toggleAnchorExpand(msgId: string) {
 >
   <!-- Header -->
   <div
-    style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center;"
+    style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; font-size: var(--tandem-text-md); display: flex; justify-content: space-between; align-items: center;"
   >
     Chat
     <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
       {#if unreadCount > 0}
         <span
-          style="background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: 10px; padding: 2px 8px; font-size: 11px;"
+          style="background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill); padding: 2px 8px; font-size: var(--tandem-text-xs);"
         >
           {unreadCount}
         </span>
@@ -202,12 +202,12 @@ function toggleAnchorExpand(msgId: string) {
     {/if}
     {#each messages as msg (msg.id)}
       <div
-        style="margin-bottom: var(--tandem-space-3); padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: 8px; background: {msg.author ===
+        style="margin-bottom: var(--tandem-space-3); padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-4); background: {msg.author ===
         'user'
           ? 'var(--tandem-accent-bg)'
           : 'var(--tandem-surface)'}; border: 1px solid {msg.author === 'user'
           ? 'var(--tandem-accent-border)'
-          : 'var(--tandem-border)'}; font-size: 13px; color: var(--tandem-fg);"
+          : 'var(--tandem-border)'}; font-size: var(--tandem-text-base); color: var(--tandem-fg); box-shadow: var(--tandem-shadow-1);"
       >
         <!-- Author + doc badge -->
         <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
@@ -220,7 +220,7 @@ function toggleAnchorExpand(msgId: string) {
           </span>
           {#if msg.documentId}
             <span
-              style="font-size: 10px; color: var(--tandem-fg-muted); background: var(--tandem-surface-muted); padding: 1px 6px; border-radius: 4px;"
+              style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-muted); background: var(--tandem-surface-muted); padding: 1px 6px; border-radius: var(--tandem-r-2);"
             >
               {getDocFileName(msg.documentId) ?? msg.documentId}
             </span>
@@ -236,7 +236,7 @@ function toggleAnchorExpand(msgId: string) {
             type="button"
             onclick={() => scrollToAnchor(msg.anchor!, msg.documentId)}
             class="chat-anchor-quote"
-            style="background: var(--tandem-accent-bg); border: none; border-left: 3px solid var(--tandem-accent-border); padding: 4px 8px; margin-bottom: 6px; font: inherit; color: var(--tandem-accent-fg-strong); cursor: pointer; text-align: left; width: 100%; font-size: 12px; border-radius: 0 4px 4px 0; max-height: {expandedAnchors.has(
+            style="background: var(--tandem-accent-bg); border: none; border-left: 3px solid var(--tandem-accent-border); padding: 4px 8px; margin-bottom: 6px; font: inherit; color: var(--tandem-accent-fg-strong); cursor: pointer; text-align: left; width: 100%; font-size: var(--tandem-text-sm); border-radius: 0 var(--tandem-r-2) var(--tandem-r-2) 0; max-height: {expandedAnchors.has(
               msg.id,
             )
               ? '500px'
@@ -308,7 +308,7 @@ function toggleAnchorExpand(msgId: string) {
       onkeydown={handleKeyDown}
       placeholder="Message Claude..."
       rows={2}
-      style="flex: 1; padding: var(--tandem-space-2); border: 1px solid var(--tandem-border-strong); border-radius: 6px; font-size: 13px; resize: none; outline: none; font-family: inherit; background: var(--tandem-surface); color: var(--tandem-fg);"
+      style="flex: 1; padding: var(--tandem-space-2); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-3); font-size: var(--tandem-text-base); resize: none; outline: none; font-family: inherit; background: var(--tandem-surface); color: var(--tandem-fg);"
     ></textarea>
     <button
       onclick={sendMessage}
@@ -317,9 +317,9 @@ function toggleAnchorExpand(msgId: string) {
         ? 'var(--tandem-accent)'
         : 'var(--tandem-border-strong)'}; color: {inputText.trim()
         ? 'var(--tandem-accent-fg)'
-        : 'var(--tandem-fg-subtle)'}; border: none; border-radius: 6px; cursor: {inputText.trim()
+        : 'var(--tandem-fg-subtle)'}; border: none; border-radius: var(--tandem-r-3); cursor: {inputText.trim()
         ? 'pointer'
-        : 'default'}; font-size: 13px; font-weight: 500; align-self: flex-end;"
+        : 'default'}; font-size: var(--tandem-text-base); font-weight: 500; align-self: flex-end;"
     >
       Send
     </button>
@@ -356,7 +356,7 @@ function toggleAnchorExpand(msgId: string) {
     font-size: 0.9em;
     background: var(--tandem-surface-muted);
     padding: 1px 4px;
-    border-radius: 3px;
+    border-radius: var(--tandem-r-2);
   }
   .chat-markdown :global(li) {
     margin-left: 1.25em;

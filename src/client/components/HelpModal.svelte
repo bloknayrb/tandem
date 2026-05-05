@@ -91,7 +91,7 @@ $effect(() => {
       aria-label="Keyboard Shortcuts"
       tabindex="-1"
       bind:this={dialogEl}
-      style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
+      style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
         e.stopPropagation();
@@ -125,7 +125,7 @@ $effect(() => {
           onclick={onClose}
           aria-label="Close help"
           data-testid="help-modal-close"
-          style="background: none; border: none; cursor: pointer; font-size: 18px; color: var(--tandem-fg-muted); line-height: 1; padding: 2px 6px; border-radius: 4px;"
+          style="background: none; border: none; cursor: pointer; font-size: 18px; color: var(--tandem-fg-muted); line-height: 1; padding: 2px 6px; border-radius: var(--tandem-r-2);"
         >
           ✕
         </button>
@@ -147,7 +147,7 @@ $effect(() => {
                       {#each row.keys as key, i (key)}
                         <span>
                           <kbd
-                            style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: 4px; color: var(--tandem-fg); line-height: 1.5;"
+                            style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;"
                           >
                             {key}
                           </kbd>
@@ -174,11 +174,11 @@ $effect(() => {
         style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--tandem-border); font-size: 11px; color: var(--tandem-fg-subtle); text-align: center;"
       >
         Press
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: 3px; color: var(--tandem-fg-subtle);">
+        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">
           ?
         </kbd>
         or
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: 3px; color: var(--tandem-fg-subtle);">
+        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">
           Esc
         </kbd>
         to close

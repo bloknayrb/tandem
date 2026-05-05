@@ -47,7 +47,7 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
     "padding: var(--tandem-space-2);",
     "min-height: 24px;",
     `border: 2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"};`,
-    "border-radius: 6px;",
+    "border-radius: var(--tandem-r-3);",
     `background: ${disabled ? "var(--tandem-surface-muted)" : selected ? "var(--tandem-accent-bg)" : "var(--tandem-surface)"};`,
     `cursor: ${disabled ? "not-allowed" : "pointer"};`,
     "text-align: center;",
@@ -260,7 +260,7 @@ const densityRg = createRadioGroup<Density>(
   <div style="display: flex; align-items: center; gap: 8px;">
     <span
       aria-hidden="true"
-      style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: 3px; flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
+    style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: var(--tandem-r-1); flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
     ></span>
     <input
       data-testid="accent-hue-slider"

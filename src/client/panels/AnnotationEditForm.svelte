@@ -41,7 +41,7 @@ $effect(() => {
   {#if hasSuggestedText}
     <label
       for="edit-newtext-{annotationId}"
-      style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-bottom: 2px;"
+      style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); display: block; margin-bottom: 2px;"
     >
       Replacement text
     </label>
@@ -56,7 +56,7 @@ $effect(() => {
     ></textarea>
     <label
       for="edit-reason-{annotationId}"
-      style="font-size: 11px; color: var(--tandem-fg-muted); display: block; margin-top: 4px; margin-bottom: 2px;"
+      style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); display: block; margin-top: 4px; margin-bottom: 2px;"
     >
       Reason
     </label>
@@ -78,14 +78,14 @@ $effect(() => {
       style={TEXTAREA_STYLE}
     ></textarea>
   {/if}
-  <div style="display: flex; gap: 6px; margin-top: 4px;">
+  <div style="display: flex; gap: 2px; margin-top: 4px;">
     <button
       data-testid="edit-save-btn-{annotationId}"
       onclick={(e) => {
         e.stopPropagation();
         onSave();
       }}
-      style="padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; background: var(--tandem-success-bg); color: var(--tandem-success-fg-strong); cursor: pointer;"
+      style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-success-bg); color: var(--tandem-success-fg-strong); cursor: pointer;"
     >
       Save
     </button>
@@ -95,7 +95,7 @@ $effect(() => {
         e.stopPropagation();
         onCancel();
       }}
-      style="padding: 2px 8px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: 3px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
+      style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
     >
       Cancel
     </button>

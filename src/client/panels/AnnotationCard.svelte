@@ -1,5 +1,5 @@
 <script lang="ts">
-import { HIGHLIGHT_COLORS } from "../../shared/constants";
+import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor } from "../../shared/constants";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
@@ -57,7 +57,7 @@ function getAuthorLabel(author: Annotation["author"]): string {
 
 function getBorderColor(ann: Annotation): string {
   if (ann.color) {
-    return HIGHLIGHT_COLORS[ann.color] || "var(--tandem-border)";
+    return HIGHLIGHT_COLOR_VARS[normalizeHighlightColor(ann.color)];
   }
   if (ann.suggestedText !== undefined) return "var(--tandem-suggestion)";
   if (ann.type === "note") return "var(--tandem-warning)";
@@ -125,7 +125,7 @@ function handleKeyDown(e: KeyboardEvent) {
   role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
-  style="padding: var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border: 1px solid var(--tandem-border); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: 6px; font-size: 13px; opacity: {isPending
+  style="padding: var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border: 1px solid var(--tandem-border); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: var(--tandem-r-3); font-size: var(--tandem-text-base); opacity: {isPending
     ? 1
     : 0.6}; cursor: {onClick
     ? 'pointer'
@@ -138,7 +138,7 @@ function handleKeyDown(e: KeyboardEvent) {
       style="font-weight: 600; text-transform: capitalize; display: flex; align-items: center; gap: 6px; color: var(--tandem-fg-muted); font-size: 11px;"
     >
       <span
-        style="font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; background: {hasSuggestedText
+        style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-2xs); letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: var(--tandem-r-pill); background: {hasSuggestedText
           ? 'var(--tandem-suggestion-bg)'
           : annotation.type === 'note'
             ? 'var(--tandem-warning-bg)'
@@ -155,7 +155,7 @@ function handleKeyDown(e: KeyboardEvent) {
           data-testid="annotation-private-pill"
           aria-hidden="true"
           title="Private note"
-          style="padding: 1px 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--tandem-warning-fg); background: var(--tandem-warning); border-radius: 3px; line-height: 1;"
+          style="padding: 1px 6px; font-size: var(--tandem-text-2xs); font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--tandem-warning-fg); background: var(--tandem-warning); border-radius: var(--tandem-r-2); line-height: 1;"
         >
           Private
         </span>
@@ -198,7 +198,7 @@ function handleKeyDown(e: KeyboardEvent) {
   {#if annotation.textSnapshot}
     <div
       data-testid="annotation-snippet-{annotation.id}"
-      style="padding: 4px 8px; margin-bottom: 6px; border-left: 3px solid var(--tandem-border-strong); color: var(--tandem-fg-muted); font-size: 12px; font-style: italic; background-color: var(--tandem-surface-muted); border-radius: 2px;"
+      style="padding: 4px 8px; margin-bottom: 6px; border-left: 3px solid var(--tandem-border-strong); color: var(--tandem-fg-muted); font-size: 12px; font-style: italic; background-color: var(--tandem-surface-muted); border-radius: var(--tandem-r-1);"
     >
       {annotation.textSnapshot.length > 80
         ? annotation.textSnapshot.slice(0, 77) + "..."
@@ -227,11 +227,11 @@ function handleKeyDown(e: KeyboardEvent) {
           data-testid="suggestion-diff-{annotation.id}"
           style="padding: 4px 8px; margin-bottom: {annotation.content
             ? '4px'
-            : '0'}; background-color: var(--tandem-surface-muted); border-radius: 3px; font-size: 12px; line-height: 1.5;"
+            : '0'}; background-color: var(--tandem-surface-muted); border-radius: var(--tandem-r-2); font-size: 12px; line-height: 1.5;"
         >
           {#if annotation.textSnapshot}
             <span
-              style="text-decoration: line-through; color: var(--tandem-error); background-color: var(--tandem-error-bg); padding: 0 2px; border-radius: 2px;"
+              style="text-decoration: line-through; color: var(--tandem-error); background-color: var(--tandem-error-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
             >
               {annotation.textSnapshot}
             </span>
@@ -240,7 +240,7 @@ function handleKeyDown(e: KeyboardEvent) {
             {" → "}
           {/if}
           <span
-            style="color: var(--tandem-success-fg-strong); background-color: var(--tandem-success-bg); padding: 0 2px; border-radius: 2px;"
+            style="color: var(--tandem-success-fg-strong); background-color: var(--tandem-success-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
           >
             {annotation.suggestedText}
           </span>

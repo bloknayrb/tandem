@@ -58,13 +58,13 @@ const isCoworkStep = $derived(step?.id === "cowork");
 {#if step}
   <div
     data-testid="onboarding-tutorial"
-    style="position: fixed; bottom: 48px; left: 24px; z-index: 900; max-width: 340px; background: var(--tandem-surface); border-left: 4px solid var(--tandem-accent); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08); padding: 16px 20px; font-family: inherit;"
+    style="position: fixed; bottom: 48px; left: 24px; z-index: var(--tandem-z-overlay); max-width: 340px; background: var(--tandem-surface); border-left: 4px solid var(--tandem-accent); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-2); padding: var(--tandem-space-4) var(--tandem-space-5); font-family: inherit;"
   >
     {#if !isComplete}
-      <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+      <div style="display: flex; gap: var(--tandem-space-1); margin-bottom: var(--tandem-space-3);">
         {#each Array.from({ length: totalActionable }, (_, i) => i) as i (i)}
           <div
-            style="width: 8px; height: 8px; border-radius: 50%; background: {i <= currentStep ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; transition: background 0.2s;"
+            style="width: var(--tandem-space-2); height: var(--tandem-space-2); border-radius: var(--tandem-r-circle); background: {i <= currentStep ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; transition: background 0.2s;"
           ></div>
         {/each}
       </div>
@@ -73,31 +73,31 @@ const isCoworkStep = $derived(step?.id === "cowork");
     {#if isCoworkStep && coworkStatus !== null}
       <CoworkOnboardingStep status={coworkStatus} onAdvance={onNext} />
     {:else}
-      <div style="font-size: 14px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px;">
+      <div style="font-size: var(--tandem-text-sm); font-weight: 600; color: var(--tandem-fg); margin-bottom: var(--tandem-space-1);">
         {step.title}
       </div>
-      <div style="font-size: 13px; line-height: 1.5; color: var(--tandem-fg-muted); margin-bottom: {isComplete ? 0 : 14}px;">
+      <div style="font-size: var(--tandem-text-base); line-height: 1.5; color: var(--tandem-fg-muted); margin-bottom: {isComplete ? 0 : 14}px;">
         {step.text}
       </div>
     {/if}
 
     {#if !isComplete && !isCoworkStep}
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 11px; color: var(--tandem-fg-subtle);">
+        <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);">
           Step {currentStep + 1} of {totalActionable}
         </span>
         <div style="display: flex; gap: 12px; align-items: center;">
           <button
             data-testid="tutorial-dismiss-btn"
             onclick={onDismiss}
-            style="background: none; border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-subtle); padding: 0; text-decoration: underline;"
+            style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); padding: 0; text-decoration: underline;"
           >
             Dismiss tutorial
           </button>
           <button
             data-testid="tutorial-next-btn"
             onclick={onNext}
-            style="padding: 4px 12px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: 4px; background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer; font-weight: 500;"
+            style="padding: var(--tandem-space-1) var(--tandem-space-3); font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer; font-weight: 500;"
           >
             {currentStep === totalActionable - 1 ? "Done" : "Next"}
           </button>
