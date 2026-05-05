@@ -20,6 +20,7 @@ import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
+import { SlashCommandExtension } from "./extensions/slash-command";
 import "./editor.css";
 
 interface Props {
@@ -31,6 +32,7 @@ interface Props {
   editorFont?: EditorFontKey;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onAnnotationClick?: (annotationId: string) => void;
+  onSlashCommandMenuChange?: (open: boolean) => void;
 }
 
 const {
@@ -42,6 +44,7 @@ const {
   editorFont = "sans",
   onEditorReady,
   onAnnotationClick,
+  onSlashCommandMenuChange,
 }: Props = $props();
 
 let editor = $state<TiptapEditor | null>(null);
@@ -96,6 +99,7 @@ $effect(() => {
       AnnotationExtension.configure({ ydoc }),
       AuthorshipExtension.configure({ ydoc }),
       AwarenessExtension.configure({ ydoc }),
+      SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
     ],
     editorProps: {
       attributes: {

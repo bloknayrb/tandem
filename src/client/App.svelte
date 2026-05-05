@@ -154,6 +154,7 @@ let activeAnnotationId = $state<string | null>(null);
 let showHelp = $state(false);
 let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
+let slashCommandMenuOpen = $state(false);
 
 let panelLayout = $state<PanelLayout>(
   (() => {
@@ -273,6 +274,7 @@ const tutorial = createTutorial(
       onModeChange={modeState.setTandemMode}
       heldCount={modeGate.heldCount}
       selectionToolbar={settingsState.settings.selectionToolbar}
+      suppressSelectionToolbar={slashCommandMenuOpen}
     />
 
     <DocumentTabs
@@ -524,6 +526,7 @@ const tutorial = createTutorial(
               showChat = false;
               activeAnnotationId = id;
             }}
+            onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
           />
         {/key}
       {:else}

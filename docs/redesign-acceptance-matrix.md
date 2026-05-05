@@ -46,7 +46,9 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
   `src/client/editor/toolbar/Toolbar.svelte:201` use the shared highlight toggle path.
 - `src/client/editor/toolbar/selection-toolbar.ts` clamps both vertical and
   horizontal toolbar placement against viewport edges.
-- No slash-command implementation or `@tiptap/suggestion` dependency is present.
+- `src/client/editor/extensions/slash-command.ts` implements the first-pass slash
+  command menu without adding a new dependency; it supports Heading 1, Heading 2,
+  bullet list, numbered list, quote, and code block.
 - `src/client/editor/extensions/authorship.ts:16` through
   `src/client/editor/extensions/authorship.ts:76` already preserve relRange-first,
   flat fallback authorship decorations with `data-tandem-author`; no paragraph
@@ -68,7 +70,7 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 | #514 Redesign foundation | Closed | Complete. Root attributes/classes, accent token family, editor font token, density spacing, high contrast, annotation patterns, persisted settings, and unit tests are present. | Treat as done. Future PRs should not reopen token namespace or density/text-size decisions unless a regression is found. |
 | #515 Settings dialog/About | Open, closeout implemented locally | Complete after evidence is attached and the issue is closed. The dialog has the issue-aligned section taxonomy, all persisted settings including `defaultMode` are visible, About renders dynamic `/api/info` fields beyond version/MCP SDK, View Changelog and Report a bug remain, and focused E2E coverage pins the new controls/About surface. | Attach/confirm verification evidence, then close #515. |
 | #516 Selection mini-toolbar | Open, closeout implemented on `fix/issue-516-selection-toolbar-closeout` | Complete after this branch lands. Selection toolbar gating, positioning, bold, italic, strike, code, link, highlight swatches, Comment, Note, Y.Map comment creation, horizontal/vertical clamping, Escape/scroll dismissal, and future slash-menu suppression plumbing are present with focused unit/E2E coverage. Ask Claude and Flag remain intentionally out of scope. | Merge the closeout branch, attach verification evidence, then close #516. |
-| #517 Slash command menu | Open, not started | Not implemented. No slash menu, command registry, keyboard flow, pointer selection, or mini-toolbar suppression exists. | Implement after #516 overlay coordination. Prefer a Tiptap suggestion/menu pattern if adding the dependency deliberately. |
+| #517 Slash command menu | Open, closeout implemented on `fix/issue-517-slash-command-menu` | Complete after this branch lands. The slash menu supports Heading 1, Heading 2, bullet list, numbered list, quote, and code block; arrow keys, Enter, Escape, pointer selection, deletion cancellation, and mini-toolbar suppression are covered. No new dependency was added. | Merge the closeout branch, attach verification evidence, then close #517. |
 | #518 Authorship/review decorations | Open, partial foundation only | Inline authorship decorations already use `data-tandem-author` with relRange-first/flat fallback, but paragraph dominant-author gutter and annotation-aware review dimming are not implemented. | Align paragraph gutter semantics before coding. Extend the existing decoration plugins; do not change annotation or authorship coordinate models. |
 | #519 Solo rail and held count | Open, partial foundation only | Mode gating and heldCount exist and the side panel can show a held banner, but Solo does not collapse/hide the rail by default and held count is not actionable from status/toolbar. | Reuse `modeGate.visibleAnnotations` and `heldCount`; add the Solo rail default and an actionable reveal/switch path without changing mode broadcast. |
 | #520 Recent files/tab/status polish | Open, partial foundation only | Recent-file utilities and File Open dialog recent list exist. Tabs already have dirty dot/read-only surfaces and status has save/read-only indicators, but there is no tabs-area recent-files menu. | Decide whether the design requires a tab-area menu or only File Open polish, then implement the smallest accessible surface. Preserve cached reads and existing indicators. |
@@ -90,7 +92,6 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 
 ### Repo Needs To Implement
 
-- #517 slash command menu.
 - #518 paragraph authorship gutter and annotation-aware review dimming.
 - #519 Solo rail default and actionable held count.
 - #520 recent-files/tab-area decision and implementation.
