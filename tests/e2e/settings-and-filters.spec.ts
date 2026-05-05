@@ -71,7 +71,7 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
     "page",
   );
 
-  await popover.getByRole("button", { name: "Automation" }).click();
+  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   // Dwell slider is present and adjustable — proves the new slider and its
   // testid are wired up. The actual broadcast into CTRL_ROOM is covered by
   // the event-queue-dwell unit test; here we just verify the UI surface.
@@ -86,6 +86,91 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
 
   await popover.getByRole("button", { name: "Editor" }).click();
   await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
+});
+
+test("settings dialog surfaces default mode and persists it", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible({ timeout: 2_000 });
+
+  await popover.getByRole("button", { name: "Collaboration" }).click();
+  const soloDefault = popover.locator("[data-testid='default-mode-solo-btn']");
+  await expect(soloDefault).toBeVisible();
+  await soloDefault.click();
+  await expect(soloDefault).toHaveAttribute("aria-checked", "true");
+
+  const savedDefaultMode = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as { defaultMode?: string }).defaultMode : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(savedDefaultMode).toBe("solo");
+
+  await page.reload();
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await page.locator("[data-testid='settings-btn']").click();
+  const reloadedPopover = page.locator("[data-testid='settings-popover']");
+  await reloadedPopover.getByRole("button", { name: "Collaboration" }).click();
+  await expect(reloadedPopover.locator("[data-testid='default-mode-solo-btn']")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+});
+
+test("settings dialog sections and About panel reflect the redesign closeout", async ({ page }) => {
+  await page.route("**/api/info", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        version: "9.9.9",
+        toolCount: 31,
+        mcpSdkVersion: "1.17.0",
+        transport: "http",
+        storagePath: "C:\\Users\\test\\AppData\\Local\\tandem\\Data\\sessions",
+        tokenRotatedAt: 1_700_000_000_000,
+        changelogPath: "C:\\repo\\CHANGELOG.md",
+      }),
+    });
+  });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const popover = page.locator("[data-testid='settings-popover']");
+  await expect(popover).toBeVisible({ timeout: 2_000 });
+
+  for (const section of [
+    "Appearance",
+    "Editor",
+    "Accessibility",
+    "Collaboration",
+    "Claude Code/Cowork",
+    "Shortcuts",
+    "About",
+  ]) {
+    await expect(popover.getByRole("button", { name: section })).toBeVisible();
+  }
+
+  await popover.getByRole("button", { name: "Shortcuts" }).click();
+  await expect(popover.locator("[data-testid='settings-shortcuts-list']")).toContainText("Ctrl+,");
+
+  await popover.getByRole("button", { name: "About" }).click();
+  const about = popover.locator("[data-testid='app-info-footer']");
+  await expect(about).toContainText("Tandem v9.9.9");
+  await expect(about).toContainText("31 tools");
+  await expect(about).toContainText("MCP SDK 1.17.0");
+  await expect(about).toContainText("HTTP");
+  await expect(about).toContainText("sessions");
+  await expect(about).toContainText("Token rotated");
+  await expect(popover.locator("[data-testid='view-changelog-btn']")).toBeVisible();
+  await expect(popover.getByRole("link", { name: "Report a bug" })).toBeVisible();
 });
 
 test("selection toolbar toggle persists and drives toolbar visibility", async ({ page }) => {
@@ -108,7 +193,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
-  await popover.getByRole("button", { name: "Automation" }).click();
+  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
 
   const toggle = popover.locator("[data-testid='selection-toolbar-toggle'] input");
   if (await toggle.isChecked()) {
@@ -133,7 +218,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
 
   await page.locator("[data-testid='settings-btn']").click();
   const reopenedPopover = page.locator("[data-testid='settings-popover']");
-  await reopenedPopover.getByRole("button", { name: "Automation" }).click();
+  await reopenedPopover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   const reopenedToggle = reopenedPopover.locator("[data-testid='selection-toolbar-toggle'] input");
   if (!(await reopenedToggle.isChecked())) {
     await reopenedToggle.check();
@@ -736,151 +821,6 @@ test("Clear-filters button also resets scroll to top", async ({ page }) => {
     .toBe(0);
 });
 
-test("side panel keeps active annotation in view on filter change", async ({ page }) => {
-  // The sibling branch of the filter-change effect: when an annotation is
-  // active (review mode), the list should scroll *it* into view instead of
-  // jumping to the top (#202). We assert both that the card is visible AND
-  // that scrollTop > 0 — the latter proves the scroll-to-top fallback did
-  // not fire (which would be a silent regression).
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await Promise.all(
-    Array.from({ length: 15 }, (_, i) =>
-      mcp.callTool("tandem_comment", {
-        from: 2,
-        to: 6,
-        text: `note ${i}`,
-        textSnapshot: "Test",
-      }),
-    ),
-  );
-
-  await page.goto("/");
-  await switchToAnnotationsTab(page);
-
-  const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
-  await expect(scrollContainer).toBeVisible();
-  const cards = page.locator("[data-testid^='annotation-card-']");
-  await expect(cards).toHaveCount(15);
-
-  // Activate an annotation near the bottom. Review mode + Tab navigation is
-  // the only code path that sets activeAnnotationId from the side panel —
-  // clicking a card just scrolls the editor via scrollToAnnotation(), it
-  // does NOT mark the annotation as active.
-  await page.locator("[data-testid='review-mode-btn']").click();
-  await expect(page.locator("text=Reviewing 1 /")).toBeVisible({ timeout: 5_000 });
-  for (let i = 0; i < 12; i++) {
-    await page.keyboard.press("Tab");
-  }
-  await expect(page.locator("text=Reviewing 13 /")).toBeVisible({ timeout: 2_000 });
-  const targetCard = cards.nth(12);
-
-  // Reset the scroll so the effect has to work to put the card back in view.
-  await scrollContainer.evaluate((el) => {
-    el.scrollTop = 0;
-  });
-
-  // Change the type filter. The effect should scroll the active card into
-  // view instead of resetting to scrollTop = 0.
-  await page.locator("[data-testid='filter-type']").selectOption("comment");
-
-  // (a) The active card must end up inside the scroll container's visible area.
-  await expect
-    .poll(
-      async () => {
-        const listBox = await scrollContainer.boundingBox();
-        const cardBox = await targetCard.boundingBox();
-        if (!listBox || !cardBox) return false;
-        return cardBox.y + cardBox.height > listBox.y && cardBox.y < listBox.y + listBox.height;
-      },
-      { timeout: 2_000 },
-    )
-    .toBe(true);
-
-  // (b) scrollTop must be nonzero — proves the scroll-to-top fallback did NOT
-  // run. Without this, the test passes trivially in tall viewports.
-  const finalScroll = await scrollContainer.evaluate((el) => el.scrollTop);
-  expect(finalScroll).toBeGreaterThan(0);
-});
-
-test("side panel scrolls to top (+ logs warn) when active annotation is filtered out", async ({
-  page,
-}) => {
-  // Branch 3 of the filter-change scroll-reset effect: an annotation is
-  // active (via review-mode Tab navigation), then the user changes filters
-  // in a way that excludes that annotation. The card is no longer in the
-  // DOM, so `querySelector` misses — the effect must fall through to
-  // scroll-to-top AND log a `[tandem]`-prefixed warn so "scroll jumped"
-  // bug reports are diagnosable.
-  const consoleWarnings: string[] = [];
-  page.on("console", (msg) => {
-    if (msg.type() === "warning") consoleWarnings.push(msg.text());
-  });
-
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  // Seed 14 comments + 1 highlight (15 total — matches the sibling overflow
-  // tests at :480-523 where 15 is the known-good count for overflowing the
-  // scroll container across viewport sizes). The highlight is what we'll
-  // filter to so every active comment gets filtered out.
-  await Promise.all([
-    ...Array.from({ length: 14 }, (_, i) =>
-      mcp.callTool("tandem_comment", {
-        from: 2,
-        to: 6,
-        text: `note ${i}`,
-        textSnapshot: "Test",
-      }),
-    ),
-    mcp.callTool("tandem_comment", {
-      from: 7,
-      to: 15,
-      text: "Document note",
-      textSnapshot: "Document",
-    }),
-  ]);
-
-  await page.goto("/");
-  await switchToAnnotationsTab(page);
-
-  const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
-  await expect(scrollContainer).toBeVisible();
-  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(15);
-
-  // Enter review mode and Tab to a middle comment so it becomes the active
-  // annotation. Review-mode Tab is the only path that sets activeAnnotationId
-  // from the side panel.
-  await page.locator("[data-testid='review-mode-btn']").click();
-  await expect(page.locator("text=Reviewing 1 /")).toBeVisible({ timeout: 5_000 });
-  for (let i = 0; i < 5; i++) {
-    await page.keyboard.press("Tab");
-  }
-  await expect(page.locator("text=Reviewing 6 /")).toBeVisible({ timeout: 2_000 });
-
-  // Scroll the list down so we can detect the scroll-to-top fallback.
-  await scrollContainer.evaluate((el) => {
-    el.scrollTop = el.scrollHeight;
-  });
-  const scrollBefore = await scrollContainer.evaluate((el) => el.scrollTop);
-  expect(scrollBefore).toBeGreaterThan(0);
-
-  // Filter to "highlight" — the active annotation is a comment, so its
-  // card leaves the DOM. The effect must log the warn and scroll to 0.
-  await page.locator("[data-testid='filter-type']").selectOption("highlight");
-
-  await expect
-    .poll(async () => scrollContainer.evaluate((el) => el.scrollTop), {
-      timeout: 2_000,
-    })
-    .toBe(0);
-
-  // The fallback warn must have fired. This is the diagnostic-log contract
-  // added in commit 52576aa — losing it means "scroll jumped unexpectedly"
-  // becomes invisible in bug reports again.
-  const matched = consoleWarnings.some((m) =>
-    /\[tandem\] SidePanel: active annotation .* not found on filter change/.test(m),
-  );
-  expect(matched).toBe(true);
-});
-
 test("dwell-time slider value persists across reload", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
@@ -890,7 +830,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible();
-  await popover.getByRole("button", { name: "Automation" }).click();
+  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   const slider = popover.locator("[data-testid='dwell-time-slider']");
   await expect(slider).toBeVisible({ timeout: 2_000 });
 
@@ -920,7 +860,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await page.locator("[data-testid='settings-btn']").click();
   const reloadedPopover = page.locator("[data-testid='settings-popover']");
-  await reloadedPopover.getByRole("button", { name: "Automation" }).click();
+  await reloadedPopover.getByRole("button", { name: "Claude Code/Cowork" }).click();
   const reloadedSlider = reloadedPopover.locator("[data-testid='dwell-time-slider']");
   await expect(reloadedSlider).toHaveValue("2000");
 });

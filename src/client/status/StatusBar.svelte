@@ -14,6 +14,9 @@ interface Props {
   readOnly?: boolean;
   documentCount?: number;
   saving?: boolean;
+  heldCount?: number;
+  mode?: import("../../shared/types").TandemMode;
+  onShowHeld?: () => void;
 }
 
 let {
@@ -26,6 +29,9 @@ let {
   readOnly,
   documentCount = 0,
   saving = false,
+  heldCount,
+  mode,
+  onShowHeld,
 }: Props = $props();
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -150,6 +156,18 @@ function commitName() {
       style="background: transparent; border: none; border-bottom: 1px dashed transparent; color: var(--tandem-fg-muted); font: inherit; font-family: var(--tandem-font-sans); font-size: 11px; width: 80px; outline: none; padding: 0 2px;"
     />
   </div>
+
+  {#if (heldCount ?? 0) > 0 && mode === "solo"}
+    <button
+      data-testid="sb-held"
+      onclick={onShowHeld}
+      title="Show held annotations — switches to Tandem"
+      style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; font-size: 11px; font-weight: 600; border: 1px solid var(--tandem-warning-border); border-radius: 9999px; background: var(--tandem-warning-bg); color: var(--tandem-warning-fg-strong); cursor: pointer;"
+    >
+      <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--tandem-warning-fg-strong); display: inline-block;"></span>
+      {heldCount} held
+    </button>
+  {/if}
 
   {#if readOnly}
     <span

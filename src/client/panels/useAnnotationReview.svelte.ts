@@ -46,11 +46,6 @@ export interface UseAnnotationReviewParams {
   /** Reactive annotations array. */
   getAnnotations: () => Annotation[];
   onActiveAnnotationChange: (id: string | null) => void;
-  getReviewMode: () => boolean;
-  onToggleReviewMode: () => void;
-  onExitReviewMode: () => void;
-  getBulkConfirm: () => "accept" | "dismiss" | null;
-  setBulkConfirm: (v: "accept" | "dismiss" | null) => void;
   getScrollBehavior: () => ScrollBehavior;
 }
 
@@ -68,23 +63,11 @@ export interface UseAnnotationReviewReturn {
   confirmEl: HTMLButtonElement | null;
 }
 
-/**
- * Svelte 5 port of useAnnotationReview.ts.
- *
- * Uses getter functions instead of React RefObjects to avoid stale-closure
- * issues. Internal state is Svelte $state runes; reactive derivations are
- * computed inline within returned getters.
- */
 export function useAnnotationReview({
   getYdoc,
   getEditor,
   getAnnotations,
   onActiveAnnotationChange,
-  getReviewMode,
-  onToggleReviewMode,
-  onExitReviewMode,
-  getBulkConfirm,
-  setBulkConfirm,
   getScrollBehavior,
 }: UseAnnotationReviewParams): UseAnnotationReviewReturn {
   // Reactive state
@@ -107,9 +90,8 @@ export function useAnnotationReview({
   }
 
   function getActiveReviewAnn(): Annotation | null {
-    const reviewMode = getReviewMode();
     const targets = getReviewTargets();
-    return reviewMode && targets.length > 0 ? (targets[reviewIndex] ?? null) : null;
+    return targets.length > 0 ? (targets[reviewIndex] ?? null) : null;
   }
 
   function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
@@ -232,138 +214,17 @@ export function useAnnotationReview({
     el?.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
   }
 
-  // Navigation
-  function navigateReview(direction: "next" | "prev") {
-    const targets = getReviewTargets();
-    if (targets.length === 0) return;
-    let idx = reviewIndex;
-    idx =
-      direction === "next"
-        ? (idx + 1) % targets.length
-        : (idx - 1 + targets.length) % targets.length;
-    reviewIndex = idx;
-    const target = targets[idx];
-    if (target) scrollToAnnotation(target);
-  }
-
-  function acceptCurrent() {
-    const targets = getReviewTargets();
-    if (targets.length === 0) return;
-    const ann = targets[reviewIndex];
-    if (ann) resolveAnnotation(ann.id, "accepted");
-  }
-
-  function dismissCurrent() {
-    const targets = getReviewTargets();
-    if (targets.length === 0) return;
-    const ann = targets[reviewIndex];
-    if (ann) resolveAnnotation(ann.id, "dismissed");
-  }
-
-  function scrollToCurrentAndExit() {
-    const targets = getReviewTargets();
-    const ann = targets[reviewIndex];
-    if (ann) scrollToAnnotation(ann);
-    onExitReviewMode();
-  }
-
-  function undoLast() {
-    if (lastResolvedId) undoResolveAnnotation(lastResolvedId);
-  }
-
-  function cancelBulkOrExit() {
-    if (getBulkConfirm()) {
-      setBulkConfirm(null);
-    } else {
-      onExitReviewMode();
-    }
-  }
-
-  // Keyboard handler for review mode
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.ctrlKey && e.shiftKey && e.key === "R") {
-      e.preventDefault();
-      onToggleReviewMode();
-      return;
-    }
-
-    if (!getReviewMode()) return;
-
-    if (e.key === "Tab" && !e.ctrlKey && !e.altKey) {
-      e.preventDefault();
-      navigateReview(e.shiftKey ? "prev" : "next");
-    } else if (e.key === "y" || e.key === "Y") {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      e.preventDefault();
-      acceptCurrent();
-    } else if (e.key === "n" || e.key === "N") {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      e.preventDefault();
-      dismissCurrent();
-    } else if (e.key === "z" || e.key === "Z") {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      e.preventDefault();
-      undoLast();
-    } else if (e.key === "e" || e.key === "E") {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      e.preventDefault();
-      scrollToCurrentAndExit();
-    } else if (e.key === "Escape") {
-      cancelBulkOrExit();
-    }
-  }
-
-  // Register keyboard listener; re-register whenever reviewMode changes.
-  // Because Svelte effects track reactive reads, we read getReviewMode() inside
-  // the effect body so it re-runs on changes.
-  $effect(() => {
-    // Capture current reviewMode for the closure — not strictly needed since
-    // handleKeyDown() calls getReviewMode() fresh, but needed to make the
-    // effect reactive to reviewMode changes so the listener is always current.
-    const _reviewMode = getReviewMode();
-    void _reviewMode; // consumed for reactivity tracking
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  });
-
   // Sync activeAnnotationId when review index changes
   $effect(() => {
-    const reviewMode = getReviewMode();
     const targets = getReviewTargets();
-    if (reviewMode && targets.length > 0) {
-      onActiveAnnotationChange(targets[reviewIndex]?.id ?? null);
-    } else {
-      onActiveAnnotationChange(null);
-    }
-  });
-
-  // Scroll to first annotation when entering review mode
-  let prevReviewMode = false;
-  $effect(() => {
-    const reviewMode = getReviewMode();
-    const targets = getReviewTargets();
-    if (reviewMode && !prevReviewMode && targets.length > 0) {
-      reviewIndex = 0;
-      scrollToAnnotation(targets[0]);
-    }
-    prevReviewMode = reviewMode;
+    onActiveAnnotationChange(targets[reviewIndex]?.id ?? null);
   });
 
   // Keep review index in bounds when annotations change
   $effect(() => {
-    const reviewMode = getReviewMode();
     const targets = getReviewTargets();
-    if (reviewMode && reviewIndex >= targets.length) {
+    if (reviewIndex >= targets.length) {
       reviewIndex = Math.max(0, targets.length - 1);
-    }
-  });
-
-  // Auto-exit when no pending left
-  $effect(() => {
-    const reviewMode = getReviewMode();
-    const targets = getReviewTargets();
-    if (reviewMode && targets.length === 0) {
-      onExitReviewMode();
     }
   });
 

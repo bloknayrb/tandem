@@ -20,28 +20,29 @@ import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
+import { SlashCommandExtension } from "./extensions/slash-command";
 import "./editor.css";
 
 interface Props {
   ydoc: Y.Doc;
   provider: HocuspocusProvider;
   readOnly: boolean;
-  reviewMode?: boolean;
   activeAnnotationId?: string | null;
   editorFont?: EditorFontKey;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onAnnotationClick?: (annotationId: string) => void;
+  onSlashCommandMenuChange?: (open: boolean) => void;
 }
 
 const {
   ydoc,
   provider,
   readOnly,
-  reviewMode,
   activeAnnotationId,
   editorFont = "sans",
   onEditorReady,
   onAnnotationClick,
+  onSlashCommandMenuChange,
 }: Props = $props();
 
 let editor = $state<TiptapEditor | null>(null);
@@ -96,6 +97,7 @@ $effect(() => {
       AnnotationExtension.configure({ ydoc }),
       AuthorshipExtension.configure({ ydoc }),
       AwarenessExtension.configure({ ydoc }),
+      SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
     ],
     editorProps: {
       attributes: {
@@ -141,7 +143,7 @@ $effect(() => {
     el.classList.remove("tandem-annotation-active");
   });
 
-  if (activeAnnotationId && reviewMode) {
+  if (activeAnnotationId) {
     container
       .querySelectorAll(`[data-annotation-id="${CSS.escape(activeAnnotationId)}"]`)
       .forEach((el) => {
@@ -160,9 +162,7 @@ function handleEditorClick(e: MouseEvent) {
 }
 </script>
 
-<div class={reviewMode ? "tandem-review-dimmed" : ""} onclick={handleEditorClick} role="presentation">
-  <div bind:this={editorRoot}></div>
-</div>
+<div bind:this={editorRoot} onclick={handleEditorClick} role="presentation"></div>
 
 <style>
   /* Apply editor font to the Tiptap content DOM (inside Tiptap's own element tree). */

@@ -452,6 +452,12 @@ the design artifact. The umbrella issue should carry this categorized reconcilia
 and any second-wave issues should be created from the "repo needs to implement" and
 "both sides need alignment" lists once the decisions are made.
 
+Current implementation status is tracked in
+[`docs/redesign-acceptance-matrix.md`](./redesign-acceptance-matrix.md). Use that
+matrix as the evidence gate before opening the next redesign PR, because `master` now
+contains the completed #514 foundation plus partial #515, #516, #519, #520, and #521
+work.
+
 ---
 
 ## Verification Summary

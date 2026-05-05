@@ -16,12 +16,32 @@
   margin: 1.6em 0 0.4em;
   line-height: 1.2;
 }
-.tandem-editor h3 { font-size: 1.17em; font-weight: 600; margin: 1.2em 0 0.4em; }
-.tandem-editor p { margin: 0 0 0.9em; }
-.tandem-editor ul, .tandem-editor ol { padding-left: 1.5em; }
-.tandem-editor table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-.tandem-editor td, .tandem-editor th { border: 1px solid var(--tandem-border); padding: 8px; }
-.tandem-editor th { background: var(--tandem-surface-muted); font-weight: 600; }
+.tandem-editor h3 {
+  font-size: 1.17em;
+  font-weight: 600;
+  margin: 1.2em 0 0.4em;
+}
+.tandem-editor p {
+  margin: 0 0 0.9em;
+}
+.tandem-editor ul,
+.tandem-editor ol {
+  padding-left: 1.5em;
+}
+.tandem-editor table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+.tandem-editor td,
+.tandem-editor th {
+  border: 1px solid var(--tandem-border);
+  padding: 8px;
+}
+.tandem-editor th {
+  background: var(--tandem-surface-muted);
+  font-weight: 600;
+}
 .tandem-editor blockquote {
   border-left: 2px solid var(--tandem-border-strong);
   margin: 1em 0;
@@ -53,7 +73,9 @@
   border-radius: 3px 3px 3px 0;
   color: var(--tandem-accent-fg);
 }
-.ProseMirror-focused { outline: none; }
+.ProseMirror-focused {
+  outline: none;
+}
 .ProseMirror p.is-empty::before {
   content: attr(data-placeholder);
   color: var(--tandem-fg-subtle);
@@ -63,34 +85,44 @@
 }
 
 /* Annotation decorations */
-.tandem-highlight { cursor: pointer; }
-.tandem-highlight:hover { filter: brightness(0.95); }
-.tandem-comment { cursor: pointer; }
-.tandem-comment:hover { border-bottom-style: solid; }
-.tandem-suggestion { cursor: pointer; }
-.tandem-note { cursor: pointer; }
-.tandem-note:hover { border-bottom-style: solid; }
+.tandem-highlight {
+  cursor: pointer;
+}
+.tandem-highlight:hover {
+  filter: brightness(0.95);
+}
+.tandem-comment {
+  cursor: pointer;
+}
+.tandem-comment:hover {
+  border-bottom-style: solid;
+}
+.tandem-suggestion {
+  cursor: pointer;
+}
+.tandem-note {
+  cursor: pointer;
+}
+.tandem-note:hover {
+  border-bottom-style: solid;
+}
 
-/* Review mode dimming — grays out text, keeps annotated spans readable */
-.tandem-review-dimmed .ProseMirror {
-  color: var(--tandem-fg-subtle);
-  transition: color 0.2s;
-}
-.tandem-review-dimmed .tandem-highlight,
-.tandem-review-dimmed .tandem-comment,
-.tandem-review-dimmed .tandem-suggestion,
-.tandem-review-dimmed .tandem-note {
-  color: var(--tandem-fg);
-}
-.tandem-review-dimmed .tandem-annotation-active {
-  outline: 2px solid var(--tandem-accent);
-  outline-offset: 1px;
-  border-radius: 2px;
+/* Position context for authorship gutter ::before pseudo-elements */
+.tandem-editor .ProseMirror p,
+.tandem-editor .ProseMirror h1,
+.tandem-editor .ProseMirror h2,
+.tandem-editor .ProseMirror h3,
+.tandem-editor .ProseMirror h4,
+.tandem-editor .ProseMirror h5,
+.tandem-editor .ProseMirror h6 {
+  position: relative;
 }
 
 /* Authorship decorations — user=blue, claude=orange */
 .ProseMirror [data-tandem-author] {
-  transition: color 0.2s, background 0.2s;
+  transition:
+    color 0.2s,
+    background 0.2s;
   border-radius: 2px;
 }
 .ProseMirror [data-tandem-author="user"] {
@@ -105,7 +137,7 @@
   position: relative;
 }
 .tandem-claude-focus::before {
-  content: '';
+  content: "";
   position: absolute;
   left: -24px;
   top: 0;
@@ -116,8 +148,13 @@
   animation: tandem-gutter-pulse 2s ease-in-out infinite;
 }
 @keyframes tandem-gutter-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* Claude character-level cursor */
@@ -148,6 +185,31 @@
   z-index: 11;
 }
 @keyframes tandem-claude-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Authorship gutter — 2px colored thread on left margin of paragraph/heading blocks */
+.tandem-editor [data-tandem-author-block]::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 0.45em;
+  bottom: 0.45em;
+  width: 2px;
+  border-radius: 1px;
+  transition: background 200ms;
+}
+.tandem-editor [data-tandem-author-block="user"]::before {
+  background: var(--tandem-author-user);
+  opacity: 0.55;
+}
+.tandem-editor [data-tandem-author-block="claude"]::before {
+  background: var(--tandem-author-claude);
+  opacity: 0.55;
 }

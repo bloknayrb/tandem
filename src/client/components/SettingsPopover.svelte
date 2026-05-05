@@ -17,21 +17,45 @@ const HEADING_ID = "tandem-settings-heading";
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 type SettingsSection =
-  | "profile"
   | "appearance"
   | "editor"
   | "accessibility"
-  | "automation"
+  | "collaboration"
+  | "claude-code"
+  | "shortcuts"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
-  { id: "profile", label: "Profile" },
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
   { id: "accessibility", label: "Accessibility" },
-  { id: "automation", label: "Automation" },
+  { id: "collaboration", label: "Collaboration" },
+  { id: "claude-code", label: "Claude Code/Cowork" },
+  { id: "shortcuts", label: "Shortcuts" },
   { id: "about", label: "About" },
 ];
+
+const SHORTCUT_SECTIONS = [
+  {
+    title: "Editor",
+    rows: [
+      { keys: "Ctrl+B", description: "Bold" },
+      { keys: "Ctrl+I", description: "Italic" },
+      { keys: "Ctrl+Z", description: "Undo" },
+      { keys: "Ctrl+Y", description: "Redo" },
+      { keys: "Ctrl+S", description: "Save document" },
+    ],
+  },
+  {
+    title: "General",
+    rows: [
+      { keys: "Ctrl+,", description: "Open settings" },
+      { keys: "?", description: "Show keyboard shortcuts" },
+      { keys: "Ctrl+Tab", description: "Next document tab" },
+      { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
+    ],
+  },
+] as const;
 
 interface Props {
   open: boolean;
@@ -180,6 +204,36 @@ function navButtonStyle(section: SettingsSection): string {
 function panelHeading(section: SettingsSection): string {
   return SECTIONS.find((s) => s.id === section)?.label ?? "Settings";
 }
+
+function aboutRows() {
+  const info = appInfo.info;
+  if (!info) return [];
+
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Version", value: `Tandem v${info.version}` },
+    {
+      label: "Tools",
+      value:
+        info.toolCount === null ? "Tool count unavailable" : `${info.toolCount} tools available`,
+    },
+    { label: "MCP SDK", value: `MCP SDK ${info.mcpSdkVersion}` },
+    { label: "Transport", value: info.transport.toUpperCase() },
+  ];
+
+  if (info.storagePath) rows.push({ label: "Storage", value: info.storagePath });
+  if (info.tokenRotatedAt !== undefined) {
+    rows.push({
+      label: "Token",
+      value:
+        info.tokenRotatedAt === null
+          ? "Token not created"
+          : `Token rotated ${new Date(info.tokenRotatedAt).toLocaleString()}`,
+    });
+  }
+  if (info.changelogPath) rows.push({ label: "Changelog", value: info.changelogPath });
+
+  return rows;
+}
 </script>
 
 {#if open}
@@ -241,7 +295,7 @@ function panelHeading(section: SettingsSection): string {
 
       <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-5);">
         <div style="display: flex; flex-direction: column; gap: var(--tandem-space-5); max-width: 620px;">
-          {#if activeSection === "profile"}
+          {#if activeSection === "collaboration"}
             <div>
               <label for="settings-display-name" style={sectionLabelStyle}>Display Name</label>
               <input
@@ -263,13 +317,63 @@ function panelHeading(section: SettingsSection): string {
                 style="width: 100%; padding: 8px 10px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: 5px; outline: none;"
               />
             </div>
+
+            <div>
+              <div id="settings-default-mode-label" style={sectionLabelStyle}>Default Mode</div>
+              <div
+                role="radiogroup"
+                aria-labelledby="settings-default-mode-label"
+                style="display: flex; gap: var(--tandem-space-2);"
+              >
+                <button
+                  type="button"
+                  data-testid="default-mode-tandem-btn"
+                  role="radio"
+                  aria-checked={settings.defaultMode === "tandem"}
+                  onclick={() => onUpdate({ defaultMode: "tandem" })}
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: 6px; background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
+                >
+                  Tandem
+                </button>
+                <button
+                  type="button"
+                  data-testid="default-mode-solo-btn"
+                  role="radio"
+                  aria-checked={settings.defaultMode === "solo"}
+                  onclick={() => onUpdate({ defaultMode: "solo" })}
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: 6px; background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
+                >
+                  Solo
+                </button>
+              </div>
+              <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+                Sets the preferred starting mode for new sessions.
+              </div>
+            </div>
+
+            <label
+              data-testid="solo-rail-hidden-toggle"
+              style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+            >
+              <input
+                type="checkbox"
+                checked={settings.soloRailHidden}
+                onchange={(e) => onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
+                style="accent-color: var(--tandem-accent);"
+              />
+              <span>Hide side panel in Solo mode</span>
+            </label>
+            <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+              When enabled, the annotation panel hides automatically when you enter Solo mode and
+              restores when you return to Tandem.
+            </div>
           {:else if activeSection === "appearance"}
             <AppearanceSettings {open} {settings} {onUpdate} />
           {:else if activeSection === "editor"}
             <EditorSettings {settings} {onUpdate} />
           {:else if activeSection === "accessibility"}
             <AccessibilitySettings {settings} {onUpdate} />
-          {:else if activeSection === "automation"}
+          {:else if activeSection === "claude-code"}
             <div>
               <div style={sectionLabelStyle}>
                 Selection Sensitivity:
@@ -309,6 +413,38 @@ function panelHeading(section: SettingsSection): string {
               />
               <span>Show floating selection toolbar</span>
             </label>
+            {#if isTauriRuntime()}
+              {#await import("./CoworkSettings.svelte")}
+                <div
+                  data-testid="cowork-settings-suspense-fallback"
+                  style="font-size: 12px; color: var(--tandem-fg-subtle);"
+                >
+                  Loading Cowork integration...
+                </div>
+              {:then mod}
+                {@const CoworkSettingsComp = mod.default}
+                <CoworkSettingsComp />
+              {/await}
+            {/if}
+          {:else if activeSection === "shortcuts"}
+            <div
+              data-testid="settings-shortcuts-list"
+              style="display: flex; flex-direction: column; gap: var(--tandem-space-4);"
+            >
+              {#each SHORTCUT_SECTIONS as section (section.title)}
+                <section>
+                  <div style={sectionLabelStyle}>{section.title}</div>
+                  <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
+                    {#each section.rows as row (row.keys + row.description)}
+                      <kbd style="justify-self: start; padding: 1px 6px; font-family: var(--tandem-font-mono); font-size: 11px; color: var(--tandem-fg); background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom-width: 2px; border-radius: 4px;">
+                        {row.keys}
+                      </kbd>
+                      <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
+                    {/each}
+                  </div>
+                </section>
+              {/each}
+            </div>
           {:else}
             <div>
               <button
@@ -337,36 +473,24 @@ function panelHeading(section: SettingsSection): string {
               </a>
             </div>
 
-            {#if isTauriRuntime()}
-              {#await import("./CoworkSettings.svelte")}
-                <div
-                  data-testid="cowork-settings-suspense-fallback"
-                  style="font-size: 12px; color: var(--tandem-fg-subtle);"
-                >
-                  Loading Cowork integration...
-                </div>
-              {:then mod}
-                {@const CoworkSettingsComp = mod.default}
-                <CoworkSettingsComp />
-              {/await}
-            {/if}
-
-            {#if appInfo.loading || appInfo.info !== null}
-              <div
-                data-testid="app-info-footer"
-                style="border-top: 1px solid var(--tandem-border); padding-top: 10px;"
-              >
-                <div style={sectionLabelStyle}>About</div>
-                {#if appInfo.loading}
-                  <div style="font-size: 11px; color: var(--tandem-fg-subtle);">Loading...</div>
-                {:else}
-                  <div style="display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--tandem-fg-subtle);">
-                    <span>Tandem v{appInfo.info?.version}</span>
-                    <span>MCP SDK {appInfo.info?.mcpSdkVersion}</span>
-                  </div>
-                {/if}
-              </div>
-            {/if}
+            <div
+              data-testid="app-info-footer"
+              style="border-top: 1px solid var(--tandem-border); padding-top: 10px;"
+            >
+              <div style={sectionLabelStyle}>About</div>
+              {#if appInfo.loading}
+                <div style="font-size: 11px; color: var(--tandem-fg-subtle);">Loading...</div>
+              {:else if appInfo.info}
+                <dl style="display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 12px; margin: 0; font-size: 11px;">
+                  {#each aboutRows() as row (row.label)}
+                    <dt style="color: var(--tandem-fg-subtle);">{row.label}</dt>
+                    <dd style="margin: 0; color: var(--tandem-fg-muted); overflow-wrap: anywhere;">{row.value}</dd>
+                  {/each}
+                </dl>
+              {:else}
+                <div style="font-size: 11px; color: var(--tandem-fg-subtle);">App info unavailable.</div>
+              {/if}
+            </div>
           {/if}
         </div>
       </div>

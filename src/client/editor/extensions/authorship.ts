@@ -11,6 +11,8 @@ import { flatOffsetToPmPos, pmPosToFlatOffset, relRangeToPmPositions } from "../
 
 export const authorshipPluginKey = new PluginKey("tandemAuthorship");
 
+const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
+
 /**
  * Resolve an AuthorshipRange to ProseMirror positions.
  * Prefers relRange (CRDT-anchored) with flat-offset fallback.
@@ -47,29 +49,61 @@ export function buildAuthorshipDecorations(
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
 
+  // Single pass: build inline spans and collect resolved ranges for the block gutter pass.
+  type ResolvedEntry = { author: "user" | "claude"; from: number; to: number };
+  const resolvedRanges: ResolvedEntry[] = [];
+
   authorshipMap.forEach((value) => {
     const entry = value as AuthorshipRange;
     if (!entry.author || !entry.range) return;
+    if (entry.author !== "user" && entry.author !== "claude") return;
 
-    // Defensive guard: skip entries with unexpected author values (Y.Map is untyped at runtime)
-    const validAuthors: ReadonlyArray<string> = ["user", "claude"];
-    if (!validAuthors.includes(entry.author)) return;
+    const r = resolveAuthorshipRange(entry, doc, ydoc);
+    if (!r) return;
 
-    const resolved = resolveAuthorshipRange(entry, doc, ydoc);
-    if (!resolved) return;
-
-    const { from, to } = resolved;
+    const { from, to } = r;
     if (from >= to || from < 0 || to > maxPos) return;
 
-    const attrs: Record<string, string> = {
-      "data-tandem-author": entry.author,
-    };
-
     try {
-      decorations.push(Decoration.inline(from, to, attrs));
+      decorations.push(Decoration.inline(from, to, { "data-tandem-author": entry.author }));
     } catch (err) {
       if (!(err instanceof RangeError)) throw err;
       console.warn("[authorship] Decoration RangeError for entry", entry.id, err);
+    }
+
+    resolvedRanges.push({ author: entry.author as "user" | "claude", from, to });
+  });
+
+  // Per-block dominant-author gutter decoration — descendants() visits nested blocks too
+  doc.descendants((node, offset) => {
+    if (!GUTTER_NODE_TYPES.has(node.type.name)) return;
+
+    const blockFrom = offset;
+    const blockTo = offset + node.nodeSize;
+
+    let userChars = 0;
+    let claudeChars = 0;
+
+    for (const r of resolvedRanges) {
+      const overlapFrom = Math.max(r.from, blockFrom);
+      const overlapTo = Math.min(r.to, blockTo);
+      if (overlapTo <= overlapFrom) continue;
+      const chars = overlapTo - overlapFrom;
+      if (r.author === "user") userChars += chars;
+      else claudeChars += chars;
+    }
+
+    if (userChars === 0 && claudeChars === 0) return;
+
+    const dominant: "user" | "claude" = userChars >= claudeChars ? "user" : "claude";
+
+    try {
+      decorations.push(
+        Decoration.node(blockFrom, blockTo, { "data-tandem-author-block": dominant }),
+      );
+    } catch (err) {
+      if (!(err instanceof RangeError)) throw err;
+      console.warn("[authorship] node Decoration RangeError at offset", offset, err);
     }
   });
 

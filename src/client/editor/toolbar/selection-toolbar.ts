@@ -14,16 +14,23 @@ export interface SelectionToolbarPositionArgs {
   start: SelectionToolbarBounds;
   end: SelectionToolbarBounds;
   toolbarHeight: number;
+  toolbarWidth: number;
   viewportHeight: number;
+  viewportWidth: number;
 }
 
 export function computeSelectionToolbarPosition({
   start,
   end,
   toolbarHeight,
+  toolbarWidth,
   viewportHeight,
+  viewportWidth,
 }: SelectionToolbarPositionArgs): { left: number; top: number } {
-  const left = (start.left + end.right) / 2;
+  const rawLeft = (start.left + end.right) / 2;
+  const halfWidth = toolbarWidth / 2;
+  const minLeft = SELECTION_TOOLBAR_EDGE_GAP + halfWidth;
+  const maxLeft = Math.max(minLeft, viewportWidth - SELECTION_TOOLBAR_EDGE_GAP - halfWidth);
   const rawTop = Math.min(start.top, end.top) - SELECTION_TOOLBAR_SELECTION_GAP - toolbarHeight;
   const maxTop = Math.max(
     SELECTION_TOOLBAR_MIN_TOP,
@@ -31,7 +38,7 @@ export function computeSelectionToolbarPosition({
   );
 
   return {
-    left,
+    left: Math.min(Math.max(rawLeft, minLeft), maxLeft),
     top: Math.min(Math.max(rawTop, SELECTION_TOOLBAR_MIN_TOP), maxTop),
   };
 }

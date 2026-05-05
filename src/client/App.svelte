@@ -143,7 +143,6 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-let reviewMode = $state(false);
 let showChat = $state(settingsState.settings.primaryTab === "chat");
 
 const pendingAnnotationBadge = $derived(
@@ -154,6 +153,7 @@ let activeAnnotationId = $state<string | null>(null);
 let showHelp = $state(false);
 let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
+let slashCommandMenuOpen = $state(false);
 
 let panelLayout = $state<PanelLayout>(
   (() => {
@@ -187,6 +187,10 @@ $effect(() => {
   }
 });
 
+const effectivePanelHidden = $derived(
+  modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden,
+);
+
 const editorMaxWidth = $derived(
   settingsState.settings.editorWidthPercent < 100
     ? `${settingsState.settings.editorWidthPercent}%`
@@ -203,14 +207,6 @@ const dragResize = createDragResize(
   },
 );
 
-function toggleReviewMode() {
-  reviewMode = !reviewMode;
-}
-
-function exitReviewMode() {
-  reviewMode = false;
-}
-
 function captureSelectionForChat() {
   if (showChat) return;
   if (!editor) return;
@@ -226,10 +222,21 @@ function captureSelectionForChat() {
 
 $effect(() => {
   function handler(e: KeyboardEvent) {
-    if (e.key !== "?") return;
-    const el = e.target as HTMLElement;
-    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
-    showHelp = untrack(() => !showHelp);
+    if (e.key === "?") {
+      const el = e.target as HTMLElement;
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+      showHelp = untrack(() => !showHelp);
+      return;
+    }
+    // Redirect Ctrl/Cmd+A to editor select-all when focus is outside the editor,
+    // so tab labels and other UI text don't get selected.
+    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      if (active?.closest?.(".ProseMirror")) return;
+      e.preventDefault();
+      editor?.commands.selectAll();
+    }
   }
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
@@ -273,6 +280,7 @@ const tutorial = createTutorial(
       onModeChange={modeState.setTandemMode}
       heldCount={modeGate.heldCount}
       selectionToolbar={settingsState.settings.selectionToolbar}
+      suppressSelectionToolbar={slashCommandMenuOpen}
     />
 
     <DocumentTabs
@@ -284,117 +292,116 @@ const tutorial = createTutorial(
       reduceMotion={settingsState.settings.reduceMotion}
     />
 
-    {#if panelLayout.kind === "three-panel"}
-      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
-        <div
-          style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
-        >
+    <!-- Single persistent container — editor column is always rendered in the same
+         DOM position so the Editor component never remounts on layout changes.
+         Panels are conditionally shown/hidden around the stable editor column. -->
+    <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
+      {#if panelLayout.kind === "three-panel"}
+        {#if !effectivePanelHidden}
           <div
-            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+            style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
           >
-            {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
+            <div
+              style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+            >
+              {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
+            </div>
+            <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+              {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
+                <PanelSlot
+                  kind="chat"
+                  ctrlYdoc={yjsSync.bootstrapYdoc}
+                  {editor}
+                  activeDocId={yjsSync.activeTabId}
+                  {openDocs}
+                  claudeActive={yjsSync.claudeActive}
+                  claudeStatus={yjsSync.claudeStatus}
+                  {capturedAnchor}
+                  onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+                  reduceMotion={settingsState.settings.reduceMotion}
+                  visible={true}
+                />
+              {:else}
+                <PanelSlot
+                  kind="side"
+                  annotations={modeGate.visibleAnnotations}
+                  {editor}
+                  ydoc={activeTab?.ydoc ?? null}
+                  heldCount={modeGate.heldCount}
+                  tandemMode={modeState.tandemMode}
+                  onModeChange={modeState.setTandemMode}
+                  activeDocFormat={activeTab?.format}
+                  documentId={activeTab?.id}
+                  {activeAnnotationId}
+                  onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+                  reduceMotion={settingsState.settings.reduceMotion}
+                />
+              {/if}
+            </div>
           </div>
-          <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-            {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
-              <PanelSlot
-                kind="chat"
-                ctrlYdoc={yjsSync.bootstrapYdoc}
-                {editor}
-                activeDocId={yjsSync.activeTabId}
-                {openDocs}
-                claudeActive={yjsSync.claudeActive}
-                claudeStatus={yjsSync.claudeStatus}
-                {capturedAnchor}
-                onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-                reduceMotion={settingsState.settings.reduceMotion}
-                visible={true}
-              />
-            {:else}
-              <PanelSlot
-                kind="side"
-                annotations={modeGate.visibleAnnotations}
-                {editor}
-                ydoc={activeTab?.ydoc ?? null}
-                heldCount={modeGate.heldCount}
-                tandemMode={modeState.tandemMode}
-                onModeChange={modeState.setTandemMode}
-                activeDocFormat={activeTab?.format}
-                documentId={activeTab?.id}
-                {reviewMode}
-                onToggleReviewMode={toggleReviewMode}
-                onExitReviewMode={exitReviewMode}
-                {activeAnnotationId}
-                onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-                reduceMotion={settingsState.settings.reduceMotion}
-              />
-            {/if}
-          </div>
-        </div>
+          {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
+        {/if}
+      {:else if panelLayout.kind === "tabbed-left"}
+        {#if !effectivePanelHidden}
+          {@render tabbedPanel(panelLayout.left, "left")}
+          {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
+        {/if}
+      {/if}
 
-        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
-        {@render editorColumn()}
-        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
+      {@render editorColumn()}
 
-        <div
-          style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
-        >
+      {#if panelLayout.kind === "three-panel"}
+        {#if !effectivePanelHidden}
+          {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
           <div
-            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+            style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
           >
-            {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
+            <div
+              style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+            >
+              {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
+            </div>
+            <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+              {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
+                <PanelSlot
+                  kind="side"
+                  annotations={modeGate.visibleAnnotations}
+                  {editor}
+                  ydoc={activeTab?.ydoc ?? null}
+                  heldCount={modeGate.heldCount}
+                  tandemMode={modeState.tandemMode}
+                  onModeChange={modeState.setTandemMode}
+                  activeDocFormat={activeTab?.format}
+                  documentId={activeTab?.id}
+                  {activeAnnotationId}
+                  onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+                  reduceMotion={settingsState.settings.reduceMotion}
+                />
+              {:else}
+                <PanelSlot
+                  kind="chat"
+                  ctrlYdoc={yjsSync.bootstrapYdoc}
+                  {editor}
+                  activeDocId={yjsSync.activeTabId}
+                  {openDocs}
+                  claudeActive={yjsSync.claudeActive}
+                  claudeStatus={yjsSync.claudeStatus}
+                  {capturedAnchor}
+                  onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+                  reduceMotion={settingsState.settings.reduceMotion}
+                  visible={true}
+                />
+              {/if}
+            </div>
           </div>
-          <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-            {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
-              <PanelSlot
-                kind="side"
-                annotations={modeGate.visibleAnnotations}
-                {editor}
-                ydoc={activeTab?.ydoc ?? null}
-                heldCount={modeGate.heldCount}
-                tandemMode={modeState.tandemMode}
-                onModeChange={modeState.setTandemMode}
-                activeDocFormat={activeTab?.format}
-                documentId={activeTab?.id}
-                {reviewMode}
-                onToggleReviewMode={toggleReviewMode}
-                onExitReviewMode={exitReviewMode}
-                {activeAnnotationId}
-                onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-                reduceMotion={settingsState.settings.reduceMotion}
-              />
-            {:else}
-              <PanelSlot
-                kind="chat"
-                ctrlYdoc={yjsSync.bootstrapYdoc}
-                {editor}
-                activeDocId={yjsSync.activeTabId}
-                {openDocs}
-                claudeActive={yjsSync.claudeActive}
-                claudeStatus={yjsSync.claudeStatus}
-                {capturedAnchor}
-                onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-                reduceMotion={settingsState.settings.reduceMotion}
-                visible={true}
-              />
-            {/if}
-          </div>
-        </div>
-      </div>
-
-    {:else if panelLayout.kind === "tabbed-left"}
-      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
-        {@render tabbedPanel(panelLayout.left, "left")}
-        {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
-        {@render editorColumn()}
-      </div>
-
-    {:else}
-      <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
-        {@render editorColumn()}
-        {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
-        {@render tabbedPanel(getRightWidth(panelLayout), "right")}
-      </div>
-    {/if}
+        {/if}
+      {:else if panelLayout.kind === "tabbed"}
+        {#if !effectivePanelHidden}
+          {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
+          {@render tabbedPanel(getRightWidth(panelLayout), "right")}
+        {/if}
+      {/if}
+    </div>
 
     <StatusBar
       connected={yjsSync.connected}
@@ -406,6 +413,9 @@ const tutorial = createTutorial(
       readOnly={yjsSync.readOnly}
       documentCount={yjsSync.tabs.length}
       saving={saveShortcut.saving}
+      heldCount={modeGate.heldCount}
+      mode={modeState.tandemMode}
+      onShowHeld={() => modeState.setTandemMode("tandem")}
     />
 
     {#if reviewCompletion.showReviewSummary && reviewCompletion.reviewSummaryData}
@@ -516,7 +526,6 @@ const tutorial = createTutorial(
             ydoc={activeTab.ydoc}
             provider={activeTab.provider}
             readOnly={yjsSync.readOnly}
-            {reviewMode}
             {activeAnnotationId}
             editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
@@ -524,6 +533,7 @@ const tutorial = createTutorial(
               showChat = false;
               activeAnnotationId = id;
             }}
+            onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
           />
         {/key}
       {:else}
@@ -586,9 +596,6 @@ const tutorial = createTutorial(
       onModeChange={modeState.setTandemMode}
       activeDocFormat={activeTab?.format}
       documentId={activeTab?.id}
-      {reviewMode}
-      onToggleReviewMode={toggleReviewMode}
-      onExitReviewMode={exitReviewMode}
       {activeAnnotationId}
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}

@@ -24,9 +24,6 @@ interface Props {
   onModeChange?: (mode: TandemMode) => void;
   activeDocFormat?: string;
   documentId?: string;
-  reviewMode: boolean;
-  onToggleReviewMode: () => void;
-  onExitReviewMode: () => void;
   activeAnnotationId: string | null;
   onActiveAnnotationChange: (id: string | null) => void;
   reduceMotion?: boolean;
@@ -41,9 +38,6 @@ let {
   onModeChange,
   activeDocFormat,
   documentId,
-  reviewMode,
-  onToggleReviewMode,
-  onExitReviewMode,
   activeAnnotationId,
   onActiveAnnotationChange,
   reduceMotion,
@@ -143,11 +137,6 @@ const review = useAnnotationReview({
   getEditor: () => editor,
   getAnnotations: () => annotations,
   onActiveAnnotationChange: (id) => onActiveAnnotationChange(id),
-  getReviewMode: () => reviewMode,
-  onToggleReviewMode: () => onToggleReviewMode(),
-  onExitReviewMode: () => onExitReviewMode(),
-  getBulkConfirm: () => bulkConfirm,
-  setBulkConfirm: (v) => (bulkConfirm = v),
   getScrollBehavior: () => scrollBehavior,
 });
 
@@ -326,47 +315,8 @@ function handleBulk(status: "accepted" | "dismissed") {
           ? "s"
           : ""}
       </span>
-      {#if filteredData.allPending.length > 0}
-        <div style="display: flex; flex-direction: column; align-items: flex-end;">
-          <button
-            data-testid="review-mode-btn"
-            onclick={onToggleReviewMode}
-            title="Keyboard review mode (Ctrl+Shift+R)"
-            aria-pressed={reviewMode}
-            style="padding: 4px 10px; font-size: 11px; border: 1px solid {reviewMode
-              ? 'var(--tandem-accent)'
-              : 'var(--tandem-border-strong)'}; border-radius: 3px; background: {reviewMode
-              ? 'var(--tandem-accent-bg)'
-              : 'var(--tandem-surface)'}; color: {reviewMode
-              ? 'var(--tandem-accent)'
-              : 'var(--tandem-fg-muted)'}; cursor: pointer; font-weight: {reviewMode ? 600 : 400};"
-          >
-            {reviewMode ? "Exit Review" : "Review"}
-          </button>
-          <div
-            data-testid="review-shortcut-hints"
-            style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 2px;"
-          >
-            Y / N / ↑↓ / Z
-          </div>
-        </div>
-      {/if}
     </div>
   </div>
-
-  <!-- Review mode indicator -->
-  {#if reviewMode && review.getReviewTargets().length > 0}
-    <div
-      style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-accent-bg); border-bottom: 1px solid var(--tandem-border); font-size: 12px; color: var(--tandem-accent-fg-strong);"
-    >
-      <div aria-live="polite" style="font-weight: 600; margin-bottom: 2px;">
-        Reviewing {review.getReviewIndex() + 1} / {review.getReviewTargets().length}
-      </div>
-      <div style="color: var(--tandem-accent);">
-        Tab: next · Shift+Tab: prev · Y: accept · N: dismiss · Z: undo · E: examine · Esc: exit
-      </div>
-    </div>
-  {/if}
 
   <!-- Filters -->
   <FilterBar

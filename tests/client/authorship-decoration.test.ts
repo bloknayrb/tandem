@@ -13,6 +13,9 @@ import type { AuthorshipRange } from "../../src/shared/types";
 type CapturedInline = { from: number; to: number; attrs: Record<string, string> };
 let capturedInlines: CapturedInline[] = [];
 
+type CapturedNode = { from: number; to: number; attrs: Record<string, string> };
+let capturedNodes: CapturedNode[] = [];
+
 vi.mock("@tiptap/pm/view", () => {
   const empty = Symbol("DecorationSet.empty");
   return {
@@ -26,6 +29,11 @@ vi.mock("@tiptap/pm/view", () => {
       inline(from: number, to: number, attrs: Record<string, string>) {
         const d = { from, to, attrs, _type: "inline" };
         capturedInlines.push(d);
+        return d;
+      },
+      node(from: number, to: number, attrs: Record<string, string>) {
+        const d = { from, to, attrs, _type: "node" };
+        capturedNodes.push(d);
         return d;
       },
     },
@@ -57,19 +65,41 @@ const { buildAuthorshipDecorations } = await import(
 
 // --- Minimal doc mock ---
 
-function makeMockDoc(size = 100) {
+function makeMockDoc(
+  blocks: Array<{
+    typeName: string;
+    size: number;
+    offset: number;
+  }> = [{ typeName: "paragraph", size: 10, offset: 1 }],
+  totalSize = 100,
+) {
   return {
-    content: { size },
-    childCount: 1,
-    child: () => ({
-      type: { name: "paragraph" },
-      isTextblock: true,
-      textContent: "x".repeat(size),
-      nodeSize: size + 2,
-      childCount: 0,
-      content: { size },
-    }),
-    forEach: () => {},
+    content: { size: totalSize },
+    forEach(cb: (node: unknown, offset: number, index: number) => void) {
+      blocks.forEach(({ typeName, size, offset }, i) => {
+        cb(
+          {
+            type: { name: typeName },
+            nodeSize: size + 2,
+            content: { size },
+          },
+          offset,
+          i,
+        );
+      });
+    },
+    descendants(cb: (node: unknown, offset: number) => boolean | void) {
+      blocks.forEach(({ typeName, size, offset }) => {
+        cb(
+          {
+            type: { name: typeName },
+            nodeSize: size + 2,
+            content: { size },
+          },
+          offset,
+        );
+      });
+    },
   } as unknown as import("@tiptap/pm/model").Node;
 }
 
@@ -85,6 +115,7 @@ function addEntry(map: Y.Map<unknown>, author: string, id = "auth-1", from = 1, 
 
 beforeEach(() => {
   capturedInlines = [];
+  capturedNodes = [];
 });
 
 // ---------------------------------------------------------------------------
@@ -171,5 +202,123 @@ describe("buildAuthorshipDecorations", () => {
 
     expect(capturedInlines).toHaveLength(1);
     expect(capturedInlines[0].attrs["data-tandem-author"]).toBe("claude");
+  });
+
+  // --- Node decoration (gutter) tests ---
+
+  it("emits data-tandem-author-block for a single-author paragraph (claude)", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    addEntry(authorshipMap, "claude", "auth-1", 1, 5);
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(1);
+    expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("claude");
+  });
+
+  it("emits data-tandem-author-block='user' when user has more chars (majority wins)", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    // claude: 3 chars (1..4), user: 5 chars (4..9)
+    addEntry(authorshipMap, "claude", "auth-claude", 1, 4);
+    addEntry(authorshipMap, "user", "auth-user", 4, 9);
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(1);
+    expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("user");
+  });
+
+  it("tie-breaks to user when claude and user have equal coverage", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    addEntry(authorshipMap, "claude", "auth-claude", 1, 4); // 3 chars
+    addEntry(authorshipMap, "user", "auth-user", 4, 7); // 3 chars
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(1);
+    expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("user");
+  });
+
+  it("authorship range spanning two paragraphs gives each its own node decoration", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    // Range spans both blocks: para1 offset 1..11, para2 offset 13..23
+    addEntry(authorshipMap, "user", "auth-1", 1, 23);
+
+    const doc = makeMockDoc(
+      [
+        { typeName: "paragraph", size: 10, offset: 1 },
+        { typeName: "paragraph", size: 10, offset: 13 },
+      ],
+      30,
+    );
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(2);
+    expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("user");
+    expect(capturedNodes[1].attrs["data-tandem-author-block"]).toBe("user");
+  });
+
+  it("import author entries are excluded from node decorations", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    addEntry(authorshipMap, "import" as any, "auth-import", 1, 8);
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(0);
+  });
+
+  it("heading node receives a gutter decoration", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    addEntry(authorshipMap, "user", "auth-1", 1, 5);
+
+    const doc = makeMockDoc([{ typeName: "heading", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(1);
+    expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("user");
+  });
+
+  it("bullet_list node does NOT receive a gutter decoration", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    addEntry(authorshipMap, "claude", "auth-1", 1, 8);
+
+    const doc = makeMockDoc([{ typeName: "bullet_list", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(0);
+  });
+
+  it("block with no authorship coverage gets no node decoration", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    // No entries in map
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    expect(capturedNodes).toHaveLength(0);
+  });
+
+  it("visible=false skips both inline and node decoration passes", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    addEntry(authorshipMap, "user", "auth-1", 1, 5);
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, false);
+
+    expect(capturedInlines).toHaveLength(0);
+    expect(capturedNodes).toHaveLength(0);
   });
 });
