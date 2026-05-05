@@ -46,12 +46,12 @@ let {
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{ left: number; top: number } | null>(null);
+let inputPosition = $state<{ left: number; top: number } | null>(null);
 let toolbarEl = $state<HTMLDivElement | null>(null);
 let mode = $state<ToolbarMode>("idle");
 let modeText = $state("");
 let capturedRange: { from: number; to: number } | null = null;
-let commentInputEl = $state<HTMLInputElement | null>(null);
-let noteInputEl = $state<HTMLInputElement | null>(null);
+let activeInputEl = $state<HTMLInputElement | null>(null);
 
 let toolbarHeight = $state(0);
 let toolbarWidth = $state(0);
@@ -132,7 +132,7 @@ $effect(() => {
 $effect(() => {
   const ed = editor;
   const el = toolbarEl;
-  if (!ed || !el || !selectionPosition) return;
+  if (!ed || !el || !selectionPosition || inInputMode) return;
 
   const updateToolbarMetrics = () => {
     const rect = el.getBoundingClientRect();
@@ -148,8 +148,7 @@ $effect(() => {
 });
 
 $effect(() => {
-  if (mode === "comment") commentInputEl?.focus();
-  else if (mode === "note") noteInputEl?.focus();
+  if (mode !== "idle") activeInputEl?.focus();
 });
 
 function createAnnotation(
@@ -212,7 +211,9 @@ function handleHighlight(color: HighlightColor) {
 function handleModeStart(targetMode: ToolbarMode) {
   return (e: MouseEvent) => {
     e.preventDefault();
+    if (!selectionPosition) return;
     captureSelectionRange();
+    inputPosition = selectionPosition;
     mode = targetMode;
     modeText = "";
   };
@@ -222,9 +223,11 @@ const startComment = handleModeStart("comment");
 const startNote = handleModeStart("note");
 
 function dismissSelectionToolbar() {
+  if (inInputMode) return;
   hasSelection = false;
   selectionPosition = null;
   capturedRange = null;
+  inputPosition = null;
   mode = "idle";
   modeText = "";
 }
@@ -232,6 +235,7 @@ function dismissSelectionToolbar() {
 function handleModeCancel() {
   mode = "idle";
   modeText = "";
+  inputPosition = null;
   resetAndFocusEditor();
 }
 
@@ -248,6 +252,7 @@ function handleModeSubmit() {
 
   mode = "idle";
   modeText = "";
+  inputPosition = null;
   editor?.chain().focus().run();
 }
 
@@ -270,13 +275,17 @@ const showMiniToolbar = $derived(
 );
 
 $effect(() => {
-  if (!showMiniToolbar) return;
+  if (!showMiniToolbar && !inInputMode) return;
 
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key !== "Escape") return;
     e.preventDefault();
-    dismissSelectionToolbar();
-    editor?.chain().focus().run();
+    if (inInputMode) {
+      handleModeCancel();
+    } else {
+      dismissSelectionToolbar();
+      editor?.chain().focus().run();
+    }
   }
 
   window.addEventListener("keydown", handleKeyDown);
@@ -297,105 +306,122 @@ function handleLinkMouseDown(e: MouseEvent) {
 }
 </script>
 
-{#if showMiniToolbar && selectionPosition}
+{#if (showMiniToolbar && selectionPosition) || (inInputMode && inputPosition)}
+  {@const floatPos = inInputMode ? inputPosition! : selectionPosition!}
   <div
     bind:this={toolbarEl}
-    role="toolbar"
-    aria-label="Selection tools"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: 1000; white-space: nowrap;`}
+    role={inInputMode ? "dialog" : "toolbar"}
+    aria-label={inInputMode ? (mode === "comment" ? "Add comment" : "Add note") : "Selection tools"}
+    style={`position: fixed; left: ${floatPos.left}px; top: ${floatPos.top}px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: 8px; box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: 1000; white-space: nowrap;`}
   >
-    <button
-      type="button"
-      aria-label="Bold"
-      title="Bold"
-      onmousedown={(e) => {
-        e.preventDefault();
-        editor?.chain().focus().toggleBold().run();
-      }}
-      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer;"
-    >
-      B
-    </button>
-    <button
-      type="button"
-      aria-label="Italic"
-      title="Italic"
-      onmousedown={(e) => {
-        e.preventDefault();
-        editor?.chain().focus().toggleItalic().run();
-      }}
-      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-style: italic; cursor: pointer;"
-    >
-      I
-    </button>
-    <button
-      type="button"
-      aria-label="Strike"
-      title="Strike"
-      onmousedown={(e) => {
-        e.preventDefault();
-        editor?.chain().focus().toggleStrike().run();
-      }}
-      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; text-decoration: line-through; cursor: pointer;"
-    >
-      S
-    </button>
-    <button
-      type="button"
-      aria-label="Code"
-      title="Code"
-      onmousedown={(e) => {
-        e.preventDefault();
-        editor?.chain().focus().toggleCode().run();
-      }}
-      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
-    >
-      &lt;/&gt;
-    </button>
-    <button
-      type="button"
-      aria-label="Link"
-      title="Link"
-      onmousedown={handleLinkMouseDown}
-      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; cursor: pointer;"
-    >
-      Link
-    </button>
-    <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
-    <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
-      {#each MINI_HIGHLIGHT_COLORS as color}
-        <button
-          type="button"
-          aria-label={`Highlight ${color}`}
-          title={`Highlight ${color}`}
-          onmousedown={(e) => {
-            e.preventDefault();
-            handleHighlight(color);
-            editor?.chain().focus().run();
-          }}
-          style={`width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLORS[color]}; cursor: pointer; padding: 0;`}
-        ></button>
-      {/each}
-    </div>
-    <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
-    <button
-      type="button"
-      aria-label="Comment on selection"
-      title="Comment on selection"
-      onmousedown={startComment}
-      style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
-    >
-      Comment
-    </button>
-    <button
-      type="button"
-      aria-label="Private note on selection"
-      title="Private note on selection"
-      onmousedown={startNote}
-      style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
-    >
-      Note
-    </button>
+    {#if inInputMode}
+      <InputGroup
+        bind:inputEl={activeInputEl}
+        value={modeText}
+        onChange={(v) => (modeText = v)}
+        onKeyDown={handleModeKeyDown}
+        onSubmit={handleModeSubmit}
+        onCancel={handleModeCancel}
+        placeholder={mode === "comment" ? "Add a comment..." : "Add a note to yourself..."}
+        submitLabel="Add"
+        borderColor={mode === "comment" ? "var(--tandem-author-user)" : "var(--tandem-fg-muted)"}
+        canSubmit={mode === "comment" ? !!modeText.trim() : true}
+        testIdPrefix={mode === "comment" ? "toolbar-comment" : "toolbar-note"}
+      />
+    {:else}
+      <button
+        type="button"
+        aria-label="Bold"
+        title="Bold"
+        onmousedown={(e) => {
+          e.preventDefault();
+          editor?.chain().focus().toggleBold().run();
+        }}
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer;"
+      >
+        B
+      </button>
+      <button
+        type="button"
+        aria-label="Italic"
+        title="Italic"
+        onmousedown={(e) => {
+          e.preventDefault();
+          editor?.chain().focus().toggleItalic().run();
+        }}
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; font-style: italic; cursor: pointer;"
+      >
+        I
+      </button>
+      <button
+        type="button"
+        aria-label="Strike"
+        title="Strike"
+        onmousedown={(e) => {
+          e.preventDefault();
+          editor?.chain().focus().toggleStrike().run();
+        }}
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; text-decoration: line-through; cursor: pointer;"
+      >
+        S
+      </button>
+      <button
+        type="button"
+        aria-label="Code"
+        title="Code"
+        onmousedown={(e) => {
+          e.preventDefault();
+          editor?.chain().focus().toggleCode().run();
+        }}
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
+      >
+        &lt;/&gt;
+      </button>
+      <button
+        type="button"
+        aria-label="Link"
+        title="Link"
+        onmousedown={handleLinkMouseDown}
+        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; cursor: pointer;"
+      >
+        Link
+      </button>
+      <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+      <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+        {#each MINI_HIGHLIGHT_COLORS as color}
+          <button
+            type="button"
+            aria-label={`Highlight ${color}`}
+            title={`Highlight ${color}`}
+            onmousedown={(e) => {
+              e.preventDefault();
+              handleHighlight(color);
+              editor?.chain().focus().run();
+            }}
+            style={`width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLORS[color]}; cursor: pointer; padding: 0;`}
+          ></button>
+        {/each}
+      </div>
+      <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+      <button
+        type="button"
+        aria-label="Comment on selection"
+        title="Comment on selection"
+        onmousedown={startComment}
+        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
+      >
+        Comment
+      </button>
+      <button
+        type="button"
+        aria-label="Private note on selection"
+        title="Private note on selection"
+        onmousedown={startNote}
+        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;"
+      >
+        Note
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -434,21 +460,6 @@ function handleLinkMouseDown(e: MouseEvent) {
     disabledTitle="Select text first"
     onMouseDown={startComment}
   />
-  {#if mode === "comment"}
-    <InputGroup
-      bind:inputEl={commentInputEl}
-      value={modeText}
-      onChange={(v) => (modeText = v)}
-      onKeyDown={handleModeKeyDown}
-      onSubmit={handleModeSubmit}
-      onCancel={handleModeCancel}
-      placeholder="Add a comment..."
-      submitLabel="Add"
-      borderColor="var(--tandem-author-user)"
-      canSubmit={!!modeText.trim()}
-      testIdPrefix="toolbar-comment"
-    />
-  {/if}
 
   <ToolbarButton
     label="Note"
@@ -457,21 +468,6 @@ function handleLinkMouseDown(e: MouseEvent) {
     disabledTitle="Select text first"
     onMouseDown={startNote}
   />
-  {#if mode === "note"}
-    <InputGroup
-      bind:inputEl={noteInputEl}
-      value={modeText}
-      onChange={(v) => (modeText = v)}
-      onKeyDown={handleModeKeyDown}
-      onSubmit={handleModeSubmit}
-      onCancel={handleModeCancel}
-      placeholder="Add a note to yourself..."
-      submitLabel="Add"
-      borderColor="var(--tandem-fg-muted)"
-      canSubmit={true}
-      testIdPrefix="toolbar-note"
-    />
-  {/if}
 
   <div style="flex: 1;"></div>
   <div style="display: flex; align-items: center; gap: var(--tandem-space-3);">
