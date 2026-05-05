@@ -222,10 +222,21 @@ function captureSelectionForChat() {
 
 $effect(() => {
   function handler(e: KeyboardEvent) {
-    if (e.key !== "?") return;
-    const el = e.target as HTMLElement;
-    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
-    showHelp = untrack(() => !showHelp);
+    if (e.key === "?") {
+      const el = e.target as HTMLElement;
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+      showHelp = untrack(() => !showHelp);
+      return;
+    }
+    // Redirect Ctrl/Cmd+A to editor select-all when focus is outside the editor,
+    // so tab labels and other UI text don't get selected.
+    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      if (active?.closest?.(".ProseMirror")) return;
+      e.preventDefault();
+      editor?.commands.selectAll();
+    }
   }
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
