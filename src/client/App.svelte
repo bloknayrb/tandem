@@ -402,6 +402,9 @@ const tutorial = createTutorial(
       readOnly={yjsSync.readOnly}
       documentCount={yjsSync.tabs.length}
       saving={saveShortcut.saving}
+      heldCount={modeGate.heldCount}
+      mode={modeState.tandemMode}
+      onShowHeld={() => modeState.setTandemMode("tandem")}
     />
 
     {#if reviewCompletion.showReviewSummary && reviewCompletion.reviewSummaryData}

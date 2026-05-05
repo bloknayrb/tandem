@@ -350,6 +350,23 @@ function aboutRows() {
                 Sets the preferred starting mode for new sessions.
               </div>
             </div>
+
+            <label
+              data-testid="solo-rail-hidden-toggle"
+              style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+            >
+              <input
+                type="checkbox"
+                checked={settings.soloRailHidden}
+                onchange={(e) => onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
+                style="accent-color: var(--tandem-accent);"
+              />
+              <span>Hide side panel in Solo mode</span>
+            </label>
+            <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+              When enabled, the annotation panel hides automatically when you enter Solo mode and
+              restores when you return to Tandem.
+            </div>
           {:else if activeSection === "appearance"}
             <AppearanceSettings {open} {settings} {onUpdate} />
           {:else if activeSection === "editor"}
