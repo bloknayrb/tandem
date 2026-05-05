@@ -10,7 +10,9 @@ describe("selection toolbar position", () => {
       start: { left: 80, top: 62 },
       end: { left: 80, top: 62, right: 150 },
       toolbarHeight: 40,
+      toolbarWidth: 160,
       viewportHeight: 400,
+      viewportWidth: 800,
     });
 
     expect(position.top).toBe(48);
@@ -22,10 +24,38 @@ describe("selection toolbar position", () => {
       start: { left: 80, top: 500 },
       end: { left: 80, top: 500, right: 150 },
       toolbarHeight: 40,
+      toolbarWidth: 160,
       viewportHeight: 400,
+      viewportWidth: 800,
     });
 
     expect(position.top).toBe(352);
+  });
+
+  it("clamps the toolbar to the viewport left edge", () => {
+    const position = computeSelectionToolbarPosition({
+      start: { left: -40, top: 180 },
+      end: { left: -20, top: 180, right: 20 },
+      toolbarHeight: 40,
+      toolbarWidth: 200,
+      viewportHeight: 500,
+      viewportWidth: 800,
+    });
+
+    expect(position.left).toBe(108);
+  });
+
+  it("clamps the toolbar to the viewport right edge", () => {
+    const position = computeSelectionToolbarPosition({
+      start: { left: 290, top: 180 },
+      end: { left: 300, top: 180, right: 340 },
+      toolbarHeight: 40,
+      toolbarWidth: 200,
+      viewportHeight: 500,
+      viewportWidth: 300,
+    });
+
+    expect(position.left).toBe(192);
   });
 });
 

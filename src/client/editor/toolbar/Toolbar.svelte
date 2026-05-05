@@ -29,6 +29,7 @@ interface Props {
   onModeChange?: (mode: TandemMode) => void;
   heldCount?: number;
   selectionToolbar?: boolean;
+  suppressSelectionToolbar?: boolean;
 }
 
 let {
@@ -40,6 +41,7 @@ let {
   onModeChange,
   heldCount,
   selectionToolbar = true,
+  suppressSelectionToolbar = false,
 }: Props = $props();
 
 let hasSelection = $state(false);
@@ -52,7 +54,9 @@ let commentInputEl = $state<HTMLInputElement | null>(null);
 let noteInputEl = $state<HTMLInputElement | null>(null);
 
 let toolbarHeight = $state(0);
+let toolbarWidth = $state(0);
 let viewportHeight = $state(window.innerHeight);
+let viewportWidth = $state(window.innerWidth);
 
 const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
@@ -72,7 +76,9 @@ function updateSelectionAffordance(ed: TiptapEditor) {
       start,
       end,
       toolbarHeight,
+      toolbarWidth,
       viewportHeight,
+      viewportWidth,
     });
     if (
       selectionPosition &&
@@ -109,16 +115,17 @@ $effect(() => {
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
       viewportHeight = window.innerHeight;
+      viewportWidth = window.innerWidth;
       updateSelectionAffordance(ed);
     });
   }
 
   window.addEventListener("resize", scheduleUpdate);
-  document.addEventListener("scroll", scheduleUpdate, true);
+  document.addEventListener("scroll", dismissSelectionToolbar, true);
   return () => {
     cancelAnimationFrame(frame);
     window.removeEventListener("resize", scheduleUpdate);
-    document.removeEventListener("scroll", scheduleUpdate, true);
+    document.removeEventListener("scroll", dismissSelectionToolbar, true);
   };
 });
 
@@ -128,7 +135,9 @@ $effect(() => {
   if (!ed || !el || !selectionPosition) return;
 
   const updateToolbarMetrics = () => {
-    toolbarHeight = el.getBoundingClientRect().height;
+    const rect = el.getBoundingClientRect();
+    toolbarHeight = rect.height;
+    toolbarWidth = rect.width;
     updateSelectionAffordance(ed);
   };
 
@@ -212,6 +221,14 @@ function handleModeStart(targetMode: ToolbarMode) {
 const startComment = handleModeStart("comment");
 const startNote = handleModeStart("note");
 
+function dismissSelectionToolbar() {
+  hasSelection = false;
+  selectionPosition = null;
+  capturedRange = null;
+  mode = "idle";
+  modeText = "";
+}
+
 function handleModeCancel() {
   mode = "idle";
   modeText = "";
@@ -245,8 +262,39 @@ function handleModeKeyDown(e: KeyboardEvent) {
 
 const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 const showMiniToolbar = $derived(
-  selectionToolbar && canAnnotate && !inInputMode && selectionPosition !== null,
+  selectionToolbar &&
+    !suppressSelectionToolbar &&
+    canAnnotate &&
+    !inInputMode &&
+    selectionPosition !== null,
 );
+
+$effect(() => {
+  if (!showMiniToolbar) return;
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    dismissSelectionToolbar();
+    editor?.chain().focus().run();
+  }
+
+  window.addEventListener("keydown", handleKeyDown);
+  return () => window.removeEventListener("keydown", handleKeyDown);
+});
+
+function handleLinkMouseDown(e: MouseEvent) {
+  e.preventDefault();
+  if (!editor) return;
+
+  if (editor.isActive("link")) {
+    editor.chain().focus().unsetLink().run();
+    return;
+  }
+
+  const url = window.prompt("Enter URL:");
+  if (url) editor.chain().focus().setLink({ href: url }).run();
+}
 </script>
 
 {#if showMiniToolbar && selectionPosition}
@@ -282,6 +330,18 @@ const showMiniToolbar = $derived(
     </button>
     <button
       type="button"
+      aria-label="Strike"
+      title="Strike"
+      onmousedown={(e) => {
+        e.preventDefault();
+        editor?.chain().focus().toggleStrike().run();
+      }}
+      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; text-decoration: line-through; cursor: pointer;"
+    >
+      S
+    </button>
+    <button
+      type="button"
       aria-label="Code"
       title="Code"
       onmousedown={(e) => {
@@ -291,6 +351,15 @@ const showMiniToolbar = $derived(
       style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
     >
       &lt;/&gt;
+    </button>
+    <button
+      type="button"
+      aria-label="Link"
+      title="Link"
+      onmousedown={handleLinkMouseDown}
+      style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: 4px; font-size: 12px; cursor: pointer;"
+    >
+      Link
     </button>
     <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
     <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">

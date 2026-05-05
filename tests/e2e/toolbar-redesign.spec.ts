@@ -127,6 +127,45 @@ test("floating selection toolbar stays within a short viewport", async ({ page }
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
 });
 
+test("floating selection toolbar exposes first-pass formatting actions", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Italic" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Strike" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Code" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Link" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: /Highlight / })).toHaveCount(4);
+  await expect(toolbar.getByRole("button", { name: "Comment on selection" })).toBeVisible();
+});
+
+test("floating selection toolbar dismisses with Escape", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await page.keyboard.press("Escape");
+  await expect(toolbar).toBeHidden({ timeout: 3_000 });
+});
+
 test("Comment flow creates a comment annotation", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");

@@ -27,32 +27,25 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 - `index.html:57` through `index.html:92` define the `--tandem-*` accent and editor
   font tokens; `index.html:155` through `index.html:184` define density,
   high-contrast, and annotation-pattern root hooks.
-- `src/client/components/SettingsPopover.svelte:16` through
-  `src/client/components/SettingsPopover.svelte:34` show a centered multi-section
-  settings shell, but its sections are Profile, Appearance, Editor, Accessibility,
-  Automation, and About rather than the full issue #515 section list.
-- `src/client/components/AppearanceSettings.svelte:62` through
-  `src/client/components/AppearanceSettings.svelte:97` create radio controls for
-  theme, layout, primary tab, panel order, text size, editor font, and density.
-  The visible controls for editor width, authorship, high contrast, annotation
-  patterns, dwell time, and selectionToolbar live in `EditorSettings`,
-  `AccessibilitySettings`, and `SettingsPopover`. No visible `defaultMode` settings
-  control was found.
-- `src/client/components/SettingsPopover.svelte:354` through
-  `src/client/components/SettingsPopover.svelte:366` render About from `/api/info`,
-  but only version and MCP SDK are surfaced today.
-- `src/client/editor/toolbar/Toolbar.svelte:246` through
-  `src/client/editor/toolbar/Toolbar.svelte:249` gate the floating toolbar on
-  settings.selectionToolbar and selection state. `src/client/editor/toolbar/Toolbar.svelte:259`
-  through `src/client/editor/toolbar/Toolbar.svelte:320` implement bold, italic,
-  code, highlight swatches, Comment, and Note. Strike and link are still missing.
+- `src/client/components/SettingsPopover.svelte` shows the centered #515 section
+  taxonomy: Appearance, Editor, Accessibility, Collaboration, Claude Code/Cowork,
+  Shortcuts, and About.
+- `src/client/components/AppearanceSettings.svelte`, `EditorSettings`,
+  `AccessibilitySettings`, and `SettingsPopover` surface the persisted settings
+  controls, including `defaultMode`, selection dwell, selectionToolbar, editor width,
+  authorship, high contrast, and annotation patterns.
+- `src/client/components/SettingsPopover.svelte` renders About from `/api/info`,
+  including fields beyond version and MCP SDK when the server provides them.
+- `src/client/editor/toolbar/Toolbar.svelte` gates the floating toolbar on
+  settings.selectionToolbar, future overlay suppression, and selection state; it
+  implements bold, italic, strike, code, link, highlight swatches, Comment, and
+  Note.
 - `src/client/editor/toolbar/Toolbar.svelte:146` through
   `src/client/editor/toolbar/Toolbar.svelte:173` write comments through the existing
   annotation Y.Map path; `src/client/editor/toolbar/Toolbar.svelte:189` through
   `src/client/editor/toolbar/Toolbar.svelte:201` use the shared highlight toggle path.
-- `src/client/editor/toolbar/selection-toolbar.ts:20` through
-  `src/client/editor/toolbar/selection-toolbar.ts:36` clamp vertical toolbar placement,
-  but horizontal edge clamping is not implemented there.
+- `src/client/editor/toolbar/selection-toolbar.ts` clamps both vertical and
+  horizontal toolbar placement against viewport edges.
 - No slash-command implementation or `@tiptap/suggestion` dependency is present.
 - `src/client/editor/extensions/authorship.ts:16` through
   `src/client/editor/extensions/authorship.ts:76` already preserve relRange-first,
@@ -73,8 +66,8 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 | Issue | Current state | Acceptance status | Next action |
 | --- | --- | --- | --- |
 | #514 Redesign foundation | Closed | Complete. Root attributes/classes, accent token family, editor font token, density spacing, high contrast, annotation patterns, persisted settings, and unit tests are present. | Treat as done. Future PRs should not reopen token namespace or density/text-size decisions unless a regression is found. |
-| #515 Settings dialog/About | Open, closeout implemented on `fix/issue-515-settings-dialog-closeout` | Complete after this branch lands. The dialog has the issue-aligned section taxonomy, all persisted settings including `defaultMode` are visible, About renders dynamic `/api/info` fields beyond version/MCP SDK, View Changelog and Report a bug remain, and focused E2E coverage pins the new controls/About surface. | Merge the closeout branch, attach verification evidence, then close #515. |
-| #516 Selection mini-toolbar | Open, partial | Partial. Selection toolbar gating, positioning, bold, italic, code, highlight swatches, Comment, Note, Y.Map comment creation, and focused tests exist. Missing first-pass criteria: strike, link, horizontal edge clamping, explicit Escape/blur dismissal, and overlay suppression with slash menu. | Finish as a closeout PR. Do not add Ask Claude or Flag unless the issue is expanded. |
+| #515 Settings dialog/About | Open, closeout implemented locally | Complete after evidence is attached and the issue is closed. The dialog has the issue-aligned section taxonomy, all persisted settings including `defaultMode` are visible, About renders dynamic `/api/info` fields beyond version/MCP SDK, View Changelog and Report a bug remain, and focused E2E coverage pins the new controls/About surface. | Attach/confirm verification evidence, then close #515. |
+| #516 Selection mini-toolbar | Open, closeout implemented on `fix/issue-516-selection-toolbar-closeout` | Complete after this branch lands. Selection toolbar gating, positioning, bold, italic, strike, code, link, highlight swatches, Comment, Note, Y.Map comment creation, horizontal/vertical clamping, Escape/scroll dismissal, and future slash-menu suppression plumbing are present with focused unit/E2E coverage. Ask Claude and Flag remain intentionally out of scope. | Merge the closeout branch, attach verification evidence, then close #516. |
 | #517 Slash command menu | Open, not started | Not implemented. No slash menu, command registry, keyboard flow, pointer selection, or mini-toolbar suppression exists. | Implement after #516 overlay coordination. Prefer a Tiptap suggestion/menu pattern if adding the dependency deliberately. |
 | #518 Authorship/review decorations | Open, partial foundation only | Inline authorship decorations already use `data-tandem-author` with relRange-first/flat fallback, but paragraph dominant-author gutter and annotation-aware review dimming are not implemented. | Align paragraph gutter semantics before coding. Extend the existing decoration plugins; do not change annotation or authorship coordinate models. |
 | #519 Solo rail and held count | Open, partial foundation only | Mode gating and heldCount exist and the side panel can show a held banner, but Solo does not collapse/hide the rail by default and held count is not actionable from status/toolbar. | Reuse `modeGate.visibleAnnotations` and `heldCount`; add the Solo rail default and an actionable reveal/switch path without changing mode broadcast. |
@@ -97,7 +90,6 @@ finished as closeout PRs, not restarted from their original issue text. #517 thr
 
 ### Repo Needs To Implement
 
-- #516 closeout: strike, link, edge/dismissal hardening, and overlay coordination.
 - #517 slash command menu.
 - #518 paragraph authorship gutter and annotation-aware review dimming.
 - #519 Solo rail default and actionable held count.
