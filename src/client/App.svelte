@@ -515,7 +515,6 @@ const tutorial = createTutorial(
             ydoc={activeTab.ydoc}
             provider={activeTab.provider}
             readOnly={yjsSync.readOnly}
-            {reviewMode}
             {activeAnnotationId}
             editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
