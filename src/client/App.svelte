@@ -143,7 +143,6 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-let reviewMode = $state(false);
 let showChat = $state(settingsState.settings.primaryTab === "chat");
 
 const pendingAnnotationBadge = $derived(
@@ -203,14 +202,6 @@ const dragResize = createDragResize(
     panelLayout = updater(panelLayout);
   },
 );
-
-function toggleReviewMode() {
-  reviewMode = !reviewMode;
-}
-
-function exitReviewMode() {
-  reviewMode = false;
-}
 
 function captureSelectionForChat() {
   if (showChat) return;
@@ -325,9 +316,6 @@ const tutorial = createTutorial(
                 onModeChange={modeState.setTandemMode}
                 activeDocFormat={activeTab?.format}
                 documentId={activeTab?.id}
-                {reviewMode}
-                onToggleReviewMode={toggleReviewMode}
-                onExitReviewMode={exitReviewMode}
                 {activeAnnotationId}
                 onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
                 reduceMotion={settingsState.settings.reduceMotion}
@@ -365,9 +353,6 @@ const tutorial = createTutorial(
                 onModeChange={modeState.setTandemMode}
                 activeDocFormat={activeTab?.format}
                 documentId={activeTab?.id}
-                {reviewMode}
-                onToggleReviewMode={toggleReviewMode}
-                onExitReviewMode={exitReviewMode}
                 {activeAnnotationId}
                 onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
                 reduceMotion={settingsState.settings.reduceMotion}
@@ -585,9 +570,6 @@ const tutorial = createTutorial(
       onModeChange={modeState.setTandemMode}
       activeDocFormat={activeTab?.format}
       documentId={activeTab?.id}
-      {reviewMode}
-      onToggleReviewMode={toggleReviewMode}
-      onExitReviewMode={exitReviewMode}
       {activeAnnotationId}
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}
