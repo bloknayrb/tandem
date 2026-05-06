@@ -86,7 +86,7 @@ pub fn run() {
         // Blocks reload shortcuts (F5, Ctrl+R, Ctrl+Shift+R, Cmd+R) while preserving
         // DevTools (F12, Ctrl+Shift+I). Fixes #541.
         .plugin(tauri_plugin_prevent_default::Builder::new()
-            .with_flags(Flags::all().difference(Flags::DEV_TOOLS))
+            .with_flags(prevent_default_flags())
             .build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -735,6 +735,14 @@ fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
         Ok(_) => Ok("light".to_string()),
         Err(e) => Err(format!("theme() error: {e}")),
     }
+}
+
+/// Returns the set of keyboard shortcuts that should be blocked in the Tauri
+/// webview. All shortcuts except DevTools (F12, Ctrl+Shift+I) are blocked.
+/// Exported so the regression test in tests/prevent_default.rs can assert
+/// against the same value that with_flags() receives. Fixes #541.
+pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
+    Flags::all().difference(Flags::DEV_TOOLS)
 }
 
 // ---------------------------------------------------------------------------

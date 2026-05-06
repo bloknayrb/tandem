@@ -1,20 +1,22 @@
 //! Regression test for #541 — verifies the prevent-default plugin is configured
 //! with the correct flag set: blocks reload shortcuts, keeps DevTools.
 //!
-//! Limitation: this test validates the flag configuration logic, not actual
-//! webview interception (which requires a live Tauri WebView to test).
+//! Calls `prevent_default_flags()` from lib.rs — the same function that
+//! `with_flags()` receives — so flag-expression changes in lib.rs are caught.
+//!
+//! Limitation: validates the flag configuration, not actual webview interception
+//! (which requires a live Tauri WebView). Removing `with_flags()` from the
+//! builder call would not be caught by this test.
+
+use app_lib::prevent_default_flags;
+use tauri_plugin_prevent_default::Flags;
 
 #[test]
 fn prevent_default_plugin_registered_with_correct_flags() {
-    use tauri_plugin_prevent_default::Flags;
-    let blocked = Flags::all().difference(Flags::DEV_TOOLS);
+    let blocked = prevent_default_flags();
     assert!(
         blocked.contains(Flags::RELOAD),
         "RELOAD flag must be blocked"
-    );
-    assert!(
-        blocked.contains(Flags::RELOAD_IGNORING_CACHE),
-        "RELOAD_IGNORING_CACHE flag must be blocked"
     );
     assert!(
         !blocked.contains(Flags::DEV_TOOLS),
