@@ -1,9 +1,15 @@
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
+declare global {
+  interface Window {
+    __TANDEM_INITIAL_THEME__?: "light" | "dark";
+  }
+}
+
 class TauriThemeStore {
   current = $state<ResolvedTheme | null>(
-    isTauriRuntime() ? (((window as any).__TANDEM_INITIAL_THEME__ as ResolvedTheme) ?? null) : null,
+    isTauriRuntime() ? (window.__TANDEM_INITIAL_THEME__ ?? null) : null,
   );
 }
 
@@ -22,43 +28,55 @@ export function initTauriTheme(): void {
   _initialized = true;
 
   // Invoke get_app_theme command to sync current OS state
-  import("@tauri-apps/api/core").then(({ invoke }) => {
-    invoke<string>("get_app_theme")
-      .then((theme) => {
-        tauriTheme.current = theme === "dark" ? "dark" : "light";
-      })
-      .catch((e) => {
-        console.warn("[useTauriTheme] get_app_theme failed:", e);
-      });
-  });
+  import("@tauri-apps/api/core")
+    .then(({ invoke }) => {
+      invoke<string>("get_app_theme")
+        .then((theme) => {
+          tauriTheme.current = theme === "dark" ? "dark" : "light";
+        })
+        .catch((e) => {
+          console.warn("[useTauriTheme] get_app_theme failed:", e);
+        });
+    })
+    .catch((e) => {
+      console.warn("[useTauriTheme] Tauri API import failed:", e);
+    });
 
   // Subscribe to onThemeChanged events
-  import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-    getCurrentWindow()
-      .onThemeChanged(({ payload: theme }) => {
-        tauriTheme.current = theme === "dark" ? "dark" : "light";
-      })
-      .catch((e) => {
-        console.warn("[useTauriTheme] onThemeChanged subscribe failed:", e);
-      });
-  });
+  import("@tauri-apps/api/window")
+    .then(({ getCurrentWindow }) => {
+      getCurrentWindow()
+        .onThemeChanged(({ payload: theme }) => {
+          tauriTheme.current = theme === "dark" ? "dark" : "light";
+        })
+        .catch((e) => {
+          console.warn("[useTauriTheme] onThemeChanged subscribe failed:", e);
+        });
+    })
+    .catch((e) => {
+      console.warn("[useTauriTheme] Tauri window API import failed:", e);
+    });
 
   // 3-second polling fallback while focused — onThemeChanged reliability
   // on Windows app-mode-only flips is undocumented and unverified
   const pollInterval = setInterval(() => {
     if (!document.hasFocus()) return;
-    import("@tauri-apps/api/core").then(({ invoke }) => {
-      invoke<string>("get_app_theme")
-        .then((theme) => {
-          const resolved: ResolvedTheme = theme === "dark" ? "dark" : "light";
-          if (tauriTheme.current !== resolved) {
-            tauriTheme.current = resolved;
-          }
-        })
-        .catch(() => {
-          // Non-fatal; onThemeChanged is the primary path
-        });
-    });
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => {
+        invoke<string>("get_app_theme")
+          .then((theme) => {
+            const resolved: ResolvedTheme = theme === "dark" ? "dark" : "light";
+            if (tauriTheme.current !== resolved) {
+              tauriTheme.current = resolved;
+            }
+          })
+          .catch(() => {
+            // Non-fatal; onThemeChanged is the primary path
+          });
+      })
+      .catch(() => {
+        // Non-fatal; import failure stops polling silently
+      });
   }, 3000);
 
   // Clean up polling when window unloads
