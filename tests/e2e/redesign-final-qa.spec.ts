@@ -96,22 +96,19 @@ test.describe("viewport layouts", () => {
     expect(box!.x + box!.width).toBeLessThanOrEqual(1280 + 2);
   });
 
-  test("1920×1200 — wide layout: side panel and annotation list visible", async ({ page }) => {
+  test("1920×1200 — annotation list scroll container renders at wide viewport", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 1920, height: 1200 });
     await openSample(page);
+    await switchToAnnotationsTab(page);
 
-    // The annotation-list scroll container is always mounted (CSS display toggle).
-    // At wide viewports the panel must have real width — zero width = collapsed layout.
     const scrollContainer = page.locator("[data-testid='annotation-list-scroll-container']");
     await expect(scrollContainer).toBeAttached({ timeout: 5_000 });
 
     const box = await scrollContainer.boundingBox();
-    if (box !== null) {
-      // Panel is visible — confirm it has a real width.
-      expect(box.width).toBeGreaterThan(0);
-    }
-    // If box is null the panel is hidden (CSS display:none in the default tabbed layout
-    // when chat tab is active) — that's acceptable; the container must still be attached.
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(0);
   });
 });
 
@@ -119,28 +116,35 @@ test.describe("viewport layouts", () => {
 // Reduced motion
 // ---------------------------------------------------------------------------
 
+test.describe("reduced motion — baseline", () => {
+  test("annotation flash animation is active by default", async ({ page }) => {
+    await openSample(page);
+    const animName = await page.evaluate(() => {
+      const el = document.createElement("div");
+      el.className = "tandem-annotation-flash";
+      document.body.appendChild(el);
+      const name = getComputedStyle(el).animationName;
+      el.remove();
+      return name;
+    });
+    expect(animName).not.toBe("none");
+  });
+});
+
 test.describe("reduced motion", () => {
   test.use({ reducedMotion: "reduce" });
 
-  test("animated elements respect prefers-reduced-motion", async ({ page }) => {
+  test("annotation flash is suppressed under prefers-reduced-motion", async ({ page }) => {
     await openSample(page);
-
-    // Make a text selection to trigger the floating selection toolbar.
-    const editor = page.locator(".tiptap");
-    await editor.click();
-    await editor.locator("p").first().selectText();
-
-    // The floating toolbar uses role="toolbar" aria-label="Selection tools".
-    const selectionToolbar = page.getByRole("toolbar", { name: "Selection tools" });
-    await expect(selectionToolbar).toBeVisible({ timeout: 5_000 });
-
-    // Under prefers-reduced-motion: reduce, transitions should be suppressed.
-    // A duration of "0s" means no transition; "0.001s" is also effectively instant.
-    // If neither holds, the CSS is missing a reduced-motion rule — blocking bug.
-    const duration = await selectionToolbar.evaluate(
-      (el) => getComputedStyle(el).transitionDuration,
-    );
-    expect(["0s", "0.001s"]).toContain(duration);
+    const animName = await page.evaluate(() => {
+      const el = document.createElement("div");
+      el.className = "tandem-annotation-flash";
+      document.body.appendChild(el);
+      const name = getComputedStyle(el).animationName;
+      el.remove();
+      return name;
+    });
+    expect(animName).toBe("none");
   });
 });
 
@@ -222,7 +226,7 @@ test.describe("color scheme — dark", () => {
 test.describe("color scheme — light", () => {
   test.use({ colorScheme: "light" });
 
-  test("light mode: data-theme=light (or empty) applied when theme is system", async ({ page }) => {
+  test("light mode: data-theme=light applied when theme is system", async ({ page }) => {
     await page.addInitScript(() => {
       try {
         localStorage.setItem("tandem:settings", JSON.stringify({ theme: "system" }));
@@ -236,11 +240,9 @@ test.describe("color scheme — light", () => {
     const theme = await page.evaluate(
       () =>
         document.documentElement.dataset.theme ??
-        document.documentElement.getAttribute("data-theme") ??
-        "",
+        document.documentElement.getAttribute("data-theme"),
     );
-    // Light mode: theme attribute is either "light" or absent (empty string).
-    expect(["light", ""]).toContain(theme);
+    expect(theme).toBe("light");
   });
 });
 
