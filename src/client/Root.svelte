@@ -4,7 +4,5 @@ import ErrorBoundary from "./components/ErrorBoundary.svelte";
 </script>
 
 <ErrorBoundary>
-  {#snippet children()}
-    <App />
-  {/snippet}
+  <App />
 </ErrorBoundary>

@@ -3,7 +3,15 @@
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ERROR_BOUNDARY_RECOVER_BTN_TESTID,
+  ERROR_BOUNDARY_RELOAD_BTN_TESTID,
+  MAX_RECOVERY_ATTEMPTS,
+} from "../../src/client/components/errorBoundaryConstants";
 import ErrorBoundaryHarness from "../../src/client/svelte-harness/ErrorBoundaryHarness.svelte";
+
+const RECOVER_SELECTOR = `[data-testid='${ERROR_BOUNDARY_RECOVER_BTN_TESTID}']`;
+const RELOAD_SELECTOR = `[data-testid='${ERROR_BOUNDARY_RELOAD_BTN_TESTID}']`;
 
 describe("ErrorBoundary", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
@@ -23,18 +31,11 @@ describe("ErrorBoundary", () => {
     });
     await tick();
 
-    const alert = container.querySelector("[role='alert']");
-    expect(alert).toBeTruthy();
-    const recoverBtn = container.querySelector<HTMLButtonElement>(
-      "[data-testid='error-boundary-recover-btn']",
-    );
-    const reloadBtn = container.querySelector<HTMLButtonElement>(
-      "[data-testid='error-boundary-reload-btn']",
-    );
+    expect(container.querySelector("[role='alert']")).toBeTruthy();
+    const recoverBtn = container.querySelector<HTMLButtonElement>(RECOVER_SELECTOR);
     expect(recoverBtn).toBeTruthy();
-    expect(reloadBtn).toBeTruthy();
+    expect(container.querySelector(RELOAD_SELECTOR)).toBeTruthy();
 
-    // Flip the harness prop so the next render of the child does not throw.
     await rerender({ shouldThrow: false });
     recoverBtn!.click();
     await tick();
@@ -49,23 +50,20 @@ describe("ErrorBoundary", () => {
     });
     await tick();
 
-    // Three failed recovery attempts; child keeps throwing each reset.
-    for (let i = 0; i < 3; i++) {
-      const btn = container.querySelector<HTMLButtonElement>(
-        "[data-testid='error-boundary-recover-btn']",
-      );
-      expect(btn).toBeTruthy();
+    for (let i = 0; i < MAX_RECOVERY_ATTEMPTS; i++) {
+      const btn = container.querySelector<HTMLButtonElement>(RECOVER_SELECTOR);
+      expect(btn, `recover button missing at attempt ${i + 1}`).toBeTruthy();
       btn!.click();
       await tick();
     }
 
-    expect(container.querySelector("[data-testid='error-boundary-recover-btn']")).toBeNull();
-    expect(container.querySelector("[data-testid='error-boundary-reload-btn']")).toBeTruthy();
+    expect(container.querySelector(RECOVER_SELECTOR)).toBeNull();
+    expect(container.querySelector(RELOAD_SELECTOR)).toBeTruthy();
     expect(container.textContent).toContain("Recovery attempts exhausted");
   });
 
   it("Reload button calls window.location.reload()", async () => {
-    // happy-dom's window.location is non-configurable; replace it via
+    // happy-dom's window.location is non-configurable; replace via
     // Object.defineProperty so the reload spy is observable.
     const originalLocation = window.location;
     const reloadSpy = vi.fn();
@@ -80,9 +78,7 @@ describe("ErrorBoundary", () => {
       });
       await tick();
 
-      const reloadBtn = container.querySelector<HTMLButtonElement>(
-        "[data-testid='error-boundary-reload-btn']",
-      );
+      const reloadBtn = container.querySelector<HTMLButtonElement>(RELOAD_SELECTOR);
       expect(reloadBtn).toBeTruthy();
       reloadBtn!.click();
       await tick();

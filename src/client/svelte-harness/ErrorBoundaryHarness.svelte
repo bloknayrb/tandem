@@ -10,7 +10,5 @@ let { shouldThrow = true }: Props = $props();
 </script>
 
 <ErrorBoundary>
-  {#snippet children()}
-    <ThrowOnRender {shouldThrow} />
-  {/snippet}
+  <ThrowOnRender {shouldThrow} />
 </ErrorBoundary>
