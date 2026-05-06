@@ -196,8 +196,8 @@ function commitName() {
   }
 
   @media (forced-colors: active) {
-    :global(.status-dot),
-    :global(.claude-dot) {
+    .status-dot,
+    .claude-dot {
       outline: 1px solid ButtonText;
       outline-offset: 1px;
     }
