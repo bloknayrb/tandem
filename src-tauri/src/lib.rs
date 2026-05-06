@@ -248,6 +248,27 @@ pub fn run() {
                 }
             }
 
+            // Pre-seed the initial theme before Svelte mounts so the correct
+            // app-mode preference (AppsUseLightTheme, not taskbar mode) is
+            // available synchronously for the first paint. Value is always a
+            // trusted literal ("light" or "dark") from the OS API — not user
+            // input. Falls back gracefully if window isn't ready; the
+            // useTauriTheme bridge will invoke get_app_theme on first init.
+            // Fixes #535.
+            if let Some(main_window) = app.get_webview_window("main") {
+                let theme_str = match main_window.theme() {
+                    Ok(Some(tauri::Theme::Dark)) => "dark",
+                    _ => "light",
+                };
+                // SAFETY: theme_str is always "dark" or "light" — a trusted
+                // compile-time-controlled literal from a Rust match arm, not
+                // any external input. Injection is not possible.
+                let script = format!("window.__TANDEM_INITIAL_THEME__={:?};", theme_str);
+                if let Err(e) = main_window.eval(&script) {
+                    log::warn!("Failed to seed initial theme: {e}");
+                }
+            }
+
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -269,6 +290,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_app_theme,
             cowork_scan_workspaces,
             cowork_toggle_integration,
             cowork_rescan,
@@ -694,6 +716,19 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Returns the current OS app-mode theme ("light" or "dark") by reading
+/// WebviewWindow::theme(), which on Windows reads AppsUseLightTheme
+/// (HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize) —
+/// the app-mode setting, not taskbar mode. Fixes #535.
+#[tauri::command]
+fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
+    match window.theme() {
+        Ok(Some(tauri::Theme::Dark)) => Ok("dark".to_string()),
+        Ok(_) => Ok("light".to_string()),
+        Err(e) => Err(format!("theme() error: {e}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
