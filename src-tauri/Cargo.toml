@@ -40,6 +40,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-prevent-default = "5"
+tauri-plugin-decorum = "1"
 
 [features]
 # Test-only hooks: TANDEM_COWORK_ROOT_OVERRIDE env-var reads.

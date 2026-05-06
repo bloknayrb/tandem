@@ -47,6 +47,7 @@ import {
   type PanelLayout,
 } from "./panel-layout";
 import { pmSelectionToFlat } from "./positions";
+import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
@@ -265,6 +266,7 @@ const tutorial = createTutorial(
   </div>
 {:else}
   <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
+    <TitleBar title={activeTab?.fileName} />
     {#if yjsSync.serverRestarted}
       <div
         style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
