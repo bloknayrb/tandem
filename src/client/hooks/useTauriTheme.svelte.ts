@@ -59,6 +59,7 @@ export function initTauriTheme(): void {
 
   // 3-second polling fallback while focused — onThemeChanged reliability
   // on Windows app-mode-only flips is undocumented and unverified
+  let pollErrorLogged = false;
   const pollInterval = setInterval(() => {
     if (!document.hasFocus()) return;
     import("@tauri-apps/api/core")
@@ -70,12 +71,18 @@ export function initTauriTheme(): void {
               tauriTheme.current = resolved;
             }
           })
-          .catch(() => {
-            // Non-fatal; onThemeChanged is the primary path
+          .catch((e) => {
+            if (!pollErrorLogged) {
+              console.warn("[useTauriTheme] theme poll failed (further errors suppressed):", e);
+              pollErrorLogged = true;
+            }
           });
       })
-      .catch(() => {
-        // Non-fatal; import failure stops polling silently
+      .catch((e) => {
+        if (!pollErrorLogged) {
+          console.warn("[useTauriTheme] theme poll import failed (further errors suppressed):", e);
+          pollErrorLogged = true;
+        }
       });
   }, 3000);
 
