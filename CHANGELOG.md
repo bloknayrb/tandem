@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Theme system: Tauri shell now reads Windows app-mode preference (`AppsUseLightTheme`) for `theme: "system"` instead of taskbar color mode (closes #535)** — `get_app_theme` Rust command reads `WebviewWindow::theme()`, which maps to `HKCU\...\Personalize\AppsUseLightTheme`. Initial theme is seeded before Svelte mounts; `useTauriTheme.svelte.ts` subscribes to `onThemeChanged` and polls every 3s while focused. `matchMedia` subscription is skipped in Tauri to prevent race conditions.
 - **Dark annotation highlight colors** — `--tandem-highlight-yellow/green/blue/pink` now have dark-adapted overrides in `[data-theme="dark"]`; the light `rgba(255, 235, 59, 0.3)`-style values were washed out against dark surfaces.
 - **Forced-colors fallbacks for background-only state surfaces (closes #311)** — StatusBar status dots, toast badge, ModeToggle active button, BulkActions confirm button, AnnotationCard type-badge and Private pill now have `border`/`outline` fallbacks in `@media (forced-colors: active)`.
 
