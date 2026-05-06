@@ -546,7 +546,6 @@ function aboutRows() {
     .settings-sidebar {
       border-right: none;
       border-bottom: 1px solid var(--tandem-border);
-      overflow-y: auto;
       padding: var(--tandem-space-3);
     }
   }

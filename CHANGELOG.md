@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- fix(settings): add narrow-width responsive breakpoint for settings dialog; add E2E viewport tests (closes #515)
+- **Settings dialog responsive breakpoint (closes #515)** — stacked single-column layout at ≤640px; sidebar capped at 45% of dialog height with vertical scroll; four E2E tests cover nav reachability, Tab cycling, focus-after-resize, and content width.
 - **Redesign bundle checked into `docs/redesign-bundle/` (#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
 - **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
 
