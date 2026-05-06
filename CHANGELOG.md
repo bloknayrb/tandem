@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Semantic token foundation expanded for redesign wave 2 (#521)** — added radius, font-size, shadow, z-index, editor-font-size, and highlight-color token families in `index.html`, plus checker rules that now flag raw `border-radius: <n>px` and inline `box-shadow: ... rgba(...)` in `src/client/`.
 - **Read-only/info surfaces now use the shared info token family (#521)** — `ReviewOnlyBanner`, `ConnectionBanner`, `ToastContainer`, `StatusBar`, and related chrome now consume the shared token scales instead of hardcoded radius/text/shadow values.
 
+### Tests
+
+- **Plugin state machine unit tests for slash command menu (#517)** — added 7 Vitest tests in `tests/client/slash-command.test.ts` that exercise the ProseMirror plugin via a real Tiptap Editor in happy-dom: active state on `/` insertion, close meta, select meta, non-empty selection guard, query filtering with index clamping, ArrowDown wrap-around, and Enter-to-execute.
+
 ### Removed
 
 - **`ReviewSummary` overlay removed with review mode already gone (#521)** — the dead component and `App.svelte` mount path are deleted rather than carried forward as unreachable redesign debt.
