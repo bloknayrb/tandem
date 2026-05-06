@@ -40,6 +40,12 @@ let { toasts, onDismiss }: Props = $props();
       }
     }
   }
+
+  @media (forced-colors: active) {
+    .toast-badge {
+      border: 1px solid ButtonText;
+    }
+  }
 </style>
 
 {#if toasts.length > 0}
@@ -60,6 +66,7 @@ let { toasts, onDismiss }: Props = $props();
         <span>{toast.message}</span>
         {#if toast.count > 1}
           <span
+            class="toast-badge"
             data-testid={`toast-count-${toast.id}`}
             style="margin-left: 6px; font-size: 11px; font-weight: 600; color: {textColor}; background: {bgColor}; padding: 1px 5px; border-radius: var(--tandem-r-4);"
           >

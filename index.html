@@ -182,6 +182,10 @@
         --tandem-accent-border: oklch(0.45 0.14 var(--tandem-accent-h));
         --tandem-scrollbar-track: oklch(0.16 0.012 270);
         --tandem-scrollbar-thumb: oklch(0.38 0.014 270);
+        --tandem-highlight-yellow: rgba(255, 220, 0, 0.38);
+        --tandem-highlight-green: rgba(72, 200, 80, 0.38);
+        --tandem-highlight-blue: rgba(56, 168, 255, 0.38);
+        --tandem-highlight-pink: rgba(240, 80, 160, 0.38);
       }
 
       /* density spacing scale — cozy is the default (matches :root values) */
@@ -241,6 +245,16 @@
 
         /* Held-count badge uses warning-bg only (no border) — add one so it stays visible. */
         [data-testid="held-badge"] {
+          border: 1px solid ButtonText;
+        }
+
+        /* BulkActions confirm button: background-only in normal mode. */
+        [data-testid="bulk-confirm-btn"] {
+          border: 1px solid ButtonText;
+        }
+
+        /* AnnotationCard private pill: background-only warning fill. */
+        [data-testid="annotation-private-pill"] {
           border: 1px solid ButtonText;
         }
       }

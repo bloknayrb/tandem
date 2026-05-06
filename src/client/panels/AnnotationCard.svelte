@@ -138,6 +138,7 @@ function handleKeyDown(e: KeyboardEvent) {
       style="font-weight: 600; text-transform: capitalize; display: flex; align-items: center; gap: 6px; color: var(--tandem-fg-muted); font-size: 11px;"
     >
       <span
+        class="annotation-type-badge"
         style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-2xs); letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: var(--tandem-r-pill); background: {hasSuggestedText
           ? 'var(--tandem-suggestion-bg)'
           : annotation.type === 'note'
@@ -276,3 +277,11 @@ function handleKeyDown(e: KeyboardEvent) {
     {onReply}
   />
 </div>
+
+<style>
+  @media (forced-colors: active) {
+    .annotation-type-badge {
+      border: 1px solid ButtonText;
+    }
+  }
+</style>

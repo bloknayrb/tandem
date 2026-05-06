@@ -116,6 +116,7 @@ function commitName() {
 >
   <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
     <span
+      class="status-dot"
       style="width: 8px; height: 8px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {isReconnecting ? 'tandem-reconnect-pulse 1.2s ease-in-out infinite' : 'none'};"
     ></span>
     <span>{connLabel}</span>
@@ -179,6 +180,7 @@ function commitName() {
 
   <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
     <span
+      class="claude-dot"
       style="width: 8px; height: 8px; border-radius: 50%; background: var(--tandem-author-claude); opacity: {claudeActive ? 1 : 0.4}; display: inline-block; transition: opacity 0.3s ease; animation: {claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
     ></span>
     <span style="transition: color 0.3s ease; color: {claudeActive ? 'var(--tandem-fg)' : 'var(--tandem-fg-subtle)'};">
@@ -191,5 +193,13 @@ function commitName() {
   :global {
     @keyframes tandem-status-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
     @keyframes tandem-reconnect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  }
+
+  @media (forced-colors: active) {
+    .status-dot,
+    .claude-dot {
+      outline: 1px solid ButtonText;
+      outline-offset: 1px;
+    }
   }
 </style>
