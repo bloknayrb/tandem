@@ -1024,3 +1024,110 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
     timeout: 3_000,
   });
 });
+
+// ─── Narrow-width responsive layout tests (issue #515) ───────────────────────
+
+/** Open sample.md, navigate to the app, and open the settings dialog at the given viewport. */
+async function openSettingsDialog(
+  page: import("@playwright/test").Page,
+  width = 600,
+  height = 800,
+) {
+  await page.setViewportSize({ width, height });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await page.locator("[data-testid='settings-btn']").click();
+  const dialog = page.locator("[data-testid='settings-popover']");
+  await expect(dialog).toBeVisible({ timeout: 3_000 });
+  return dialog;
+}
+
+test("settings dialog at 600x800 viewport — section nav reachable without horizontal scroll", async ({
+  page,
+}) => {
+  const dialog = await openSettingsDialog(page);
+
+  // Nav buttons should all be within the dialog bounds (no horizontal overflow).
+  // overflow:hidden on the dialog means scrollWidth === clientWidth, but we
+  // want to confirm each button's right edge is inside the dialog, proving
+  // the single-column layout is in effect and buttons are not clipped away.
+  const navButtons = dialog.locator("nav[aria-label='Settings sections'] button");
+  await expect(navButtons.first()).toBeVisible();
+
+  // Collect all button rects in a single round-trip to avoid N serial calls.
+  const { dialogRight, buttonRects } = await page.evaluate(() => {
+    const dlg = document.querySelector("[data-testid='settings-popover']")!;
+    const btns = Array.from(dlg.querySelectorAll("nav[aria-label='Settings sections'] button"));
+    const dr = dlg.getBoundingClientRect();
+    return {
+      dialogRight: dr.x + dr.width,
+      buttonRects: btns.map((b) => {
+        const r = b.getBoundingClientRect();
+        return { width: r.width, right: r.x + r.width };
+      }),
+    };
+  });
+
+  for (const btn of buttonRects) {
+    expect(btn.width).toBeGreaterThan(0);
+    expect(btn.right).toBeLessThanOrEqual(dialogRight + 1);
+  }
+});
+
+test("settings dialog at 600x800 viewport — Tab cycles through visible controls without dead-ends", async ({
+  page,
+}) => {
+  const dialog = await openSettingsDialog(page);
+
+  // Tab through the dialog at least 5 times, collecting focused elements.
+  // Each Tab press must (a) keep focus inside the dialog and (b) move focus.
+  const seenHandles: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press("Tab");
+    const focusedId = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return el ? (el.dataset.testid ?? el.tagName + el.textContent?.slice(0, 20)) : "none";
+    });
+    seenHandles.push(focusedId);
+
+    const focusInDialog = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
+    expect(focusInDialog).toBe(true);
+  }
+
+  const distinct = new Set(seenHandles);
+  expect(distinct.size).toBeGreaterThanOrEqual(2);
+});
+
+test("settings dialog resize from 1280 to 600 with focus inside — focus survives reflow", async ({
+  page,
+}) => {
+  const dialog = await openSettingsDialog(page, 1280, 800);
+
+  // Tab twice to land focus on an interactive control inside the dialog.
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+
+  // Guard: confirm focus is inside before triggering reflow.
+  const focusInDialogBefore = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
+  expect(focusInDialogBefore).toBe(true);
+
+  await page.setViewportSize({ width: 600, height: 800 });
+
+  await page.keyboard.press("Tab");
+  const focusInDialogAfter = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
+  expect(focusInDialogAfter).toBe(true);
+});
+
+test("settings dialog at 600x800 viewport — section content readable, no clipped controls", async ({
+  page,
+}) => {
+  const dialog = await openSettingsDialog(page);
+
+  // Single-column layout at 600px means content spans the full dialog width.
+  // A width under 200px indicates the two-column grid is still active and
+  // content is crushed into an unusable strip.
+  const contentBox = await dialog.locator("[data-testid='settings-content']").boundingBox();
+  expect(contentBox).not.toBeNull();
+  expect(contentBox!.width).toBeGreaterThanOrEqual(200);
+});
