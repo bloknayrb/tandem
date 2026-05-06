@@ -29,7 +29,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
   redirectConsoleToStderr,
-  resolveAuthToken,
+  resolveAuthTokenCandidate,
   resolveTandemUrl,
 } from "../shared/cli-runtime.js";
 import { probeTandemServer } from "./preflight.js";
@@ -92,22 +92,22 @@ const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
  * - Must match /^[A-Za-z0-9_-]{32,}$/ (no whitespace, no newlines, no Bearer prefix).
  */
 export function readAndValidateAuthToken(): string | null {
-  const raw = resolveAuthToken();
+  const { token, source } = resolveAuthTokenCandidate();
   // Token not set at all, or empty/whitespace-only → loopback-only mode, no auth header, no exit.
-  if (raw === undefined) return null;
-  const trimmed = raw.trim();
+  if (token === undefined) return null;
+  const trimmed = token.trim();
   if (trimmed === "") return null;
 
   if (trimmed.startsWith("Bearer ")) {
     process.stderr.write(
-      "[tandem mcp-stdio] auth token is invalid (double-prefix: do not include 'Bearer ' prefix — supply the raw token only)\n",
+      `[tandem mcp-stdio] ${source} is invalid (double-prefix: do not include 'Bearer ' prefix — supply the raw token only)\n`,
     );
     process.exit(1);
   }
 
   if (!VALID_TOKEN_RE.test(trimmed)) {
     process.stderr.write(
-      "[tandem mcp-stdio] auth token is malformed (must be 32+ URL-safe characters: [A-Za-z0-9_-])\n",
+      `[tandem mcp-stdio] ${source} is malformed (must be 32+ URL-safe characters: [A-Za-z0-9_-])\n`,
     );
     process.exit(1);
   }

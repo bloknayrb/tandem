@@ -169,6 +169,7 @@ describe("rotateToken CLI", () => {
 
   beforeEach(() => {
     delete process.env.TANDEM_AUTH_TOKEN;
+    delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
 
     // Reset module-level stubs to defaults
     _writeFileSpy.mockReset().mockResolvedValue(undefined);
@@ -191,6 +192,7 @@ describe("rotateToken CLI", () => {
     vi.restoreAllMocks();
     clearPreviousToken();
     delete process.env.TANDEM_AUTH_TOKEN;
+    delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
   });
 
   it("writes new token to disk atomically and calls server rotate endpoint", async () => {
@@ -286,16 +288,39 @@ describe("rotateToken CLI", () => {
     stderrSpy.mockRestore();
   });
 
-  it("exits with code 1 when TANDEM_AUTH_TOKEN env is set", async () => {
+  it("exits with code 1 and names the source when TANDEM_AUTH_TOKEN env is set", async () => {
     process.env.TANDEM_AUTH_TOKEN = "some-env-token";
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number) => {
       throw new Error("process.exit called");
     });
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { rotateToken } = await import("../../src/cli/rotate-token.js");
     await expect(rotateToken()).rejects.toThrow("process.exit called");
     expect(exitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(messages).toContain("TANDEM_AUTH_TOKEN");
+    expect(messages).toContain("env-token mode");
 
+    stderrSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("exits with code 1 and names the source when CLAUDE_PLUGIN_OPTION_AUTH_TOKEN env is set", async () => {
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "some-plugin-token";
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number) => {
+      throw new Error("process.exit called");
+    });
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await expect(rotateToken()).rejects.toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(messages).toContain("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN");
+    expect(messages).toContain("plugin host");
+
+    stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
 

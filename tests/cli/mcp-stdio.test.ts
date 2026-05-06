@@ -891,6 +891,7 @@ describe("parseTimeoutMs", () => {
 describe("readAndValidateAuthToken", () => {
   const origExit = process.exit;
   const origEnv = process.env.TANDEM_AUTH_TOKEN;
+  const origPluginEnv = process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
 
   afterEach(() => {
     // Restore after each test
@@ -899,6 +900,11 @@ describe("readAndValidateAuthToken", () => {
       delete process.env.TANDEM_AUTH_TOKEN;
     } else {
       process.env.TANDEM_AUTH_TOKEN = origEnv;
+    }
+    if (origPluginEnv === undefined) {
+      delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
+    } else {
+      process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = origPluginEnv;
     }
   });
 
@@ -950,7 +956,7 @@ describe("readAndValidateAuthToken", () => {
     expect(result.exitCode).toBe(1);
   });
 
-  it("exits 1 for Bearer-prefixed token (double-prefix)", () => {
+  it("exits 1 for Bearer-prefixed token (double-prefix) and names TANDEM_AUTH_TOKEN", () => {
     process.env.TANDEM_AUTH_TOKEN = "Bearer abcdefghijklmnopqrstuvwxyz012345";
     const stderrLines: string[] = [];
     const origStderrWrite = process.stderr.write.bind(process.stderr);
@@ -964,6 +970,7 @@ describe("readAndValidateAuthToken", () => {
       expect(result.exitCode).toBe(1);
       const stderrOutput = stderrLines.join("");
       expect(stderrOutput).toMatch(/double[- ]prefix|Bearer/i);
+      expect(stderrOutput).toContain("TANDEM_AUTH_TOKEN");
     } finally {
       process.stderr.write = origStderrWrite;
     }
@@ -974,6 +981,67 @@ describe("readAndValidateAuthToken", () => {
     const result = mockExit();
     expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
     expect(result.exitCode).toBe(1);
+  });
+
+  it("names CLAUDE_PLUGIN_OPTION_AUTH_TOKEN in stderr when the plugin token is malformed", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "short";
+    const stderrLines: string[] = [];
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((...args: Parameters<typeof process.stderr.write>) => {
+      stderrLines.push(String(args[0]));
+      return origStderrWrite(...args);
+    }) as typeof process.stderr.write;
+    const result = mockExit();
+    try {
+      expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+      expect(result.exitCode).toBe(1);
+      const stderrOutput = stderrLines.join("");
+      expect(stderrOutput).toContain("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN");
+      expect(stderrOutput).toMatch(/malformed/i);
+    } finally {
+      process.stderr.write = origStderrWrite;
+    }
+  });
+
+  it("names CLAUDE_PLUGIN_OPTION_AUTH_TOKEN in stderr when the plugin token has Bearer prefix", () => {
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "Bearer abcdefghijklmnopqrstuvwxyz012345";
+    const stderrLines: string[] = [];
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((...args: Parameters<typeof process.stderr.write>) => {
+      stderrLines.push(String(args[0]));
+      return origStderrWrite(...args);
+    }) as typeof process.stderr.write;
+    const result = mockExit();
+    try {
+      expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+      expect(result.exitCode).toBe(1);
+      const stderrOutput = stderrLines.join("");
+      expect(stderrOutput).toContain("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN");
+      expect(stderrOutput).toMatch(/double[- ]prefix|Bearer/i);
+    } finally {
+      process.stderr.write = origStderrWrite;
+    }
+  });
+
+  it("names the higher-precedence source when both are set and the plugin token is malformed", () => {
+    process.env.TANDEM_AUTH_TOKEN = "abcdefghijklmnopqrstuvwxyz012345"; // valid
+    process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "short"; // malformed, but wins precedence
+    const stderrLines: string[] = [];
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((...args: Parameters<typeof process.stderr.write>) => {
+      stderrLines.push(String(args[0]));
+      return origStderrWrite(...args);
+    }) as typeof process.stderr.write;
+    const result = mockExit();
+    try {
+      expect(() => readAndValidateAuthToken()).toThrow("process.exit(1)");
+      expect(result.exitCode).toBe(1);
+      const stderrOutput = stderrLines.join("");
+      expect(stderrOutput).toContain("CLAUDE_PLUGIN_OPTION_AUTH_TOKEN");
+      expect(stderrOutput).not.toContain("TANDEM_AUTH_TOKEN is");
+    } finally {
+      process.stderr.write = origStderrWrite;
+    }
   });
 });
 
