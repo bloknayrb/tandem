@@ -22,12 +22,6 @@ import {
  * tests within it share the same browser context configuration. The viewport
  * tests use `page.setViewportSize()` inline because the desired size varies
  * per test and `test.use()` applies a single value for the whole block.
- *
- * NOTE on reduced-motion: if any test in the "reduced motion" block fails
- * because `transitionDuration` is not `"0s"`, that is a *blocking bug* —
- * the CSS does not yet have a `prefers-reduced-motion: reduce` media rule
- * suppressing the relevant transitions. The test is intentionally strict
- * to surface that gap.
  */
 
 let mcp: McpTestClient;
@@ -52,6 +46,31 @@ async function openSample(page: import("@playwright/test").Page): Promise<void> 
   await expect(page.locator(".tiptap")).toBeVisible({ timeout: 10_000 });
 }
 
+/** Force theme to "system" via localStorage before the page loads. */
+function setSystemTheme(page: import("@playwright/test").Page): Promise<void> {
+  return page.addInitScript(() => {
+    try {
+      localStorage.setItem("tandem:settings", JSON.stringify({ theme: "system" }));
+    } catch {
+      // Storage disabled — test will still run but theme assertion may fail.
+    }
+  });
+}
+
+/** Return the computed animationName of a .tandem-annotation-flash probe element. */
+async function flashAnimationName(page: import("@playwright/test").Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.createElement("div");
+    el.className = "tandem-annotation-flash";
+    document.body.appendChild(el);
+    try {
+      return getComputedStyle(el).animationName;
+    } finally {
+      el.remove();
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Viewport layouts
 // ---------------------------------------------------------------------------
@@ -61,17 +80,14 @@ test.describe("viewport layouts", () => {
     await page.setViewportSize({ width: 600, height: 800 });
     await openSample(page);
 
-    // Highlight button is always visible in the main toolbar (not selection toolbar).
     await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeVisible();
 
-    // The status bar must occupy real space — zero-height would mean it collapsed.
     const statusBarBox = await page.locator("[data-testid='user-name-input']").boundingBox();
     expect(statusBarBox).not.toBeNull();
     expect(statusBarBox!.height).toBeGreaterThan(0);
 
-    // Tab container must not overflow horizontally — the active tab must be in view.
-    // We check that the tab button itself is visible rather than measuring scrollWidth,
-    // because at narrow viewports the tab bar may scroll to keep the active tab visible.
+    // Check the tab button itself rather than scrollWidth — narrow viewports may scroll
+    // the tab bar to keep the active tab visible, so scrollWidth > clientWidth is expected.
     const activeTab = page.locator("[data-testid^='tab-']").first();
     if ((await activeTab.count()) > 0) {
       await expect(activeTab).toBeVisible();
@@ -82,7 +98,6 @@ test.describe("viewport layouts", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await openSample(page);
 
-    // Open the settings popover via the settings button in the toolbar.
     await page.locator("[data-testid='settings-btn']").click();
 
     const popover = page.locator("[data-testid='settings-popover']");
@@ -90,9 +105,7 @@ test.describe("viewport layouts", () => {
 
     const box = await popover.boundingBox();
     expect(box).not.toBeNull();
-    // The bottom edge must not be below the viewport.
     expect(box!.y + box!.height).toBeLessThanOrEqual(800 + 2); // 2px tolerance
-    // The right edge must not overflow.
     expect(box!.x + box!.width).toBeLessThanOrEqual(1280 + 2);
   });
 
@@ -119,15 +132,7 @@ test.describe("viewport layouts", () => {
 test.describe("reduced motion — baseline", () => {
   test("annotation flash animation is active by default", async ({ page }) => {
     await openSample(page);
-    const animName = await page.evaluate(() => {
-      const el = document.createElement("div");
-      el.className = "tandem-annotation-flash";
-      document.body.appendChild(el);
-      const name = getComputedStyle(el).animationName;
-      el.remove();
-      return name;
-    });
-    expect(animName).not.toBe("none");
+    expect(await flashAnimationName(page)).not.toBe("none");
   });
 });
 
@@ -139,15 +144,7 @@ test.describe("reduced motion", () => {
     // App.svelte adds body.tandem-reduce-motion via a $effect driven by matchMedia.
     // Wait for it before checking computed style — the effect may not have flushed yet.
     await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
-    const animName = await page.evaluate(() => {
-      const el = document.createElement("div");
-      el.className = "tandem-annotation-flash";
-      document.body.appendChild(el);
-      const name = getComputedStyle(el).animationName;
-      el.remove();
-      return name;
-    });
-    expect(animName).toBe("none");
+    expect(await flashAnimationName(page)).toBe("none");
   });
 });
 
@@ -161,13 +158,9 @@ test.describe("forced colors / high contrast", () => {
   test("annotation cards remain visible in forced-colors mode", async ({ page }) => {
     await openSample(page);
 
-    // Create a comment via MCP so there is at least one annotation card to assert against.
     await mcp.callTool("tandem_comment", { from: 5, to: 10, text: "test comment" });
-
-    // Switch to annotations tab (no-op in three-panel layout).
     await switchToAnnotationsTab(page);
 
-    // The first annotation card must be visible and non-zero dimensions.
     const cards = page.locator("[data-testid^='annotation-card-']");
     await expect(cards.first()).toBeVisible({ timeout: 5_000 });
 
@@ -176,7 +169,6 @@ test.describe("forced colors / high contrast", () => {
     expect(box!.width).toBeGreaterThan(0);
     expect(box!.height).toBeGreaterThan(0);
 
-    // The comment text must be present in the DOM (not invisible/collapsed).
     await expect(cards.first()).toContainText("test comment");
   });
 
@@ -206,15 +198,7 @@ test.describe("color scheme — dark", () => {
   test.use({ colorScheme: "dark" });
 
   test("dark mode: data-theme=dark applied when theme is system", async ({ page }) => {
-    // Force theme to "system" before navigation so matchMedia drives the theme hook.
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("tandem:settings", JSON.stringify({ theme: "system" }));
-      } catch {
-        // Storage disabled — test will still run but theme assertion may fail.
-      }
-    });
-
+    await setSystemTheme(page);
     await openSample(page);
 
     const theme = await page.evaluate(
@@ -230,14 +214,7 @@ test.describe("color scheme — light", () => {
   test.use({ colorScheme: "light" });
 
   test("light mode: data-theme=light applied when theme is system", async ({ page }) => {
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("tandem:settings", JSON.stringify({ theme: "system" }));
-      } catch {
-        // Storage disabled.
-      }
-    });
-
+    await setSystemTheme(page);
     await openSample(page);
 
     const theme = await page.evaluate(
@@ -257,12 +234,9 @@ test.describe("tab order traversal", () => {
   test("main UI elements are keyboard reachable via Tab", async ({ page }) => {
     await openSample(page);
 
-    // Click the document body outside the editor to reset focus to the start
-    // of the tab sequence. Clicking the body itself gives focus to body which
-    // Playwright can then Tab away from.
+    // Click outside the editor to reset focus to the top of the tab sequence.
     await page.locator("body").click({ position: { x: 10, y: 10 } });
 
-    // Collect aria-labels of focused elements across up to 30 Tab presses.
     const focusedLabels: string[] = [];
     for (let i = 0; i < 30; i++) {
       await page.keyboard.press("Tab");
@@ -279,7 +253,6 @@ test.describe("tab order traversal", () => {
       if (label) focusedLabels.push(label);
     }
 
-    // At least one stop in the toolbar region must be reachable.
     const toolbarLabels = [
       "Highlight",
       "Comment",
@@ -295,7 +268,6 @@ test.describe("tab order traversal", () => {
     );
     expect(hasToolbarStop).toBe(true);
 
-    // The display-name input in the status bar must also be reachable.
     const hasStatusBarStop = focusedLabels.some(
       (l) => l.toLowerCase().includes("display name") || l === "user-name-input",
     );
