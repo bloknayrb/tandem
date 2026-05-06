@@ -215,7 +215,10 @@ function handleHighlight(color: HighlightColor) {
 function handleModeStart(targetMode: ToolbarMode) {
   return (e: MouseEvent) => {
     e.preventDefault();
-    if (!selectionPosition) return;
+    if (!selectionPosition) {
+      console.warn("[toolbar] mode-start skipped — selection position unavailable");
+      return;
+    }
     captureSelectionRange();
     inputPosition = selectionPosition;
     mode = targetMode;
