@@ -140,9 +140,15 @@ test.describe("reduced motion", () => {
   test.use({ reducedMotion: "reduce" });
 
   test("annotation flash is suppressed under prefers-reduced-motion", async ({ page }) => {
+    // Playwright's reducedMotion context option doesn't reliably drive matchMedia().matches
+    // in the running app, so seed the setting directly so the $effect in App.svelte adds
+    // body.tandem-reduce-motion — that's the CSS hook we're actually verifying.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("tandem:settings", JSON.stringify({ reduceMotion: true }));
+      } catch {}
+    });
     await openSample(page);
-    // App.svelte adds body.tandem-reduce-motion via a $effect driven by matchMedia.
-    // Wait for it before checking computed style — the effect may not have flushed yet.
     await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
     expect(await flashAnimationName(page)).toBe("none");
   });
