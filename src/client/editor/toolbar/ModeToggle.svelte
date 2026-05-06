@@ -52,3 +52,11 @@ const { tandemMode, onModeChange }: Props = $props();
     Tandem
   </button>
 </div>
+
+<style>
+  @media (forced-colors: active) {
+    button[aria-pressed="true"] {
+      outline: 2px solid ButtonText;
+    }
+  }
+</style>
