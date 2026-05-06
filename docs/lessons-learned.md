@@ -540,3 +540,7 @@ When removing an npm package from `package.json` and running `npm install` in a 
 **Fix:** Before re-running browser smoke after a failure, identify and restart the long-lived Tandem server and dev server processes, then re-run the exact changed specs instead of assuming the old backend state is still trustworthy.
 
 **Key insight:** Browser tests that depend on MCP/Yjs state are only as reliable as the backend session they attach to. If a run starts acting nondeterministic, restart the shared processes first; do not treat stale transport state as a product regression until you have a clean backend.
+
+## 56. WAI-ARIA APG Toolbar Pattern for Transient Contextual Toolbars
+
+WAI-ARIA APG Toolbar Pattern §3 classifies arrow-key navigation as MAY (not MUST) for transient contextual toolbars. Tab/Shift+Tab through buttons plus Escape-to-close is fully APG-compliant. No roving tabindex is needed. Slash-menu key collision is not possible because the slash menu's handleKeyDown only fires when slashCommandPluginKey state is active AND focus is in the editor view — a focused toolbar button is outside the editor view.

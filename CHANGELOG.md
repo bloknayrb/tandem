@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Redesign bundle checked into `docs/redesign-bundle/` (#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
 - **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
+- **Keyboard navigation E2E tests for floating selection toolbar (closes #516)** — Tab/Shift+Tab focus traversal, Enter activation, and Escape-to-editor focus return are now covered by four Playwright tests documenting APG-compliant behavior for transient contextual toolbars.
 
 ### Changed
 
