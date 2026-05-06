@@ -263,7 +263,7 @@ pub fn run() {
             // Fixes #535.
             if let Some(main_window) = app.get_webview_window("main") {
                 let theme_str = match main_window.theme() {
-                    Ok(Some(tauri::Theme::Dark)) => "dark",
+                    Ok(tauri::Theme::Dark) => "dark",
                     _ => "light",
                 };
                 // SAFETY: theme_str is always "dark" or "light" — a trusted
@@ -731,7 +731,7 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
     match window.theme() {
-        Ok(Some(tauri::Theme::Dark)) => Ok("dark".to_string()),
+        Ok(tauri::Theme::Dark) => Ok("dark".to_string()),
         Ok(_) => Ok("light".to_string()),
         Err(e) => Err(format!("theme() error: {e}")),
     }
