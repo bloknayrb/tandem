@@ -233,6 +233,83 @@ test.describe("color scheme — light", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Toolbar re-theming (#536)
+// ---------------------------------------------------------------------------
+
+test.describe("toolbar re-theming", () => {
+  /**
+   * Verify that HighlightColorPicker borders adapt when the theme changes.
+   * The fix replaced hardcoded rgba(0,0,0,0.15) with var(--tandem-border), so
+   * the computed border-color must differ between light and dark themes.
+   *
+   * Strategy: seed the page in dark mode, read the computed border color of the
+   * color-toggle button, switch to light mode, read again — values must differ.
+   * This catches any regression back to a hardcoded value that ignores
+   * data-theme changes.
+   */
+  test("HighlightColorPicker border-color differs between dark and light themes", async ({
+    page,
+  }) => {
+    // Start in dark mode so we can detect the change to light.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("tandem:settings", JSON.stringify({ theme: "dark" }));
+      } catch {}
+    });
+    await openSample(page);
+
+    // Select text so the floating toolbar mounts.
+    const editor = page.locator(".tiptap");
+    await editor.click();
+    await editor.locator("p").first().selectText();
+    await expect(page.locator("[data-testid='toolbar-highlight-color-toggle']")).toBeVisible({
+      timeout: 5_000,
+    });
+
+    // Read the border-color in dark mode.
+    const darkBorder = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-toggle']",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+
+    // Switch to light mode by updating data-theme directly (mirrors what the
+    // app's $effect does when settings.theme changes to "light").
+    await page.evaluate(() => {
+      document.documentElement.setAttribute("data-theme", "light");
+    });
+
+    // Read the border-color in light mode.
+    const lightBorder = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-toggle']",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+
+    // The two values must be different — a hardcoded color would be identical
+    // in both modes and expose the regression. An empty string means the
+    // element was not found, which would also fail this assertion.
+    expect(darkBorder).not.toBe("");
+    expect(lightBorder).not.toBe("");
+    expect(darkBorder).not.toBe(lightBorder);
+
+    // Switch back to dark to confirm the token resolves again (dark→light→dark).
+    await page.evaluate(() => {
+      document.documentElement.setAttribute("data-theme", "dark");
+    });
+    const darkBorderAgain = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-toggle']",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+    expect(darkBorderAgain).toBe(darkBorder);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tab order traversal
 // ---------------------------------------------------------------------------
 
