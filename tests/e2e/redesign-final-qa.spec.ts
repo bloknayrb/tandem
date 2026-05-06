@@ -136,6 +136,9 @@ test.describe("reduced motion", () => {
 
   test("annotation flash is suppressed under prefers-reduced-motion", async ({ page }) => {
     await openSample(page);
+    // App.svelte adds body.tandem-reduce-motion via a $effect driven by matchMedia.
+    // Wait for it before checking computed style — the effect may not have flushed yet.
+    await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
     const animName = await page.evaluate(() => {
       const el = document.createElement("div");
       el.className = "tandem-annotation-flash";
