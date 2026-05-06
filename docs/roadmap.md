@@ -379,6 +379,43 @@ Remaining Cowork work (#316, #317, #322) is polish — making the installer turn
 
 ---
 
+## Integration Picker + Browser Deprecation (#477) — NEXT
+
+First-run wizard that lets users choose their AI integration, plus dropping the browser distribution path entirely (Tauri-only going forward). The integration choice drives startup behavior, auto-launch strategy, and default layout.
+
+**Motivation:** Claude's continuity features (CLAUDE.md, hooks, skills, memory) require spawning the real Claude Code CLI — an Agent SDK connection can't replicate them. The first-run wizard makes that explicit and allows future integration slots (Claude Desktop, local LLM). Simultaneously, the browser distribution path adds ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches, npm global install) without serving the primary Tauri user base.
+
+### Phase 0: Required Spikes (before PR 4)
+
+Both spikes must pass before implementing the auto-launch supervisor (PR 4). They can run in parallel.
+
+- **Spike A:** Does `--session-id` + `--resume` round-trip correctly in interactive mode? Reference: anthropics/claude-code#44607.
+- **Spike B:** Does the plugin monitor deliver the same events as `--dangerously-load-development-channels`? (Determines whether launcher can drop the dev-channels flag.)
+
+### PR Sequence (5 PRs)
+
+| PR | Concern | Prerequisite |
+|----|---------|--------------|
+| 1 | Schema + storage + migration framework (`IntegrationConfig` discriminated union, zod validator, atomic writes) | — |
+| 2 | **Browser deprecation** — remove `TANDEM_OPEN_BROWSER`, `open-browser.ts`, npm CLI start path, CORS localhost wildcard | — (independent) |
+| 3 | First-run wizard UI only — integration picker screen, existing-user detection via `last-seen-version` file, pre-selection from existing MCP config | PR 1 |
+| 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])` | PR 1 + Phase 0 spikes |
+| 5 | Local LLM + Claude Desktop providers | PR 4 |
+
+PR 2 is the fastest win and has zero dependencies — it can ship independently at any time.
+
+### Key Decisions (locked)
+
+- `IntegrationConfig`: discriminated union, zod validator, atomic writes, migration framework
+- Tauri permissions use `core:` prefix
+- Hook point: AFTER `Promise.all([startMcpServerHttp, startHocuspocus])` fires, not at line 255
+- `TANDEM_OPEN_BROWSER` replaced with `TANDEM_TAURI_SIDECAR`
+- Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`
+- Layout coupling server-side via extended `/api/info`; no client-side race
+- Existing users detected via `last-seen-version` file; wizard pre-selects based on existing MCP config
+
+---
+
 ## v1.0 Release Plan
 
 Core features are complete (25 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Redesign data model (#443, #445) and UX polish (#435, #437) shipped in v0.9.0. Remaining work: distribution (#316, #317, #322), dark theme, desktop UI polish, and first-run UX.
@@ -476,9 +513,10 @@ After PR #474 merges, #473 closes automatically via `closingIssuesReferences`.
 | v0.10.0 | Full Svelte conversion | #312 Phases 2-4: Vite plugin (#465), useYjsSync rune (#466), all hooks (#467), Editor+toolbar (#468), DocumentTabs (#469), panels (#470), settings/modals/misc (#471), App.svelte+React removal (#472, shipped: PR #508). Co-resident polish: #478 (rename "Upload" → "Open" in #469's FileOpenDialog port), #494 (store lock recovery: 30s retry in HTTP mode, `storeReadOnly` field on `tandem_status`/`tandem_checkInbox`). Folded into #471: #383 (bug report link). **Deferred from v0.10.0:** #506 (browser warning banner for store readonly — MCP visibility ships in #494, browser Y.Map transport + SidePanel wiring deferred), #457 (documentation in settings — feature never existed in React source; needs new implementation, not a port) |
 | v0.10.1 | Plugin URL + auth resolution (hotfix) | `resolveTandemUrl()` now checks `CLAUDE_PLUGIN_OPTION_SERVER_URL` before `TANDEM_URL`; new `resolveAuthToken()` peer checks `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` before `TANDEM_AUTH_TOKEN`; `authFetch` uses it. Monitor + channel benefit automatically. ADR-028 (Proposed). |
 | v0.10.2 | Cowork real-time push + `plugin.json` userConfig | `userConfig` (server_url + auth_token) in `.claude-plugin/plugin.json`; Cowork installer writes `pluginConfigs` to workspace `settings.json`. Gated on Sub-task D: empirical confirmation that monitors spawn in Cowork VM and `CLAUDE_PLUGIN_OPTION_*` env reaches them. Fallback if D fails: extend installer to write `tandem-channel` env block (restores channel push). ADR-028 → Accepted. |
-| v0.11.0 | Dark theme + UI polish | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification. Polish bundle: #475 (temporary scratchpad — `priority:high`; introduces in-memory document model, kept out of v0.10.0 to avoid building it twice across React/Svelte), #479 (internal links open within Tandem), #492 (re-highlighting same text toggles the highlight off — behavior change kept out of v0.10.0 to avoid mixing behavioral change into the mechanical Svelte port), #457 (docs from settings — new implementation needed), #506 (browser readonly banner — Y.Map transport + SidePanel wiring), #507 (ErrorBoundary in-place reset recovery path) |
-| v0.12.0 | Desktop UI Tier 1 + Cowork cross-platform | #269 §1.1-1.5, #316, #317, #319, #322, #378, #380 (PR f already shipped in v0.8.0). Multi-client + installer hardening: #438 (per-client identity spec, prerequisite), #452 (multiple Claude Code chats concurrent, depends on #438), #433 (Cowork installer TOCTOU — sequence **last**, after #316/#317 rewrite `find_cowork_workspaces()` for macOS/Linux), #428 install bug on M1 / 26.1 (distinct from the v1.0 notarization gate) |
-| v0.13.0 | Desktop UI Tier 2 + first-run | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
+| v0.11.0 | Dark theme + UI polish | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification. Polish bundle: #475 (temporary scratchpad — `priority:high`; introduces in-memory document model, kept out of v0.10.0 to avoid building it twice across React/Svelte), #479 (internal links open within Tandem), #492 (re-highlighting same text toggles the highlight off — behavior change kept out of v0.10.0 to avoid mixing behavioral change into the mechanical Svelte port), #457 (docs from settings — new implementation needed), #506 (browser readonly banner — Y.Map transport + SidePanel wiring), #507 (ErrorBoundary in-place reset recovery path), #513, #515, #516, #517, #519, #520, #521, #522 (Claude Design redesign handoff, app-shell/UI rollout, and final QA), #535, #536, #541 (theme fixes and disable browser reload shortcuts in the Tauri shell), #548 (toolbar inline link input — replace `window.prompt` with inline URL input matching comment/note pattern) |
+| v0.12.0 | Integration picker + browser deprecation (#477) | PR 2 (browser deprecation, independent) + PRs 1/3/4/5 after Phase 0 spikes. See [Integration Picker + Browser Deprecation](#integration-picker--browser-deprecation-477--next) section. |
+| v0.13.0 | Desktop UI Tier 1 + Cowork cross-platform | #269 §1.1-1.5, #316, #317, #319, #322, #378, #380 (PR f already shipped in v0.8.0). Desktop UI follow-ups: #538 (commonly used keyboard shortcuts), #539 (customize keyboard shortcuts in settings). Multi-client + installer hardening: #438 (per-client identity spec, prerequisite), #452 (multiple Claude Code chats concurrent, depends on #438), #433 (Cowork installer TOCTOU — sequence **last**, after #316/#317 rewrite `find_cowork_workspaces()` for macOS/Linux), #428 install bug on M1 / 26.1 (distinct from the v1.0 notarization gate) |
+| v0.14.0 | Desktop UI Tier 2 + polish | #265, #103, #269 §2.1-2.4/§3.1/§3.4 |
 | v1.0.0 | Verification + bump | Soak test, notarization, update flow, accessibility gate, version bump |
 
 **v0.10.0 scope change (2026-04-28):** Consolidated former v0.10.0 (Phase 2) and v0.11.0 (Phase 3-4) into a single release. Three independent Phase B plan reviewers identified cross-framework integration (React hosting Svelte 5 components via unproven bridge shims) as a blocker for the incremental approach. Full conversion eliminates the bridge problem entirely. The remaining ~7,900 LOC beyond the original scope is mechanical UI conversion — the hard CRDT/lifecycle work (useYjsSync, Editor) was already in scope. See `.pipeline-state/v010-full-conversion-plan.md` for the full execution plan.
@@ -576,7 +614,7 @@ These are intentional scope boundaries, not bugs:
 ## Future Extensions (v2+)
 
 - **Progressive Web App (PWA)** — Lower priority now that the desktop app ships. Would still be useful as a lighter-weight alternative for users who prefer not to install a native app.
-- **Local LLM integration (#477)** — Speculative; pair with future standalone-mode work below.
+- **Local LLM integration** — Provider slot in the integration picker (#477 PR 5); ships with v0.12.0.
 - Spreadsheet component (Handsontable/AG Grid)
 - Claude Desktop support (MCP server already exists)
 - Drawing/freeform annotation layer
