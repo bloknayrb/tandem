@@ -548,7 +548,7 @@ function aboutRows() {
       border-bottom: 1px solid var(--tandem-border);
       /* Allow horizontal scroll if nav overflows at very small widths */
       overflow-x: auto;
-      overflow-y: visible;
+      overflow-y: auto;
       padding: var(--tandem-space-3);
     }
   }
