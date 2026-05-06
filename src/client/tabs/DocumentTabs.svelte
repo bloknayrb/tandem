@@ -209,6 +209,8 @@ $effect(() => {
     bind:this={scrollEl}
     data-testid="tab-scroll-container"
     class="tab-scroll-hide"
+    role="tablist"
+    aria-label="Open documents"
     style="display: flex; align-items: stretch; gap: 2px; flex: 1; overflow-x: auto; overflow-y: hidden;"
   >
     {#each tabs as tab (tab.id)}

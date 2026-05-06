@@ -4,13 +4,15 @@ export interface FilterSelectProps {
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
   testId?: string;
+  ariaLabel?: string;
 }
 
-let { value, onChange, options, testId }: FilterSelectProps = $props();
+let { value, onChange, options, testId, ariaLabel }: FilterSelectProps = $props();
 </script>
 
 <select
   data-testid={testId}
+  aria-label={ariaLabel}
   {value}
   onchange={(e) => onChange((e.target as HTMLSelectElement).value)}
   style="padding: 2px 4px; font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer; outline: none;"

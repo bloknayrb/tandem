@@ -33,6 +33,7 @@ let {
 >
   <FilterSelect
     testId="filter-type"
+    ariaLabel="Filter by type"
     value={filterType}
     onChange={(v) => onSetFilterType(v as FilterType)}
     options={[
@@ -45,6 +46,7 @@ let {
   />
   <FilterSelect
     testId="filter-author"
+    ariaLabel="Filter by author"
     value={filterAuthor}
     onChange={(v) => onSetFilterAuthor(v as FilterAuthor)}
     options={[
@@ -56,6 +58,7 @@ let {
   />
   <FilterSelect
     testId="filter-status"
+    ariaLabel="Filter by status"
     value={filterStatus}
     onChange={(v) => onSetFilterStatus(v as FilterStatus)}
     options={[

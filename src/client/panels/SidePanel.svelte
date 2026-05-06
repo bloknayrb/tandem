@@ -353,14 +353,17 @@ function handleBulk(status: "accepted" | "dismissed") {
   />
 
   <!-- Annotation list -->
-  <div style="padding: var(--tandem-space-3); flex: 1;" role="list" aria-label="Annotations">
-    {#if filteredData.filtered.length === 0}
-      <p role="status" style="font-size: var(--tandem-text-base); color: var(--tandem-fg-subtle); margin-top: 8px;">
+  <!-- Empty state lives outside role="list" — role="list" must only contain role="listitem" children -->
+  {#if filteredData.filtered.length === 0}
+    <div style="padding: var(--tandem-space-3); flex: 1;" aria-live="polite">
+      <p style="font-size: var(--tandem-text-base); color: var(--tandem-fg-subtle); margin-top: 8px;">
         {hasFilters
           ? "No annotations match filters."
           : "No annotations yet. Open a document to get started."}
       </p>
-    {:else}
+    </div>
+  {:else}
+  <div style="padding: var(--tandem-space-3); flex: 1;" role="list" aria-label="Annotations">
       {#each filteredData.pending as ann (ann.id)}
         {@const isTarget = review.getActiveReviewAnn()?.id === ann.id}
         <AnnotationCard
@@ -394,8 +397,8 @@ function handleBulk(status: "accepted" | "dismissed") {
           </div>
         </details>
       {/if}
-    {/if}
   </div>
+  {/if}
 </div>
 
 <style>

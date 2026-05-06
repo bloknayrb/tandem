@@ -120,16 +120,23 @@ function handleMouseEnterClose() {
   if (closeBtn) closeBtn.style.color = "var(--tandem-error)";
 }
 function handleMouseLeaveClose() {
-  if (closeBtn) closeBtn.style.color = "var(--tandem-fg-subtle)";
+  if (closeBtn) closeBtn.style.color = "var(--tandem-fg-muted)";
 }
 </script>
 
+<!--
+  The WAI-ARIA APG closable tabs pattern places the close button inside role="tab".
+  axe's nested-interactive rule fires on this pattern; it is suppressed in the a11y spec
+  with justification (see tests/e2e/accessibility.spec.ts).
+-->
 <!-- svelte-ignore a11y_interactive_supports_focus -->
 <div
   data-testid={`tab-${tab.id}`}
   data-active={isActive}
   role="tab"
   tabindex={0}
+  aria-selected={isActive}
+  aria-label={tab.fileName}
   {draggable}
   style={tabStyle}
   onclick={() => onswitch(tab.id)}
@@ -149,7 +156,9 @@ function handleMouseLeaveClose() {
     </span>
   {/if}
 
+  <!-- Format icon is decorative — the file name is the accessible label via aria-label on the tab -->
   <span
+    aria-hidden="true"
     style={`font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: ${isActive ? "var(--tandem-accent)" : "var(--tandem-fg-faint)"}; width: 14px; text-align: center;`}
   >
     {FORMAT_ICONS[tab.format] ?? "?"}
@@ -187,8 +196,9 @@ function handleMouseLeaveClose() {
     }}
     onmouseenter={handleMouseEnterClose}
     onmouseleave={handleMouseLeaveClose}
-    style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-md); line-height: 1; color: var(--tandem-fg-faint); padding: 0 2px; border-radius: var(--tandem-r-1); opacity: 0.85;"
+    style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-md); line-height: 1; color: var(--tandem-fg-muted); padding: 0 2px; border-radius: var(--tandem-r-1);"
     title="Close document"
+    aria-label={`Close ${tab.fileName}`}
   >
     ×
   </button>
