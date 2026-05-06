@@ -55,10 +55,48 @@ describe("ErrorBoundary", () => {
       expect(btn, `recover button missing at attempt ${i + 1}`).toBeTruthy();
       btn!.click();
       await tick();
+      // Boundary must stay in failed state across the loop — the recover button
+      // wouldn't be queryable in the next iteration if the alert disappeared.
+      expect(
+        container.querySelector("[role='alert']"),
+        `alert missing after attempt ${i + 1}`,
+      ).toBeTruthy();
     }
 
     expect(container.querySelector(RECOVER_SELECTOR)).toBeNull();
     expect(container.querySelector(RELOAD_SELECTOR)).toBeTruthy();
+    expect(container.textContent).toContain("Recovery attempts exhausted");
+  });
+
+  it("resets the attempts counter after a successful recovery", async () => {
+    const { container, rerender } = render(ErrorBoundaryHarness, {
+      props: { shouldThrow: true },
+    });
+    await tick();
+
+    // Burn one attempt against the still-throwing child so the counter is non-zero.
+    container.querySelector<HTMLButtonElement>(RECOVER_SELECTOR)!.click();
+    await tick();
+    expect(container.querySelector("[role='alert']")).toBeTruthy();
+
+    // Stop throwing, recover successfully — SuccessHook should reset attempts to 0.
+    await rerender({ shouldThrow: false });
+    await tick();
+    container.querySelector<HTMLButtonElement>(RECOVER_SELECTOR)!.click();
+    await tick();
+    expect(container.querySelector("[role='alert']")).toBeNull();
+
+    // Re-trigger failure: a fresh budget should be available.
+    await rerender({ shouldThrow: true });
+    await tick();
+    for (let i = 0; i < MAX_RECOVERY_ATTEMPTS; i++) {
+      const btn = container.querySelector<HTMLButtonElement>(RECOVER_SELECTOR);
+      expect(btn, `recover button missing at attempt ${i + 1} after counter reset`).toBeTruthy();
+      btn!.click();
+      await tick();
+    }
+    // Cap should be reachable again — proves the budget started fresh from 0.
+    expect(container.querySelector(RECOVER_SELECTOR)).toBeNull();
     expect(container.textContent).toContain("Recovery attempts exhausted");
   });
 

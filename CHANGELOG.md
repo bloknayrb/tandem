@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **ErrorBoundary now offers in-place recovery before falling back to a full reload (#507)** — the app-root `<svelte:boundary>` re-renders children via `reset()` on a "Try to recover" click, capped at three attempts before forcing the user to reload.
+- **ErrorBoundary now offers in-place recovery before falling back to a full reload (#507)** — the app-root `<svelte:boundary>` re-renders children via `reset()` on a "Try to recover" click, capped at three attempts before forcing the user to reload. The budget resets after each successful recovery so an unrelated subsequent error gets a fresh three attempts. Failed-state surface uses `--tandem-error-bg`/`-border`/`-fg-strong` tokens (was neutral) and re-announces via `role="alert"` on each fresh failure.
 - **Dark annotation highlight colors** — `--tandem-highlight-yellow/green/blue/pink` now have dark-adapted overrides in `[data-theme="dark"]`; the light `rgba(255, 235, 59, 0.3)`-style values were washed out against dark surfaces.
 - **Forced-colors fallbacks for background-only state surfaces (closes #311)** — StatusBar status dots, toast badge, ModeToggle active button, BulkActions confirm button, AnnotationCard type-badge and Private pill now have `border`/`outline` fallbacks in `@media (forced-colors: active)`.
 
