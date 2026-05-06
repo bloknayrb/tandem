@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
 - **Keyboard navigation E2E tests for floating selection toolbar (closes #516)** — Tab/Shift+Tab focus traversal, Enter activation, and Escape-to-editor focus return are now covered by four Playwright tests documenting APG-compliant behavior for transient contextual toolbars.
 - **Redesign final QA suite (closes #522)** — Playwright tests covering viewport layouts (600/1280/1920px), `prefers-reduced-motion`, forced-colors/high-contrast mode, dark/light color scheme switching, and keyboard Tab-order reachability.
+- **Automated WCAG AA gate** — `tests/e2e/accessibility.spec.ts` uses `@axe-core/playwright` to verify zero contrast violations in both light and dark mode on every CI run; editor content area excluded (user-authored content has arbitrary contrast).
 
 ### Changed
 
