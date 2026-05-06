@@ -1,4 +1,4 @@
-import { isTauriRuntime } from "@client/cowork/cowork-helpers";
+import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { ThemePreference } from "./useTandemSettings";
 
 export type ResolvedTheme = "light" | "dark";
@@ -10,7 +10,7 @@ export function systemTheme(): ResolvedTheme {
       // Read the Tauri-resolved theme (seeded by the Rust get_app_theme command
       // via window.__TANDEM_INITIAL_THEME__ or the useTauriTheme bridge).
       // Reads AppsUseLightTheme (app mode), not taskbar mode. Fixes #535.
-      const tauri = (window as any).__TANDEM_INITIAL_THEME__;
+      const tauri = window.__TANDEM_INITIAL_THEME__;
       if (tauri === "dark" || tauri === "light") return tauri;
     }
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
