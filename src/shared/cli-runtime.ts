@@ -26,7 +26,8 @@ export function redirectConsoleToStderr(): void {
  * Blank values are treated as absent so a blank plugin option does not mask an
  * explicit TANDEM_URL or the localhost default.
  * The returned string has no trailing slash so callers can concatenate
- * `/health`, `/mcp`, etc. without double-slash.
+ * `/health`, `/mcp`, etc. without double-slash. One or more trailing slashes
+ * are stripped, so both `http://x/` and `http://x//` resolve to `http://x`.
  */
 export function resolveTandemUrl(override?: string): string {
   return resolveTandemUrlCandidate(override).replace(/\/+$/, "");
@@ -57,12 +58,12 @@ export function resolveAuthToken(override?: string): string | undefined {
   return resolveAuthTokenCandidate(override).token;
 }
 
-type AuthTokenSource =
+export type AuthTokenSource =
   | "explicit override"
   | "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN"
   | "TANDEM_AUTH_TOKEN";
 
-function resolveAuthTokenCandidate(
+export function resolveAuthTokenCandidate(
   override?: string,
 ): { token: string; source: AuthTokenSource } | { token: undefined; source: undefined } {
   const candidates: Array<[AuthTokenSource, string | undefined]> = [

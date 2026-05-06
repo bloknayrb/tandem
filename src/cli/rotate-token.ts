@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
-import { resolveTandemUrl } from "../shared/cli-runtime.js";
+import { resolveAuthTokenCandidate, resolveTandemUrl } from "../shared/cli-runtime.js";
 import { applyConfigWithToken } from "./setup.js";
 
 /** SHA-256 fingerprint — first 8 hex chars. Never logs the full token value. */
@@ -17,15 +17,21 @@ function generateToken(): string {
 export async function rotateToken(): Promise<void> {
   console.error("\n[tandem] Rotating auth token...\n");
 
-  // Refuse to rotate when token comes from env — Tauri injects it before sidecar
-  // spawn and we have no way to update the launcher. Rotating the file would create
-  // a mismatch with what Tauri passes in on the next launch.
-  if (process.env.TANDEM_AUTH_TOKEN) {
+  // Refuse to rotate when token comes from env — Tauri injects TANDEM_AUTH_TOKEN
+  // before sidecar spawn, and Claude Code's plugin host injects
+  // CLAUDE_PLUGIN_OPTION_AUTH_TOKEN from userConfig. In either case we have no
+  // way to update the launcher; rotating the file would desync with what's
+  // re-injected on the next launch.
+  const { source: envAuthSource } = resolveAuthTokenCandidate();
+  if (
+    envAuthSource === "TANDEM_AUTH_TOKEN" ||
+    envAuthSource === "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN"
+  ) {
     console.error(
-      "[tandem] Error: TANDEM_AUTH_TOKEN is set in the environment.\n" +
-        "  Token rotation is not supported in env-token mode (used by Tauri).\n" +
-        "  Unset the variable and let Tandem manage the token file, or rotate\n" +
-        "  via your Tauri app's token management instead.",
+      `[tandem] Error: ${envAuthSource} is set in the environment.\n` +
+        "  Token rotation is not supported in env-token mode (used by Tauri\n" +
+        "  and Claude Code's plugin host). Unset the variable and let Tandem\n" +
+        "  manage the token file, or rotate via the launcher's token management.",
     );
     process.exit(1);
   }

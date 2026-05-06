@@ -40,6 +40,8 @@ if (!IS_VITEST) {
   console.info = console.error;
 }
 
+// Resolved at module-load time. Tests that mutate URL env vars must
+// `vi.resetModules()` and dynamic-import this module to pick up changes.
 const TANDEM_URL = resolveTandemUrl();
 const AWARENESS_DEBOUNCE_MS = 500;
 const AWARENESS_CLEAR_MS = 3000;
