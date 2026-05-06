@@ -40,6 +40,6 @@ export const registry: Record<string, () => Promise<{ default: Component<any> }>
   ReviewOnlyBanner: () => import("../components/ReviewOnlyBanner.svelte"),
   ToastContainer: () => import("../components/ToastContainer.svelte"),
   PanelSlot: () => import("../components/PanelSlot.svelte"),
-  ErrorBoundary: () => import("../components/ErrorBoundary.svelte"),
+  ErrorBoundaryHarness: () => import("./ErrorBoundaryHarness.svelte"),
   StatusBar: () => import("../status/StatusBar.svelte"),
 };

@@ -312,7 +312,7 @@ Initial attempts to filter at the bridge and server levels had no effect because
 - Imported `.docx` content can contain `javascript:` URLs in hyperlinks. Protocol-allowlisting (`http:`, `https:`, `mailto:` only) prevents XSS when Tiptap renders the links.
 - User-supplied regex in `tandem_search` needs both a match count cap and a time-based bailout to prevent catastrophic backtracking from blocking the event loop.
 - Every `catch {}` block (bare catch) is a code smell. Distinguish expected errors (ENOENT) from corruption (SyntaxError) from system errors (EACCES). Session file corruption from a crash during save silently loses all annotations if you just `return null`.
-- A React ErrorBoundary at the app root prevents any rendering error from producing an unrecoverable white screen. Without it, corrupted Y.Map data (realistic after CRDT merges) can crash the entire UI.
+- A Svelte 5 `<svelte:boundary>` at the app root prevents any rendering error from producing an unrecoverable white screen. Without it, corrupted Y.Map data (realistic after CRDT merges) can crash the entire UI. The component-level `ErrorBoundary` wrapper additionally offers in-place recovery (capped at 3 attempts) before falling back to reload.
 
 **Process:** Run security and error-handling audits in parallel using specialized reviewers. The security reviewer catches attack surfaces; the silent-failure hunter catches error handling that hides bugs or data loss. Together they provide comprehensive coverage.
 
