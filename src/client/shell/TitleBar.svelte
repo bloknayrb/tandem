@@ -1,6 +1,6 @@
 <script lang="ts">
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { onDestroy, onMount } from "svelte";
 
 interface Props {
@@ -8,25 +8,36 @@ interface Props {
 }
 const { title = "Tandem" }: Props = $props();
 
-let win: ReturnType<typeof getCurrentWindow> | null = null;
+let win: TauriWindow | null = null;
 let isMaximized = $state(false);
+let initFailed = $state(false);
 let cleanupListeners: (() => void)[] = [];
 
 onMount(async () => {
   if (!isTauriRuntime()) return;
   try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     win = getCurrentWindow();
     isMaximized = await win.isMaximized();
 
     const unlistenResize = await win.onResized(async () => {
-      isMaximized = await win!.isMaximized();
+      try {
+        isMaximized = await win!.isMaximized();
+      } catch (e) {
+        console.warn("[TitleBar] isMaximized check failed on resize:", e);
+      }
     });
     const unlistenMove = await win.onMoved(async () => {
-      isMaximized = await win!.isMaximized();
+      try {
+        isMaximized = await win!.isMaximized();
+      } catch (e) {
+        console.warn("[TitleBar] isMaximized check failed on move:", e);
+      }
     });
     cleanupListeners = [unlistenResize, unlistenMove];
-  } catch {
-    // Non-fatal: title bar degrades gracefully if window API unavailable
+  } catch (e) {
+    console.error("[TitleBar] Window API initialization failed:", e);
+    initFailed = true;
   }
 });
 
@@ -35,19 +46,31 @@ onDestroy(() => {
 });
 
 async function minimize() {
-  await win?.minimize();
+  try {
+    await win?.minimize();
+  } catch (e) {
+    console.error("[TitleBar] minimize failed:", e);
+  }
 }
 
 async function toggleMaximize() {
-  await win?.toggleMaximize();
+  try {
+    await win?.toggleMaximize();
+  } catch (e) {
+    console.error("[TitleBar] toggleMaximize failed:", e);
+  }
 }
 
 async function close() {
-  await win?.close();
+  try {
+    await win?.close();
+  } catch (e) {
+    console.error("[TitleBar] close failed:", e);
+  }
 }
 </script>
 
-{#if isTauriRuntime()}
+{#if isTauriRuntime() && !initFailed}
 	<div class="title-bar" data-tauri-drag-region>
 		<div class="title-bar-left" data-tauri-drag-region>
 			<span class="title-bar-title" data-tauri-drag-region="false">{title}</span>

@@ -83,8 +83,8 @@ pub fn run() {
             show_main_window(app);
             // TODO: if args contains a file path, open it via the sidecar API
         }))
-        // Blocks reload shortcuts (F5, Ctrl+R, Ctrl+Shift+R, Cmd+R) while preserving
-        // DevTools (F12, Ctrl+Shift+I). Fixes #541.
+        // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
+        // DevTools, Find, Print, and right-click are preserved. Fixes #541.
         .plugin(tauri_plugin_prevent_default::Builder::new()
             .with_flags(prevent_default_flags())
             .build())
@@ -277,6 +277,13 @@ pub fn run() {
                 if let Err(e) = main_window.eval(&script) {
                     log::warn!("Failed to seed initial theme: {e}");
                 }
+            } else {
+                log::warn!("main window not found at theme-seed time — useTauriTheme bridge will handle initial theme");
+                use tauri_plugin_dialog::DialogExt;
+                app.dialog()
+                    .message("Internal error: main window not found during startup. The app may display an incorrect theme. Please restart.")
+                    .title("Theme Initialization Error")
+                    .show(|_| {});
             }
 
             Ok(())
@@ -746,7 +753,7 @@ fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
 /// Exported so the regression test in tests/prevent_default.rs can assert
 /// against the same value that with_flags() receives. Fixes #541.
 pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
-    Flags::all().difference(Flags::DEV_TOOLS)
+    Flags::RELOAD
 }
 
 // ---------------------------------------------------------------------------

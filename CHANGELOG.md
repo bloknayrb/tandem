@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Custom window chrome via tauri-plugin-decorum** — native OS title bar replaced with a themed custom title bar that re-themes with the rest of the app; preserves Windows Aero Snap, Snap Layouts, resize border, and macOS traffic-light positioning (#554)
-- **Tauri shell**: browser reload shortcuts (F5, Ctrl+R, Ctrl+Shift+R) are now blocked in the desktop app to prevent accidental navigation away from the editor; DevTools shortcuts (F12, Ctrl+Shift+I) are unaffected (#541)
+- **Tauri shell**: reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) are now blocked in the desktop app to prevent accidental navigation away from the editor; DevTools, Find, Print, and right-click context menu are preserved (#541)
 - **Semantic token foundation expanded for redesign wave 2 (#521)** — added radius, font-size, shadow, z-index, editor-font-size, and highlight-color token families in `index.html`, plus checker rules that now flag raw `border-radius: <n>px` and inline `box-shadow: ... rgba(...)` in `src/client/`.
 - **Read-only/info surfaces now use the shared info token family (#521)** — `ReviewOnlyBanner`, `ConnectionBanner`, `ToastContainer`, `StatusBar`, and related chrome now consume the shared token scales instead of hardcoded radius/text/shadow values.
 
