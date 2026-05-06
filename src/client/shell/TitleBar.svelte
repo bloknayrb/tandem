@@ -8,20 +8,21 @@ interface Props {
 }
 const { title = "Tandem" }: Props = $props();
 
+let win: ReturnType<typeof getCurrentWindow> | null = null;
 let isMaximized = $state(false);
 let cleanupListeners: (() => void)[] = [];
 
 onMount(async () => {
   if (!isTauriRuntime()) return;
   try {
-    const win = getCurrentWindow();
+    win = getCurrentWindow();
     isMaximized = await win.isMaximized();
 
     const unlistenResize = await win.onResized(async () => {
-      isMaximized = await win.isMaximized();
+      isMaximized = await win!.isMaximized();
     });
     const unlistenMove = await win.onMoved(async () => {
-      isMaximized = await win.isMaximized();
+      isMaximized = await win!.isMaximized();
     });
     cleanupListeners = [unlistenResize, unlistenMove];
   } catch {
@@ -34,18 +35,15 @@ onDestroy(() => {
 });
 
 async function minimize() {
-  if (!isTauriRuntime()) return;
-  await getCurrentWindow().minimize();
+  await win?.minimize();
 }
 
 async function toggleMaximize() {
-  if (!isTauriRuntime()) return;
-  await getCurrentWindow().toggleMaximize();
+  await win?.toggleMaximize();
 }
 
 async function close() {
-  if (!isTauriRuntime()) return;
-  await getCurrentWindow().close();
+  await win?.close();
 }
 </script>
 

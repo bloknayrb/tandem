@@ -90,7 +90,7 @@ pub fn run() {
             .build())
         // Custom window chrome — preserves Aero Snap, Snap Layouts, traffic lights.
         // decorations:false is set in tauri.conf.json; decorum restores resize handles
-        // and shadow. Fixes #554.
+        // and shadow.
         .plugin(tauri_plugin_decorum::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
