@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
@@ -89,5 +90,10 @@ export function initTauriTheme(): void {
       });
   }, 3000);
 
-  window.addEventListener("pagehide", () => clearInterval(pollInterval), { once: true });
+  // Clean up the polling interval. pagehide is more reliable than unload in
+  // Chromium-based environments (including Tauri's WebView2). HMR dispose
+  // prevents interval accumulation across Vite hot-reload cycles.
+  const cleanup = () => clearInterval(pollInterval);
+  window.addEventListener("pagehide", cleanup, { once: true });
+  import.meta.hot?.dispose(cleanup);
 }

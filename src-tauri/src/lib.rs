@@ -268,7 +268,11 @@ pub fn run() {
             if let Some(main_window) = app.get_webview_window("main") {
                 let theme_str = match main_window.theme() {
                     Ok(tauri::Theme::Dark) => "dark",
-                    _ => "light",
+                    Ok(_) => "light",
+                    Err(e) => {
+                        log::warn!("[theme] WebviewWindow::theme() failed, defaulting to light: {e}");
+                        "light"
+                    }
                 };
                 // SAFETY: theme_str is always "dark" or "light" — a trusted
                 // compile-time-controlled literal from a Rust match arm, not
