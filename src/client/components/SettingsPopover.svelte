@@ -123,6 +123,10 @@ $effect(() => {
       return;
     }
     if (e.key !== "Tab" || !popoverEl) return;
+    // Re-query focusables on every Tab press (intentional). At the 640px
+    // breakpoint the layout reflows from two-column to single-column, which
+    // can add or remove scrollable overflow elements — a stale cached list
+    // would produce dead-ends in the focus cycle.
     const focusables = popoverEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
     if (focusables.length === 0) return;
     const first = focusables[0];
@@ -249,11 +253,9 @@ function aboutRows() {
     aria-modal="true"
     aria-labelledby={HEADING_ID}
     tabindex={-1}
-    style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(900px, calc(100vw - 32px)); height: min(680px, calc(100vh - 32px)); background: var(--tandem-surface); color: var(--tandem-fg); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); z-index: 9999; display: grid; grid-template-columns: 188px minmax(0, 1fr); outline: none; overflow: hidden;"
+    class="settings-dialog"
   >
-    <aside
-      style="display: flex; flex-direction: column; gap: var(--tandem-space-4); padding: var(--tandem-space-5) var(--tandem-space-3); border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);"
-    >
+    <aside class="settings-sidebar">
       <div style="padding: 0 var(--tandem-space-2);">
         <div id={HEADING_ID} style="font-size: 18px; font-weight: 700; color: var(--tandem-fg);">
           Settings
@@ -277,7 +279,7 @@ function aboutRows() {
       </nav>
     </aside>
 
-    <section style="display: flex; flex-direction: column; min-width: 0; min-height: 0;">
+    <section class="settings-content" data-testid="settings-content">
       <header
         style="display: flex; align-items: center; justify-content: space-between; min-height: 56px; padding: 0 var(--tandem-space-5); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface);"
       >
@@ -497,3 +499,57 @@ function aboutRows() {
     </section>
   </div>
 {/if}
+
+<style>
+  .settings-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(900px, calc(100vw - 32px));
+    height: min(680px, calc(100vh - 32px));
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-4);
+    box-shadow: var(--tandem-shadow-3);
+    z-index: 9999;
+    display: grid;
+    grid-template-columns: 188px minmax(0, 1fr);
+    outline: none;
+    overflow: hidden;
+  }
+
+  .settings-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-4);
+    padding: var(--tandem-space-5) var(--tandem-space-3);
+    border-right: 1px solid var(--tandem-border);
+    background: var(--tandem-surface-muted);
+    overflow-y: auto;
+  }
+
+  .settings-content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  @media (max-width: 640px) {
+    .settings-dialog {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+    }
+
+    .settings-sidebar {
+      border-right: none;
+      border-bottom: 1px solid var(--tandem-border);
+      /* Allow horizontal scroll if nav overflows at very small widths */
+      overflow-x: auto;
+      overflow-y: visible;
+      padding: var(--tandem-space-3);
+    }
+  }
+</style>

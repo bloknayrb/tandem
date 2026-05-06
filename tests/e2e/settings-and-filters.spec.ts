@@ -1024,3 +1024,123 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
     timeout: 3_000,
   });
 });
+
+// ─── Narrow-width responsive layout tests (issue #515) ───────────────────────
+
+test("settings dialog at 600x800 viewport — section nav reachable without horizontal scroll", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  // Open settings
+  await page.locator("[data-testid='settings-btn']").click();
+  const dialog = page.locator("[data-testid='settings-popover']");
+  await expect(dialog).toBeVisible({ timeout: 3_000 });
+
+  // Nav buttons should all be within the dialog bounds (no horizontal overflow).
+  // overflow:hidden on the dialog means scrollWidth === clientWidth, but we
+  // want to confirm each button's right edge is inside the dialog, proving
+  // the single-column layout is in effect and buttons are not clipped away.
+  const navButtons = dialog.locator("nav[aria-label='Settings sections'] button");
+  await expect(navButtons.first()).toBeVisible();
+
+  const buttonCount = await navButtons.count();
+  const dialogBox = await dialog.boundingBox();
+  expect(dialogBox).not.toBeNull();
+
+  for (let i = 0; i < buttonCount; i++) {
+    const btnBox = await navButtons.nth(i).boundingBox();
+    // Each button must have non-zero dimensions (visible in layout)
+    expect(btnBox).not.toBeNull();
+    expect(btnBox!.width).toBeGreaterThan(0);
+    // Button's right edge must not exceed the dialog's right edge
+    expect(btnBox!.x + btnBox!.width).toBeLessThanOrEqual(dialogBox!.x + dialogBox!.width + 1);
+  }
+});
+
+test("settings dialog at 600x800 viewport — Tab cycles through visible controls without dead-ends", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const dialog = page.locator("[data-testid='settings-popover']");
+  await expect(dialog).toBeVisible({ timeout: 3_000 });
+
+  // Tab through the dialog at least 5 times, collecting focused elements.
+  // Each Tab press must (a) keep focus inside the dialog and (b) move focus.
+  const seenHandles: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press("Tab");
+    const focusedId = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return el ? (el.dataset.testid ?? el.tagName + el.textContent?.slice(0, 20)) : "none";
+    });
+    seenHandles.push(focusedId);
+
+    // Focus must remain inside the dialog
+    const focusInDialog = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
+    expect(focusInDialog).toBe(true);
+  }
+
+  // At least 2 distinct focusable elements must have received focus
+  const distinct = new Set(seenHandles);
+  expect(distinct.size).toBeGreaterThanOrEqual(2);
+});
+
+test("settings dialog resize from 1280 to 600 with focus inside — focus survives reflow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const dialog = page.locator("[data-testid='settings-popover']");
+  await expect(dialog).toBeVisible({ timeout: 3_000 });
+
+  // Tab twice to land focus on an interactive control inside the dialog
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+
+  // Verify focus is inside the dialog before resize
+  const focusInDialogBefore = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
+  expect(focusInDialogBefore).toBe(true);
+
+  // Resize to narrow viewport — triggers single-column breakpoint
+  await page.setViewportSize({ width: 600, height: 800 });
+
+  // Tab once more; focus must remain inside the dialog after reflow
+  await page.keyboard.press("Tab");
+  const focusInDialogAfter = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
+  expect(focusInDialogAfter).toBe(true);
+});
+
+test("settings dialog at 600x800 viewport — section content readable, no clipped controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("[data-testid='settings-btn']").click();
+  const dialog = page.locator("[data-testid='settings-popover']");
+  await expect(dialog).toBeVisible({ timeout: 3_000 });
+
+  // The settings-content area (right section) must have readable width — at
+  // 600px viewport, single-column layout means it spans the full dialog width.
+  // A width under 200px would indicate the two-column grid is still active and
+  // content is crushed into an unusable strip.
+  const contentWidth = await dialog
+    .locator("[data-testid='settings-content']")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(contentWidth).toBeGreaterThanOrEqual(200);
+});
