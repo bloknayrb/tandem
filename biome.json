@@ -22,7 +22,7 @@
       "tests/**/*.{ts,tsx}",
       "scripts/**/*.{ts,tsx,mjs}",
       "packages/**/*.{ts,tsx,mjs}",
-      "*.{ts,json}",
+      "*.{ts,json,html}",
       "!dist/**",
       "!node_modules/**",
       "!package-lock.json"
