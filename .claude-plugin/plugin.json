@@ -24,11 +24,13 @@
       }
     }
   },
-  "monitors": [
-    {
-      "name": "tandem-events",
-      "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js",
-      "description": "Tandem real-time document events (annotations, chat, selections)"
-    }
-  ]
+  "experimental": {
+    "monitors": [
+      {
+        "name": "tandem-events",
+        "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js",
+        "description": "Tandem real-time document events (annotations, chat, selections)"
+      }
+    ]
+  }
 }
