@@ -24,6 +24,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri_plugin_prevent_default::Flags;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -82,6 +83,11 @@ pub fn run() {
             show_main_window(app);
             // TODO: if args contains a file path, open it via the sidecar API
         }))
+        // Blocks reload shortcuts (F5, Ctrl+R, Ctrl+Shift+R, Cmd+R) while preserving
+        // DevTools (F12, Ctrl+Shift+I). Fixes #541.
+        .plugin(tauri_plugin_prevent_default::Builder::new()
+            .with_flags(Flags::all().difference(Flags::DEV_TOOLS))
+            .build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
