@@ -341,6 +341,9 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleBold().run();
         }}
+        onclick={(e) => {
+          if (e.detail === 0) editor?.chain().focus().toggleBold().run();
+        }}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 700; cursor: pointer;"
       >
         B
@@ -352,6 +355,9 @@ function handleLinkMouseDown(e: MouseEvent) {
         onmousedown={(e) => {
           e.preventDefault();
           editor?.chain().focus().toggleItalic().run();
+        }}
+        onclick={(e) => {
+          if (e.detail === 0) editor?.chain().focus().toggleItalic().run();
         }}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-style: italic; cursor: pointer;"
       >
@@ -365,6 +371,9 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleStrike().run();
         }}
+        onclick={(e) => {
+          if (e.detail === 0) editor?.chain().focus().toggleStrike().run();
+        }}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; text-decoration: line-through; cursor: pointer;"
       >
         S
@@ -377,6 +386,9 @@ function handleLinkMouseDown(e: MouseEvent) {
           e.preventDefault();
           editor?.chain().focus().toggleCode().run();
         }}
+        onclick={(e) => {
+          if (e.detail === 0) editor?.chain().focus().toggleCode().run();
+        }}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
       >
         &lt;/&gt;
@@ -386,6 +398,9 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Link"
         title="Link"
         onmousedown={handleLinkMouseDown}
+        onclick={(e) => {
+          if (e.detail === 0) handleLinkMouseDown(e);
+        }}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; cursor: pointer;"
       >
         Link
@@ -402,6 +417,12 @@ function handleLinkMouseDown(e: MouseEvent) {
               handleHighlight(color);
               editor?.chain().focus().run();
             }}
+            onclick={(e) => {
+              if (e.detail === 0) {
+                handleHighlight(color);
+                editor?.chain().focus().run();
+              }
+            }}
             style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
           ></button>
         {/each}
@@ -412,6 +433,9 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Comment on selection"
         title="Comment on selection"
         onmousedown={startComment}
+        onclick={(e) => {
+          if (e.detail === 0) startComment(e);
+        }}
         style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
       >
         Comment
@@ -421,6 +445,9 @@ function handleLinkMouseDown(e: MouseEvent) {
         aria-label="Private note on selection"
         title="Private note on selection"
         onmousedown={startNote}
+        onclick={(e) => {
+          if (e.detail === 0) startNote(e);
+        }}
         style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
       >
         Note
