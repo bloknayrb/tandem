@@ -20,6 +20,9 @@ gha-creds-*.json
 AGENTS.md
 .claude/worktrees/
 .claude/settings.local.json
+.claude/plans/
+.claude/scheduled_tasks.lock
+.clone/
 .superpowers/
 skills-lock.json
 test-results/
