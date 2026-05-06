@@ -15,12 +15,20 @@ class TauriThemeStore {
 
 export const tauriTheme = new TauriThemeStore();
 
-/** Resets store to null. Call from test teardown for vitest module isolation. */
+let _initialized = false;
+
+/** Resets module state. Call from test teardown for vitest module isolation. */
 export function _resetForTests(): void {
   tauriTheme.current = null;
+  _initialized = false;
+  if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = undefined;
 }
 
-let _initialized = false;
+/** Write-through setter: keeps tauriTheme.current and the window bootstrap seed in sync. */
+function setTauriTheme(next: ResolvedTheme): void {
+  tauriTheme.current = next;
+  if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = next;
+}
 
 /** Initialize the Tauri theme bridge. Called once on first import in Tauri. */
 export function initTauriTheme(): void {
@@ -32,7 +40,7 @@ export function initTauriTheme(): void {
     .then(({ invoke }) => {
       invoke<string>("get_app_theme")
         .then((theme) => {
-          tauriTheme.current = theme === "dark" ? "dark" : "light";
+          setTauriTheme(theme === "dark" ? "dark" : "light");
         })
         .catch((e) => {
           console.warn("[useTauriTheme] get_app_theme failed:", e);
@@ -47,7 +55,7 @@ export function initTauriTheme(): void {
     .then(({ getCurrentWindow }) => {
       getCurrentWindow()
         .onThemeChanged(({ payload: theme }) => {
-          tauriTheme.current = theme === "dark" ? "dark" : "light";
+          setTauriTheme(theme === "dark" ? "dark" : "light");
         })
         .catch((e) => {
           console.warn("[useTauriTheme] onThemeChanged subscribe failed:", e);
@@ -68,7 +76,7 @@ export function initTauriTheme(): void {
           .then((theme) => {
             const resolved: ResolvedTheme = theme === "dark" ? "dark" : "light";
             if (tauriTheme.current !== resolved) {
-              tauriTheme.current = resolved;
+              setTauriTheme(resolved);
             }
           })
           .catch((e) => {

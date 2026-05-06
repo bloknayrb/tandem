@@ -378,13 +378,14 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
 
       // Wait until the fake upstream has received the POST, then slam the
       // socket shut so the client's connection closes mid-session.
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 100; i++) {
         if (held) break;
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 100));
       }
+      expect(held).toBeDefined(); // fail fast if CLI startup was too slow
       // Destroy the held response — exercises forwardToUpstream.catch (not
       // http.onclose, which the current SDK only fires from its own close()).
-      held?.destroy();
+      held!.destroy();
 
       const line = await readOneLine(child);
       const parsed = JSON.parse(line) as {

@@ -258,15 +258,15 @@ const tutorial = createTutorial(
 );
 </script>
 
-{#if !yjsSync.ready}
-  <div
-    style="display: flex; align-items: center; justify-content: center; height: 100vh; color: var(--tandem-fg-subtle);"
-  >
-    Connecting...
-  </div>
-{:else}
-  <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
-    <TitleBar title={activeTab?.fileName} />
+<div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
+  <TitleBar title={activeTab?.fileName} />
+  {#if !yjsSync.ready}
+    <div
+      style="display: flex; flex: 1; align-items: center; justify-content: center; color: var(--tandem-fg-subtle);"
+    >
+      Connecting...
+    </div>
+  {:else}
     {#if yjsSync.serverRestarted}
       <div
         style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
@@ -451,8 +451,8 @@ const tutorial = createTutorial(
         coworkStatus={tutorial.coworkStatus}
       />
     {/if}
-  </div>
-{/if}
+  {/if}
+</div>
 
 {#snippet resizeHandle(side: "left" | "right", onmousedown: (e: MouseEvent) => void, testId?: string, widthPx?: number)}
   <div

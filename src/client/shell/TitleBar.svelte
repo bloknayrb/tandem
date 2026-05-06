@@ -71,9 +71,9 @@ async function close() {
 </script>
 
 {#if isTauriRuntime() && !initFailed}
-	<div class="title-bar" data-tauri-drag-region>
+	<div class="title-bar">
 		<div class="title-bar-left" data-tauri-drag-region>
-			<span class="title-bar-title" data-tauri-drag-region="false">{title}</span>
+			<span class="title-bar-title">{title}</span>
 		</div>
 		<div class="title-bar-controls">
 			<button type="button" class="title-bar-btn" aria-label="Minimize" onclick={minimize}>
@@ -154,6 +154,7 @@ async function close() {
 		flex-shrink: 0;
 	}
 
+	/* drag region — any new sibling between this and .title-bar-controls must carry data-tauri-drag-region too */
 	.title-bar-left {
 		display: flex;
 		align-items: center;

@@ -78,6 +78,7 @@ describe("TitleBar", () => {
   it("minimize button calls window.minimize()", async () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
     const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await new Promise((r) => setTimeout(r, 0));
     await tick();
 
     const minimizeBtn = container.querySelector<HTMLButtonElement>("[aria-label='Minimize']");
@@ -90,6 +91,7 @@ describe("TitleBar", () => {
   it("close button calls window.close()", async () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
     const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await new Promise((r) => setTimeout(r, 0));
     await tick();
 
     const closeBtn = container.querySelector<HTMLButtonElement>("[aria-label='Close']");
@@ -102,6 +104,7 @@ describe("TitleBar", () => {
   it("maximize button calls window.toggleMaximize()", async () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
     const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await new Promise((r) => setTimeout(r, 0));
     await tick();
 
     const maximizeBtn = container.querySelector<HTMLButtonElement>("[aria-label='Maximize']");
@@ -120,5 +123,38 @@ describe("TitleBar", () => {
     await tick();
 
     expect(container.querySelector("[aria-label='Restore']")).toBeTruthy();
+  });
+
+  it("outer .title-bar has no data-tauri-drag-region (controls must be outside drag region)", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await tick();
+
+    const titleBar = container.querySelector(".title-bar");
+    expect(titleBar?.hasAttribute("data-tauri-drag-region")).toBe(false);
+  });
+
+  it(".title-bar-left retains data-tauri-drag-region for window dragging", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await tick();
+
+    const left = container.querySelector(".title-bar-left");
+    expect(left?.hasAttribute("data-tauri-drag-region")).toBe(true);
+  });
+
+  it("control buttons have no ancestor with data-tauri-drag-region", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await tick();
+
+    const buttons = container.querySelectorAll<HTMLButtonElement>("button");
+    for (const btn of buttons) {
+      let el: Element | null = btn.parentElement;
+      while (el && el !== container) {
+        expect(el.hasAttribute("data-tauri-drag-region")).toBe(false);
+        el = el.parentElement;
+      }
+    }
   });
 });

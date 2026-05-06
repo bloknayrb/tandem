@@ -337,6 +337,8 @@ Future hardening (not blocking release):
 - **File association**: Register `.md`/`.docx`/`.txt` file extensions so double-clicking opens in Tandem
 - **Deep link / open-with**: Pass file path from second-instance launch into the running server via `POST /api/open`
 - **Linux tray fallback**: Improve UX when `libappindicator3-dev` is absent (currently logs and continues)
+- **Linux/KDE title bar button placement** (#552): verify and fix custom window-control placement under KDE (deferred from PR #557)
+- **Updater dialog theming** (#561): theme or replace the native `tauri-plugin-updater` OS dialog to match the custom `tauri-plugin-decorum` shell (deferred from PR #557)
 
 ---
 
