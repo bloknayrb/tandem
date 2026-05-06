@@ -239,11 +239,14 @@ test.describe("color scheme — light", () => {
 test.describe("toolbar re-theming", () => {
   /**
    * Verify that HighlightColorPicker borders adapt when the theme changes.
-   * The fix replaced hardcoded rgba(0,0,0,0.15) with var(--tandem-border), so
-   * the computed border-color must differ between light and dark themes.
+   * The fix replaced hardcoded rgba(0,0,0,0.15) with var(--tandem-border) on
+   * the color-preview swatch span inside the toggle button and on the grid
+   * swatch buttons in the popover. We target those specific elements, not the
+   * outer toggle button whose border was already token-based.
    *
    * Strategy: seed the page in dark mode, read the computed border color of the
-   * color-toggle button, switch to light mode, read again — values must differ.
+   * inner color-preview span, switch to light mode, read again — values must
+   * differ. Also open the color picker and verify a grid swatch border changes.
    * This catches any regression back to a hardcoded value that ignores
    * data-theme changes.
    */
@@ -266,10 +269,11 @@ test.describe("toolbar re-theming", () => {
       timeout: 5_000,
     });
 
-    // Read the border-color in dark mode.
+    // Read the border-color of the inner color-preview span (the element whose
+    // border was fixed — it lives inside the toggle button).
     const darkBorder = await page.evaluate(() => {
       const el = document.querySelector(
-        "[data-testid='toolbar-highlight-color-toggle']",
+        "[data-testid='toolbar-highlight-color-toggle'] span",
       ) as HTMLElement | null;
       return el ? getComputedStyle(el).borderColor : "";
     });
@@ -280,10 +284,10 @@ test.describe("toolbar re-theming", () => {
       document.documentElement.setAttribute("data-theme", "light");
     });
 
-    // Read the border-color in light mode.
+    // Read the border-color of the inner span in light mode.
     const lightBorder = await page.evaluate(() => {
       const el = document.querySelector(
-        "[data-testid='toolbar-highlight-color-toggle']",
+        "[data-testid='toolbar-highlight-color-toggle'] span",
       ) as HTMLElement | null;
       return el ? getComputedStyle(el).borderColor : "";
     });
@@ -301,11 +305,40 @@ test.describe("toolbar re-theming", () => {
     });
     const darkBorderAgain = await page.evaluate(() => {
       const el = document.querySelector(
-        "[data-testid='toolbar-highlight-color-toggle']",
+        "[data-testid='toolbar-highlight-color-toggle'] span",
       ) as HTMLElement | null;
       return el ? getComputedStyle(el).borderColor : "";
     });
     expect(darkBorderAgain).toBe(darkBorder);
+
+    // Also verify a grid swatch border changes between themes. Open the picker
+    // so the swatch buttons are in the DOM.
+    await page.locator("[data-testid='toolbar-highlight-color-toggle']").click();
+    await expect(page.locator("[data-testid='toolbar-highlight-color-yellow']")).toBeVisible({
+      timeout: 3_000,
+    });
+
+    const swatchDarkBorder = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-yellow']",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+
+    await page.evaluate(() => {
+      document.documentElement.setAttribute("data-theme", "light");
+    });
+
+    const swatchLightBorder = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-yellow']",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+
+    expect(swatchDarkBorder).not.toBe("");
+    expect(swatchLightBorder).not.toBe("");
+    expect(swatchDarkBorder).not.toBe(swatchLightBorder);
   });
 });
 
