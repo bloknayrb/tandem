@@ -447,3 +447,81 @@ test("highlights on different ranges produce two separate annotations", async ({
   });
   expect(await getAnnotationCount()).toBe(2);
 });
+
+// These four tests verify keyboard behaviour for the floating selection mini-toolbar
+// (role="toolbar" aria-label="Selection tools"). Focus is placed on the first button
+// directly — this tests within-toolbar keyboard navigation, not the tab-to-toolbar path
+// (which depends on DOM order and varies by layout). APG Toolbar Pattern §3 classifies
+// roving-tabindex as MAY for transient toolbars; Tab/Shift+Tab + Escape-to-close is
+// fully compliant.
+
+/** Open the file, select the first paragraph, and wait for the mini-toolbar Bold button. */
+async function openAndWaitForToolbar(page: import("@playwright/test").Page) {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible({ timeout: 3_000 });
+  return { editor, toolbar };
+}
+
+/** Return the aria-label of the currently focused element. */
+async function getFocusedLabel(page: import("@playwright/test").Page): Promise<string> {
+  return page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? "");
+}
+
+test("Tab from selection moves focus through mini-toolbar buttons in DOM order", async ({
+  page,
+}) => {
+  const { toolbar } = await openAndWaitForToolbar(page);
+
+  await toolbar.getByRole("button", { name: "Bold" }).focus();
+  expect(await getFocusedLabel(page)).toBe("Bold");
+
+  await page.keyboard.press("Tab");
+  const secondFocused = await getFocusedLabel(page);
+  expect(secondFocused).toBeTruthy();
+  expect(secondFocused).not.toBe("Bold");
+
+  const inToolbar = await page.evaluate(
+    () =>
+      document.activeElement?.closest('[role="toolbar"][aria-label="Selection tools"]') !== null,
+  );
+  expect(inToolbar).toBe(true);
+});
+
+test("Shift+Tab cycles backwards through mini-toolbar buttons", async ({ page }) => {
+  const { toolbar } = await openAndWaitForToolbar(page);
+
+  // Focus Bold, Tab to Italic, Shift+Tab back to Bold.
+  await toolbar.getByRole("button", { name: "Bold" }).focus();
+  await page.keyboard.press("Tab");
+  expect(await getFocusedLabel(page)).not.toBe("Bold");
+
+  await page.keyboard.press("Shift+Tab");
+  expect(await getFocusedLabel(page)).toBe("Bold");
+});
+
+test("Enter activates the focused mini-toolbar Bold button", async ({ page }) => {
+  const { editor, toolbar } = await openAndWaitForToolbar(page);
+
+  // Enter on a focused button fires onclick with detail===0, which toggleBold.
+  await toolbar.getByRole("button", { name: "Bold" }).focus();
+  await page.keyboard.press("Enter");
+
+  await expect(editor.locator("strong")).toContainText("first paragraph", { timeout: 3_000 });
+});
+
+test("Escape closes the mini-toolbar and returns focus to the editor", async ({ page }) => {
+  const { editor, toolbar } = await openAndWaitForToolbar(page);
+
+  await toolbar.getByRole("button", { name: "Bold" }).focus();
+  await page.keyboard.press("Escape");
+
+  await expect(toolbar).toBeHidden({ timeout: 3_000 });
+  await expect(editor).toBeFocused({ timeout: 2_000 });
+});
