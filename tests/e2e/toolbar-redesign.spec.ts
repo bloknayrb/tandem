@@ -455,37 +455,38 @@ test("highlights on different ranges produce two separate annotations", async ({
 // roving-tabindex as MAY for transient toolbars; Tab/Shift+Tab + Escape-to-close is
 // fully compliant.
 
-test("Tab from selection moves focus through mini-toolbar buttons in DOM order", async ({
-  page,
-}) => {
+/** Open the file, select the first paragraph, and wait for the mini-toolbar Bold button. */
+async function openAndWaitForToolbar(page: import("@playwright/test").Page) {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   const editor = page.locator(".tiptap");
-  await expect(editor.locator("p").first()).toContainText("first paragraph", {
-    timeout: 10_000,
-  });
+  await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
   await editor.click();
   await editor.locator("p").first().selectText();
-
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
   await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible({ timeout: 3_000 });
+  return { editor, toolbar };
+}
 
-  // Place focus on the first button directly; Tab should advance to the next.
+/** Return the aria-label of the currently focused element. */
+async function getFocusedLabel(page: import("@playwright/test").Page): Promise<string> {
+  return page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? "");
+}
+
+test("Tab from selection moves focus through mini-toolbar buttons in DOM order", async ({
+  page,
+}) => {
+  const { toolbar } = await openAndWaitForToolbar(page);
+
   await toolbar.getByRole("button", { name: "Bold" }).focus();
-  const firstFocused = await page.evaluate(
-    () => document.activeElement?.getAttribute("aria-label") ?? "",
-  );
-  expect(firstFocused).toBe("Bold");
+  expect(await getFocusedLabel(page)).toBe("Bold");
 
   await page.keyboard.press("Tab");
-  const secondFocused = await page.evaluate(
-    () => document.activeElement?.getAttribute("aria-label") ?? "",
-  );
+  const secondFocused = await getFocusedLabel(page);
   expect(secondFocused).toBeTruthy();
   expect(secondFocused).not.toBe("Bold");
 
-  // Focus must still be inside the toolbar after Tab.
   const inToolbar = await page.evaluate(
     () =>
       document.activeElement?.closest('[role="toolbar"][aria-label="Selection tools"]') !== null,
@@ -494,71 +495,30 @@ test("Tab from selection moves focus through mini-toolbar buttons in DOM order",
 });
 
 test("Shift+Tab cycles backwards through mini-toolbar buttons", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  const editor = page.locator(".tiptap");
-  await expect(editor.locator("p").first()).toContainText("first paragraph", {
-    timeout: 10_000,
-  });
-  await editor.click();
-  await editor.locator("p").first().selectText();
-
-  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
-  await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible({ timeout: 3_000 });
+  const { toolbar } = await openAndWaitForToolbar(page);
 
   // Focus Bold, Tab to Italic, Shift+Tab back to Bold.
   await toolbar.getByRole("button", { name: "Bold" }).focus();
   await page.keyboard.press("Tab");
-  const afterTab = await page.evaluate(
-    () => document.activeElement?.getAttribute("aria-label") ?? "",
-  );
-  expect(afterTab).not.toBe("Bold");
+  expect(await getFocusedLabel(page)).not.toBe("Bold");
 
   await page.keyboard.press("Shift+Tab");
-  const afterShiftTab = await page.evaluate(
-    () => document.activeElement?.getAttribute("aria-label") ?? "",
-  );
-  expect(afterShiftTab).toBe("Bold");
+  expect(await getFocusedLabel(page)).toBe("Bold");
 });
 
 test("Enter activates the focused mini-toolbar Bold button", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  const editor = page.locator(".tiptap");
-  await expect(editor.locator("p").first()).toContainText("first paragraph", {
-    timeout: 10_000,
-  });
-  await editor.click();
-  await editor.locator("p").first().selectText();
+  const { editor, toolbar } = await openAndWaitForToolbar(page);
 
-  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
-  await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible({ timeout: 3_000 });
-
-  // Focus Bold and activate with Enter (keyboard click, detail===0).
+  // Enter on a focused button fires onclick with detail===0, which toggleBold.
   await toolbar.getByRole("button", { name: "Bold" }).focus();
   await page.keyboard.press("Enter");
 
-  // The onclick handler (detail===0 guard) fires toggleBold via editor.chain().focus().
   await expect(editor.locator("strong")).toContainText("first paragraph", { timeout: 3_000 });
 });
 
 test("Escape closes the mini-toolbar and returns focus to the editor", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  const editor = page.locator(".tiptap");
-  await expect(editor.locator("p").first()).toContainText("first paragraph", {
-    timeout: 10_000,
-  });
-  await editor.click();
-  await editor.locator("p").first().selectText();
+  const { editor, toolbar } = await openAndWaitForToolbar(page);
 
-  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
-  await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible({ timeout: 3_000 });
-
-  // Focus a toolbar button, then Escape — toolbar must close and editor regain focus.
   await toolbar.getByRole("button", { name: "Bold" }).focus();
   await page.keyboard.press("Escape");
 
