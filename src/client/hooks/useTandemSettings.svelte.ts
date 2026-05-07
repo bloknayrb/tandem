@@ -10,6 +10,7 @@ export type {
   LeftSlotKind,
   PanelOrder,
   PrimaryTab,
+  SidecarRetryStrategy,
   TandemSettings,
   TextSize,
   ThemePreference,

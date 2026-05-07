@@ -13,6 +13,7 @@ import { API_BASE } from "../utils/fileUpload";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
+import NetworkSettings from "./NetworkSettings.svelte";
 
 const HEADING_ID = "tandem-settings-heading";
 const FOCUSABLE_SELECTOR =
@@ -20,6 +21,7 @@ const FOCUSABLE_SELECTOR =
 type SettingsSection =
   | "appearance"
   | "editor"
+  | "network"
   | "accessibility"
   | "collaboration"
   | "claude-code"
@@ -29,6 +31,7 @@ type SettingsSection =
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
+  { id: "network", label: "Network" },
   { id: "accessibility", label: "Accessibility" },
   { id: "collaboration", label: "Collaboration" },
   { id: "claude-code", label: "Claude Code/Cowork" },
@@ -72,9 +75,20 @@ interface Props {
   onUpdate: (partial: Partial<TandemSettings>) => void;
   returnFocusEl?: HTMLElement | null;
   anchorEl?: HTMLElement | null;
+  connected?: boolean;
+  reconnectAttempts?: number;
 }
 
-let { open, onClose, settings, onUpdate, returnFocusEl, anchorEl }: Props = $props();
+let {
+  open,
+  onClose,
+  settings,
+  onUpdate,
+  returnFocusEl,
+  anchorEl,
+  connected = false,
+  reconnectAttempts = 0,
+}: Props = $props();
 
 let popoverEl: HTMLDivElement | undefined = $state();
 let inputEl: HTMLInputElement | undefined = $state();
@@ -381,6 +395,14 @@ function aboutRows() {
             <AppearanceSettings {open} {settings} {onUpdate} />
           {:else if activeSection === "editor"}
             <EditorSettings {settings} {onUpdate} />
+          {:else if activeSection === "network"}
+            <NetworkSettings
+              {open}
+              {settings}
+              {onUpdate}
+              {connected}
+              {reconnectAttempts}
+            />
           {:else if activeSection === "accessibility"}
             <AccessibilitySettings {settings} {onUpdate} />
           {:else if activeSection === "claude-code"}

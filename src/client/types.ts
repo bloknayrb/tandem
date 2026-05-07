@@ -78,7 +78,8 @@ export interface AppInfoData {
   version: string;
   toolCount: number | null;
   mcpSdkVersion: string;
-  transport: "http";
+  transport: "http" | "stdio";
+  bindHost?: string;
   /** Loopback-only: absolute path to session storage directory. */
   storagePath?: string;
   /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */

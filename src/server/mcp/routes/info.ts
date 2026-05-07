@@ -19,6 +19,10 @@ export interface InfoHandlerDeps {
    * Undefined if the file does not exist (e.g. stripped production builds).
    */
   changelogPath?: string;
+  /** Active MCP transport mode. */
+  transport?: "http" | "stdio";
+  /** Bind host for HTTP transport (e.g. "127.0.0.1"). Undefined for stdio. */
+  bindHost?: string;
 }
 
 /**
@@ -53,8 +57,12 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
       version: deps.version,
       toolCount: deps.toolCount,
       mcpSdkVersion: deps.mcpSdkVersion,
-      transport: "http",
+      transport: deps.transport ?? "http",
     };
+
+    if (deps.bindHost !== undefined) {
+      body.bindHost = deps.bindHost;
+    }
 
     // changelogPath is not sensitive — include whenever the file exists on disk.
     if (deps.changelogPath !== undefined) {

@@ -321,6 +321,7 @@ pub fn run() {
             cowork_uninstall_from_workspace,
             cowork_set_lan_ip_override,
             cowork_retry_admin_elevation,
+            restart_sidecar,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
@@ -329,6 +330,12 @@ pub fn run() {
                 kill_sidecar(app);
             }
         });
+}
+
+/// Kill the sidecar and let the supervisor loop restart it automatically.
+#[tauri::command]
+fn restart_sidecar(app: tauri::AppHandle) {
+    kill_sidecar(&app);
 }
 
 /// Kill the sidecar process if one is running.

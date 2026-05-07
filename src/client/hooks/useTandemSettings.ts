@@ -14,6 +14,7 @@ export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
 export type ThemePreference = "light" | "dark" | "system";
+export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 
 export interface TandemSettings {
   layout: LayoutMode;
@@ -35,6 +36,9 @@ export interface TandemSettings {
   soloRailHidden: boolean;
   panelHidden: boolean;
   leftSlot: { kind: LeftSlotKind };
+  degradedBannerDelayMs: number;
+  sidecarRetryStrategy: SidecarRetryStrategy;
+  holdAnnotationsWhileOffline: boolean;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -70,6 +74,9 @@ const DEFAULTS: TandemSettings = {
   soloRailHidden: true,
   panelHidden: false,
   leftSlot: { kind: "outline" },
+  degradedBannerDelayMs: 30000,
+  sidecarRetryStrategy: "exponential",
+  holdAnnotationsWhileOffline: true,
 };
 
 /**
@@ -151,6 +158,22 @@ export function loadSettings(): TandemSettings {
         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
         panelHidden: parsed.panelHidden === true,
+        degradedBannerDelayMs:
+          typeof parsed.degradedBannerDelayMs === "number" &&
+          parsed.degradedBannerDelayMs >= 5000 &&
+          parsed.degradedBannerDelayMs <= 120000
+            ? parsed.degradedBannerDelayMs
+            : DEFAULTS.degradedBannerDelayMs,
+        sidecarRetryStrategy:
+          parsed.sidecarRetryStrategy === "exponential" ||
+          parsed.sidecarRetryStrategy === "constant-2s" ||
+          parsed.sidecarRetryStrategy === "manual"
+            ? parsed.sidecarRetryStrategy
+            : DEFAULTS.sidecarRetryStrategy,
+        holdAnnotationsWhileOffline:
+          typeof parsed.holdAnnotationsWhileOffline === "boolean"
+            ? parsed.holdAnnotationsWhileOffline
+            : DEFAULTS.holdAnnotationsWhileOffline,
         leftSlot: {
           kind:
             parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
@@ -187,5 +210,6 @@ export function mergeAndClampSettings(
     accentHue: Number.isFinite(merged.accentHue)
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
+    degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
   };
 }
