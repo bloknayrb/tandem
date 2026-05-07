@@ -24,6 +24,7 @@ import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
+import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
@@ -140,6 +141,7 @@ $effect(() => {
 
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
+createRootEditorFont(() => settingsState.settings.editorFont);
 createDensity(() => settingsState.settings.density);
 createHighContrast(() => settingsState.settings.highContrast);
 createAnnotationPatterns(() => settingsState.settings.annotationPatterns);
@@ -526,7 +528,6 @@ const tutorial = createTutorial(
             provider={activeTab.provider}
             readOnly={yjsSync.readOnly}
             {activeAnnotationId}
-            editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
             onAnnotationClick={(id) => {
               showChat = false;
