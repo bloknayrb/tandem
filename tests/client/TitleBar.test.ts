@@ -8,6 +8,10 @@ vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
   isTauriRuntime: vi.fn(() => false),
 }));
 
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
+
 const mockWin = {
   isMaximized: vi.fn().mockResolvedValue(false),
   onResized: vi.fn().mockResolvedValue(vi.fn()),
@@ -123,6 +127,20 @@ describe("TitleBar", () => {
     await tick();
 
     expect(container.querySelector("[aria-label='Restore']")).toBeTruthy();
+  });
+
+  it("minimize still works when setup_overlay_titlebar rejects", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("setup failed"));
+    const { container } = render(TitleBar, { props: { title: "test.md" } });
+    await new Promise((r) => setTimeout(r, 0));
+    await tick();
+
+    container.querySelector<HTMLButtonElement>("[aria-label='Minimize']")?.click();
+    await tick();
+
+    expect(mockWin.minimize).toHaveBeenCalledOnce();
   });
 
   it("outer .title-bar has no data-tauri-drag-region (controls must be outside drag region)", async () => {
