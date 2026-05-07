@@ -314,7 +314,6 @@ const tutorial = createTutorial(
       bind:settingsBtn={settingsBtnEl}
       tandemMode={modeState.tandemMode}
       onModeChange={modeState.setTandemMode}
-      heldCount={modeGate.heldCount}
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen}
     />
