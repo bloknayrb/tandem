@@ -49,6 +49,7 @@ import {
   PANEL_MIN_WIDTH,
   type PanelLayout,
 } from "./panel-layout";
+import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
@@ -177,6 +178,15 @@ let editor = $state<TiptapEditor | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let outlineFocusTrigger = $state(0);
+let activeAnnotationFilter = $state<{
+  type: FilterType;
+  author: FilterAuthor;
+  status: FilterStatus;
+}>({
+  type: "all",
+  author: "all",
+  status: "all",
+});
 
 let panelLayout = $state<PanelLayout>(
   (() => {
@@ -453,6 +463,10 @@ const tutorial = createTutorial(
                   kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   focusTrigger={outlineFocusTrigger}
+                  activeFilterType={activeAnnotationFilter.type}
+                  onFilterChange={(type, author, status) => {
+                    activeAnnotationFilter = { type, author, status };
+                  }}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
                   heldCount={modeGate.heldCount}
@@ -495,6 +509,10 @@ const tutorial = createTutorial(
                   kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   focusTrigger={outlineFocusTrigger}
+                  activeFilterType={activeAnnotationFilter.type}
+                  onFilterChange={(type, author, status) => {
+                    activeAnnotationFilter = { type, author, status };
+                  }}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
                   heldCount={modeGate.heldCount}
@@ -630,6 +648,7 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
+    class="editor-scroll"
     role="region"
     aria-label="Document editor"
     style={`position: relative; flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
@@ -726,6 +745,9 @@ const tutorial = createTutorial(
       {activeAnnotationId}
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}
+      onFilterChange={(type, author, status) => {
+        activeAnnotationFilter = { type, author, status };
+      }}
       visible={!showChat}
     />
   </div>

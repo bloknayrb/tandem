@@ -27,6 +27,7 @@ interface Props {
   activeAnnotationId: string | null;
   onActiveAnnotationChange: (id: string | null) => void;
   reduceMotion?: boolean;
+  onFilterChange?: (type: FilterType, author: FilterAuthor, status: FilterStatus) => void;
 }
 
 let {
@@ -41,6 +42,7 @@ let {
   activeAnnotationId,
   onActiveAnnotationChange,
   reduceMotion,
+  onFilterChange,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
@@ -70,6 +72,11 @@ $effect(() => {
   void filterAuthor;
   void filterStatus;
   bulkConfirm = null;
+});
+
+// Notify parent of filter changes (enables filter-aware annotation counts in OutlinePanel)
+$effect(() => {
+  onFilterChange?.(filterType, filterAuthor, filterStatus);
 });
 
 // Replies: observe Y.Map(annotationReplies)
