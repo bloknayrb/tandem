@@ -1,9 +1,9 @@
 import type { EditorFont } from "./useTandemSettings.js";
 
 const FONT_STACKS: Record<EditorFont, string> = {
-  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-  serif: 'Georgia, "Times New Roman", Times, serif',
-  mono: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+  sans: 'var(--tandem-font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  serif: 'var(--tandem-font-serif), Georgia, "Times New Roman", Times, serif',
+  mono: 'var(--tandem-font-mono), "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
 };
 
 /** @deprecated Use {@link EditorFont} from useTandemSettings instead. */
