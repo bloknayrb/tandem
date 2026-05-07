@@ -406,6 +406,8 @@ const tutorial = createTutorial(
       ydoc={activeTab?.ydoc ?? null}
       panelVisible={!settingsState.settings.panelHidden}
       onTogglePanel={togglePanel}
+      rightPanelVisible={!effectivePanelHidden}
+      onTogglePanelRight={togglePanel}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same

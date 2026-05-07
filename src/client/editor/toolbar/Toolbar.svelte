@@ -10,8 +10,6 @@ import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
-import FormattingToolbar from "./FormattingToolbar.svelte";
-import HighlightColorPicker from "./HighlightColorPicker.svelte";
 import { toggleHighlight } from "./highlight-toggle";
 import InputGroup from "./InputGroup.svelte";
 import ModeToggle from "./ModeToggle.svelte";
@@ -463,17 +461,6 @@ function handleLinkMouseDown(e: MouseEvent) {
     ></span>
     Tandem
   </span>
-
-  <FormattingToolbar {editor} disabled={inInputMode} />
-
-  <div
-    style="width: 1px; height: 18px; background: var(--tandem-border);"
-  ></div>
-
-  <HighlightColorPicker
-    disabled={!canAnnotate || inInputMode}
-    onHighlight={handleHighlight}
-  />
 
   <ToolbarButton
     label="Comment"
