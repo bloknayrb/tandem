@@ -266,18 +266,6 @@ pub fn run() {
             // useTauriTheme bridge will invoke get_app_theme on first init.
             // Fixes #535.
             if let Some(main_window) = app.get_webview_window("main") {
-                // Remove native Win32 caption and restore resize handles + shadow
-                // via DWM. Must be called after window creation; decorations:false
-                // in tauri.conf.json sets WS_POPUP but DWM still needs this call
-                // to strip the title-bar area and keep Aero Snap / resize borders.
-                #[cfg(target_os = "windows")]
-                {
-                    use tauri_plugin_decorum::WebviewWindowExt;
-                    if let Err(e) = main_window.create_overlay_titlebar() {
-                        log::warn!("Failed to create overlay titlebar: {e}");
-                    }
-                }
-
                 let theme_str = match main_window.theme() {
                     Ok(tauri::Theme::Dark) => "dark",
                     _ => "light",
@@ -319,6 +307,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            setup_overlay_titlebar,
             get_app_theme,
             cowork_scan_workspaces,
             cowork_toggle_integration,
@@ -749,6 +738,23 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 
 /// Returns the current OS app-mode theme ("light" or "dark") by reading
 /// WebviewWindow::theme(), which on Windows reads AppsUseLightTheme
+/// Called from TitleBar.svelte after the WebView page has loaded. Must run
+/// post-load because create_overlay_titlebar() injects JS hit-test logic that
+/// is cleared when the page navigates; setup() fires before navigation.
+/// Windows-only; no-op on other platforms.
+#[tauri::command]
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+fn setup_overlay_titlebar(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_decorum::WebviewWindowExt;
+        window
+            .create_overlay_titlebar()
+            .map_err(|e| format!("create_overlay_titlebar failed: {e}"))?;
+    }
+    Ok(())
+}
+
 /// (HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize) —
 /// the app-mode setting, not taskbar mode. Fixes #535.
 #[tauri::command]

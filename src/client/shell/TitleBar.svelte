@@ -16,6 +16,14 @@ let cleanupListeners: (() => void)[] = [];
 onMount(async () => {
   if (!isTauriRuntime()) return;
   try {
+    // Re-run the decorum overlay setup now that the WebView page is loaded.
+    // create_overlay_titlebar() injects JS hit-test logic that is cleared on
+    // page navigation; calling it here (post-load) keeps it alive.
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("setup_overlay_titlebar").catch((e: unknown) => {
+      console.warn("[TitleBar] setup_overlay_titlebar failed:", e);
+    });
+
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     win = getCurrentWindow();
     isMaximized = await win.isMaximized();
