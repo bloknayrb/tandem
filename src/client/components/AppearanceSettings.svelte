@@ -4,6 +4,7 @@ import type {
   Density,
   EditorFont,
   LayoutMode,
+  LeftSlotKind,
   PanelOrder,
   PrimaryTab,
   TandemSettings,
@@ -95,6 +96,16 @@ const densityRg = createRadioGroup<Density>(
   ["compact", "cozy", "spacious"] as const,
   (d) => onUpdate({ density: d }),
 );
+
+const leftSlotDisabled = $derived(settings.layout === "tabbed");
+
+const leftSlotRg = createRadioGroup<LeftSlotKind>(
+  () => settings.leftSlot.kind,
+  ["side", "outline"] as const,
+  (k) => {
+    if (!leftSlotDisabled) onUpdate({ leftSlot: { kind: k } });
+  },
+);
 </script>
 
 <!-- Theme -->
@@ -150,7 +161,7 @@ const densityRg = createRadioGroup<Density>(
     {/each}
   </div>
   {#if threePanelDisabled}
-    <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
       Three-panel requires a wider viewport
     </div>
   {/if}
@@ -249,7 +260,7 @@ const densityRg = createRadioGroup<Density>(
       </button>
     {/each}
   </div>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Reading density only — use browser zoom (Ctrl + =/−) to scale the whole UI.
   </div>
 </div>
@@ -301,6 +312,39 @@ const densityRg = createRadioGroup<Density>(
   </div>
 </div>
 
+<!-- Left Panel Content — disabled when layout has no left panel -->
+<div>
+  <div id="settings-left-slot-label" style={sectionLabelStyle}>Left Panel</div>
+  <div
+    role="radiogroup"
+    aria-labelledby="settings-left-slot-label"
+    aria-disabled={leftSlotDisabled}
+    tabindex={leftSlotDisabled ? -1 : 0}
+    onkeydown={leftSlotRg.handleKeyDown}
+    style="display: flex; gap: var(--tandem-space-2);"
+  >
+    {#each ([["side", "Annotations"], ["outline", "Outline"]] as const) as [value, label] (value)}
+      <button
+        data-testid={`left-slot-kind-radio-${value}`}
+        role="radio"
+        aria-checked={settings.leftSlot.kind === value}
+        aria-disabled={leftSlotDisabled || undefined}
+        tabindex={leftSlotDisabled ? -1 : leftSlotRg.tabIndexFor(value)}
+        onclick={() => { if (!leftSlotDisabled) onUpdate({ leftSlot: { kind: value } }); }}
+        style={cardStyle(settings.leftSlot.kind === value, leftSlotDisabled)}
+        title={leftSlotDisabled ? "Switch to Tabbed-Left or Three-Panel to use the left panel" : undefined}
+      >
+        {label}
+      </button>
+    {/each}
+  </div>
+  {#if leftSlotDisabled}
+    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+      Switch to Tabbed-Left or Three-Panel layout to enable the left panel
+    </div>
+  {/if}
+</div>
+
 <!-- Density -->
 <div>
   <div id="settings-density-label" style={sectionLabelStyle}>Spacing Density</div>
@@ -340,7 +384,7 @@ const densityRg = createRadioGroup<Density>(
     />
     <span>Reduce motion</span>
   </label>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Disables smooth autoscroll and the annotation flash animation.
   </div>
 </div>

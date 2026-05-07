@@ -8,6 +8,7 @@ import type { TandemMode } from "../../shared/types.js";
 
 export type LayoutMode = "tabbed" | "three-panel" | "tabbed-left";
 export type EditorFont = "serif" | "sans" | "mono";
+export type LeftSlotKind = "side" | "outline";
 export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
@@ -32,6 +33,7 @@ export interface TandemSettings {
   annotationPatterns: boolean;
   selectionToolbar: boolean;
   soloRailHidden: boolean;
+  leftSlot: { kind: LeftSlotKind };
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -65,6 +67,7 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   soloRailHidden: true,
+  leftSlot: { kind: "side" },
 };
 
 /**
@@ -145,6 +148,12 @@ export function loadSettings(): TandemSettings {
         annotationPatterns: parsed.annotationPatterns === true,
         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
+        leftSlot: {
+          kind:
+            parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
+              ? parsed.leftSlot.kind
+              : DEFAULTS.leftSlot.kind,
+        },
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead

@@ -7,6 +7,7 @@ export type {
   Density,
   EditorFont,
   LayoutMode,
+  LeftSlotKind,
   PanelOrder,
   PrimaryTab,
   TandemSettings,

@@ -6,6 +6,8 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
+import { saveStore, triggerSave, wireActionDeps } from "./actions/builtin.svelte.js";
+import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
@@ -18,18 +20,19 @@ import ToastContainer from "./components/ToastContainer.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
+import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
+import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
-import { createSaveShortcut } from "./hooks/useSaveShortcut.svelte";
-import { createSettingsShortcut } from "./hooks/useSettingsShortcut.svelte";
+import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
@@ -104,18 +107,27 @@ createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
-const saveShortcut = createSaveShortcut(() => yjsSync.activeTabId);
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
 
 let settingsOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
+let paletteOpen = $state(false);
 
 function toggleSettings() {
   settingsOpen = !settingsOpen;
 }
 
-createSettingsShortcut(() => toggleSettings);
+// Wire action dependencies for builtin actions (save, settings, find, mode)
+// after the reactive state they depend on is available.
+wireActionDeps({
+  getActiveTabId: () => yjsSync.activeTabId,
+  openSettings: () => (settingsOpen = true),
+  toggleSoloMode: () =>
+    modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
+  // openFindBar wired when PR 570 (find/replace bar) merges into this branch
+  openFindBar: () => {},
+});
 
 // Guard: only dispatch when visibility actually changes. Without this, every
 // call to updateSettings() (which replaces the entire settings object even
@@ -140,6 +152,7 @@ $effect(() => {
 
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
+createRootEditorFont(() => settingsState.settings.editorFont);
 createDensity(() => settingsState.settings.density);
 createHighContrast(() => settingsState.settings.highContrast);
 createAnnotationPatterns(() => settingsState.settings.annotationPatterns);
@@ -161,6 +174,7 @@ let showHelp = $state(false);
 let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 let slashCommandMenuOpen = $state(false);
+let findBarOpen = $state(false);
 
 let panelLayout = $state<PanelLayout>(
   (() => {
@@ -235,14 +249,28 @@ $effect(() => {
       showHelp = untrack(() => !showHelp);
       return;
     }
-    // Redirect Ctrl/Cmd+A to editor select-all when focus is outside the editor,
-    // so tab labels and other UI text don't get selected.
-    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
-      const active = document.activeElement;
-      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
-      if (active?.closest?.(".ProseMirror")) return;
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === "a") {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+        if (active?.closest?.(".ProseMirror")) return;
+        e.preventDefault();
+        editor?.commands.selectAll();
+      } else if (e.key === "s") {
+        e.preventDefault();
+        void triggerSave(yjsSync.activeTabId);
+      } else if (isSettingsShortcut(e)) {
+        e.preventDefault();
+        settingsOpen = true;
+      } else if (e.shiftKey && e.key === "P") {
+        e.preventDefault();
+        paletteOpen = !untrack(() => paletteOpen);
+      }
+    }
+    // Ctrl/Cmd+F — open find bar (suppress browser native find)
+    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
       e.preventDefault();
-      editor?.commands.selectAll();
+      findBarOpen = true;
     }
   }
   window.addEventListener("keydown", handler);
@@ -331,7 +359,7 @@ const tutorial = createTutorial(
                 />
               {:else}
                 <PanelSlot
-                  kind="side"
+                  kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
@@ -372,7 +400,7 @@ const tutorial = createTutorial(
             <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
               {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
                 <PanelSlot
-                  kind="side"
+                  kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
@@ -420,7 +448,7 @@ const tutorial = createTutorial(
       claudeActive={yjsSync.claudeActive}
       readOnly={yjsSync.readOnly}
       documentCount={yjsSync.tabs.length}
-      saving={saveShortcut.saving}
+      saving={saveStore.saving}
       heldCount={modeGate.heldCount}
       mode={modeState.tandemMode}
       onShowHeld={() => modeState.setTandemMode("tandem")}
@@ -436,6 +464,8 @@ const tutorial = createTutorial(
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+
+    <CommandPalette open={paletteOpen} onClose={() => (paletteOpen = false)} />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
 
@@ -509,7 +539,7 @@ const tutorial = createTutorial(
   <div
     role="region"
     aria-label="Document editor"
-    style={`flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+    style={`position: relative; flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}
@@ -526,7 +556,6 @@ const tutorial = createTutorial(
             provider={activeTab.provider}
             readOnly={yjsSync.readOnly}
             {activeAnnotationId}
-            editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
             onAnnotationClick={(id) => {
               showChat = false;
@@ -539,6 +568,12 @@ const tutorial = createTutorial(
         <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
       {/if}
     </div>
+    <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
+    <FindReplaceBar
+      {editor}
+      open={findBarOpen}
+      onClose={() => (findBarOpen = false)}
+    />
   </div>
 {/snippet}
 

@@ -13,3 +13,9 @@ export function applyEditorFont(font: EditorFont, el: HTMLElement): () => void {
   el.style.setProperty("--tandem-editor-font-family", FONT_STACKS[font]);
   return () => el.style.removeProperty("--tandem-editor-font-family");
 }
+
+export function applyEditorFontToRoot(font: EditorFont): () => void {
+  const root = document.documentElement;
+  root.style.setProperty("--tandem-editor-font-family", FONT_STACKS[font]);
+  return () => root.style.removeProperty("--tandem-editor-font-family");
+}
