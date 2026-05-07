@@ -266,6 +266,18 @@ pub fn run() {
             // useTauriTheme bridge will invoke get_app_theme on first init.
             // Fixes #535.
             if let Some(main_window) = app.get_webview_window("main") {
+                // Remove native Win32 caption and restore resize handles + shadow
+                // via DWM. Must be called after window creation; decorations:false
+                // in tauri.conf.json sets WS_POPUP but DWM still needs this call
+                // to strip the title-bar area and keep Aero Snap / resize borders.
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri_plugin_decorum::WebviewWindowExt;
+                    if let Err(e) = main_window.create_overlay_titlebar() {
+                        log::warn!("Failed to create overlay titlebar: {e}");
+                    }
+                }
+
                 let theme_str = match main_window.theme() {
                     Ok(tauri::Theme::Dark) => "dark",
                     _ => "light",
