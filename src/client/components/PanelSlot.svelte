@@ -14,13 +14,20 @@
  */
 import type { Editor } from "@tiptap/core";
 import type { ComponentProps } from "svelte";
+import type { Annotation } from "../../shared/types";
 import ChatPanel from "../panels/ChatPanel.svelte";
 import SidePanel from "../panels/SidePanel.svelte";
 import OutlinePanel from "./OutlinePanel.svelte";
 
 type ChatSlotProps = { kind: "chat"; visible?: boolean } & ComponentProps<typeof ChatPanel>;
 type SideSlotProps = { kind: "side"; visible?: boolean } & ComponentProps<typeof SidePanel>;
-type OutlineSlotProps = { kind: "outline"; visible?: boolean; editor: Editor | null };
+type OutlineSlotProps = {
+  kind: "outline";
+  visible?: boolean;
+  editor: Editor | null;
+  annotations?: Annotation[];
+  focusTrigger?: number;
+};
 
 // biome-ignore lint/suspicious/noExplicitAny: discriminated union prop spread
 type Props =
@@ -43,7 +50,11 @@ const wrapStyle = $derived(
     {#if kind === "chat"}
       <ChatPanel {...(rest as ComponentProps<typeof ChatPanel>)} {visible} />
     {:else if kind === "outline"}
-      <OutlinePanel editor={(rest as OutlineSlotProps).editor} />
+      <OutlinePanel
+        editor={(rest as OutlineSlotProps).editor}
+        annotations={(rest as OutlineSlotProps).annotations}
+        focusTrigger={(rest as OutlineSlotProps).focusTrigger}
+      />
     {:else}
       <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
     {/if}
