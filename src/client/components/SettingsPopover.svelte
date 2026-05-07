@@ -44,6 +44,7 @@ const SHORTCUT_SECTIONS = [
       { keys: "Ctrl+Z", description: "Undo" },
       { keys: "Ctrl+Y", description: "Redo" },
       { keys: "Ctrl+S", description: "Save document" },
+      { keys: "Ctrl+F", description: "Find / Replace" },
     ],
   },
   {

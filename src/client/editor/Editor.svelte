@@ -17,6 +17,7 @@ import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
+import { FindReplaceExtension } from "./extensions/find-replace";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SlashCommandExtension } from "./extensions/slash-command";
 import "./editor.css";
@@ -89,6 +90,7 @@ $effect(() => {
       AuthorshipExtension.configure({ ydoc }),
       AwarenessExtension.configure({ ydoc }),
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
+      FindReplaceExtension,
     ],
     editorProps: {
       attributes: {
