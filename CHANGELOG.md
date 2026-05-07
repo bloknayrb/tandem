@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Outline panel for H1–H3 navigation (closes #569)** — Settings → Appearance now offers a "Left Panel" radio (Side / Outline). When Outline is selected, the side/annotations panel is replaced with a compact heading navigator. Click any heading to jump the cursor. Roving tabindex for keyboard navigation. Disabled with explanatory text when the Tabbed layout (no left panel) is active. New testids: `outline-panel`, `outline-heading-{level}-{index}`, `left-slot-kind-radio-{side|outline}`.
 - **Root-scoped editor font (closes #568)** — `--tandem-editor-font-family` is now applied to `document.documentElement` so the chosen font propagates to all surfaces (editor, tab labels, toolbar) rather than only the editor container. `applyEditorFontToRoot` and `createRootEditorFont` added alongside the existing per-element helpers.
 - **Redesigned format badge on document tabs (closes #568)** — the 1-letter format icon is replaced with a styled pill badge (`MD`, `TXT`, `HTML`, `DOCX`) using format-specific semantic token colours. The dirty-dot slot is now always in layout with `visibility` toggled (prevents tab-width shift between dirty/clean states). New testids: `tab-format-badge-{id}`.
 

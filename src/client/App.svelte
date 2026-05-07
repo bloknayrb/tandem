@@ -333,7 +333,7 @@ const tutorial = createTutorial(
                 />
               {:else}
                 <PanelSlot
-                  kind="side"
+                  kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
@@ -374,7 +374,7 @@ const tutorial = createTutorial(
             <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
               {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
                 <PanelSlot
-                  kind="side"
+                  kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
