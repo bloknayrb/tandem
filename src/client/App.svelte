@@ -197,6 +197,8 @@ $effect(() => {
     const right = "right" in prev ? prev.right : loadPanelWidth("right");
     const left = "left" in prev ? prev.left : loadPanelWidth("left");
     panelLayout = { kind: "three-panel", left, right };
+    // On first switch to three-panel, set the canonical default: Outline left.
+    settingsState.updateSettings({ leftSlot: { kind: "outline" } });
   } else if (layout === "tabbed-left") {
     if (prev.kind === "tabbed-left") return;
     const left = "left" in prev ? prev.left : loadPanelWidth("left");
