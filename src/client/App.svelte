@@ -677,39 +677,33 @@ const tutorial = createTutorial(
       visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
+    {#snippet editorContent()}
+      <Editor
+        ydoc={activeTab!.ydoc}
+        provider={activeTab!.provider}
+        readOnly={yjsSync.readOnly}
+        {activeAnnotationId}
+        onEditorReady={(ed) => (editor = ed)}
+        onAnnotationClick={(id) => {
+          showChat = false;
+          activeAnnotationId = id;
+        }}
+        onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
+      />
+    {/snippet}
+    <!-- DocxPageContainer wraps Editor for .docx; format is stable per activeTab.id key guard —
+         both branches share the same onEditorReady to update the editor ref -->
     {#if activeTab?.format === "docx"}
       <DocxPageContainer>
         {#key activeTab.id}
-          <Editor
-            ydoc={activeTab.ydoc}
-            provider={activeTab.provider}
-            readOnly={yjsSync.readOnly}
-            {activeAnnotationId}
-            onEditorReady={(ed) => (editor = ed)}
-            onAnnotationClick={(id) => {
-              showChat = false;
-              activeAnnotationId = id;
-            }}
-            onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
-          />
+          {@render editorContent()}
         {/key}
       </DocxPageContainer>
     {:else}
       <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
         {#if activeTab}
           {#key activeTab.id}
-            <Editor
-              ydoc={activeTab.ydoc}
-              provider={activeTab.provider}
-              readOnly={yjsSync.readOnly}
-              {activeAnnotationId}
-              onEditorReady={(ed) => (editor = ed)}
-              onAnnotationClick={(id) => {
-                showChat = false;
-                activeAnnotationId = id;
-              }}
-              onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
-            />
+            {@render editorContent()}
           {/key}
         {:else}
           <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
