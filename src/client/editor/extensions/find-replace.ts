@@ -289,7 +289,7 @@ export async function replaceAll(
       let tr = view.state.tr;
       for (let i = chunk.length - 1; i >= 0; i--) {
         const { from, to } = chunk[i];
-        tr = tr.replaceWith(from, to, view.state.schema.text(replaceText));
+        tr = tr.insertText(replaceText, from, to);
       }
       view.dispatch(tr);
       replaced += chunk.length;
