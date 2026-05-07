@@ -576,7 +576,13 @@ const tutorial = createTutorial(
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
 
-    <CommandPalette open={paletteOpen} onClose={() => (paletteOpen = false)} />
+    <CommandPalette
+      open={paletteOpen}
+      onClose={() => (paletteOpen = false)}
+      {editor}
+      annotations={modeGate.visibleAnnotations}
+      onFocusAnnotation={(id) => { activeAnnotationId = id; }}
+    />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
 
