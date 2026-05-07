@@ -1,6 +1,5 @@
 <script lang="ts">
 import type { Editor } from "@tiptap/core";
-import { onMount } from "svelte";
 import {
   type FindReplaceOptions,
   getFindState,
@@ -39,10 +38,6 @@ const matchCount = $derived(findState?.matches.length ?? 0);
 const activeIndex = $derived(findState?.activeIndex ?? -1);
 
 let queryInput = $state<HTMLInputElement | null>(null);
-
-onMount(() => {
-  if (open) queryInput?.focus();
-});
 
 $effect(() => {
   if (!open) return;
@@ -86,10 +81,6 @@ function dispatchFind() {
 
   const opts: FindReplaceOptions = { query, caseSensitive, wholeWord, regexMode };
   ed.commands.find(opts);
-}
-
-function handleQueryInput() {
-  dispatchFind();
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -169,7 +160,7 @@ async function handleReplaceAll() {
         placeholder="Find…"
         aria-label="Find"
         bind:value={query}
-        oninput={handleQueryInput}
+        oninput={dispatchFind}
         style="
           flex: 1; padding: 4px 8px; font-size: var(--tandem-text-sm);
           border: 1px solid {regexError ? 'var(--tandem-error)' : 'var(--tandem-border)'};
