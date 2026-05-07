@@ -1,18 +1,7 @@
 <script lang="ts">
 import { untrack } from "svelte";
 import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
-
-// Static shortcuts not in the action registry (formatting, navigation, help)
-const STATIC_SHORTCUT_ROWS = [
-  { keys: "Ctrl+B", description: "Bold" },
-  { keys: "Ctrl+I", description: "Italic" },
-  { keys: "Ctrl+Z", description: "Undo" },
-  { keys: "Ctrl+Y", description: "Redo" },
-  { keys: "Ctrl+F", description: "Find / Replace" },
-  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
-  { keys: "Ctrl+Tab", description: "Next document tab" },
-  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
-];
+import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
 
 // Registry-derived sections — same source as Settings → Shortcuts tab
 const registryShortcutSections = $derived.by(() => {

@@ -3,6 +3,8 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import type { Annotation } from "../../shared/types.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
+import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
+import { walkHeadings } from "../utils/headings.js";
 
 // ---------------------------------------------------------------------------
 // Prop types
@@ -27,33 +29,10 @@ let selectedIndex = $state(0);
 let inputEl = $state<HTMLInputElement | null>(null);
 
 // Detect routing prefix
-const activePrefix = $derived(
-  query.startsWith("#")
-    ? "#"
-    : query.startsWith("@")
-      ? "@"
-      : query.startsWith("?")
-        ? "?"
-        : query.startsWith(">")
-          ? ">"
-          : null,
-);
+const PREFIXES = ["#", "@", "?", ">"] as const;
+type Prefix = (typeof PREFIXES)[number];
+const activePrefix = $derived<Prefix | null>(PREFIXES.find((p) => query.startsWith(p)) ?? null);
 const searchText = $derived((activePrefix ? query.slice(1) : query).trim().toLowerCase());
-
-// ---------------------------------------------------------------------------
-// Static shortcut rows (mirrors HelpModal)
-// ---------------------------------------------------------------------------
-
-const STATIC_SHORTCUT_ROWS = [
-  { keys: "Ctrl+B", description: "Bold" },
-  { keys: "Ctrl+I", description: "Italic" },
-  { keys: "Ctrl+Z", description: "Undo" },
-  { keys: "Ctrl+Y", description: "Redo" },
-  { keys: "Ctrl+F", description: "Find / Replace" },
-  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
-  { keys: "Ctrl+Tab", description: "Next document tab" },
-  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
-];
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -107,23 +86,9 @@ const headingResults = $derived.by((): HeadingResult[] => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return [];
   const q = searchText;
-  const results: HeadingResult[] = [];
-  let idx = 0;
-  ed.state.doc.descendants((node, pos) => {
-    if (node.type.name === "heading" && node.attrs.level <= 3) {
-      const text = node.textContent;
-      if (!q || text.toLowerCase().includes(q)) {
-        results.push({
-          kind: "heading",
-          id: `heading-${idx++}`,
-          text,
-          level: node.attrs.level as number,
-          pos,
-        });
-      }
-    }
-  });
-  return results;
+  return walkHeadings(ed)
+    .filter((h) => !q || h.text.toLowerCase().includes(q))
+    .map((h, idx) => ({ kind: "heading" as const, id: `heading-${idx}`, ...h }));
 });
 
 // Annotations: `@` prefix — lazy, reactive on `annotations` prop change
@@ -208,16 +173,16 @@ $effect(() => {
 // Input placeholder by mode
 // ---------------------------------------------------------------------------
 
+const PREFIX_PLACEHOLDER: Record<string, string> = {
+  "#": "Search headings…",
+  "@": "Search annotations…",
+  "?": "Search shortcuts…",
+  ">": "Search commands…",
+};
 const placeholder = $derived(
-  activePrefix === "#"
-    ? "Search headings…"
-    : activePrefix === "@"
-      ? "Search annotations…"
-      : activePrefix === "?"
-        ? "Search shortcuts…"
-        : activePrefix === ">"
-          ? "Search commands…"
-          : "Type a command, # headings, @ annotations, ? shortcuts…",
+  activePrefix
+    ? PREFIX_PLACEHOLDER[activePrefix]
+    : "Type a command, # headings, @ annotations, ? shortcuts…",
 );
 
 // ---------------------------------------------------------------------------
@@ -228,12 +193,11 @@ function close() {
   onClose();
 }
 
-function runResult(result: PaletteResult, _openInNewTab = false) {
+function runResult(result: PaletteResult) {
   if (result.kind === "action") {
     close();
     void result.action.run();
   } else if (result.kind === "heading") {
-    // Jump to heading in editor. _openInNewTab reserved for cross-doc heading navigation (future).
     close();
     const ed = editor;
     if (!ed || ed.isDestroyed) return;
@@ -265,8 +229,7 @@ function handleKeydown(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     const result = allResults[selectedIndex];
-    const openInNewTab = e.ctrlKey || e.metaKey;
-    if (result) runResult(result, openInNewTab);
+    if (result) runResult(result);
   } else if (e.key === "Escape") {
     e.preventDefault();
     close();
@@ -275,16 +238,6 @@ function handleKeydown(e: KeyboardEvent) {
 
 function handleBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget) close();
-}
-
-// Heading level label
-function headingLabel(level: number): string {
-  return `H${level}`;
-}
-
-// Annotation type label
-function annotationTypeLabel(type: string): string {
-  return type.charAt(0).toUpperCase() + type.slice(1);
 }
 </script>
 
@@ -393,7 +346,7 @@ function annotationTypeLabel(type: string): string {
                     color: var(--tandem-fg-subtle);
                     font-family: var(--tandem-font-mono);
                     min-width: 20px;
-                  ">{headingLabel(result.level)}</span>
+                  ">H{result.level}</span>
                   <span style="font-size: var(--tandem-text-sm); padding-left: calc({result.level - 1} * var(--tandem-space-2));">{result.text}</span>
                 </span>
               {:else if result.kind === "annotation"}
@@ -404,7 +357,7 @@ function annotationTypeLabel(type: string): string {
                   {/if}
                 </span>
                 <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); flex-shrink: 0; margin-left: var(--tandem-space-2);">
-                  {annotationTypeLabel(result.annotationType)}
+                  {result.annotationType.charAt(0).toUpperCase() + result.annotationType.slice(1)}
                 </span>
               {:else if result.kind === "shortcut"}
                 <span style="font-size: var(--tandem-text-sm);">{result.description}</span>
