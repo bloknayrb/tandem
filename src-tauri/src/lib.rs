@@ -51,12 +51,14 @@ const MENU_ABOUT: &str = "about";
 const MENU_QUIT: &str = "quit";
 const MENU_UPDATE: &str = "update";
 
+const MAIN_WINDOW_LABEL: &str = "main";
+
 /// Tracks the sidecar child process so we can kill it on shutdown.
 struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
 /// Show, unminimize, and focus the main window.
 fn show_main_window(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         log::error!("Main window not found — check window label matches tauri.conf.json");
         return;
     };
@@ -265,7 +267,7 @@ pub fn run() {
             // input. Falls back gracefully if window isn't ready; the
             // useTauriTheme bridge will invoke get_app_theme on first init.
             // Fixes #535.
-            if let Some(main_window) = app.get_webview_window("main") {
+            if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let theme_str = match main_window.theme() {
                     Ok(tauri::Theme::Dark) => "dark",
                     Ok(_) => "light",
@@ -1482,44 +1484,62 @@ fn show_no_claude_dialog(handle: &tauri::AppHandle) {
 fn show_update_available_dialog(app: &tauri::AppHandle, version: &str) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    app.dialog()
+    let mut builder = app
+        .dialog()
         .message(format!(
             "Tandem v{version} is available.\n\n\
              Would you like to update now? The application will restart after installing."
         ))
         .title("Update Available")
         .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancel)
-        .blocking_show()
+        .buttons(MessageDialogButtons::OkCancel);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        builder = builder.parent(&window);
+    } else {
+        log::warn!("show_update_available_dialog: main window not found — dialog will appear parentless");
+    }
+    builder.blocking_show()
 }
 
 /// Inform the user they're on the latest version (manual check feedback).
 fn show_up_to_date_dialog(app: &tauri::AppHandle) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-    app.dialog()
+    let mut builder = app
+        .dialog()
         .message(format!(
             "You're running the latest version of Tandem (v{}).",
             env!("CARGO_PKG_VERSION")
         ))
         .title("No Updates Available")
-        .kind(MessageDialogKind::Info)
-        .show(|_| {});
+        .kind(MessageDialogKind::Info);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        builder = builder.parent(&window);
+    } else {
+        log::warn!("show_up_to_date_dialog: main window not found — dialog will appear parentless");
+    }
+    builder.show(|_| {});
 }
 
 /// Show an error dialog for failed update checks (manual check feedback only).
 fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-    app.dialog()
+    let mut builder = app
+        .dialog()
         .message(format!(
             "Could not check for updates.\n\n\
              Error: {error}\n\n\
              Please try again later or check your internet connection."
         ))
         .title("Update Error")
-        .kind(MessageDialogKind::Error)
-        .show(|_| {});
+        .kind(MessageDialogKind::Error);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        builder = builder.parent(&window);
+    } else {
+        log::warn!("show_update_error_dialog: main window not found — dialog will appear parentless");
+    }
+    builder.show(|_| {});
 }
 
 /// Check for updates and optionally prompt the user.
