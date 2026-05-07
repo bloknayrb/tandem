@@ -33,6 +33,7 @@ export interface TandemSettings {
   annotationPatterns: boolean;
   selectionToolbar: boolean;
   soloRailHidden: boolean;
+  panelHidden: boolean;
   leftSlot: { kind: LeftSlotKind };
 }
 
@@ -67,6 +68,7 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   soloRailHidden: true,
+  panelHidden: false,
   leftSlot: { kind: "side" },
 };
 
@@ -148,6 +150,7 @@ export function loadSettings(): TandemSettings {
         annotationPatterns: parsed.annotationPatterns === true,
         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
+        panelHidden: parsed.panelHidden === true,
         leftSlot: {
           kind:
             parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
