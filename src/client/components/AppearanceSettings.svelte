@@ -161,7 +161,7 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
     {/each}
   </div>
   {#if threePanelDisabled}
-    <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
       Three-panel requires a wider viewport
     </div>
   {/if}
@@ -260,7 +260,7 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
       </button>
     {/each}
   </div>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Reading density only — use browser zoom (Ctrl + =/−) to scale the whole UI.
   </div>
 </div>
@@ -339,7 +339,7 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
     {/each}
   </div>
   {#if leftSlotDisabled}
-    <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
       Switch to Tabbed-Left or Three-Panel layout to enable the left panel
     </div>
   {/if}
@@ -384,7 +384,7 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
     />
     <span>Reduce motion</span>
   </label>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: 4px;">
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
     Disables smooth autoscroll and the annotation flash animation.
   </div>
 </div>

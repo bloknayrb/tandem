@@ -36,9 +36,13 @@ $effect(() => {
   // Seed immediately — don't wait for the first update event (CRDT may have
   // already synced before this component mounted).
   headings = walkHeadings(ed);
+  itemEls = itemEls.slice(0, headings.length);
+  if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
 
   const handler = () => {
     headings = walkHeadings(ed);
+    itemEls = itemEls.slice(0, headings.length);
+    if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
   };
   ed.on("update", handler);
 
@@ -117,8 +121,8 @@ function handleKeyDown(e: KeyboardEvent) {
             onclick={() => jumpTo(entry, i)}
             onfocus={() => (focusedIndex = i)}
             style={`
-              display: block; width: 100%; text-align: left; padding: 3px var(--tandem-space-3);
-              padding-left: ${4 + (entry.level - 1) * 12}px;
+              display: block; width: 100%; text-align: left; padding: var(--tandem-space-1) var(--tandem-space-3);
+              padding-left: calc(var(--tandem-space-1) + ${(entry.level - 1) * 12}px);
               font-size: ${entry.level === 1 ? "var(--tandem-text-sm)" : "var(--tandem-text-xs)"};
               font-weight: ${entry.level === 1 ? 600 : entry.level === 2 ? 500 : 400};
               color: ${entry.level === 1 ? "var(--tandem-fg)" : entry.level === 2 ? "var(--tandem-fg-subtle)" : "var(--tandem-fg-muted)"};
