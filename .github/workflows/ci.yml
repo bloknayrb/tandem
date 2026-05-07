@@ -30,7 +30,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/binaries dist/channel dist/server dist/client
-          touch "src-tauri/binaries/node-sidecar-$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
+          TRIPLE="$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
+          touch "src-tauri/binaries/node-sidecar-${TRIPLE}"
+          touch "src-tauri/binaries/node-sidecar-${TRIPLE}.exe"
 
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
