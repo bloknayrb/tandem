@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
-import { onDestroy } from "svelte";
 
 interface Props {
   editor: Editor | null;
@@ -47,10 +46,6 @@ $effect(() => {
     if (!ed.isDestroyed) ed.off("update", handler);
     headings = [];
   };
-});
-
-onDestroy(() => {
-  headings = [];
 });
 
 function jumpTo(entry: HeadingEntry, index: number) {
