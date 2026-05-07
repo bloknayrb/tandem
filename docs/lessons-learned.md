@@ -585,3 +585,21 @@ Mirror the identical step already present in `tauri-release.yml`.
 **Problem:** `useTauriTheme.svelte.ts` polls `get_app_theme` only when `document.hasFocus()` is true. During a manual smoke test, switching to Windows Settings to flip the OS theme causes the Tandem window to lose focus. The poll won't fire until the tester clicks back into the app.
 
 **Solution:** Instruct smoke testers to click back on the Tandem window after flipping the OS theme before checking whether the theme updated.
+
+## 62. Agent Branch Checkouts Stomp Uncommitted Working Tree Changes
+
+**Problem:** When dispatching parallel implementation agents to work on different PR branches within the same git working tree, each agent runs `git checkout <their-branch>`. If you have uncommitted edits (e.g., a one-line fix staged but not committed), the branch switch silently carries those changes to the new branch — or discards them if the file doesn't exist on the target branch. The working tree ends up in an unexpected state.
+
+**Solution:** Commit or stash any in-progress changes before dispatching agents that will call `git checkout`. Better: use `isolation: "worktree"` so agents operate in an isolated copy of the repo and can't affect each other's working trees.
+
+## 63. Sequential PR Merges Accumulate CHANGELOG/CLAUDE.md Conflicts
+
+**Problem:** When several PRs are merged to master in sequence and each one touched `CHANGELOG.md` and/or `CLAUDE.md` (unreleased entries, testid list), every subsequent branch needs a merge-master step that conflicts in the same two files. This is expected but easy to forget — the conflict is always the same pattern: HEAD has the branch's new entry, origin/master has the entries from previously-merged PRs.
+
+**Solution:** Resolve by keeping ALL entries from both sides (no lines lost). The CHANGELOG `### Added` block and CLAUDE.md testid list should be additive — concatenate, don't pick one side.
+
+## 64. `gh pr merge --squash --auto` Is Disabled on This Repo
+
+**Problem:** `gh pr merge --squash --auto` returns `GraphQL: Auto merge is not allowed for this repository`. Auto-merge requires a branch protection setting that isn't enabled.
+
+**Solution:** Use `gh pr merge --squash` (no `--auto`). If the branch has unresolved conflicts first update it: checkout → fetch origin master → merge → resolve → push — then merge.
