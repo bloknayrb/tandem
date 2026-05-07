@@ -13,9 +13,18 @@ interface Props {
   ydoc: Y.Doc | null;
   panelVisible?: boolean;
   onTogglePanel?: () => void;
+  rightPanelVisible?: boolean;
+  onTogglePanelRight?: () => void;
 }
 
-const { editor, ydoc, panelVisible = true, onTogglePanel }: Props = $props();
+const {
+  editor,
+  ydoc,
+  panelVisible = true,
+  onTogglePanel,
+  rightPanelVisible = true,
+  onTogglePanelRight,
+}: Props = $props();
 
 const canHighlight = $derived(!!editor && !editor.isDestroyed);
 
@@ -69,4 +78,26 @@ function handleHighlight(color: HighlightColor) {
       onHighlight={handleHighlight}
     />
   </div>
+
+  <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 var(--tandem-space-2); flex-shrink: 0;"></div>
+
+  <!-- Right rail toggle -->
+  <button
+    type="button"
+    aria-label={rightPanelVisible ? "Hide right panel" : "Show right panel"}
+    aria-pressed={rightPanelVisible}
+    title={rightPanelVisible ? "Hide right panel" : "Show right panel"}
+    data-testid="formatting-bar-toggle-right"
+    onclick={onTogglePanelRight}
+    style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
+      background: {rightPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
+      color: {rightPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      margin-left: var(--tandem-space-2); flex-shrink: 0;"
+  >
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
+      <rect x="10" y="2" width="5" height="12" fill="currentColor" opacity="0.6"/>
+    </svg>
+  </button>
 </div>
