@@ -210,19 +210,26 @@ $effect(() => {
   }
 });
 
-let manualPanelHidden = $state(false);
-
 const effectivePanelHidden = $derived(
-  manualPanelHidden || (modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
+  settingsState.settings.panelHidden ||
+    (modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
 );
 
 function togglePanel() {
-  manualPanelHidden = !manualPanelHidden;
+  settingsState.updateSettings({ panelHidden: !settingsState.settings.panelHidden });
 }
+
+// Remembers the last non-three-panel layout so toggling off three-panel restores it.
+let prevNonThreePanelLayout: "tabbed" | "tabbed-left" = "tabbed";
 
 function toggleLayout() {
   const current = settingsState.settings.layout;
-  settingsState.updateSettings({ layout: current === "three-panel" ? "tabbed" : "three-panel" });
+  if (current === "three-panel") {
+    settingsState.updateSettings({ layout: prevNonThreePanelLayout });
+  } else {
+    prevNonThreePanelLayout = current;
+    settingsState.updateSettings({ layout: "three-panel" });
+  }
 }
 
 const editorMaxWidth = $derived(
@@ -307,7 +314,7 @@ const tutorial = createTutorial(
 <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
   <TitleBar
     title={activeTab?.fileName}
-    panelVisible={!manualPanelHidden}
+    panelVisible={!settingsState.settings.panelHidden}
     onTogglePanel={togglePanel}
     isThreePanel={panelLayout.kind === "three-panel"}
     onToggleLayout={toggleLayout}
