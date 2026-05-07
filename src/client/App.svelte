@@ -51,6 +51,7 @@ import {
   type PanelLayout,
 } from "./panel-layout";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
+import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
@@ -169,10 +170,14 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-let showChat = $state(settingsState.settings.primaryTab === "chat");
+let activeRailTab = $state<"annotations" | "chat" | "outline">(
+  settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
+);
 
 const pendingAnnotationBadge = $derived(
-  !showChat ? 0 : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
+  activeRailTab !== "annotations"
+    ? 0
+    : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
 );
 
 let activeAnnotationId = $state<string | null>(null);
@@ -271,7 +276,7 @@ const dragResize = createDragResize(
 );
 
 function captureSelectionForChat() {
-  if (showChat) return;
+  if (activeRailTab === "chat") return;
   if (!editor) return;
   const { from, to } = editor.state.selection;
   if (from === to) return;
@@ -690,8 +695,8 @@ const tutorial = createTutorial(
         {activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
-          showChat = false;
-          activeAnnotationId = id;
+          activeRailTab = "annotations";
+                    activeAnnotationId = id;
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
       />
@@ -726,34 +731,58 @@ const tutorial = createTutorial(
 {/snippet}
 
 {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
+  {@const enabledTabs = settingsState.settings.rightRailTabs}
+  {@const iconOnly = enabledTabs.length > 3}
   <div
     style={`display: flex; flex-direction: column; width: ${width}px; ${borderSide === "left" ? "border-right" : "border-left"}: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
   >
     <div
-      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-3); gap: 2px;"
+      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
     >
-      <button
-        data-testid="annotations-tab"
-        onclick={() => (showChat = false)}
-        style={`flex: 1; padding: 0 var(--tandem-space-3); font-size: 12px; font-weight: 500; border: none; border-bottom: ${showChat ? "2px solid transparent" : "2px solid var(--tandem-accent)"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg-subtle)" : "var(--tandem-fg)"}; position: relative;`}
-      >
-        Annotations
-        {#if showChat && pendingAnnotationBadge > 0}
-          <span
-            style="position: absolute; top: 2px; right: 6px; background: var(--tandem-error); color: var(--tandem-error-fg); font-size: 9px; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700;"
-          >
-            {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
-          </span>
-        {/if}
-      </button>
-      <button
-        data-testid="chat-tab"
-        onmousedown={captureSelectionForChat}
-        onclick={() => (showChat = true)}
-        style={`flex: 1; padding: 0 var(--tandem-space-3); font-size: 12px; font-weight: 500; border: none; border-bottom: ${showChat ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; position: relative;`}
-      >
-        Chat
-      </button>
+      {#if enabledTabs.includes("annotations")}
+        <button
+          data-testid="annotations-tab"
+          onclick={() => { activeRailTab = "annotations"; }}
+          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "annotations" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "annotations" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; position: relative; white-space: nowrap;`}
+          title={iconOnly ? "Annotations" : undefined}
+        >
+          {#if iconOnly}◨{:else}Annotations{/if}
+          {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
+            <span
+              style="position: absolute; top: 2px; right: 2px; background: var(--tandem-error); color: var(--tandem-error-fg); font-size: 9px; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700;"
+            >
+              {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+            </span>
+          {/if}
+        </button>
+      {/if}
+      {#if enabledTabs.includes("chat")}
+        <button
+          data-testid="chat-tab"
+          onmousedown={captureSelectionForChat}
+          onclick={() => { activeRailTab = "chat";  }}
+          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "chat" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "chat" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
+          title={iconOnly ? "Chat" : undefined}
+        >
+          {#if iconOnly}💬{:else}Chat{/if}
+        </button>
+      {/if}
+      {#if enabledTabs.includes("outline")}
+        <button
+          data-testid="outline-tab"
+          onclick={() => { activeRailTab = "outline"; }}
+          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "outline" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "outline" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
+          title={iconOnly ? "Outline" : undefined}
+        >
+          {#if iconOnly}≡{:else}Outline{/if}
+        </button>
+      {/if}
+      <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
+        <RailTabPicker
+          enabledTabs={settingsState.settings.rightRailTabs}
+          onTabsChange={(tabs) => settingsState.updateSettings({ rightRailTabs: tabs })}
+        />
+      </div>
     </div>
     <PanelSlot
       kind="chat"
@@ -766,7 +795,7 @@ const tutorial = createTutorial(
       {capturedAnchor}
       onCapturedAnchorChange={(a) => (capturedAnchor = a)}
       reduceMotion={settingsState.settings.reduceMotion}
-      visible={showChat}
+      visible={activeRailTab === "chat" && enabledTabs.includes("chat")}
     />
     <PanelSlot
       kind="side"
@@ -784,7 +813,17 @@ const tutorial = createTutorial(
       onFilterChange={(type, author, status) => {
         activeAnnotationFilter = { type, author, status };
       }}
-      visible={!showChat}
+      visible={activeRailTab === "annotations" && enabledTabs.includes("annotations")}
     />
+    {#if enabledTabs.includes("outline")}
+      <PanelSlot
+        kind="outline"
+        {editor}
+        annotations={modeGate.visibleAnnotations}
+        focusTrigger={outlineFocusTrigger}
+        activeFilterType={activeAnnotationFilter.type}
+        visible={activeRailTab === "outline"}
+      />
+    {/if}
   </div>
 {/snippet}

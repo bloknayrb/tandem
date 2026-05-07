@@ -15,6 +15,7 @@ export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
 export type ThemePreference = "light" | "dark" | "system";
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
+export type RailTab = "annotations" | "chat" | "outline";
 
 export interface TandemSettings {
   layout: LayoutMode;
@@ -36,6 +37,7 @@ export interface TandemSettings {
   soloRailHidden: boolean;
   panelHidden: boolean;
   leftSlot: { kind: LeftSlotKind };
+  rightRailTabs: RailTab[];
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
   sidecarRetryStrategy: SidecarRetryStrategy;
@@ -76,6 +78,7 @@ const DEFAULTS: TandemSettings = {
   soloRailHidden: true,
   panelHidden: false,
   leftSlot: { kind: "outline" },
+  rightRailTabs: ["annotations", "chat"],
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
@@ -182,6 +185,16 @@ export function loadSettings(): TandemSettings {
               ? parsed.leftSlot.kind
               : DEFAULTS.leftSlot.kind,
         },
+        rightRailTabs: (() => {
+          const VALID: RailTab[] = ["annotations", "chat", "outline"];
+          if (Array.isArray(parsed.rightRailTabs)) {
+            const filtered = parsed.rightRailTabs.filter((t: unknown) =>
+              VALID.includes(t as RailTab),
+            ) as RailTab[];
+            return filtered.length > 0 ? filtered : DEFAULTS.rightRailTabs;
+          }
+          return DEFAULTS.rightRailTabs;
+        })(),
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
