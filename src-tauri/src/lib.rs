@@ -1495,6 +1495,8 @@ fn show_update_available_dialog(app: &tauri::AppHandle, version: &str) -> bool {
         .buttons(MessageDialogButtons::OkCancel);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         builder = builder.parent(&window);
+    } else {
+        log::warn!("show_update_available_dialog: main window not found — dialog will appear parentless");
     }
     builder.blocking_show()
 }
@@ -1513,6 +1515,8 @@ fn show_up_to_date_dialog(app: &tauri::AppHandle) {
         .kind(MessageDialogKind::Info);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         builder = builder.parent(&window);
+    } else {
+        log::warn!("show_up_to_date_dialog: main window not found — dialog will appear parentless");
     }
     builder.show(|_| {});
 }
@@ -1532,6 +1536,8 @@ fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
         .kind(MessageDialogKind::Error);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         builder = builder.parent(&window);
+    } else {
+        log::warn!("show_update_error_dialog: main window not found — dialog will appear parentless");
     }
     builder.show(|_| {});
 }

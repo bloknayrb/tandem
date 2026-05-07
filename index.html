@@ -290,8 +290,8 @@
   <body>
     <div id="root"></div>
     <!-- Pre-seeds theme before Svelte mounts to avoid a light-flash on first paint in the
-         browser distribution path. Mirrors what the Tauri shell does via WebviewWindow::theme()
-         (lib.rs:268-286). Reads persisted preference first; falls back to matchMedia.
+         browser distribution path. Mirrors what the Tauri shell does via WebviewWindow::theme().
+         Reads persisted preference first; falls back to matchMedia.
          Note: matchMedia on Windows reflects taskbar color mode (not app mode) — full fix
          tracked with #477 browser deprecation. -->
     <script>
@@ -300,7 +300,7 @@
           // Key must match TANDEM_SETTINGS_KEY in src/shared/constants.ts
           var stored = localStorage.getItem("tandem:settings");
           var theme = stored && JSON.parse(stored).theme;
-          if (theme === "system" || !theme) {
+          if (theme !== "light" && theme !== "dark") {
             theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
           }
           document.documentElement.dataset.theme = theme;
