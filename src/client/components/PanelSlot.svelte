@@ -12,18 +12,22 @@
  * visibility. When `visible` is omitted the panel renders bare (three-panel
  * layout, where both panels are always visible).
  */
+import type { Editor } from "@tiptap/core";
 import type { ComponentProps } from "svelte";
 import ChatPanel from "../panels/ChatPanel.svelte";
 import SidePanel from "../panels/SidePanel.svelte";
+import OutlinePanel from "./OutlinePanel.svelte";
 
 type ChatSlotProps = { kind: "chat"; visible?: boolean } & ComponentProps<typeof ChatPanel>;
 type SideSlotProps = { kind: "side"; visible?: boolean } & ComponentProps<typeof SidePanel>;
+type OutlineSlotProps = { kind: "outline"; visible?: boolean; editor: Editor | null };
 
 // biome-ignore lint/suspicious/noExplicitAny: discriminated union prop spread
 type Props =
   | ChatSlotProps
   | SideSlotProps
-  | { kind: "chat" | "side"; visible?: boolean; [key: string]: any };
+  | OutlineSlotProps
+  | { kind: "chat" | "side" | "outline"; visible?: boolean; [key: string]: any };
 
 let { kind, visible, ...rest }: Props = $props();
 
@@ -38,12 +42,16 @@ const wrapStyle = $derived(
   <div style={wrapStyle}>
     {#if kind === "chat"}
       <ChatPanel {...(rest as ComponentProps<typeof ChatPanel>)} {visible} />
+    {:else if kind === "outline"}
+      <OutlinePanel editor={(rest as OutlineSlotProps).editor} />
     {:else}
       <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
     {/if}
   </div>
 {:else if kind === "chat"}
   <ChatPanel {...(rest as ComponentProps<typeof ChatPanel>)} />
+{:else if kind === "outline"}
+  <OutlinePanel editor={(rest as OutlineSlotProps).editor} />
 {:else}
   <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
 {/if}
