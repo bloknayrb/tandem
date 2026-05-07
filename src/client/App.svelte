@@ -18,6 +18,7 @@ import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
+import DocxPageContainer from "./editor/DocxPageContainer.svelte";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
@@ -676,8 +677,8 @@ const tutorial = createTutorial(
       visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
-    <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
-      {#if activeTab}
+    {#if activeTab?.format === "docx"}
+      <DocxPageContainer>
         {#key activeTab.id}
           <Editor
             ydoc={activeTab.ydoc}
@@ -692,10 +693,29 @@ const tutorial = createTutorial(
             onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
           />
         {/key}
-      {:else}
-        <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
-      {/if}
-    </div>
+      </DocxPageContainer>
+    {:else}
+      <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
+        {#if activeTab}
+          {#key activeTab.id}
+            <Editor
+              ydoc={activeTab.ydoc}
+              provider={activeTab.provider}
+              readOnly={yjsSync.readOnly}
+              {activeAnnotationId}
+              onEditorReady={(ed) => (editor = ed)}
+              onAnnotationClick={(id) => {
+                showChat = false;
+                activeAnnotationId = id;
+              }}
+              onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
+            />
+          {/key}
+        {:else}
+          <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
+        {/if}
+      </div>
+    {/if}
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar
       {editor}
