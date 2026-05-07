@@ -23,7 +23,7 @@
 - [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-027)
-- [Lessons Learned](docs/lessons-learned.md) -- 53 lessons including E2E testing gotchas
+- [Lessons Learned](docs/lessons-learned.md) -- 61 lessons including E2E testing gotchas
 
 ## Critical Rules
 
@@ -97,6 +97,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **Sidecar name** is `"node-sidecar"`. Tauri appends the target triple at build time; actual binary is `node-sidecar-{target-triple}[.exe]`.
 - `kill_sidecar()` is called **before** `app.restart()` after update install; Rust then polls the health endpoint (up to 5s) waiting for port release before restarting.
 - **CI:** `tauri-release.yml` validates the signing key before building and has a `release-check` summary job that fails if any matrix build failed.
+- **`create_overlay_titlebar()` must be called post-page-load** — the hit-test JS injected by `tauri-plugin-decorum` is cleared on WebView navigation; expose it as a `#[tauri::command]` and invoke from the component's `onMount` instead of from `setup()`.
 
 ## Gotchas
 
@@ -135,6 +136,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 ### Testing & E2E
 - **E2E tests start their own server** via Playwright `webServer`. `freePort()` kills existing :3478/:3479 -- running E2E alongside `dev:server` will terminate your dev server.
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save.
+- **`cargo test` in CI requires sidecar stubs + GTK libs.** `tauri_build::build()` checks all declared `resources` (including `dist/client`, `dist/server`, `dist/channel`) and the sidecar binary. Create stubs before running: `mkdir -p src-tauri/binaries dist/channel dist/server dist/client && touch "src-tauri/binaries/node-sidecar-${TRIPLE}" "src-tauri/binaries/node-sidecar-${TRIPLE}.exe"`. On Ubuntu CI also install `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf` first.
 
 ## Security
 - Server binds to 127.0.0.1 by default. LAN binding (`TANDEM_BIND_HOST`) requires an auth token; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is an explicit insecure opt-in for development only
