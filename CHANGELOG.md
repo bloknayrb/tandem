@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Updater dialogs are now parented to the main window** — "Update Available", "No Updates Available", and "Update Error" dialogs attach to the Tandem window via `MessageDialogBuilder::parent()`, centering them over the app and inheriting Windows 11 dark-mode chrome from the `tauri-plugin-decorum` shell (closes #561, #553)
 - **Custom window chrome via tauri-plugin-decorum** — native OS title bar replaced with a themed custom title bar that re-themes with the rest of the app; preserves Windows Aero Snap, Snap Layouts, resize border, and macOS traffic-light positioning (#554)
 - **Tauri shell**: reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) are now blocked in the desktop app to prevent accidental navigation away from the editor; DevTools, Find, Print, and right-click context menu are preserved (#541)
 - **Semantic token foundation expanded for redesign wave 2 (#521)** — added radius, font-size, shadow, z-index, editor-font-size, and highlight-color token families in `index.html`, plus checker rules that now flag raw `border-radius: <n>px` and inline `box-shadow: ... rgba(...)` in `src/client/`.
@@ -33,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Browser path: no light-flash on first paint for dark-mode users** — an inline pre-mount script in `index.html` reads the persisted theme preference (falling back to `matchMedia`) and sets `data-theme` on `<html>` before Svelte mounts, matching the behaviour the Tauri shell already provided via `window.__TANDEM_INITIAL_THEME__` (#551 partial — FOUC mitigated; matchMedia source-of-truth fix deferred to #477)
 - **ErrorBoundary now offers in-place recovery before falling back to a full reload (#507)** — the app-root `<svelte:boundary>` re-renders children via `reset()` on a "Try to recover" click, capped at three attempts before forcing the user to reload. The budget resets after each successful recovery so an unrelated subsequent error gets a fresh three attempts. Failed-state surface uses `--tandem-error-bg`/`-border`/`-fg-strong` tokens (was neutral) and re-announces via `role="alert"` on each fresh failure.
 - **Toolbar**: HighlightColorPicker border now uses `--tandem-border` token, correctly adapting to light/dark theme switching (#536)
 - **Theme system: Tauri shell now reads Windows app-mode preference (`AppsUseLightTheme`) for `theme: "system"` instead of taskbar color mode (closes #535)** — `get_app_theme` Rust command reads `WebviewWindow::theme()`, which maps to `HKCU\...\Personalize\AppsUseLightTheme`. Initial theme is seeded before Svelte mounts; `useTauriTheme.svelte.ts` subscribes to `onThemeChanged` and polls every 3s while focused. `matchMedia` subscription is skipped in Tauri to prevent race conditions.

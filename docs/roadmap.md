@@ -337,8 +337,8 @@ Future hardening (not blocking release):
 - **File association**: Register `.md`/`.docx`/`.txt` file extensions so double-clicking opens in Tandem
 - **Deep link / open-with**: Pass file path from second-instance launch into the running server via `POST /api/open`
 - **Linux tray fallback**: Improve UX when `libappindicator3-dev` is absent (currently logs and continues)
-- **Linux/KDE title bar button placement** (#552): verify and fix custom window-control placement under KDE (deferred from PR #557)
-- **Updater dialog theming** (#561): theme or replace the native `tauri-plugin-updater` OS dialog to match the custom `tauri-plugin-decorum` shell (deferred from PR #557)
+- **Linux/KDE title bar button placement** (#552): `tauri-plugin-decorum` positions window controls on the right (GNOME convention); KDE Plasma users with left-side decoration preference will see a mismatch. No per-platform config knob in decorum — fix requires a CSS-only `[data-platform="linux"]` mirror or a KDE-specific adjustment. Needs a KDE tester to confirm the issue and validate any fix. Tagged `needs-tester`.
+- **Updater dialog theming** (#561): dialogs now parented to main window (`MessageDialogBuilder::parent()`) so they center over the app and inherit Windows 11 dark-mode chrome from decorum; full in-app Svelte modal deferred to v0.12.0 alongside #477 if the parent attachment isn't sufficient after visual verification
 
 ---
 

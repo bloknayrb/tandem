@@ -1482,44 +1482,56 @@ fn show_no_claude_dialog(handle: &tauri::AppHandle) {
 fn show_update_available_dialog(app: &tauri::AppHandle, version: &str) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    app.dialog()
+    let mut builder = app
+        .dialog()
         .message(format!(
             "Tandem v{version} is available.\n\n\
              Would you like to update now? The application will restart after installing."
         ))
         .title("Update Available")
         .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancel)
-        .blocking_show()
+        .buttons(MessageDialogButtons::OkCancel);
+    if let Some(window) = app.get_webview_window("main") {
+        builder = builder.parent(&window);
+    }
+    builder.blocking_show()
 }
 
 /// Inform the user they're on the latest version (manual check feedback).
 fn show_up_to_date_dialog(app: &tauri::AppHandle) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-    app.dialog()
+    let mut builder = app
+        .dialog()
         .message(format!(
             "You're running the latest version of Tandem (v{}).",
             env!("CARGO_PKG_VERSION")
         ))
         .title("No Updates Available")
-        .kind(MessageDialogKind::Info)
-        .show(|_| {});
+        .kind(MessageDialogKind::Info);
+    if let Some(window) = app.get_webview_window("main") {
+        builder = builder.parent(&window);
+    }
+    builder.show(|_| {});
 }
 
 /// Show an error dialog for failed update checks (manual check feedback only).
 fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-    app.dialog()
+    let mut builder = app
+        .dialog()
         .message(format!(
             "Could not check for updates.\n\n\
              Error: {error}\n\n\
              Please try again later or check your internet connection."
         ))
         .title("Update Error")
-        .kind(MessageDialogKind::Error)
-        .show(|_| {});
+        .kind(MessageDialogKind::Error);
+    if let Some(window) = app.get_webview_window("main") {
+        builder = builder.parent(&window);
+    }
+    builder.show(|_| {});
 }
 
 /// Check for updates and optionally prompt the user.
