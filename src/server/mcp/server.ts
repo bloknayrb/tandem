@@ -365,6 +365,8 @@ export async function startMcpServerHttp(
       storagePath: SESSION_DIR,
       getTokenFilePath,
       changelogPath: CHANGELOG_PATH,
+      transport: "http",
+      bindHost: host,
     },
   );
 

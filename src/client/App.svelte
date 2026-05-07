@@ -583,6 +583,8 @@ const tutorial = createTutorial(
       onUpdate={settingsState.updateSettings}
       returnFocusEl={settingsBtnEl}
       anchorEl={settingsBtnEl}
+      connected={yjsSync.connected}
+      reconnectAttempts={yjsSync.reconnectAttempts}
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
