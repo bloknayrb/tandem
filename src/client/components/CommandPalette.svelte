@@ -26,6 +26,7 @@ const filteredActions = $derived.by(() => {
 });
 
 $effect(() => {
+  filteredActions;
   selectedIndex = 0;
 });
 

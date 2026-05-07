@@ -9,7 +9,7 @@
  * console.warn in production (debugging aid) and a thrown error in dev. To
  * replace an existing entry explicitly, pass { replace: true }.
  *
- * ADR-028 (docs/decisions.md) records the design rationale.
+ * ADR-029 (docs/decisions.md) records the design rationale.
  */
 
 export const ACTION_GROUPS = ["editor", "navigation", "view", "document"] as const;

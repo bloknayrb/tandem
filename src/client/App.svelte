@@ -245,29 +245,23 @@ $effect(() => {
       showHelp = untrack(() => !showHelp);
       return;
     }
-    // Redirect Ctrl/Cmd+A to editor select-all when focus is outside the editor,
-    // so tab labels and other UI text don't get selected.
-    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
-      const active = document.activeElement;
-      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
-      if (active?.closest?.(".ProseMirror")) return;
-      e.preventDefault();
-      editor?.commands.selectAll();
-    }
-    // Ctrl/Cmd+S — save document
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-      e.preventDefault();
-      void triggerSave(yjsSync.activeTabId);
-    }
-    // Ctrl/Cmd+, — open settings
-    if (isSettingsShortcut(e)) {
-      e.preventDefault();
-      settingsOpen = true;
-    }
-    // Ctrl/Cmd+Shift+P — command palette
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "P") {
-      e.preventDefault();
-      paletteOpen = !untrack(() => paletteOpen);
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === "a") {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+        if (active?.closest?.(".ProseMirror")) return;
+        e.preventDefault();
+        editor?.commands.selectAll();
+      } else if (e.key === "s") {
+        e.preventDefault();
+        void triggerSave(yjsSync.activeTabId);
+      } else if (isSettingsShortcut(e)) {
+        e.preventDefault();
+        settingsOpen = true;
+      } else if (e.shiftKey && e.key === "P") {
+        e.preventDefault();
+        paletteOpen = !untrack(() => paletteOpen);
+      }
     }
   }
   window.addEventListener("keydown", handler);
