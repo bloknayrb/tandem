@@ -6,6 +6,8 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
+import { saving as actionSaving, triggerSave, wireActionDeps } from "./actions/builtin.js";
+import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
@@ -28,8 +30,7 @@ import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
-import { createSaveShortcut } from "./hooks/useSaveShortcut.svelte";
-import { createSettingsShortcut } from "./hooks/useSettingsShortcut.svelte";
+import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
@@ -104,18 +105,27 @@ createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
-const saveShortcut = createSaveShortcut(() => yjsSync.activeTabId);
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
 
 let settingsOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
+let paletteOpen = $state(false);
 
 function toggleSettings() {
   settingsOpen = !settingsOpen;
 }
 
-createSettingsShortcut(() => toggleSettings);
+// Wire action dependencies for builtin actions (save, settings, find, mode)
+// after the reactive state they depend on is available.
+wireActionDeps({
+  getActiveTabId: () => yjsSync.activeTabId,
+  openSettings: () => (settingsOpen = true),
+  toggleSoloMode: () =>
+    modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
+  // openFindBar wired when PR 570 (find/replace bar) merges into this branch
+  openFindBar: () => {},
+});
 
 // Guard: only dispatch when visibility actually changes. Without this, every
 // call to updateSettings() (which replaces the entire settings object even
@@ -243,6 +253,21 @@ $effect(() => {
       if (active?.closest?.(".ProseMirror")) return;
       e.preventDefault();
       editor?.commands.selectAll();
+    }
+    // Ctrl/Cmd+S — save document
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      void triggerSave(yjsSync.activeTabId);
+    }
+    // Ctrl/Cmd+, — open settings
+    if (isSettingsShortcut(e)) {
+      e.preventDefault();
+      settingsOpen = true;
+    }
+    // Ctrl/Cmd+Shift+P — command palette
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "P") {
+      e.preventDefault();
+      paletteOpen = !untrack(() => paletteOpen);
     }
   }
   window.addEventListener("keydown", handler);
@@ -420,7 +445,7 @@ const tutorial = createTutorial(
       claudeActive={yjsSync.claudeActive}
       readOnly={yjsSync.readOnly}
       documentCount={yjsSync.tabs.length}
-      saving={saveShortcut.saving}
+      saving={actionSaving}
       heldCount={modeGate.heldCount}
       mode={modeState.tandemMode}
       onShowHeld={() => modeState.setTandemMode("tandem")}
@@ -436,6 +461,8 @@ const tutorial = createTutorial(
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+
+    <CommandPalette open={paletteOpen} onClose={() => (paletteOpen = false)} />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
 

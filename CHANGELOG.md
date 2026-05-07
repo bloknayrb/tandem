@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Command palette + action registry (closes #571)** — Ctrl+Shift+P opens a fuzzy-search command palette. A central action registry (`src/client/actions/registry.ts`) is the new source of truth for commands and their display shortcuts; the Settings → Shortcuts tab now derives its content from the registry rather than a hardcoded array. Ctrl+S and Ctrl+, are migrated from dedicated hook files into the global keydown handler; `useSaveShortcut.svelte.ts` and `useSettingsShortcut.svelte.ts` are deleted. ADR-029 records the design. New testids: `command-palette`, `palette-input`, `palette-item-{id}`, `palette-empty`.
+
 - **Settings dialog responsive breakpoint (closes #515)** — stacked single-column layout at ≤640px; sidebar capped at 45% of dialog height with vertical scroll; four E2E tests cover nav reachability, Tab cycling, focus-after-resize, and content width.
 - **Redesign bundle checked into `docs/redesign-bundle/` (#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
 - **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
