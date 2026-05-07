@@ -151,11 +151,12 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   });
   await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Italic" })).toBeVisible();
-  await expect(toolbar.getByRole("button", { name: "Strike" })).toBeVisible();
-  await expect(toolbar.getByRole("button", { name: "Code" })).toBeVisible();
-  await expect(toolbar.getByRole("button", { name: "Link" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: /Highlight / })).toHaveCount(4);
   await expect(toolbar.getByRole("button", { name: "Comment on selection" })).toBeVisible();
+  // Strike, Code, and Link were removed from the selection popup (see toolbar-ux-research.md)
+  await expect(toolbar.getByRole("button", { name: "Strike" })).not.toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Code" })).not.toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Link" })).not.toBeVisible();
 });
 
 test("floating selection toolbar dismisses with Escape", async ({ page }) => {
