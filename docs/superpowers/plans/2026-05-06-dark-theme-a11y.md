@@ -15,7 +15,7 @@
 These were verified before writing the plan — don't re-derive them:
 
 - **`index.html`** line ~184: last line of `[data-theme="dark"]` block is `--tandem-scrollbar-thumb: oklch(0.38 0.014 270);`
-- **`index.html`** lines 220–246: existing `@media (forced-colors: active)` block already maps token families to system colors. Add new surface rules **inside this block, after the existing `[data-testid="held-badge"]` rule**.
+- **`index.html`** lines 220–246: existing `@media (forced-colors: active)` block already maps token families to system colors. Add new surface rules **inside this block, before the closing `}` of the forced-colors block**.
 - **`src/client/status/StatusBar.svelte`**: held pill (`data-testid="sb-held"`) already has `border: 1px solid var(--tandem-warning-border)` inline → **no forced-colors fix needed**. Status dots and Claude-active dot are inline-style background circles with no class.
 - **`src/client/components/ToastContainer.svelte`**: toast count badge uses dynamic `data-testid={`toast-count-${toast.id}`}` and background-only inline styles. Animation `tandem-toast-slide-in` uses only `opacity + transform` — no keyframe guard needed.
 - **`src/client/panels/BulkActions.svelte`**: confirm button is `data-testid="bulk-confirm-btn"`, background-only inline styles.
@@ -208,28 +208,20 @@ BulkActions confirm button and AnnotationCard Private pill both have static `dat
 
 - [ ] **Step 2: In `index.html`, find the existing `@media (forced-colors: active)` block** (around line 220). It ends with:
   ```css
-        /* Held-count badge uses warning-bg only (no border) — add one so it stays visible. */
-        [data-testid="held-badge"] {
-          border: 1px solid ButtonText;
-        }
-      }
-  ```
-  Replace that closing section with:
-  ```css
-        /* Held-count badge uses warning-bg only (no border) — add one so it stays visible. */
-        [data-testid="held-badge"] {
-          border: 1px solid ButtonText;
-        }
-
-        /* BulkActions confirm button: background-only in normal mode. */
-        [data-testid="bulk-confirm-btn"] {
-          border: 1px solid ButtonText;
-        }
-
         /* AnnotationCard private pill: background-only warning fill. */
         [data-testid="annotation-private-pill"] {
           border: 1px solid ButtonText;
         }
+      }
+  ```
+  Insert new rules before the closing `}`:
+  ```css
+        /* AnnotationCard private pill: background-only warning fill. */
+        [data-testid="annotation-private-pill"] {
+          border: 1px solid ButtonText;
+        }
+
+        /* ADD NEW RULES HERE */
       }
   ```
 

@@ -31,7 +31,6 @@ interface Props {
   settingsBtn?: HTMLButtonElement | null;
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
-  heldCount?: number;
   selectionToolbar?: boolean;
   suppressSelectionToolbar?: boolean;
 }
@@ -43,7 +42,6 @@ let {
   settingsBtn = $bindable(null),
   tandemMode,
   onModeChange,
-  heldCount,
   selectionToolbar = true,
   suppressSelectionToolbar = false,
 }: Props = $props();
@@ -495,17 +493,6 @@ function handleLinkMouseDown(e: MouseEvent) {
 
   <div style="flex: 1;"></div>
   <div style="display: flex; align-items: center; gap: var(--tandem-space-3);">
-    {#if (heldCount ?? 0) > 0}
-      <span
-        data-testid="held-badge"
-        style="padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: var(--tandem-font-mono);
-          color: var(--tandem-warning-fg-strong);
-          background: var(--tandem-warning-bg);
-          border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-pill);"
-      >
-        {heldCount} held
-      </span>
-    {/if}
     {#if tandemMode && onModeChange}
       <ModeToggle {tandemMode} {onModeChange} />
     {/if}
