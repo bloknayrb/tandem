@@ -26,10 +26,10 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Create sidecar stub for build script
+      - name: Create stubs for tauri_build resource checks
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries
+          mkdir -p src-tauri/binaries dist/channel dist/server dist/client
           touch "src-tauri/binaries/node-sidecar-$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
 
       - name: Rust unit tests
