@@ -218,6 +218,14 @@ $effect(() => {
     const right = "right" in prev ? prev.right : loadPanelWidth("right");
     const left = "left" in prev ? prev.left : loadPanelWidth("left");
     panelLayout = { kind: "three-panel", left, right };
+<<<<<<< HEAD
+=======
+    // Set the canonical default (Outline left) only if not already set — avoids
+    // a superfluous settings write and the extra effect re-run it would cause.
+    if (untrack(() => settingsState.settings.leftSlot.kind) !== "outline") {
+      settingsState.updateSettings({ leftSlot: { kind: "outline" } });
+    }
+>>>>>>> 098278b (fix(outline): prevent effect_update_depth_exceeded in OutlinePanel)
   } else if (layout === "tabbed-left") {
     if (prev.kind === "tabbed-left") return;
     const left = "left" in prev ? prev.left : loadPanelWidth("left");
