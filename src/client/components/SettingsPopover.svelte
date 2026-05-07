@@ -4,7 +4,7 @@ import {
   SELECTION_DWELL_MIN_MS,
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
-import { ACTION_GROUPS, getActionsMap } from "../actions/registry.js";
+import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import type { TandemSettings } from "../hooks/useTandemSettings.svelte";

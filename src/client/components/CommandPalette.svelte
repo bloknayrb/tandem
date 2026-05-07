@@ -1,5 +1,5 @@
 <script lang="ts">
-import { type Action, getActions } from "../actions/registry.js";
+import { type Action, getActions } from "../actions/registry.svelte.js";
 
 interface Props {
   open: boolean;

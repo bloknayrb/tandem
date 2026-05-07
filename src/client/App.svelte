@@ -6,7 +6,7 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
-import { saving as actionSaving, triggerSave, wireActionDeps } from "./actions/builtin.js";
+import { saveStore, triggerSave, wireActionDeps } from "./actions/builtin.svelte.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -439,7 +439,7 @@ const tutorial = createTutorial(
       claudeActive={yjsSync.claudeActive}
       readOnly={yjsSync.readOnly}
       documentCount={yjsSync.tabs.length}
-      saving={actionSaving}
+      saving={saveStore.saving}
       heldCount={modeGate.heldCount}
       mode={modeState.tandemMode}
       onShowHeld={() => modeState.setTandemMode("tandem")}

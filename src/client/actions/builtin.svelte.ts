@@ -10,7 +10,7 @@
  */
 
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
-import { type Action, registerAction } from "./registry.js";
+import { type Action, registerAction } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection — App.svelte calls wireActionDeps on mount
@@ -41,7 +41,12 @@ function guardedRun(id: string, fn: (d: ActionDeps) => void | Promise<void>) {
 // Save — mirrors useSaveShortcut.svelte.ts logic
 // ---------------------------------------------------------------------------
 
-export let saving = $state(false);
+let saving = $state(false);
+export const saveStore = {
+  get saving() {
+    return saving;
+  },
+};
 let inflight = false;
 
 export async function triggerSave(activeDocId: string | null): Promise<void> {
