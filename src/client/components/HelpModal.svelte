@@ -1,45 +1,34 @@
 <script lang="ts">
 import { untrack } from "svelte";
+import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
 
-interface ShortcutRow {
-  keys: string[];
-  description: string;
-}
-
-interface ShortcutSection {
-  title: string;
-  rows: ShortcutRow[];
-}
-
-const SECTIONS: ShortcutSection[] = [
-  {
-    title: "Editor",
-    rows: [
-      { keys: ["Ctrl", "B"], description: "Bold" },
-      { keys: ["Ctrl", "I"], description: "Italic" },
-      { keys: ["Ctrl", "Z"], description: "Undo" },
-      { keys: ["Ctrl", "Y"], description: "Redo" },
-      { keys: ["Ctrl", "S"], description: "Save document" },
-    ],
-  },
-  {
-    title: "Chat",
-    rows: [{ keys: ["Enter"], description: "Send message" }],
-  },
-  {
-    title: "Tabs",
-    rows: [
-      { keys: ["Ctrl", "Tab"], description: "Next tab" },
-      { keys: ["Ctrl", "Shift", "Tab"], description: "Previous tab" },
-      { keys: ["Alt", "←"], description: "Move tab left" },
-      { keys: ["Alt", "→"], description: "Move tab right" },
-    ],
-  },
-  {
-    title: "General",
-    rows: [{ keys: ["?"], description: "Show / hide this help" }],
-  },
+// Static shortcuts not in the action registry (formatting, navigation, help)
+const STATIC_SHORTCUT_ROWS = [
+  { keys: "Ctrl+B", description: "Bold" },
+  { keys: "Ctrl+I", description: "Italic" },
+  { keys: "Ctrl+Z", description: "Undo" },
+  { keys: "Ctrl+Y", description: "Redo" },
+  { keys: "Ctrl+F", description: "Find / Replace" },
+  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
+  { keys: "Ctrl+Tab", description: "Next document tab" },
+  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
 ];
+
+// Registry-derived sections — same source as Settings → Shortcuts tab
+const registryShortcutSections = $derived.by(() => {
+  const actionsMap = getActionsMap();
+  const byGroup = new Map<string, Array<{ keys: string; description: string }>>();
+  for (const action of actionsMap.values()) {
+    if (!action.shortcut) continue;
+    const rows = byGroup.get(action.group) ?? [];
+    rows.push({ keys: action.shortcut, description: action.label });
+    byGroup.set(action.group, rows);
+  }
+  return ACTION_GROUPS.map((g) => ({
+    title: g.charAt(0).toUpperCase() + g.slice(1),
+    rows: byGroup.get(g) ?? [],
+  })).filter((s) => s.rows.length > 0);
+});
 
 interface Props {
   open: boolean;
@@ -131,56 +120,49 @@ $effect(() => {
         </button>
       </div>
 
-      {#each SECTIONS as section (section.title)}
+      {#each registryShortcutSections as section (section.title)}
         <div style="margin-bottom: 18px;">
           <div
             style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tandem-fg-subtle); margin-bottom: 6px;"
           >
             {section.title}
           </div>
-          <table style="width: 100%; border-collapse: collapse;">
-            <tbody>
-              {#each section.rows as row (row.description)}
-                <tr>
-                  <td style="padding-bottom: 5px; padding-right: 16px; white-space: nowrap; vertical-align: middle; width: 1%;">
-                    <span style="display: flex; gap: 4px; align-items: center;">
-                      {#each row.keys as key, i (key)}
-                        <span>
-                          <kbd
-                            style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;"
-                          >
-                            {key}
-                          </kbd>
-                          {#if i < row.keys.length - 1}
-                            <span style="color: var(--tandem-fg-subtle); font-size: 11px; margin: 0 2px;">
-                              +
-                            </span>
-                          {/if}
-                        </span>
-                      {/each}
-                    </span>
-                  </td>
-                  <td style="padding-bottom: 5px; font-size: 13px; color: var(--tandem-fg-muted); vertical-align: middle;">
-                    {row.description}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+          <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
+            {#each section.rows as row (row.description)}
+              <span style="font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;">
+                <kbd style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: inherit; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;">{row.keys}</kbd>
+              </span>
+              <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
+            {/each}
+          </div>
         </div>
       {/each}
+
+      <!-- Static shortcuts not yet in the action registry -->
+      <div style="margin-bottom: 18px;">
+        <div
+          style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tandem-fg-subtle); margin-bottom: 6px;"
+        >
+          Other
+        </div>
+        <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
+          {#each STATIC_SHORTCUT_ROWS as row (row.description)}
+            <span style="font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;">
+              <kbd style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: inherit; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;">{row.keys}</kbd>
+            </span>
+            <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
+          {/each}
+        </div>
+      </div>
 
       <div
         style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--tandem-border); font-size: 11px; color: var(--tandem-fg-subtle); text-align: center;"
       >
         Press
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">
-          ?
-        </kbd>
+        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">?</kbd>,
+        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">Ctrl+/</kbd>,
         or
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">
-          Esc
-        </kbd>
+        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">Esc</kbd>
         to close
       </div>
     </div>

@@ -265,6 +265,11 @@ $effect(() => {
       } else if (e.shiftKey && e.key === "P") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
+      } else if (e.key === "/") {
+        const el = e.target as HTMLElement;
+        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+        e.preventDefault();
+        showHelp = untrack(() => !showHelp);
       }
     }
     // Ctrl/Cmd+F — open find bar (suppress browser native find)
