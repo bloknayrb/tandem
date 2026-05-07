@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
-import { systemTheme } from "../../src/client/hooks/useTheme.js";
+import { systemTheme } from "../../src/client/hooks/useTheme.svelte.js";
 
 vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
   isTauriRuntime: vi.fn(() => false),
@@ -60,16 +60,30 @@ describe("useTauriTheme", () => {
   });
 
   it("tauriTheme.current initializes from __TANDEM_INITIAL_THEME__ when isTauriRuntime() returns true", async () => {
-    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
-    const { tauriTheme, _resetForTests } = await import(
+    // vi.resetModules() clears the cache so the re-import below re-evaluates
+    // the TauriThemeStore singleton constructor with fresh dependencies.
+    // vi.doMock() (not vi.mock()) sets the factory without hoisting, so it
+    // does not replace the outer coworkHelpers spy that afterEach depends on.
+    vi.resetModules();
+
+    vi.doMock("../../src/client/cowork/cowork-helpers.js", () => ({
+      isTauriRuntime: vi.fn(() => true),
+    }));
+
+    Object.defineProperty(window, "__TANDEM_INITIAL_THEME__", {
+      value: "dark",
+      writable: true,
+      configurable: true,
+    });
+
+    const { tauriTheme: freshStore } = await import(
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
-    // Reset first (clears globals), then stub with the desired seed value
-    _resetForTests();
-    vi.stubGlobal("window", { __TANDEM_INITIAL_THEME__: "dark" });
-    // Verify the seeding logic: the store constructor reads window.__TANDEM_INITIAL_THEME__
-    (tauriTheme as any).current = (window as any).__TANDEM_INITIAL_THEME__ ?? null;
-    expect(tauriTheme.current).toBe("dark");
+    expect(freshStore.current).toBe("dark");
+
+    // Restore for subsequent tests
+    delete (window as any).__TANDEM_INITIAL_THEME__;
+    vi.resetModules();
   });
 
   it("_resetForTests() also clears window.__TANDEM_INITIAL_THEME__ and resets _initialized", async () => {

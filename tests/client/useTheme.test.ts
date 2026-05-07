@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
-import { applyTheme, resolveTheme, systemTheme } from "../../src/client/hooks/useTheme.js";
+import { applyTheme, resolveTheme, systemTheme } from "../../src/client/hooks/useTheme.svelte.js";
 
 vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
   isTauriRuntime: vi.fn(() => false),
