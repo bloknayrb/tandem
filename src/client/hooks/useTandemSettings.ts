@@ -37,7 +37,9 @@ export interface TandemSettings {
   panelHidden: boolean;
   leftSlot: { kind: LeftSlotKind };
   degradedBannerDelayMs: number;
+  // TODO(v0.11.0): wire to yjsSync reconnect strategy
   sidecarRetryStrategy: SidecarRetryStrategy;
+  // TODO(v0.11.0): wire to annotation queuing in useModeGate
   holdAnnotationsWhileOffline: boolean;
 }
 

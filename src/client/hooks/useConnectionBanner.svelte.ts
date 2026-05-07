@@ -9,14 +9,14 @@ export interface ConnectionBannerState {
  * Svelte 5 port of `useConnectionBanner`.
  *
  * Tracks prolonged-disconnect state and surfaces a dismissible banner signal.
- * Shows after PROLONGED_DISCONNECT_MS of continuous disconnection.
- * Resets (hidden, undismissed) when the connection recovers.
+ * Shows after `getDelayMs()` ms of continuous disconnection (defaults to
+ * PROLONGED_DISCONNECT_MS). Resets when the connection recovers.
  *
- * Accepts a getter for `disconnectedSince` so callers with `$state` values
- * propagate reactively.
+ * Accepts getters so callers with `$state` values propagate reactively.
  */
 export function createConnectionBanner(
   getDisconnectedSince: () => number | null,
+  getDelayMs: () => number = () => PROLONGED_DISCONNECT_MS,
 ): ConnectionBannerState {
   let showDisconnectBanner = $state(false);
   let disconnectBannerDismissed = $state(false);
@@ -29,7 +29,7 @@ export function createConnectionBanner(
       return;
     }
     const elapsed = Date.now() - disconnectedSince;
-    const remaining = PROLONGED_DISCONNECT_MS - elapsed;
+    const remaining = getDelayMs() - elapsed;
     if (remaining <= 0) {
       showDisconnectBanner = true;
       return;

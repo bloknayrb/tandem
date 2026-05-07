@@ -105,7 +105,10 @@ const modeGate = $derived.by(() => {
 
   return { visibleAnnotations, heldCount };
 });
-const connectionBanner = createConnectionBanner(() => yjsSync.disconnectedSince);
+const connectionBanner = createConnectionBanner(
+  () => yjsSync.disconnectedSince,
+  () => settingsState.settings.degradedBannerDelayMs,
+);
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
