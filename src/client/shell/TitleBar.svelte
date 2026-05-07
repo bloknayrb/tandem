@@ -5,8 +5,20 @@ import { onDestroy, onMount } from "svelte";
 
 interface Props {
   title?: string;
+  dirty?: boolean;
+  panelVisible?: boolean;
+  onTogglePanel?: () => void;
+  isThreePanel?: boolean;
+  onToggleLayout?: () => void;
 }
-const { title = "Tandem" }: Props = $props();
+const {
+  title = "Tandem",
+  dirty = false,
+  panelVisible = true,
+  onTogglePanel,
+  isThreePanel = false,
+  onToggleLayout,
+}: Props = $props();
 
 let win: TauriWindow | null = null;
 let isMaximized = $state(false);
@@ -83,7 +95,42 @@ async function close() {
 {#if isTauriRuntime()}
 	<div class="title-bar">
 		<div class="title-bar-left" data-tauri-drag-region>
-			<span class="title-bar-title">{title}</span>
+			<span class="title-bar-title">{title ?? "Tandem"}{#if dirty}<span class="title-bar-dirty" aria-label="unsaved changes"></span>{/if}</span>
+		</div>
+		<div class="title-bar-chrome">
+			{#if onTogglePanel}
+				<button
+					type="button"
+					class="title-bar-chrome-btn"
+					class:active={panelVisible}
+					data-testid="title-bar-toggle-panel"
+					aria-label={panelVisible ? "Hide panel" : "Show panel"}
+					aria-pressed={panelVisible}
+					onclick={onTogglePanel}
+				>
+					<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+						<rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
+						<line x1="9" y1="1" x2="9" y2="13" stroke="currentColor" stroke-width="1.2"/>
+					</svg>
+				</button>
+			{/if}
+			{#if onToggleLayout}
+				<button
+					type="button"
+					class="title-bar-chrome-btn"
+					class:active={isThreePanel}
+					data-testid="title-bar-toggle-layout"
+					aria-label={isThreePanel ? "Single panel layout" : "Three-panel layout"}
+					aria-pressed={isThreePanel}
+					onclick={onToggleLayout}
+				>
+					<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+						<rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
+						<line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" stroke-width="1.2"/>
+						<line x1="9" y1="1" x2="9" y2="13" stroke="currentColor" stroke-width="1.2"/>
+					</svg>
+				</button>
+			{/if}
 		</div>
 		<div class="title-bar-controls">
 			<button type="button" class="title-bar-btn" aria-label="Minimize" onclick={minimize}>
@@ -182,6 +229,51 @@ async function close() {
 		white-space: nowrap;
 	}
 
+	.title-bar-dirty {
+		display: inline-block;
+		width: 6px;
+		height: 6px;
+		border-radius: var(--tandem-r-circle);
+		background: var(--tandem-warning);
+		vertical-align: middle;
+		margin-left: 4px;
+	}
+
+	.title-bar-chrome {
+		display: flex;
+		align-items: center;
+		gap: var(--tandem-space-1);
+		padding: 0 var(--tandem-space-2);
+	}
+
+	.title-bar-chrome-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 22px;
+		border: none;
+		background: transparent;
+		color: var(--tandem-fg-subtle);
+		cursor: pointer;
+		border-radius: var(--tandem-r-2);
+		transition: background 0.1s, color 0.1s;
+	}
+
+	.title-bar-chrome-btn:hover {
+		background: var(--tandem-surface-muted);
+		color: var(--tandem-fg);
+	}
+
+	.title-bar-chrome-btn.active {
+		color: var(--tandem-accent);
+	}
+
+	.title-bar-chrome-btn:focus-visible {
+		outline: 2px solid var(--tandem-accent);
+		outline-offset: -2px;
+	}
+
 	.title-bar-controls {
 		display: flex;
 		height: 100%;
@@ -234,6 +326,18 @@ async function close() {
 		}
 
 		.title-bar-close:hover {
+			background: Highlight;
+			color: HighlightText;
+		}
+
+		.title-bar-chrome-btn {
+			background: ButtonFace;
+			color: ButtonText;
+			border: 1px solid ButtonText;
+		}
+
+		.title-bar-chrome-btn:hover,
+		.title-bar-chrome-btn.active {
 			background: Highlight;
 			color: HighlightText;
 		}

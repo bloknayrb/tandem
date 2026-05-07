@@ -210,9 +210,20 @@ $effect(() => {
   }
 });
 
+let manualPanelHidden = $state(false);
+
 const effectivePanelHidden = $derived(
-  modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden,
+  manualPanelHidden || (modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
 );
+
+function togglePanel() {
+  manualPanelHidden = !manualPanelHidden;
+}
+
+function toggleLayout() {
+  const current = settingsState.settings.layout;
+  settingsState.updateSettings({ layout: current === "three-panel" ? "tabbed" : "three-panel" });
+}
 
 const editorMaxWidth = $derived(
   settingsState.settings.editorWidthPercent < 100
@@ -294,7 +305,13 @@ const tutorial = createTutorial(
 </script>
 
 <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
-  <TitleBar title={activeTab?.fileName} />
+  <TitleBar
+    title={activeTab?.fileName}
+    panelVisible={!manualPanelHidden}
+    onTogglePanel={togglePanel}
+    isThreePanel={panelLayout.kind === "three-panel"}
+    onToggleLayout={toggleLayout}
+  />
   {#if !yjsSync.ready}
     <div
       style="display: flex; flex: 1; align-items: center; justify-content: center; color: var(--tandem-fg-subtle);"
