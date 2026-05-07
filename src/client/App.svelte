@@ -304,7 +304,10 @@ const tutorial = createTutorial(
     {/if}
 
     {#if connectionBanner.showBanner}
-      <ConnectionBanner onDismiss={connectionBanner.dismiss} />
+      <ConnectionBanner
+        onDismiss={connectionBanner.dismiss}
+        onRetry={() => { connectionBanner.dismiss(); yjsSync.reconnect(); }}
+      />
     {/if}
 
     <Toolbar

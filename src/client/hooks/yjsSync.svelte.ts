@@ -40,6 +40,8 @@ export interface YjsSyncState {
   readonly serverRestarted: boolean;
   /** Caller invokes this in component teardown (`onDestroy`). */
   destroy: () => void;
+  /** Force an immediate reconnect attempt on all providers. */
+  reconnect: () => void;
 }
 
 /**
@@ -247,6 +249,7 @@ export function createYjsSync(): YjsSyncState {
 
   // Forward-declared so the bootstrap block (below) can assign and destroy() can call.
   let bootstrapCleanup: (() => void) | null = null;
+  let bootstrapProviderRef: HocuspocusProvider | null = null;
 
   // ---------- Bootstrap (collapsed Effect 1+2: connect bootstrap provider AND wire its observer) ----------
   // Done inline (eager) so the bootstrap provider + observer are guaranteed
@@ -260,6 +263,7 @@ export function createYjsSync(): YjsSyncState {
       document: ydoc,
     });
     bootstrapYdocState = ydoc;
+    bootstrapProviderRef = provider;
 
     provider.on("status", ({ status }: { status: string }) => {
       connected = status === "connected";
@@ -326,6 +330,7 @@ export function createYjsSync(): YjsSyncState {
       provider.destroy();
       ydoc.destroy();
       bootstrapYdocState = null;
+      bootstrapProviderRef = null;
     };
 
     ready = true;
@@ -476,5 +481,11 @@ export function createYjsSync(): YjsSyncState {
       return serverRestarted;
     },
     destroy,
+    reconnect() {
+      bootstrapProviderRef?.connect();
+      for (const t of tabsState) {
+        t.provider.connect();
+      }
+    },
   };
 }
