@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
+import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
@@ -52,8 +53,13 @@ $effect(() => {
   }
 
   headings = walkHeadings(ed);
-  itemEls = itemEls.slice(0, headings.length);
-  if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
+  // Use untrack to avoid a self-referential read→write cycle on itemEls.
+  // .slice() always returns a new array reference; tracking it would cause
+  // effect_update_depth_exceeded. focusedIndex has the same issue.
+  untrack(() => {
+    itemEls = itemEls.slice(0, headings.length);
+    if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
+  });
 
   const handler = () => {
     headings = walkHeadings(ed);
