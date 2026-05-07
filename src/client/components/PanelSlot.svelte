@@ -27,6 +27,7 @@ type OutlineSlotProps = {
   editor: Editor | null;
   annotations?: Annotation[];
   focusTrigger?: number;
+  activeFilterType?: string;
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: discriminated union prop spread
@@ -54,6 +55,7 @@ const wrapStyle = $derived(
         editor={(rest as OutlineSlotProps).editor}
         annotations={(rest as OutlineSlotProps).annotations}
         focusTrigger={(rest as OutlineSlotProps).focusTrigger}
+        activeFilterType={(rest as OutlineSlotProps).activeFilterType}
       />
     {:else}
       <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
@@ -62,7 +64,12 @@ const wrapStyle = $derived(
 {:else if kind === "chat"}
   <ChatPanel {...(rest as ComponentProps<typeof ChatPanel>)} />
 {:else if kind === "outline"}
-  <OutlinePanel editor={(rest as OutlineSlotProps).editor} />
+  <OutlinePanel
+    editor={(rest as OutlineSlotProps).editor}
+    annotations={(rest as OutlineSlotProps).annotations}
+    focusTrigger={(rest as OutlineSlotProps).focusTrigger}
+    activeFilterType={(rest as OutlineSlotProps).activeFilterType}
+  />
 {:else}
   <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
 {/if}

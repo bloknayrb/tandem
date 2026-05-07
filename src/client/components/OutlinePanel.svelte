@@ -8,11 +8,12 @@ interface Props {
   editor: Editor | null;
   annotations?: Annotation[];
   focusTrigger?: number;
+  activeFilterType?: string;
 }
 
 type HeadingEntry = { text: string; level: number; pos: number };
 
-let { editor, annotations = [], focusTrigger = 0 }: Props = $props();
+let { editor, annotations = [], focusTrigger = 0, activeFilterType = "all" }: Props = $props();
 
 let headings = $state<HeadingEntry[]>([]);
 let focusedIndex = $state<number>(-1);
@@ -128,12 +129,18 @@ function handleSearchKeydown(e: KeyboardEvent) {
   }
 }
 
-// Per-heading annotation counts (not filter-aware — filter state is SidePanel-local).
+// Per-heading annotation counts (filter-aware when activeFilterType is set).
 function countAnnotationsInSection(sectionStart: number, sectionEnd: number): number {
   const ed = editor;
   if (!ed || annotations.length === 0) return 0;
   let count = 0;
   for (const ann of annotations) {
+    // Apply type filter to match side panel's active filter
+    if (activeFilterType && activeFilterType !== "all") {
+      if (activeFilterType === "with-replacement") {
+        if (!ann.suggestedText) continue;
+      } else if (ann.type !== activeFilterType) continue;
+    }
     try {
       const annPmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
       if (annPmFrom >= sectionStart && annPmFrom < sectionEnd) count++;
