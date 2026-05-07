@@ -46,6 +46,8 @@ const FORMAT_COLORS: Record<string, string> = {
   docx: "var(--tandem-suggestion-fg-strong)",
 };
 
+const badgeColor = $derived(FORMAT_COLORS[tab.format] ?? "var(--tandem-fg-faint)");
+
 // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
 let dirty = $state(false);
 // These don't drive UI; plain let keeps them non-reactive
@@ -167,7 +169,7 @@ function handleMouseLeaveClose() {
   <span
     data-testid={`tab-format-badge-${tab.id}`}
     aria-label={`Format: ${tab.format}`}
-    style={`font-family: var(--tandem-font-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.03em; color: ${FORMAT_COLORS[tab.format] ?? "var(--tandem-fg-faint)"}; background: transparent; padding: 1px 4px; border: 1px solid ${FORMAT_COLORS[tab.format] ?? "var(--tandem-fg-faint)"}; border-radius: var(--tandem-r-pill); opacity: ${isActive ? 1 : 0.6}; white-space: nowrap;`}
+    style={`font-family: var(--tandem-font-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.03em; color: ${badgeColor}; background: transparent; padding: 1px 4px; border: 1px solid ${badgeColor}; border-radius: var(--tandem-r-pill); opacity: ${isActive ? 1 : 0.6}; white-space: nowrap;`}
   >
     {FORMAT_LABELS[tab.format] ?? tab.format.toUpperCase()}
   </span>
