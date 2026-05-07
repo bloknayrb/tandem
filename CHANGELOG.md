@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Find / Replace bar (closes #570)** — Ctrl+F opens a find bar anchored to the bottom-right of the editor. Highlights all matches in the document using the existing highlight-yellow token; active match gets a warning-bg border. Enter / Shift+Enter cycle through matches. Replace replaces the active match and advances; All replaces in 100-match chunks to keep Yjs updates bounded. Regex-mode toggle (off by default) with inline error for invalid patterns. All options are session-only (not persisted). New testids: `find-replace-bar`, `find-input`, `replace-input`, `find-next-btn`, `find-prev-btn`, `replace-btn`, `replace-all-btn`, `find-close-btn`, `find-match-count`, `find-regex-toggle`, `find-case-toggle`, `find-word-toggle`.
+
 - **Settings dialog responsive breakpoint (closes #515)** — stacked single-column layout at ≤640px; sidebar capped at 45% of dialog height with vertical scroll; four E2E tests cover nav reachability, Tab cycling, focus-after-resize, and content width.
 - **Redesign bundle checked into `docs/redesign-bundle/` (#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
 - **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
