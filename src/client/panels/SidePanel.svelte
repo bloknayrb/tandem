@@ -49,6 +49,7 @@ const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth"
 let filterType = $state<FilterType>("all");
 let filterAuthor = $state<FilterAuthor>("all");
 let filterStatus = $state<FilterStatus>("all");
+let filterBarOpen = $state(false);
 let bulkConfirm = $state<"accept" | "dismiss" | null>(null);
 
 // Scroll container ref
@@ -324,9 +325,12 @@ function handleBulk(status: "accepted" | "dismissed") {
     {filterAuthor}
     {filterStatus}
     {hasFilters}
-    onSetFilterType={(v) => (filterType = v)}
-    onSetFilterAuthor={(v) => (filterAuthor = v)}
-    onSetFilterStatus={(v) => (filterStatus = v)}
+    open={filterBarOpen}
+    totalCount={filteredData.filtered.length}
+    onToggleOpen={() => (filterBarOpen = !filterBarOpen)}
+    onSetFilterType={(v) => { filterType = v; filterBarOpen = false; }}
+    onSetFilterAuthor={(v) => { filterAuthor = v; filterBarOpen = false; }}
+    onSetFilterStatus={(v) => { filterStatus = v; filterBarOpen = false; }}
     onClearFilters={() => {
       filterType = "all";
       filterAuthor = "all";
