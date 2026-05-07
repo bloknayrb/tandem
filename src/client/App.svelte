@@ -691,6 +691,7 @@ const tutorial = createTutorial(
       {editor}
       open={findBarOpen}
       onClose={() => (findBarOpen = false)}
+      tabs={yjsSync.tabs}
     />
   </div>
 {/snippet}
