@@ -187,7 +187,7 @@ Remaining:
 - ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
 - ~~Version indicator in the UI (#435)~~ — **SHIPPED** (PR #460, 2026-04-28). About footer in Settings popover showing version + MCP SDK version via `useAppInfo` hook fetching `/api/info`.
 - ~~"View Changelog" button in Settings panel (#437)~~ — **SHIPPED** (PR #463, 2026-04-28). Opens bundled `CHANGELOG.md` as a read-only document tab via `POST /api/open` with `readOnly: true`.
-- Highlight color picker (palette switched to 4 colors in PR #451; UI picker not yet built)
+- ~~Highlight color picker~~ — **SHIPPED** (`HighlightColorPicker.svelte`; 4-color palette yellow/green/blue/pink)
 
 ### Verification
 - First launch shows sample document with annotations
@@ -512,7 +512,7 @@ After PR #474 merges, #473 closes automatically via `closingIssuesReferences`.
 
 | Release | Concern | Scope |
 |---------|---------|-------|
-| v0.10.0 | Full Svelte conversion | #312 Phases 2-4: Vite plugin (#465), useYjsSync rune (#466), all hooks (#467), Editor+toolbar (#468), DocumentTabs (#469), panels (#470), settings/modals/misc (#471), App.svelte+React removal (#472, shipped: PR #508). Co-resident polish: #478 (rename "Upload" → "Open" in #469's FileOpenDialog port), #494 (store lock recovery: 30s retry in HTTP mode, `storeReadOnly` field on `tandem_status`/`tandem_checkInbox`). Folded into #471: #383 (bug report link). **Deferred from v0.10.0:** #506 (browser warning banner for store readonly — MCP visibility ships in #494, browser Y.Map transport + SidePanel wiring deferred), #457 (documentation in settings — feature never existed in React source; needs new implementation, not a port) |
+| v0.10.0 | Full Svelte conversion | #312 Phases 2-4: Vite plugin (#465), useYjsSync rune (#466), all hooks (#467), Editor+toolbar (#468), DocumentTabs (#469), panels (#470), settings/modals/misc (#471), App.svelte+React removal (#472, shipped: PR #508). Co-resident polish: #478 (rename "Upload" → "Open" in #469's FileOpenDialog port), #494 (store lock recovery: 30s retry in HTTP mode, `storeReadOnly` field on `tandem_status`/`tandem_checkInbox`). Folded into #471: #383 (bug report link). **Also shipped in v0.10.0:** #569 Outline panel (PR #573, `OutlinePanel.svelte`), #570 Find/Replace bar (PR #574, `find-replace.ts` + `FindReplaceBar.svelte`), #571 Command palette (PR #575, `CommandPalette.svelte` + `registry.svelte.ts`). Connection-degradation banner (`ConnectionBanner.svelte` + `useConnectionBanner.svelte.ts`), keyboard shortcuts modal (`HelpModal.svelte`), dirty-tab dot (`TabItem.svelte` `unsaved-indicator-{id}`), recent files hover menu (`RecentFilesMenu.svelte` + `recentFiles.ts`, 30s cache). **Deferred from v0.10.0:** #506 (browser warning banner for store readonly — MCP visibility ships in #494, browser Y.Map transport + SidePanel wiring deferred), #457 (documentation in settings — feature never existed in React source; needs new implementation, not a port) |
 | v0.10.1 | Plugin URL + auth resolution (hotfix) | `resolveTandemUrl()` now checks `CLAUDE_PLUGIN_OPTION_SERVER_URL` before `TANDEM_URL`; new `resolveAuthToken()` peer checks `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` before `TANDEM_AUTH_TOKEN`; `authFetch` uses it. Monitor + channel benefit automatically. ADR-028 (Proposed). |
 | v0.10.2 | Cowork real-time push + `plugin.json` userConfig | `userConfig` (server_url + auth_token) in `.claude-plugin/plugin.json`; Cowork installer writes `pluginConfigs` to workspace `settings.json`. Gated on Sub-task D: empirical confirmation that monitors spawn in Cowork VM and `CLAUDE_PLUGIN_OPTION_*` env reaches them. Fallback if D fails: extend installer to write `tandem-channel` env block (restores channel push). ADR-028 → Accepted. |
 | v0.11.0 | Dark theme + UI polish | #59, `editor.css` dark overrides, #311, WCAG AA contrast, #369 verification. Polish bundle: #475 (temporary scratchpad — `priority:high`; introduces in-memory document model, kept out of v0.10.0 to avoid building it twice across React/Svelte), #479 (internal links open within Tandem), #492 (re-highlighting same text toggles the highlight off — behavior change kept out of v0.10.0 to avoid mixing behavioral change into the mechanical Svelte port), #457 (docs from settings — new implementation needed), #506 (browser readonly banner — Y.Map transport + SidePanel wiring), #507 (ErrorBoundary in-place reset recovery path), #513, #515, #516, #517, #522 (release QA — blocked on #518–#521, all now shipped), #535, #536, #541 (theme fixes and disable browser reload shortcuts in the Tauri shell), #548 (toolbar inline link input — replace `window.prompt` with inline URL input matching comment/note pattern) |
@@ -582,7 +582,7 @@ Net result: 25 tools (down from 31; `tandem_highlight`, `tandem_flag`, `tandem_s
 | #244 — Windows Playwright deadlock | CI workaround exists |
 | Three-way merge / conflict UI (5c partial) | Complex; reload behavior acceptable for v1.0 |
 | RANGE_MOVED auto-retry | Edge case |
-| Flag markers / highlight color picker | Minor toolbar gaps |
+| Flag markers | Minor toolbar gap |
 | #312 (if no-go) | Svelte deferred to v2 |
 | #321 — WS LAN auth | Only if WS exposed to LAN |
 | #315 — DocumentStore interface | Architecture cleanup |
