@@ -13,3 +13,12 @@ export function applyEditorFont(font: EditorFont, el: HTMLElement): () => void {
   el.style.setProperty("--tandem-editor-font-family", FONT_STACKS[font]);
   return () => el.style.removeProperty("--tandem-editor-font-family");
 }
+
+// Throws intentionally if documentElement is unavailable — indicates a broken
+// environment, not a recoverable edge case.
+export function applyEditorFontToRoot(font: EditorFont): () => void {
+  const root = document.documentElement;
+  if (!root) throw new Error("[useEditorFont] document.documentElement unavailable");
+  root.style.setProperty("--tandem-editor-font-family", FONT_STACKS[font]);
+  return () => root.style.removeProperty("--tandem-editor-font-family");
+}
