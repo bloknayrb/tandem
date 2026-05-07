@@ -133,8 +133,7 @@ const annotationResults = $derived.by((): AnnotationResult[] => {
   return annotations
     .filter((a) => {
       if (!q) return true;
-      const snippet = a.textSnapshot ?? a.content ?? "";
-      return snippet.toLowerCase().includes(q) || a.content?.toLowerCase().includes(q);
+      return a.content.toLowerCase().includes(q) || a.textSnapshot?.toLowerCase().includes(q);
     })
     .slice(0, 50)
     .map((a) => ({
