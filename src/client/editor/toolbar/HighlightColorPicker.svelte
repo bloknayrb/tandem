@@ -71,7 +71,7 @@ function handleColorSelect(color: HighlightColor) {
     <span
       style="display: inline-block; width: 12px; height: 12px; border-radius: var(--tandem-r-1);
         background: {HIGHLIGHT_COLOR_VARS[highlightColor]};
-        border: 1px solid rgba(0,0,0,0.15);"
+        border: 1px solid var(--tandem-border);"
     ></span>
   </button>
   {#if showColorPicker}
@@ -91,7 +91,7 @@ function handleColorSelect(color: HighlightColor) {
           style="width: 24px; height: 24px; border-radius: var(--tandem-r-2);
             border: {value === highlightColor
               ? '2px solid var(--tandem-fg)'
-              : '1px solid rgba(0,0,0,0.15)'};
+              : '1px solid var(--tandem-border)'};
             background: {HIGHLIGHT_COLOR_VARS[value]};
             cursor: pointer; padding: 0;"
         ></button>

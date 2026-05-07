@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
 import { applyTheme, resolveTheme, systemTheme } from "../../src/client/hooks/useTheme.js";
+
+vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
+  isTauriRuntime: vi.fn(() => false),
+}));
 
 describe("systemTheme", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
   });
 
   it("returns 'light' when window is undefined (SSR/Node)", () => {
@@ -29,6 +35,31 @@ describe("systemTheme", () => {
     });
     expect(systemTheme()).toBe("light");
   });
+
+  it("in Tauri with __TANDEM_INITIAL_THEME__='dark', returns 'dark' without matchMedia", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    vi.stubGlobal("window", { __TANDEM_INITIAL_THEME__: "dark" });
+    expect(systemTheme()).toBe("dark");
+  });
+
+  it("in Tauri with __TANDEM_INITIAL_THEME__='light', returns 'light' without matchMedia", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    vi.stubGlobal("window", { __TANDEM_INITIAL_THEME__: "light" });
+    expect(systemTheme()).toBe("light");
+  });
+
+  it("in Tauri without __TANDEM_INITIAL_THEME__, falls through to matchMedia", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    // No __TANDEM_INITIAL_THEME__ — matchMedia reports dark
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
+    expect(systemTheme()).toBe("dark");
+  });
+
+  it("in Tauri without __TANDEM_INITIAL_THEME__, falls through to matchMedia (light)", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    expect(systemTheme()).toBe("light");
+  });
 });
 
 describe("resolveTheme", () => {
@@ -38,6 +69,7 @@ describe("resolveTheme", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
   });
 
   it("passes 'light' through", () => {
@@ -101,6 +133,7 @@ describe("useTheme — DOM side effects (via applyTheme)", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
   });
 
   it("sets data-theme='light' when pref is 'light'", () => {
@@ -148,6 +181,36 @@ describe("useTheme — DOM side effects (via applyTheme)", () => {
     expect(attrs.get("data-theme")).toBeUndefined();
     // After unmount, a media-query change must NOT touch the attribute.
     fireChange(true);
+    expect(attrs.get("data-theme")).toBeUndefined();
+  });
+
+  it("in Tauri with pref='system', skips matchMedia subscription", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { attrs, listeners } = installDomStubs(false);
+    // Patch the window stub with the initial theme value
+    vi.stubGlobal("window", {
+      ...(globalThis as any).window,
+      __TANDEM_INITIAL_THEME__: "dark",
+      matchMedia: (globalThis as any).window.matchMedia,
+    });
+    applyTheme("system");
+    // Tauri path: no matchMedia listener should be registered
+    expect(listeners.size).toBe(0);
+    // Theme was still applied via systemTheme() → __TANDEM_INITIAL_THEME__
+    expect(attrs.get("data-theme")).toBe("dark");
+  });
+
+  it("in Tauri with pref='system', cleanup still removes data-theme", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { attrs } = installDomStubs(false);
+    vi.stubGlobal("window", {
+      ...(globalThis as any).window,
+      __TANDEM_INITIAL_THEME__: "light",
+      matchMedia: (globalThis as any).window.matchMedia,
+    });
+    const cleanup = applyTheme("system");
+    expect(attrs.get("data-theme")).toBe("light");
+    cleanup();
     expect(attrs.get("data-theme")).toBeUndefined();
   });
 });

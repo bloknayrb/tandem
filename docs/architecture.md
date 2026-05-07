@@ -748,7 +748,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 
 ### Tauri Desktop (`src-tauri/`)
 
-- `Cargo.toml` -- Rust dependencies: tauri v2, tauri-plugin-shell, tauri-plugin-fs, tauri-plugin-dialog, tauri-plugin-single-instance, tauri-plugin-window-state, tauri-plugin-process, tauri-plugin-updater, tauri-plugin-log, reqwest, tokio, serde_json
+- `Cargo.toml` -- Rust dependencies: tauri v2, tauri-plugin-shell, tauri-plugin-fs, tauri-plugin-dialog, tauri-plugin-single-instance, tauri-plugin-window-state, tauri-plugin-process, tauri-plugin-updater, tauri-plugin-log, tauri-plugin-prevent-default, tauri-plugin-decorum (custom window chrome — preserves Aero Snap and macOS traffic lights), reqwest, tokio, serde_json
 - `tauri.conf.json` -- App config: identifier (`com.tandem.editor`), window dimensions (1200×800, min 800×600), `bundle.externalBin` (node-sidecar), `bundle.resources` (dist/server/, dist/channel/, dist/client/, sample/), CSP, updater endpoint (GitHub Releases `latest.json`), `bundle.createUpdaterArtifacts: true`
 - `capabilities/default.json` -- Core permissions: window events, shell sidecar, fs read/write, dialog
 - `capabilities/desktop.json` -- Desktop-only permissions: single-instance, window-state save/restore, updater

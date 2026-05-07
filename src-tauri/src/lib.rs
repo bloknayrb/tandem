@@ -24,6 +24,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri_plugin_prevent_default::Flags;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -82,6 +83,15 @@ pub fn run() {
             show_main_window(app);
             // TODO: if args contains a file path, open it via the sidecar API
         }))
+        // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
+        // DevTools, Find, Print, and right-click are preserved. Fixes #541.
+        .plugin(tauri_plugin_prevent_default::Builder::new()
+            .with_flags(prevent_default_flags())
+            .build())
+        // Custom window chrome — preserves Aero Snap, Snap Layouts, traffic lights.
+        // decorations:false is set in tauri.conf.json; decorum restores resize handles
+        // and shadow.
+        .plugin(tauri_plugin_decorum::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -248,6 +258,29 @@ pub fn run() {
                 }
             }
 
+            // Pre-seed the initial theme before Svelte mounts so the correct
+            // app-mode preference (AppsUseLightTheme, not taskbar mode) is
+            // available synchronously for the first paint. Value is always a
+            // trusted literal ("light" or "dark") from the OS API — not user
+            // input. Falls back gracefully if window isn't ready; the
+            // useTauriTheme bridge will invoke get_app_theme on first init.
+            // Fixes #535.
+            if let Some(main_window) = app.get_webview_window("main") {
+                let theme_str = match main_window.theme() {
+                    Ok(tauri::Theme::Dark) => "dark",
+                    _ => "light",
+                };
+                // SAFETY: theme_str is always "dark" or "light" — a trusted
+                // compile-time-controlled literal from a Rust match arm, not
+                // any external input. Injection is not possible.
+                let script = format!("window.__TANDEM_INITIAL_THEME__={:?};", theme_str);
+                if let Err(e) = main_window.eval(&script) {
+                    log::warn!("Failed to seed initial theme: {e}");
+                }
+            } else {
+                log::warn!("main window not found at theme-seed time — useTauriTheme bridge will handle initial theme");
+            }
+
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -269,6 +302,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            setup_overlay_titlebar,
+            get_app_theme,
             cowork_scan_workspaces,
             cowork_toggle_integration,
             cowork_rescan,
@@ -694,6 +729,42 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Invoked from `TitleBar.svelte` after the WebView page has loaded.
+/// `create_overlay_titlebar()` injects JS hit-test logic that is cleared on
+/// page navigation; calling post-load keeps it alive so button clicks reach the
+/// WebView. Windows-only; no-op on other platforms.
+#[tauri::command]
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+fn setup_overlay_titlebar(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_decorum::WebviewWindowExt;
+        window
+            .create_overlay_titlebar()
+            .map_err(|e| format!("create_overlay_titlebar failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Reads `AppsUseLightTheme` from `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
+/// (app-mode preference, not taskbar color mode). Fixes #535.
+#[tauri::command]
+fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
+    match window.theme() {
+        Ok(tauri::Theme::Dark) => Ok("dark".to_string()),
+        Ok(_) => Ok("light".to_string()),
+        Err(e) => Err(format!("theme() error: {e}")),
+    }
+}
+
+/// Returns the set of keyboard shortcuts that should be blocked in the Tauri
+/// webview. All shortcuts except DevTools (F12, Ctrl+Shift+I) are blocked.
+/// Exported so the regression test in tests/prevent_default.rs can assert
+/// against the same value that with_flags() receives. Fixes #541.
+pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
+    Flags::RELOAD
 }
 
 // ---------------------------------------------------------------------------

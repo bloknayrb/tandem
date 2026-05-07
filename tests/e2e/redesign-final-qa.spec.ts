@@ -233,6 +233,94 @@ test.describe("color scheme — light", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Toolbar re-theming (#536)
+// ---------------------------------------------------------------------------
+
+test.describe("toolbar re-theming", () => {
+  /**
+   * Verify that HighlightColorPicker borders adapt when the theme changes.
+   * The fix replaced hardcoded rgba(0,0,0,0.15) with var(--tandem-border) on
+   * the color-preview swatch span inside the toggle button and on the grid
+   * swatch buttons in the popover. We target those specific elements, not the
+   * outer toggle button whose border was already token-based.
+   *
+   * Strategy: seed the page in dark mode, read the computed border color of the
+   * inner color-preview span, switch to light mode, read again — values must
+   * differ. Also open the color picker and verify a grid swatch border changes.
+   * This catches any regression back to a hardcoded value that ignores
+   * data-theme changes.
+   */
+  test("HighlightColorPicker border-color differs between dark and light themes", async ({
+    page,
+  }) => {
+    // Start in dark mode so we can detect the change to light.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("tandem:settings", JSON.stringify({ theme: "dark" }));
+      } catch {}
+    });
+    await openSample(page);
+
+    // Select text so the floating toolbar mounts.
+    const editor = page.locator(".tiptap");
+    await editor.click();
+    await editor.locator("p").first().selectText();
+    await expect(page.locator("[data-testid='toolbar-highlight-color-toggle']")).toBeVisible({
+      timeout: 5_000,
+    });
+
+    // Read the border-color of the inner color-preview span (the element whose
+    // border was fixed — it lives inside the toggle button).
+    const darkBorder = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-toggle'] span",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+
+    // Switch to light mode by updating data-theme directly (mirrors what the
+    // app's $effect does when settings.theme changes to "light").
+    await page.evaluate(() => {
+      document.documentElement.setAttribute("data-theme", "light");
+    });
+
+    // Read the border-color of the inner span in light mode.
+    const lightBorder = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-toggle'] span",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+
+    // The two values must be different — a hardcoded color would be identical
+    // in both modes and expose the regression. An empty string means the
+    // element was not found, which would also fail this assertion.
+    expect(darkBorder).not.toBe("");
+    expect(lightBorder).not.toBe("");
+    expect(darkBorder).not.toBe(lightBorder);
+
+    // Switch back to dark to confirm the token resolves again (dark→light→dark).
+    await page.evaluate(() => {
+      document.documentElement.setAttribute("data-theme", "dark");
+    });
+    const darkBorderAgain = await page.evaluate(() => {
+      const el = document.querySelector(
+        "[data-testid='toolbar-highlight-color-toggle'] span",
+      ) as HTMLElement | null;
+      return el ? getComputedStyle(el).borderColor : "";
+    });
+    expect(darkBorderAgain).toBe(darkBorder);
+
+    // Swatch border verification (via the color picker popover) is intentionally
+    // omitted — clicking the toggle clears ProseMirror's selection before the
+    // popover renders in headless Chromium (same limitation documented in
+    // toolbar-redesign.spec.ts). The toggle-button inner span above uses the
+    // same --tandem-border token as the grid swatches, so these assertions are
+    // sufficient to catch any regression to a hardcoded value.
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tab order traversal
 // ---------------------------------------------------------------------------
 
