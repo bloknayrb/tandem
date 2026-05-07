@@ -297,6 +297,7 @@
     <script>
       (function () {
         try {
+          // Key must match TANDEM_SETTINGS_KEY in src/shared/constants.ts
           var stored = localStorage.getItem("tandem:settings");
           var theme = stored && JSON.parse(stored).theme;
           if (theme === "system" || !theme) {
