@@ -780,7 +780,10 @@ const tutorial = createTutorial(
       <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
         <RailTabPicker
           enabledTabs={settingsState.settings.rightRailTabs}
-          onTabsChange={(tabs) => settingsState.updateSettings({ rightRailTabs: tabs })}
+          onTabsChange={(tabs) => {
+            if (!tabs.includes(activeRailTab)) activeRailTab = tabs[0];
+            settingsState.updateSettings({ rightRailTabs: tabs });
+          }}
         />
       </div>
     </div>
