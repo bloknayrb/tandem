@@ -311,6 +311,14 @@ test.describe("toolbar re-theming", () => {
     });
     expect(darkBorderAgain).toBe(darkBorder);
 
+    // Re-establish the text selection — headless Chromium can drop it during
+    // the page.evaluate setAttribute calls above. Without an active selection
+    // the floating toolbar unmounts before we can open the color picker.
+    await editor.locator("p").first().selectText();
+    await expect(page.locator("[data-testid='toolbar-highlight-color-toggle']")).toBeVisible({
+      timeout: 5_000,
+    });
+
     // Also verify a grid swatch border changes between themes. Open the picker
     // so the swatch buttons are in the DOM.
     await page.locator("[data-testid='toolbar-highlight-color-toggle']").click();
