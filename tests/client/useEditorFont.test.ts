@@ -1,61 +1,48 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyEditorFont } from "../../src/client/hooks/useEditorFont";
+import { afterEach, describe, expect, it } from "vitest";
+import { applyEditorFont, applyEditorFontToRoot } from "../../src/client/hooks/useEditorFont.js";
 
-/**
- * Minimal HTMLElement stub that tracks style custom properties, mirroring the
- * pattern in useTheme.test.ts (no DOM environment required).
- */
-function makeEl() {
-  const props = new Map<string, string>();
-  return {
-    style: {
-      setProperty: (name: string, value: string) => props.set(name, value),
-      removeProperty: (name: string) => props.delete(name),
-      getPropertyValue: (name: string) => props.get(name) ?? "",
-    },
-  } as unknown as HTMLElement;
-}
-
-describe("applyEditorFont", () => {
-  let el: HTMLElement;
-  beforeEach(() => {
-    el = makeEl();
-  });
-
-  it("sets --tandem-editor-font-family for 'sans'", () => {
-    applyEditorFont("sans", el);
-    expect(el.style.getPropertyValue("--tandem-editor-font-family")).toContain("sans-serif");
-  });
-
-  it("sets --tandem-editor-font-family for 'serif'", () => {
-    applyEditorFont("serif", el);
-    expect(el.style.getPropertyValue("--tandem-editor-font-family")).toContain("serif");
-  });
-
-  it("sets a different stack for 'mono' vs 'serif'", () => {
-    applyEditorFont("mono", el);
-    const monoValue = el.style.getPropertyValue("--tandem-editor-font-family");
-    applyEditorFont("serif", el);
-    const serifValue = el.style.getPropertyValue("--tandem-editor-font-family");
-    expect(monoValue).not.toBe(serifValue);
-  });
-
-  it("'mono' stack includes a monospace font name", () => {
-    applyEditorFont("mono", el);
-    expect(el.style.getPropertyValue("--tandem-editor-font-family")).toContain("monospace");
-  });
-
-  it("cleanup removes --tandem-editor-font-family", () => {
-    const cleanup = applyEditorFont("sans", el);
-    expect(el.style.getPropertyValue("--tandem-editor-font-family")).not.toBe("");
+describe("applyEditorFont (scoped)", () => {
+  it("sets the font family on the given element and returns cleanup", () => {
+    const el = document.createElement("div");
+    const cleanup = applyEditorFont("serif", el);
+    expect(el.style.getPropertyValue("--tandem-editor-font-family")).toContain("Georgia");
     cleanup();
     expect(el.style.getPropertyValue("--tandem-editor-font-family")).toBe("");
   });
 
-  it("switching from mono to serif updates the property", () => {
+  it("applies each font variant", () => {
+    const el = document.createElement("div");
+    applyEditorFont("sans", el);
+    expect(el.style.getPropertyValue("--tandem-editor-font-family")).toContain("Roboto");
+
     applyEditorFont("mono", el);
-    const monoValue = el.style.getPropertyValue("--tandem-editor-font-family");
-    applyEditorFont("serif", el);
-    expect(el.style.getPropertyValue("--tandem-editor-font-family")).not.toBe(monoValue);
+    expect(el.style.getPropertyValue("--tandem-editor-font-family")).toContain("JetBrains Mono");
+  });
+});
+
+describe("applyEditorFontToRoot", () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty("--tandem-editor-font-family");
+  });
+
+  it("sets the font family on document.documentElement and returns cleanup", () => {
+    const cleanup = applyEditorFontToRoot("serif");
+    expect(
+      document.documentElement.style.getPropertyValue("--tandem-editor-font-family"),
+    ).toContain("Georgia");
+    cleanup();
+    expect(document.documentElement.style.getPropertyValue("--tandem-editor-font-family")).toBe("");
+  });
+
+  it("applies sans and mono variants to root", () => {
+    applyEditorFontToRoot("sans");
+    expect(
+      document.documentElement.style.getPropertyValue("--tandem-editor-font-family"),
+    ).toContain("Roboto");
+
+    applyEditorFontToRoot("mono");
+    expect(
+      document.documentElement.style.getPropertyValue("--tandem-editor-font-family"),
+    ).toContain("JetBrains Mono");
   });
 });
