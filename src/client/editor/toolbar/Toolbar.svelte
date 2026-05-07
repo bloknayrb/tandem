@@ -300,19 +300,6 @@ $effect(() => {
   window.addEventListener("keydown", handleKeyDown);
   return () => window.removeEventListener("keydown", handleKeyDown);
 });
-
-function handleLinkMouseDown(e: MouseEvent) {
-  e.preventDefault();
-  if (!editor) return;
-
-  if (editor.isActive("link")) {
-    editor.chain().focus().unsetLink().run();
-    return;
-  }
-
-  const url = window.prompt("Enter URL:");
-  if (url) editor.chain().focus().setLink({ href: url }).run();
-}
 </script>
 
 {#if (showMiniToolbar && selectionPosition) || (inInputMode && inputPosition)}
@@ -363,42 +350,6 @@ function handleLinkMouseDown(e: MouseEvent) {
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-style: italic; cursor: pointer;"
       >
         I
-      </button>
-      <button
-        type="button"
-        aria-label="Strike"
-        title="Strike"
-        onmousedown={(e) => {
-          e.preventDefault();
-          editor?.chain().focus().toggleStrike().run();
-        }}
-        onclick={onKeyActivate(() => editor?.chain().focus().toggleStrike().run())}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; text-decoration: line-through; cursor: pointer;"
-      >
-        S
-      </button>
-      <button
-        type="button"
-        aria-label="Code"
-        title="Code"
-        onmousedown={(e) => {
-          e.preventDefault();
-          editor?.chain().focus().toggleCode().run();
-        }}
-        onclick={onKeyActivate(() => editor?.chain().focus().toggleCode().run())}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
-      >
-        &lt;/&gt;
-      </button>
-      <button
-        type="button"
-        aria-label="Link"
-        title="Link"
-        onmousedown={handleLinkMouseDown}
-        onclick={onKeyActivate(handleLinkMouseDown)}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; cursor: pointer;"
-      >
-        Link
       </button>
       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">

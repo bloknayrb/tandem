@@ -389,7 +389,7 @@ const tutorial = createTutorial(
       tandemMode={modeState.tandemMode}
       onModeChange={modeState.setTandemMode}
       selectionToolbar={settingsState.settings.selectionToolbar}
-      suppressSelectionToolbar={slashCommandMenuOpen}
+      suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
     />
 
     <DocumentTabs
