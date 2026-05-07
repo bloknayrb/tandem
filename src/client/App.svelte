@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { PANEL_WIDTH_KEYS } from "../shared/constants";
+import { PANEL_WIDTH_KEYS, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -50,6 +50,7 @@ import {
   type PanelLayout,
 } from "./panel-layout";
 import { pmSelectionToFlat } from "./positions";
+import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
@@ -304,6 +305,44 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
+// Track dirty state for the active tab so TitleBar can show the unsaved dot.
+let activeTabDirty = $state(false);
+$effect(() => {
+  const tab = activeTab;
+  if (!tab || tab.readOnly) {
+    activeTabDirty = false;
+    return;
+  }
+  const fragment = tab.ydoc.getXmlFragment("default");
+  const meta = tab.ydoc.getMap(Y_MAP_DOCUMENT_META);
+  let armed = false;
+  let baseline: number | null = null;
+  activeTabDirty = false;
+  const armTimer = setTimeout(() => {
+    armed = true;
+    baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
+  }, 500);
+  const onFragmentChange = () => {
+    if (armed) activeTabDirty = true;
+  };
+  fragment.observeDeep(onFragmentChange);
+  const onMetaChange = (event: import("yjs").YMapEvent<unknown>) => {
+    if (!event.keysChanged.has(Y_MAP_SAVED_AT_VERSION)) return;
+    if (!armed) return;
+    const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
+    if (saved !== undefined && saved !== baseline) {
+      baseline = saved;
+      activeTabDirty = false;
+    }
+  };
+  meta.observe(onMetaChange);
+  return () => {
+    clearTimeout(armTimer);
+    fragment.unobserveDeep(onFragmentChange);
+    meta.unobserve(onMetaChange);
+  };
+});
+
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
   () => editor,
@@ -314,6 +353,7 @@ const tutorial = createTutorial(
 <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
   <TitleBar
     title={activeTab?.fileName}
+    dirty={activeTabDirty}
     panelVisible={!settingsState.settings.panelHidden}
     onTogglePanel={togglePanel}
     isThreePanel={panelLayout.kind === "three-panel"}
@@ -359,6 +399,13 @@ const tutorial = createTutorial(
       onTabClose={yjsSync.handleTabClose}
       reorder={tabOrder.reorder}
       reduceMotion={settingsState.settings.reduceMotion}
+    />
+
+    <FormattingBar
+      {editor}
+      ydoc={activeTab?.ydoc ?? null}
+      panelVisible={!settingsState.settings.panelHidden}
+      onTogglePanel={togglePanel}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same
