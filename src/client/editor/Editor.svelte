@@ -13,12 +13,11 @@ import TableRow from "@tiptap/extension-table-row";
 import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
-import type { EditorFontKey } from "../hooks/useEditorFont.svelte";
-import { createEditorFont } from "../hooks/useEditorFont.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
+import { FindReplaceExtension } from "./extensions/find-replace";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SlashCommandExtension } from "./extensions/slash-command";
 import "./editor.css";
@@ -28,7 +27,6 @@ interface Props {
   provider: HocuspocusProvider;
   readOnly: boolean;
   activeAnnotationId?: string | null;
-  editorFont?: EditorFontKey;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onAnnotationClick?: (annotationId: string) => void;
   onSlashCommandMenuChange?: (open: boolean) => void;
@@ -39,7 +37,6 @@ const {
   provider,
   readOnly,
   activeAnnotationId,
-  editorFont = "sans",
   onEditorReady,
   onAnnotationClick,
   onSlashCommandMenuChange,
@@ -47,11 +44,6 @@ const {
 
 let editor = $state<TiptapEditor | null>(null);
 let editorRoot: HTMLDivElement | null = null;
-
-createEditorFont(
-  () => editorFont,
-  () => editorRoot,
-);
 
 // -------------------------------------------------------------------------
 // Editor lifecycle: re-create when (ydoc, provider) identity changes.
@@ -98,6 +90,7 @@ $effect(() => {
       AuthorshipExtension.configure({ ydoc }),
       AwarenessExtension.configure({ ydoc }),
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
+      FindReplaceExtension,
     ],
     editorProps: {
       attributes: {

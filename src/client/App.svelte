@@ -20,12 +20,14 @@ import ToastContainer from "./components/ToastContainer.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
+import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
+import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
@@ -150,6 +152,7 @@ $effect(() => {
 
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
+createRootEditorFont(() => settingsState.settings.editorFont);
 createDensity(() => settingsState.settings.density);
 createHighContrast(() => settingsState.settings.highContrast);
 createAnnotationPatterns(() => settingsState.settings.annotationPatterns);
@@ -171,6 +174,7 @@ let showHelp = $state(false);
 let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 let slashCommandMenuOpen = $state(false);
+let findBarOpen = $state(false);
 
 let panelLayout = $state<PanelLayout>(
   (() => {
@@ -263,6 +267,11 @@ $effect(() => {
         paletteOpen = !untrack(() => paletteOpen);
       }
     }
+    // Ctrl/Cmd+F — open find bar (suppress browser native find)
+    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+      e.preventDefault();
+      findBarOpen = true;
+    }
   }
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
@@ -350,7 +359,7 @@ const tutorial = createTutorial(
                 />
               {:else}
                 <PanelSlot
-                  kind="side"
+                  kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
@@ -391,7 +400,7 @@ const tutorial = createTutorial(
             <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
               {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
                 <PanelSlot
-                  kind="side"
+                  kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
@@ -530,7 +539,7 @@ const tutorial = createTutorial(
   <div
     role="region"
     aria-label="Document editor"
-    style={`flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+    style={`position: relative; flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}
@@ -547,7 +556,6 @@ const tutorial = createTutorial(
             provider={activeTab.provider}
             readOnly={yjsSync.readOnly}
             {activeAnnotationId}
-            editorFont={settingsState.settings.editorFont}
             onEditorReady={(ed) => (editor = ed)}
             onAnnotationClick={(id) => {
               showChat = false;
@@ -560,6 +568,12 @@ const tutorial = createTutorial(
         <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
       {/if}
     </div>
+    <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
+    <FindReplaceBar
+      {editor}
+      open={findBarOpen}
+      onClose={() => (findBarOpen = false)}
+    />
   </div>
 {/snippet}
 

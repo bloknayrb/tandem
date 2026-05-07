@@ -84,6 +84,17 @@
   height: 0;
 }
 
+/* Find / Replace decorations */
+.tandem-find-match {
+  background: var(--tandem-highlight-yellow);
+  border-radius: 2px;
+}
+.tandem-find-active {
+  background: var(--tandem-warning-bg);
+  outline: 1px solid var(--tandem-warning);
+  border-radius: 2px;
+}
+
 /* Annotation decorations */
 .tandem-highlight {
   cursor: pointer;
