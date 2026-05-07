@@ -26,8 +26,6 @@ export function createTheme(getPref: () => ThemePreference): void {
 
   $effect(() => {
     const pref = getPref();
-    // Read tauriTheme.current to make this effect depend on it reactively.
-    // When the OS app-mode theme changes in Tauri, this re-runs applyTheme.
     void tauriTheme.current;
     return applyTheme(pref);
   });

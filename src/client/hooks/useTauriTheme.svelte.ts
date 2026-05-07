@@ -35,9 +35,12 @@ export function initTauriTheme(): void {
   if (_initialized || !isTauriRuntime()) return;
   _initialized = true;
 
-  // Invoke get_app_theme command to sync current OS state
+  // Resolve invoke once; reuse the cached reference in the polling interval.
+  let invokeRef: null | ((cmd: string) => Promise<string>) = null;
+
   import("@tauri-apps/api/core")
     .then(({ invoke }) => {
+      invokeRef = invoke as (cmd: string) => Promise<string>;
       invoke<string>("get_app_theme")
         .then((theme) => {
           setTauriTheme(theme === "dark" ? "dark" : "light");
@@ -69,31 +72,22 @@ export function initTauriTheme(): void {
   // on Windows app-mode-only flips is undocumented and unverified
   let pollErrorLogged = false;
   const pollInterval = setInterval(() => {
-    if (!document.hasFocus()) return;
-    import("@tauri-apps/api/core")
-      .then(({ invoke }) => {
-        invoke<string>("get_app_theme")
-          .then((theme) => {
-            const resolved: ResolvedTheme = theme === "dark" ? "dark" : "light";
-            if (tauriTheme.current !== resolved) {
-              setTauriTheme(resolved);
-            }
-          })
-          .catch((e) => {
-            if (!pollErrorLogged) {
-              console.warn("[useTauriTheme] theme poll failed (further errors suppressed):", e);
-              pollErrorLogged = true;
-            }
-          });
+    if (!document.hasFocus() || !invokeRef) return;
+    invokeRef("get_app_theme")
+      .then((theme) => {
+        const resolved: ResolvedTheme = theme === "dark" ? "dark" : "light";
+        if (tauriTheme.current !== resolved) {
+          setTauriTheme(resolved);
+          pollErrorLogged = false;
+        }
       })
       .catch((e) => {
         if (!pollErrorLogged) {
-          console.warn("[useTauriTheme] theme poll import failed (further errors suppressed):", e);
+          console.warn("[useTauriTheme] theme poll failed (further errors suppressed):", e);
           pollErrorLogged = true;
         }
       });
   }, 3000);
 
-  // Clean up polling when window unloads
-  window.addEventListener("unload", () => clearInterval(pollInterval), { once: true });
+  window.addEventListener("pagehide", () => clearInterval(pollInterval), { once: true });
 }

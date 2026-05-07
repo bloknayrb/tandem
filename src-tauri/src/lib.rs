@@ -279,11 +279,6 @@ pub fn run() {
                 }
             } else {
                 log::warn!("main window not found at theme-seed time — useTauriTheme bridge will handle initial theme");
-                use tauri_plugin_dialog::DialogExt;
-                app.dialog()
-                    .message("Internal error: main window not found during startup. The app may display an incorrect theme. Please restart.")
-                    .title("Theme Initialization Error")
-                    .show(|_| {});
             }
 
             Ok(())
@@ -736,12 +731,10 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Returns the current OS app-mode theme ("light" or "dark") by reading
-/// WebviewWindow::theme(), which on Windows reads AppsUseLightTheme
-/// Called from TitleBar.svelte after the WebView page has loaded. Must run
-/// post-load because create_overlay_titlebar() injects JS hit-test logic that
-/// is cleared when the page navigates; setup() fires before navigation.
-/// Windows-only; no-op on other platforms.
+/// Invoked from `TitleBar.svelte` after the WebView page has loaded.
+/// `create_overlay_titlebar()` injects JS hit-test logic that is cleared on
+/// page navigation; calling post-load keeps it alive so button clicks reach the
+/// WebView. Windows-only; no-op on other platforms.
 #[tauri::command]
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 fn setup_overlay_titlebar(window: tauri::WebviewWindow) -> Result<(), String> {
@@ -755,8 +748,8 @@ fn setup_overlay_titlebar(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
-/// (HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize) —
-/// the app-mode setting, not taskbar mode. Fixes #535.
+/// Reads `AppsUseLightTheme` from `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
+/// (app-mode preference, not taskbar color mode). Fixes #535.
 #[tauri::command]
 fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
     match window.theme() {

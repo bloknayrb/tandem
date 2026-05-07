@@ -10,21 +10,24 @@ const { title = "Tandem" }: Props = $props();
 
 let win: TauriWindow | null = null;
 let isMaximized = $state(false);
-let initFailed = $state(false);
 let cleanupListeners: (() => void)[] = [];
 
 onMount(async () => {
   if (!isTauriRuntime()) return;
   try {
-    // Re-run the decorum overlay setup now that the WebView page is loaded.
-    // create_overlay_titlebar() injects JS hit-test logic that is cleared on
-    // page navigation; calling it here (post-load) keeps it alive.
-    const { invoke } = await import("@tauri-apps/api/core");
+    // Parallelize both API module loads; neither depends on the other.
+    const [{ invoke }, { getCurrentWindow }] = await Promise.all([
+      import("@tauri-apps/api/core"),
+      import("@tauri-apps/api/window"),
+    ]);
+
+    // Re-run decorum overlay setup now that the WebView page is loaded.
+    // create_overlay_titlebar() injects JS hit-test logic cleared on navigation;
+    // calling post-load keeps it alive so button clicks reach the WebView.
     await invoke("setup_overlay_titlebar").catch((e: unknown) => {
       console.warn("[TitleBar] setup_overlay_titlebar failed:", e);
     });
 
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     win = getCurrentWindow();
     isMaximized = await win.isMaximized();
 
@@ -45,7 +48,6 @@ onMount(async () => {
     cleanupListeners = [unlistenResize, unlistenMove];
   } catch (e) {
     console.error("[TitleBar] Window API initialization failed:", e);
-    initFailed = true;
   }
 });
 
@@ -78,7 +80,7 @@ async function close() {
 }
 </script>
 
-{#if isTauriRuntime() && !initFailed}
+{#if isTauriRuntime()}
 	<div class="title-bar">
 		<div class="title-bar-left" data-tauri-drag-region>
 			<span class="title-bar-title">{title}</span>
