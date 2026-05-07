@@ -26,6 +26,12 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Create sidecar stub for build script
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          touch "src-tauri/binaries/node-sidecar-$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
+
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
