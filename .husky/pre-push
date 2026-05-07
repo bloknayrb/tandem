@@ -1,2 +1,4 @@
 #!/usr/bin/env sh
 npx biome check src/ tests/
+npm test -- --run --reporter=dot
+cargo test --manifest-path src-tauri/Cargo.toml
