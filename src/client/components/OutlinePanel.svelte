@@ -5,6 +5,7 @@ import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
+import { type HeadingEntry, walkHeadings } from "../utils/headings";
 
 interface Props {
   editor: Editor | null;
@@ -32,18 +33,6 @@ let itemEls = $state<(HTMLButtonElement | null)[]>([]);
 let searchQuery = $state("");
 let searchInput = $state<HTMLInputElement | null>(null);
 let scrollSpyIndex = $state<number>(-1);
-
-// Walk the doc and return heading entries. Mirrors doc.descendants pattern
-// from authorship.ts:78.
-function walkHeadings(ed: Editor): HeadingEntry[] {
-  const result: HeadingEntry[] = [];
-  ed.state.doc.descendants((node, pos) => {
-    if (node.type.name === "heading" && node.attrs.level <= 3) {
-      result.push({ text: node.textContent, level: node.attrs.level as number, pos });
-    }
-  });
-  return result;
-}
 
 $effect(() => {
   const ed = editor;
@@ -145,11 +134,13 @@ function handleSearchKeydown(e: KeyboardEvent) {
   }
 }
 
-// Per-heading annotation counts (filter-aware when activeFilterType is set).
-function countAnnotationsInSection(sectionStart: number, sectionEnd: number): number {
+const headingAnnotationCounts = $derived.by(() => {
   const ed = editor;
-  if (!ed || annotations.length === 0) return 0;
-  let count = 0;
+  if (!ed || ed.isDestroyed || headings.length === 0) return [] as number[];
+  const docEnd = ed.state.doc.content.size;
+
+  // Single pass: resolve all annotation PM positions, then bucket per heading.
+  const annPositions: number[] = [];
   for (const ann of annotations) {
     // Mirror all three active filters so counts match the side panel.
     if (activeFilterType !== "all") {
@@ -160,23 +151,15 @@ function countAnnotationsInSection(sectionStart: number, sectionEnd: number): nu
     if (activeFilterAuthor !== "all" && ann.author !== activeFilterAuthor) continue;
     if (activeFilterStatus !== "all" && ann.status !== activeFilterStatus) continue;
     try {
-      const annPmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
-      if (annPmFrom >= sectionStart && annPmFrom < sectionEnd) count++;
+      annPositions.push(flatOffsetToPmPos(ed.state.doc, ann.range.from));
     } catch {
       // skip annotations with invalid ranges
     }
   }
-  return count;
-}
 
-const headingAnnotationCounts = $derived.by(() => {
-  const ed = editor;
-  if (!ed || ed.isDestroyed || headings.length === 0) return [] as number[];
-  const docEnd = ed.state.doc.content.size;
   return headings.map((h, i) => {
-    const sectionStart = h.pos;
     const sectionEnd = i + 1 < headings.length ? headings[i + 1].pos : docEnd;
-    return countAnnotationsInSection(sectionStart, sectionEnd);
+    return annPositions.filter((p) => p >= h.pos && p < sectionEnd).length;
   });
 });
 
@@ -295,8 +278,7 @@ function handleKeyDown(e: KeyboardEvent) {
                     "var(--tandem-surface-hover, var(--tandem-surface-muted))";
               }}
               onmouseleave={(e) => {
-                if (!isActive)
-                  (e.currentTarget as HTMLButtonElement).style.background = isActive ? "var(--tandem-accent-bg)" : "none";
+                if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "none";
               }}
             >
               <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">

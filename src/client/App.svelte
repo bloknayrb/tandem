@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { PANEL_WIDTH_KEYS, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../shared/constants";
+import { PANEL_WIDTH_KEYS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -35,6 +35,7 @@ import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
+import { createTabDirty } from "./hooks/useTabDirty.svelte.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
@@ -218,14 +219,6 @@ $effect(() => {
     const right = "right" in prev ? prev.right : loadPanelWidth("right");
     const left = "left" in prev ? prev.left : loadPanelWidth("left");
     panelLayout = { kind: "three-panel", left, right };
-<<<<<<< HEAD
-=======
-    // Set the canonical default (Outline left) only if not already set — avoids
-    // a superfluous settings write and the extra effect re-run it would cause.
-    if (untrack(() => settingsState.settings.leftSlot.kind) !== "outline") {
-      settingsState.updateSettings({ leftSlot: { kind: "outline" } });
-    }
->>>>>>> 098278b (fix(outline): prevent effect_update_depth_exceeded in OutlinePanel)
   } else if (layout === "tabbed-left") {
     if (prev.kind === "tabbed-left") return;
     const left = "left" in prev ? prev.left : loadPanelWidth("left");
@@ -252,6 +245,14 @@ function togglePanel() {
   } else {
     settingsState.updateSettings({ panelHidden: true });
   }
+}
+
+function handleFilterChange(
+  type: (typeof activeAnnotationFilter)["type"],
+  author: (typeof activeAnnotationFilter)["author"],
+  status: (typeof activeAnnotationFilter)["status"],
+) {
+  activeAnnotationFilter = { type, author, status };
 }
 
 // Remembers the last non-three-panel layout so toggling off three-panel restores it.
@@ -347,43 +348,8 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
-// Track dirty state for the active tab so TitleBar can show the unsaved dot.
-let activeTabDirty = $state(false);
-$effect(() => {
-  const tab = activeTab;
-  if (!tab || tab.readOnly) {
-    activeTabDirty = false;
-    return;
-  }
-  const fragment = tab.ydoc.getXmlFragment("default");
-  const meta = tab.ydoc.getMap(Y_MAP_DOCUMENT_META);
-  let armed = false;
-  let baseline: number | null = null;
-  activeTabDirty = false;
-  const armTimer = setTimeout(() => {
-    armed = true;
-    baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
-  }, 500);
-  const onFragmentChange = () => {
-    if (armed) activeTabDirty = true;
-  };
-  fragment.observeDeep(onFragmentChange);
-  const onMetaChange = (event: import("yjs").YMapEvent<unknown>) => {
-    if (!event.keysChanged.has(Y_MAP_SAVED_AT_VERSION)) return;
-    if (!armed) return;
-    const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
-    if (saved !== undefined && saved !== baseline) {
-      baseline = saved;
-      activeTabDirty = false;
-    }
-  };
-  meta.observe(onMetaChange);
-  return () => {
-    clearTimeout(armTimer);
-    fragment.unobserveDeep(onFragmentChange);
-    meta.unobserve(onMetaChange);
-  };
-});
+const tabDirtyState = createTabDirty(() => activeTab);
+const activeTabDirty = $derived(tabDirtyState.dirty);
 
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,

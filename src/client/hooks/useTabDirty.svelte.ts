@@ -13,13 +13,13 @@ export interface TabDirtyState {
  * reactively. Adds `keysChanged` filtering on the meta observer (missing
  * from the original React version).
  */
-export function createTabDirty(getTab: () => OpenTab): TabDirtyState {
+export function createTabDirty(getTab: () => OpenTab | undefined): TabDirtyState {
   let dirty = $state(false);
 
   $effect(() => {
     const tab = getTab();
 
-    if (tab.readOnly) {
+    if (!tab || tab.readOnly) {
       dirty = false;
       return;
     }
