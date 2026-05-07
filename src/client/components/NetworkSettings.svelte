@@ -106,29 +106,16 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
   </div>
 </div>
 
-<!-- Loopback Port (HTTP only) -->
+<!-- Loopback Port (HTTP only, read-only — port changes require CLI/server restart) -->
 {#if isHttp}
   <div>
     <div style={labelStyle}>Loopback Port</div>
-    <div style="display: flex; gap: var(--tandem-space-2); align-items: center;">
-      <input
-        type="number"
-        min="1024"
-        max="65535"
-        placeholder="3479"
-        disabled={!isHttp}
-        style="width: 90px; padding: 4px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); outline: none;"
-        aria-label="MCP HTTP port"
-      />
-      <button
-        type="button"
-        disabled={!isHttp}
-        style="padding: 4px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
-      >
-        Pick free port
-      </button>
+    <div
+      style="padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface-muted); font-size: 13px; color: var(--tandem-fg-subtle); display: inline-block;"
+    >
+      {appInfo.info?.bindHost ? appInfo.info.bindHost.split(":").pop() : "3479"}
     </div>
-    <div style={subtextStyle}>Port used when transport is HTTP. Requires server restart.</div>
+    <div style={subtextStyle}>Port used when transport is HTTP. To change, run <code>tandem start --port &lt;N&gt;</code>.</div>
   </div>
 {/if}
 
