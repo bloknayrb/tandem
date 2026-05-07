@@ -12,5 +12,5 @@ const banner = createConnectionBanner(() => disconnectedSince);
 </script>
 
 {#if banner.showBanner}
-  <ConnectionBanner onDismiss={banner.dismiss} />
+  <ConnectionBanner onDismiss={banner.dismiss} onRetry={banner.dismiss} />
 {/if}
