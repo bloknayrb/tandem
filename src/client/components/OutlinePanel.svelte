@@ -1,18 +1,25 @@
 <script lang="ts">
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
+import type { Annotation } from "../../shared/types";
+import { flatOffsetToPmPos } from "../positions";
 
 interface Props {
   editor: Editor | null;
+  annotations?: Annotation[];
+  focusTrigger?: number;
 }
 
 type HeadingEntry = { text: string; level: number; pos: number };
 
-let { editor }: Props = $props();
+let { editor, annotations = [], focusTrigger = 0 }: Props = $props();
 
 let headings = $state<HeadingEntry[]>([]);
 let focusedIndex = $state<number>(-1);
 let itemEls = $state<(HTMLButtonElement | null)[]>([]);
+let searchQuery = $state("");
+let searchInput = $state<HTMLInputElement | null>(null);
+let scrollSpyIndex = $state<number>(-1);
 
 // Walk the doc and return heading entries. Mirrors doc.descendants pattern
 // from authorship.ts:78.
@@ -33,8 +40,6 @@ $effect(() => {
     return;
   }
 
-  // Seed immediately — don't wait for the first update event (CRDT may have
-  // already synced before this component mounted).
   headings = walkHeadings(ed);
   itemEls = itemEls.slice(0, headings.length);
   if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
@@ -50,6 +55,104 @@ $effect(() => {
     if (!ed.isDestroyed) ed.off("update", handler);
     headings = [];
   };
+});
+
+// Focus search input when focusTrigger changes (triggered by Ctrl+F from App.svelte).
+$effect(() => {
+  if (focusTrigger > 0) {
+    searchInput?.focus();
+    searchInput?.select();
+  }
+});
+
+// Scroll-spy: track which heading is currently visible.
+$effect(() => {
+  const ed = editor;
+  if (!ed || ed.isDestroyed) return;
+
+  function updateScrollSpy() {
+    if (!ed || ed.isDestroyed || headings.length === 0) {
+      scrollSpyIndex = -1;
+      return;
+    }
+    const editorRect = ed.view.dom.getBoundingClientRect();
+    const threshold = editorRect.top + 48;
+    let activeIdx = -1;
+    for (let i = 0; i < headings.length; i++) {
+      try {
+        const coords = ed.view.coordsAtPos(headings[i].pos + 1);
+        if (coords.top <= threshold) activeIdx = i;
+      } catch {
+        // pos may be stale after a concurrent edit
+      }
+    }
+    scrollSpyIndex = activeIdx;
+  }
+
+  updateScrollSpy();
+
+  const scrollEl = ed.view.dom.closest(".editor-scroll") ?? ed.view.dom.parentElement;
+  scrollEl?.addEventListener("scroll", updateScrollSpy);
+  return () => scrollEl?.removeEventListener("scroll", updateScrollSpy);
+});
+
+// Drive find-replace from search input.
+function handleSearchInput() {
+  const ed = editor;
+  if (!ed || ed.isDestroyed) return;
+  if (searchQuery) {
+    ed.commands.find({
+      query: searchQuery,
+      caseSensitive: false,
+      wholeWord: false,
+      regexMode: false,
+    });
+  } else {
+    ed.commands.findClose();
+  }
+}
+
+function handleSearchKeydown(e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (e.shiftKey) {
+      editor?.commands.findPrev();
+    } else {
+      editor?.commands.findNext();
+    }
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    searchQuery = "";
+    editor?.commands.findClose();
+    searchInput?.blur();
+  }
+}
+
+// Per-heading annotation counts (not filter-aware — filter state is SidePanel-local).
+function countAnnotationsInSection(sectionStart: number, sectionEnd: number): number {
+  const ed = editor;
+  if (!ed || annotations.length === 0) return 0;
+  let count = 0;
+  for (const ann of annotations) {
+    try {
+      const annPmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
+      if (annPmFrom >= sectionStart && annPmFrom < sectionEnd) count++;
+    } catch {
+      // skip annotations with invalid ranges
+    }
+  }
+  return count;
+}
+
+const headingAnnotationCounts = $derived.by(() => {
+  const ed = editor;
+  if (!ed || ed.isDestroyed || headings.length === 0) return [] as number[];
+  const docEnd = ed.state.doc.content.size;
+  return headings.map((h, i) => {
+    const sectionStart = h.pos;
+    const sectionEnd = i + 1 < headings.length ? headings[i + 1].pos : docEnd;
+    return countAnnotationsInSection(sectionStart, sectionEnd);
+  });
 });
 
 function jumpTo(entry: HeadingEntry, index: number) {
@@ -101,48 +204,102 @@ function handleKeyDown(e: KeyboardEvent) {
   data-testid="outline-panel"
   aria-label="Document outline"
   onkeydown={handleKeyDown}
-  style="display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;"
+  style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;"
 >
-  {#if headings.length === 0}
-    <div
-      style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-style: italic;"
-    >
-      No headings
-    </div>
-  {:else}
-    <!-- ul + li + button: correct semantics for a roving-tabindex list of actions -->
-    <ul style="list-style: none; margin: 0; padding: 0;">
-      {#each headings as entry, i (i)}
-        <li>
-          <button
-            bind:this={itemEls[i]}
-            data-testid={`outline-heading-${entry.level}-${i}`}
-            tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
-            onclick={() => jumpTo(entry, i)}
-            onfocus={() => (focusedIndex = i)}
-            style={`
-              display: block; width: 100%; text-align: left; padding: var(--tandem-space-1) var(--tandem-space-3);
-              padding-left: calc(var(--tandem-space-1) + ${(entry.level - 1) * 12}px);
-              font-size: ${entry.level === 1 ? "var(--tandem-text-sm)" : "var(--tandem-text-xs)"};
-              font-weight: ${entry.level === 1 ? 600 : entry.level === 2 ? 500 : 400};
-              color: ${entry.level === 1 ? "var(--tandem-fg)" : entry.level === 2 ? "var(--tandem-fg-subtle)" : "var(--tandem-fg-muted)"};
-              background: none; border: none; cursor: pointer; line-height: 1.5;
-              white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-              transition: color 0.1s, background 0.1s;
-            `}
-            title={entry.text}
-            onmouseenter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background =
-                "var(--tandem-surface-hover, var(--tandem-surface-muted))";
-            }}
-            onmouseleave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background = "none";
-            }}
-          >
-            {entry.text || "(untitled)"}
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
+  <!-- Search field -->
+  <div style="padding: var(--tandem-space-2) var(--tandem-space-3); border-bottom: 1px solid var(--tandem-border);">
+    <input
+      bind:this={searchInput}
+      bind:value={searchQuery}
+      oninput={handleSearchInput}
+      onkeydown={handleSearchKeydown}
+      type="search"
+      placeholder="Search in document…"
+      data-testid="outline-search-input"
+      aria-label="Search document"
+      style="
+        width: 100%; box-sizing: border-box;
+        padding: var(--tandem-space-1) var(--tandem-space-2);
+        font-size: var(--tandem-text-xs);
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-2);
+        background: var(--tandem-surface);
+        color: var(--tandem-fg);
+        outline: none;
+      "
+    />
+  </div>
+
+  <!-- Headings list -->
+  <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;">
+    {#if headings.length === 0}
+      <div
+        style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-style: italic;"
+      >
+        No headings
+      </div>
+    {:else}
+      <!-- ul + li + button: correct semantics for a roving-tabindex list of actions -->
+      <ul style="list-style: none; margin: 0; padding: 0;">
+        {#each headings as entry, i (i)}
+          {@const isActive = scrollSpyIndex === i}
+          {@const count = headingAnnotationCounts[i] ?? 0}
+          <li>
+            <button
+              bind:this={itemEls[i]}
+              data-testid={`outline-heading-${entry.level}-${i}`}
+              tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
+              onclick={() => jumpTo(entry, i)}
+              onfocus={() => (focusedIndex = i)}
+              style={`
+                display: flex; align-items: center; width: 100%; text-align: left;
+                padding: var(--tandem-space-1) var(--tandem-space-3);
+                padding-left: calc(var(--tandem-space-1) + ${(entry.level - 1) * 12}px);
+                font-size: ${entry.level === 1 ? "var(--tandem-text-sm)" : "var(--tandem-text-xs)"};
+                font-weight: ${entry.level === 1 ? 600 : entry.level === 2 ? 500 : 400};
+                color: ${isActive ? "var(--tandem-accent)" : entry.level === 1 ? "var(--tandem-fg)" : entry.level === 2 ? "var(--tandem-fg-subtle)" : "var(--tandem-fg-muted)"};
+                background: ${isActive ? "var(--tandem-accent-bg)" : "none"};
+                border: none; cursor: pointer; line-height: 1.5;
+                transition: color 0.1s, background 0.1s;
+                gap: var(--tandem-space-2);
+              `}
+              title={entry.text}
+              onmouseenter={(e) => {
+                if (!isActive)
+                  (e.currentTarget as HTMLButtonElement).style.background =
+                    "var(--tandem-surface-hover, var(--tandem-surface-muted))";
+              }}
+              onmouseleave={(e) => {
+                if (!isActive)
+                  (e.currentTarget as HTMLButtonElement).style.background = isActive ? "var(--tandem-accent-bg)" : "none";
+              }}
+            >
+              <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                {entry.text || "(untitled)"}
+              </span>
+              {#if count > 0}
+                <span
+                  style="
+                    flex-shrink: 0;
+                    font-size: var(--tandem-text-2xs, 10px);
+                    font-weight: 500;
+                    color: var(--tandem-fg-subtle);
+                    background: var(--tandem-surface-muted);
+                    border-radius: var(--tandem-r-pill);
+                    padding: 0 var(--tandem-space-1);
+                    min-width: 16px;
+                    text-align: center;
+                    line-height: 16px;
+                  "
+                  title="{count} annotation{count !== 1 ? 's' : ''}"
+                >
+                  {count}
+                </span>
+              {/if}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </nav>

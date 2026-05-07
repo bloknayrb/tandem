@@ -176,6 +176,7 @@ let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
+let outlineFocusTrigger = $state(0);
 
 let panelLayout = $state<PanelLayout>(
   (() => {
@@ -293,10 +294,18 @@ $effect(() => {
         showHelp = untrack(() => !showHelp);
       }
     }
-    // Ctrl/Cmd+F — open find bar (suppress browser native find)
+    // Ctrl/Cmd+F — focus outline search if the outline panel is visible; fall back to find bar.
     if ((e.ctrlKey || e.metaKey) && e.key === "f") {
       e.preventDefault();
-      findBarOpen = true;
+      const isOutlineVisible =
+        panelLayout.kind === "three-panel" &&
+        !effectivePanelHidden &&
+        settingsState.settings.leftSlot.kind === "outline";
+      if (isOutlineVisible) {
+        outlineFocusTrigger += 1;
+      } else {
+        findBarOpen = true;
+      }
     }
   }
   window.addEventListener("keydown", handler);
@@ -443,6 +452,7 @@ const tutorial = createTutorial(
                 <PanelSlot
                   kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
+                  focusTrigger={outlineFocusTrigger}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
                   heldCount={modeGate.heldCount}
@@ -484,6 +494,7 @@ const tutorial = createTutorial(
                 <PanelSlot
                   kind={settingsState.settings.leftSlot.kind}
                   annotations={modeGate.visibleAnnotations}
+                  focusTrigger={outlineFocusTrigger}
                   {editor}
                   ydoc={activeTab?.ydoc ?? null}
                   heldCount={modeGate.heldCount}
