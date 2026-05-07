@@ -544,3 +544,44 @@ When removing an npm package from `package.json` and running `npm install` in a 
 ## 56. WAI-ARIA APG Toolbar Pattern for Transient Contextual Toolbars
 
 WAI-ARIA APG Toolbar Pattern §3 classifies arrow-key navigation as MAY (not MUST) for transient contextual toolbars. Tab/Shift+Tab through buttons plus Escape-to-close is fully APG-compliant. No roving tabindex is needed. Slash-menu key collision is not possible because the slash menu's handleKeyDown only fires when slashCommandPluginKey state is active AND focus is in the editor view — a focused toolbar button is outside the editor view.
+
+## 57. `tauri_build::build()` Checks All Declared Resources, Not Just the Sidecar
+
+**Problem:** When adding `cargo test` to CI, `tauri_build::build()` failed because the sidecar binary (`binaries/node-sidecar-{triple}`) didn't exist AND because `dist/channel`, `dist/server`, and `dist/client` (declared as `resources` in `tauri.conf.json`) don't exist in a clean repo checkout.
+
+**Solution:** Create stubs before running `cargo test`:
+```bash
+mkdir -p src-tauri/binaries dist/channel dist/server dist/client
+touch "src-tauri/binaries/node-sidecar-${TRIPLE}" "src-tauri/binaries/node-sidecar-${TRIPLE}.exe"
+```
+Touch both with and without `.exe` so the same step works on Linux and Windows runners.
+
+## 58. Ubuntu CI Needs GTK/WebKit System Libs for `cargo test` on Tauri Projects
+
+**Problem:** `glib-sys` and `gobject-sys` crates fail to build on a bare Ubuntu runner because they need system headers.
+
+**Solution:** Add an "Install Linux dependencies" step before any `cargo build/test` invocation:
+```yaml
+- name: Install Linux dependencies
+  if: matrix.os == 'ubuntu-latest'
+  run: sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+```
+Mirror the identical step already present in `tauri-release.yml`.
+
+## 59. `tauri-plugin-decorum`'s `create_overlay_titlebar()` Must Be Called After Page Load, Not in `setup()`
+
+**Problem:** `create_overlay_titlebar()` injects JS hit-test logic (`WM_NCHITTEST` intercept) into the WebView. The WebView clears that injected JS on page navigation. Calling it in Tauri's `setup()` means the JS runs before the page loads and is then wiped — button clicks land on the caption area (HTCAPTION) and the OS treats them as window-drag rather than forwarding them to the WebView.
+
+**Solution:** Expose a `#[tauri::command]` (e.g., `setup_overlay_titlebar`) that calls `create_overlay_titlebar()`, and invoke it from the relevant Svelte component's `onMount` after the page has fully loaded.
+
+## 60. Vitest for Svelte Components Using `invoke` Must Mock `@tauri-apps/api/core`
+
+**Problem:** If only `@tauri-apps/api/window` is mocked, a component that does `Promise.all([import("@tauri-apps/api/core"), import("@tauri-apps/api/window")])` throws (no `invoke` export from the real module in happy-dom). The `onMount` catch swallows the error and `win` is never assigned — button clicks silently no-op with no visible failure.
+
+**Solution:** Add `vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }))` alongside the window mock. Also add a hardening test that asserts button handlers still fire even when `invoke` rejects, so future regressions surface via a different signal rather than silent no-ops.
+
+## 61. Tauri Desktop Smoke Test for Live Theme-Flipping Requires the App Window to Have Focus
+
+**Problem:** `useTauriTheme.svelte.ts` polls `get_app_theme` only when `document.hasFocus()` is true. During a manual smoke test, switching to Windows Settings to flip the OS theme causes the Tandem window to lose focus. The poll won't fire until the tester clicks back into the app.
+
+**Solution:** Instruct smoke testers to click back on the Tandem window after flipping the OS theme before checking whether the theme updated.
