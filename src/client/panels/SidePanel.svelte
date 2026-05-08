@@ -335,9 +335,9 @@ function handleBulk(status: "accepted" | "dismissed") {
     open={filterBarOpen}
     totalCount={filteredData.filtered.length}
     onToggleOpen={() => (filterBarOpen = !filterBarOpen)}
-    onSetFilterType={(v) => { filterType = v; filterBarOpen = false; }}
-    onSetFilterAuthor={(v) => { filterAuthor = v; filterBarOpen = false; }}
-    onSetFilterStatus={(v) => { filterStatus = v; filterBarOpen = false; }}
+    onSetFilterType={(v) => { filterType = v; }}
+    onSetFilterAuthor={(v) => { filterAuthor = v; }}
+    onSetFilterStatus={(v) => { filterStatus = v; }}
     onClearFilters={() => {
       filterType = "all";
       filterAuthor = "all";
