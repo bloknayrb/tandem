@@ -26,7 +26,29 @@ const {
   onTogglePanelRight,
 }: Props = $props();
 
-const canHighlight = $derived(!!editor && !editor.isDestroyed);
+// Force-reactive tick — mirrors FormattingToolbar's pattern so that
+// canHighlight reflects the live selection state, not just editor existence.
+// Without this, toolbar-highlight-btn stays enabled even with no selection.
+let _tick = $state(0);
+$effect(() => {
+  const ed = editor;
+  if (!ed || ed.isDestroyed) return;
+  const handler = () => {
+    if (!ed.isDestroyed) _tick++;
+  };
+  ed.on("selectionUpdate", handler);
+  ed.on("transaction", handler);
+  return () => {
+    ed.off("selectionUpdate", handler);
+    ed.off("transaction", handler);
+  };
+});
+
+const canHighlight = $derived.by(() => {
+  void _tick;
+  if (!editor || editor.isDestroyed || !ydoc) return false;
+  return !editor.state.selection.empty;
+});
 
 function handleHighlight(color: HighlightColor) {
   if (!editor || !ydoc || editor.isDestroyed) return;
