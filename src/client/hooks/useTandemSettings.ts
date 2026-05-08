@@ -6,7 +6,6 @@ import {
 } from "../../shared/constants";
 import type { TandemMode } from "../../shared/types.js";
 
-export type LayoutMode = "tabbed" | "three-panel" | "tabbed-left";
 export type EditorFont = "serif" | "sans" | "mono";
 export type LeftSlotKind = "side" | "outline";
 export type Density = "compact" | "cozy" | "spacious";
@@ -18,7 +17,9 @@ export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 export type RailTab = "annotations" | "chat" | "outline";
 
 export interface TandemSettings {
-  layout: LayoutMode;
+  leftPanelVisible: boolean;
+  rightPanelVisible: boolean;
+  schemaVersion: number;
   primaryTab: PrimaryTab;
   panelOrder: PanelOrder;
   editorWidthPercent: number;
@@ -35,7 +36,6 @@ export interface TandemSettings {
   annotationPatterns: boolean;
   selectionToolbar: boolean;
   soloRailHidden: boolean;
-  panelHidden: boolean;
   leftSlot: { kind: LeftSlotKind };
   rightRailTabs: RailTab[];
   degradedBannerDelayMs: number;
@@ -59,7 +59,9 @@ function prefersReducedMotion(): boolean {
 }
 
 const DEFAULTS: TandemSettings = {
-  layout: "tabbed",
+  leftPanelVisible: false,
+  rightPanelVisible: true,
+  schemaVersion: 2,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -94,6 +96,9 @@ const DEFAULTS: TandemSettings = {
  * intentional — `0` is not a valid dwell or width anyway). `accentHue` is
  * the exception: hue 0 (red) is valid, so it uses an explicit `typeof`
  * range check instead.
+ *
+ * v1→v2 migration: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
+ * Runs once on upgrade; subsequent loads see schemaVersion=2 and skip it.
  */
 export function loadSettings(): TandemSettings {
   let saved: string | null;
@@ -105,14 +110,31 @@ export function loadSettings(): TandemSettings {
   }
   if (saved) {
     try {
-      const parsed = JSON.parse(saved);
+      let parsed = JSON.parse(saved) as Record<string, unknown>;
+      // v1→v2 migration: derive per-side visibility from old layout+panelHidden.
+      if (!parsed || typeof parsed !== "object" || parsed.schemaVersion !== 2) {
+        const panelHidden = parsed.panelHidden === true;
+        let leftPanelVisible = false;
+        let rightPanelVisible = true;
+        if (panelHidden) {
+          leftPanelVisible = false;
+          rightPanelVisible = false;
+        } else if (parsed.layout === "three-panel") {
+          leftPanelVisible = true;
+          rightPanelVisible = true;
+        } else if (parsed.layout === "tabbed-left") {
+          leftPanelVisible = true;
+          rightPanelVisible = false;
+        }
+        // "tabbed" or no recognizable layout → defaults (left hidden, right visible)
+        parsed = { ...parsed, leftPanelVisible, rightPanelVisible, schemaVersion: 2 };
+        delete parsed.layout;
+        delete parsed.panelHidden;
+      }
       return {
-        layout:
-          parsed.layout === "three-panel" ||
-          parsed.layout === "tabbed" ||
-          parsed.layout === "tabbed-left"
-            ? parsed.layout
-            : DEFAULTS.layout,
+        leftPanelVisible: parsed.leftPanelVisible === true,
+        rightPanelVisible: parsed.rightPanelVisible !== false,
+        schemaVersion: 2,
         primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
         panelOrder:
           parsed.panelOrder === "annotations-editor-chat"
@@ -162,7 +184,6 @@ export function loadSettings(): TandemSettings {
         annotationPatterns: parsed.annotationPatterns === true,
         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
-        panelHidden: parsed.panelHidden === true,
         degradedBannerDelayMs:
           typeof parsed.degradedBannerDelayMs === "number" &&
           parsed.degradedBannerDelayMs >= 5000 &&
@@ -180,10 +201,12 @@ export function loadSettings(): TandemSettings {
             ? parsed.holdAnnotationsWhileOffline
             : DEFAULTS.holdAnnotationsWhileOffline,
         leftSlot: {
-          kind:
-            parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
-              ? parsed.leftSlot.kind
-              : DEFAULTS.leftSlot.kind,
+          kind: (() => {
+            const ls = parsed.leftSlot as { kind?: unknown } | undefined;
+            return ls?.kind === "side" || ls?.kind === "outline"
+              ? (ls.kind as LeftSlotKind)
+              : DEFAULTS.leftSlot.kind;
+          })(),
         },
         rightRailTabs: (() => {
           const VALID: RailTab[] = ["annotations", "chat", "outline"];

@@ -52,7 +52,9 @@ describe("loadSettings — selectionDwellMs clamping", () => {
 
   it("returns default when no settings are stored", () => {
     const settings = loadSettings();
-    expect(settings.layout).toBe("tabbed");
+    expect(settings.leftPanelVisible).toBe(false);
+    expect(settings.rightPanelVisible).toBe(true);
+    expect(settings.schemaVersion).toBe(2);
     expect(settings.editorWidthPercent).toBe(100);
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
@@ -248,7 +250,9 @@ describe("useTandemSettings — updateSettings write path", () => {
   // render environment (no @testing-library/react in this project).
 
   const BASE: TandemSettings = {
-    layout: "three-panel",
+    leftPanelVisible: true,
+    rightPanelVisible: true,
+    schemaVersion: 2,
     primaryTab: "chat",
     panelOrder: "chat-editor-annotations",
     editorWidthPercent: 75,
@@ -265,6 +269,11 @@ describe("useTandemSettings — updateSettings write path", () => {
     annotationPatterns: false,
     selectionToolbar: true,
     soloRailHidden: true,
+    leftSlot: { kind: "side" },
+    rightRailTabs: ["annotations", "chat"],
+    degradedBannerDelayMs: 30000,
+    sidecarRetryStrategy: "exponential",
+    holdAnnotationsWhileOffline: true,
   };
 
   it("clamps editorWidthPercent above 100 down to 100", () => {
@@ -290,7 +299,8 @@ describe("useTandemSettings — updateSettings write path", () => {
   it("preserves unchanged fields when a single field is updated", () => {
     const next = mergeAndClampSettings(BASE, { theme: "dark" });
     expect(next.theme).toBe("dark");
-    expect(next.layout).toBe(BASE.layout);
+    expect(next.leftPanelVisible).toBe(BASE.leftPanelVisible);
+    expect(next.rightPanelVisible).toBe(BASE.rightPanelVisible);
     expect(next.primaryTab).toBe(BASE.primaryTab);
     expect(next.panelOrder).toBe(BASE.panelOrder);
     expect(next.editorWidthPercent).toBe(BASE.editorWidthPercent);
@@ -345,13 +355,20 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
   });
 
   it("defaults showAuthorship to true for upgrading users (key absent from existing blob)", () => {
-    writeRawSettings({ layout: "three-panel", editorWidthPercent: 75 });
+    writeRawSettings({
+      schemaVersion: 2,
+      leftPanelVisible: true,
+      rightPanelVisible: true,
+      editorWidthPercent: 75,
+    });
     expect(loadSettings().showAuthorship).toBe(true);
   });
 
-  it("accepts tabbed-left as a valid layout", () => {
+  it("migrates old layout:'tabbed-left' to leftPanelVisible:true, rightPanelVisible:false", () => {
     writeRawSettings({ layout: "tabbed-left" });
-    expect(loadSettings().layout).toBe("tabbed-left");
+    const s = loadSettings();
+    expect(s.leftPanelVisible).toBe(true);
+    expect(s.rightPanelVisible).toBe(false);
   });
 
   it("preserves accentHue: 0 (red) — not falsy-defaulted", () => {

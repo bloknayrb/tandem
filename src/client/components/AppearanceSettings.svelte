@@ -3,7 +3,6 @@ import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
   Density,
   EditorFont,
-  LayoutMode,
   LeftSlotKind,
   PanelOrder,
   PrimaryTab,
@@ -18,29 +17,10 @@ interface Props {
   onUpdate: (partial: Partial<TandemSettings>) => void;
 }
 
-let { open, settings, onUpdate }: Props = $props();
+let { open: _open, settings, onUpdate }: Props = $props();
 
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
-
-let viewportWidth = $state(window.innerWidth);
-const threePanelDisabled = $derived(viewportWidth < 768);
-
-$effect(() => {
-  if (!open) return;
-  viewportWidth = window.innerWidth;
-  const handler = () => {
-    viewportWidth = window.innerWidth;
-  };
-  window.addEventListener("resize", handler);
-  return () => window.removeEventListener("resize", handler);
-});
-
-const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; icon: string }> = [
-  { value: "tabbed", label: "Tabbed", icon: "[=|]" },
-  { value: "tabbed-left", label: "Tabbed-Left", icon: "[|=]" },
-  { value: "three-panel", label: "Three-Panel", icon: "[|||]" },
-];
 
 function cardStyle(selected: boolean, disabled?: boolean): string {
   return [
@@ -64,12 +44,6 @@ const themeRg = createRadioGroup<ThemePreference>(
   () => settings.theme,
   ["light", "dark", "system"] as const,
   (t) => onUpdate({ theme: t }),
-);
-const layoutRg = createRadioGroup<LayoutMode>(
-  () => settings.layout,
-  ["tabbed", "tabbed-left", "three-panel"] as const,
-  (l) => onUpdate({ layout: l }),
-  (l) => l === "three-panel" && threePanelDisabled,
 );
 const primaryTabRg = createRadioGroup<PrimaryTab>(
   () => settings.primaryTab,
@@ -96,15 +70,10 @@ const densityRg = createRadioGroup<Density>(
   ["compact", "cozy", "spacious"] as const,
   (d) => onUpdate({ density: d }),
 );
-
-const leftSlotDisabled = $derived(settings.layout === "tabbed");
-
 const leftSlotRg = createRadioGroup<LeftSlotKind>(
   () => settings.leftSlot.kind,
   ["side", "outline"] as const,
-  (k) => {
-    if (!leftSlotDisabled) onUpdate({ leftSlot: { kind: k } });
-  },
+  (k) => onUpdate({ leftSlot: { kind: k } }),
 );
 </script>
 
@@ -133,109 +102,71 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
   </div>
 </div>
 
-<!-- Layout mode -->
+<!-- Default Tab -->
 <div>
-  <div id="settings-layout-label" style={sectionLabelStyle}>Layout</div>
+  <div id="settings-default-tab-label" style={sectionLabelStyle}>Default Tab</div>
   <div
     role="radiogroup"
-    aria-labelledby="settings-layout-label"
+    aria-labelledby="settings-default-tab-label"
     tabindex="0"
-    onkeydown={layoutRg.handleKeyDown}
-    style="display: flex; gap: 8px; flex-wrap: wrap;"
+    onkeydown={primaryTabRg.handleKeyDown}
+    style="display: flex; gap: var(--tandem-space-2);"
   >
-    {#each LAYOUT_OPTIONS as { value, label, icon } (value)}
-      {@const disabled = value === "three-panel" && threePanelDisabled}
-      <button
-        data-testid={`layout-${value}-btn`}
-        role="radio"
-        aria-checked={settings.layout === value}
-        aria-disabled={disabled || undefined}
-        tabindex={layoutRg.tabIndexFor(value)}
-        onclick={() => { if (!disabled) onUpdate({ layout: value }); }}
-        style={cardStyle(settings.layout === value, disabled)}
-        title={disabled ? "Requires viewport wider than 768px" : undefined}
-      >
-        <div style="font-size: 18px; margin-bottom: 2px;">{icon}</div>
-        {label}
-      </button>
-    {/each}
+    <button
+      data-testid="default-tab-chat-btn"
+      role="radio"
+      aria-checked={settings.primaryTab === "chat"}
+      tabindex={primaryTabRg.tabIndexFor("chat")}
+      onclick={() => onUpdate({ primaryTab: "chat" })}
+      style={cardStyle(settings.primaryTab === "chat")}
+    >
+      Chat
+    </button>
+    <button
+      data-testid="default-tab-annotations-btn"
+      role="radio"
+      aria-checked={settings.primaryTab === "annotations"}
+      tabindex={primaryTabRg.tabIndexFor("annotations")}
+      onclick={() => onUpdate({ primaryTab: "annotations" })}
+      style={cardStyle(settings.primaryTab === "annotations")}
+    >
+      Annotations
+    </button>
   </div>
-  {#if threePanelDisabled}
-    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
-      Three-panel requires a wider viewport
-    </div>
-  {/if}
 </div>
 
-<!-- Default tab (tabbed and tabbed-left modes) -->
-{#if settings.layout === "tabbed" || settings.layout === "tabbed-left"}
-  <div>
-    <div id="settings-default-tab-label" style={sectionLabelStyle}>Default Tab</div>
-    <div
-      role="radiogroup"
-      aria-labelledby="settings-default-tab-label"
-      tabindex="0"
-      onkeydown={primaryTabRg.handleKeyDown}
-      style="display: flex; gap: var(--tandem-space-2);"
+<!-- Panel Order -->
+<div>
+  <div id="settings-panel-order-label" style={sectionLabelStyle}>Panel Order</div>
+  <div
+    role="radiogroup"
+    aria-labelledby="settings-panel-order-label"
+    tabindex="0"
+    onkeydown={panelOrderRg.handleKeyDown}
+    style="display: flex; gap: var(--tandem-space-2);"
+  >
+    <button
+      data-testid="panel-order-cea-btn"
+      role="radio"
+      aria-checked={settings.panelOrder === "chat-editor-annotations"}
+      tabindex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
+      onclick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
+      style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
     >
-      <button
-        data-testid="default-tab-chat-btn"
-        role="radio"
-        aria-checked={settings.primaryTab === "chat"}
-        tabindex={primaryTabRg.tabIndexFor("chat")}
-        onclick={() => onUpdate({ primaryTab: "chat" })}
-        style={cardStyle(settings.primaryTab === "chat")}
-      >
-        Chat
-      </button>
-      <button
-        data-testid="default-tab-annotations-btn"
-        role="radio"
-        aria-checked={settings.primaryTab === "annotations"}
-        tabindex={primaryTabRg.tabIndexFor("annotations")}
-        onclick={() => onUpdate({ primaryTab: "annotations" })}
-        style={cardStyle(settings.primaryTab === "annotations")}
-      >
-        Annotations
-      </button>
-    </div>
-  </div>
-{/if}
-
-<!-- Panel order (three-panel mode only) -->
-{#if settings.layout === "three-panel"}
-  <div>
-    <div id="settings-panel-order-label" style={sectionLabelStyle}>Panel Order</div>
-    <div
-      role="radiogroup"
-      aria-labelledby="settings-panel-order-label"
-      tabindex="0"
-      onkeydown={panelOrderRg.handleKeyDown}
-      style="display: flex; gap: var(--tandem-space-2);"
+      Chat | Editor | Ann.
+    </button>
+    <button
+      data-testid="panel-order-aec-btn"
+      role="radio"
+      aria-checked={settings.panelOrder === "annotations-editor-chat"}
+      tabindex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
+      onclick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
+      style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
     >
-      <button
-        data-testid="panel-order-cea-btn"
-        role="radio"
-        aria-checked={settings.panelOrder === "chat-editor-annotations"}
-        tabindex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
-        onclick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
-        style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
-      >
-        Chat | Editor | Ann.
-      </button>
-      <button
-        data-testid="panel-order-aec-btn"
-        role="radio"
-        aria-checked={settings.panelOrder === "annotations-editor-chat"}
-        tabindex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
-        onclick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
-        style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
-      >
-        Ann. | Editor | Chat
-      </button>
-    </div>
+      Ann. | Editor | Chat
+    </button>
   </div>
-{/if}
+</div>
 
 <!-- Text Size -->
 <div>
@@ -271,7 +202,7 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
   <div style="display: flex; align-items: center; gap: 8px;">
     <span
       aria-hidden="true"
-    style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: var(--tandem-r-1); flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
+      style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: var(--tandem-r-1); flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
     ></span>
     <input
       data-testid="accent-hue-slider"
@@ -312,14 +243,13 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
   </div>
 </div>
 
-<!-- Left Panel Content — disabled when layout has no left panel -->
+<!-- Left Panel Content -->
 <div>
   <div id="settings-left-slot-label" style={sectionLabelStyle}>Left Panel</div>
   <div
     role="radiogroup"
     aria-labelledby="settings-left-slot-label"
-    aria-disabled={leftSlotDisabled}
-    tabindex={leftSlotDisabled ? -1 : 0}
+    tabindex="0"
     onkeydown={leftSlotRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
@@ -328,21 +258,14 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
         data-testid={`left-slot-kind-radio-${value}`}
         role="radio"
         aria-checked={settings.leftSlot.kind === value}
-        aria-disabled={leftSlotDisabled || undefined}
-        tabindex={leftSlotDisabled ? -1 : leftSlotRg.tabIndexFor(value)}
-        onclick={() => { if (!leftSlotDisabled) onUpdate({ leftSlot: { kind: value } }); }}
-        style={cardStyle(settings.leftSlot.kind === value, leftSlotDisabled)}
-        title={leftSlotDisabled ? "Switch to Tabbed-Left or Three-Panel to use the left panel" : undefined}
+        tabindex={leftSlotRg.tabIndexFor(value)}
+        onclick={() => onUpdate({ leftSlot: { kind: value } })}
+        style={cardStyle(settings.leftSlot.kind === value)}
       >
         {label}
       </button>
     {/each}
   </div>
-  {#if leftSlotDisabled}
-    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
-      Switch to Tabbed-Left or Three-Panel layout to enable the left panel
-    </div>
-  {/if}
 </div>
 
 <!-- Density -->
