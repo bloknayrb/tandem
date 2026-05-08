@@ -66,7 +66,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
 - ADR-027: notes are user-private; Claude never reads them via MCP tools or channel events
 - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`. `openFileByPath` accepts an optional `readOnly` flag to force read-only mode (used by the View Changelog button)
-- Three layout modes: `tabbed` (panel right, default), `tabbed-left` (panel left), `three-panel` (annotations left, chat right). Layout state persists in `tandem:settings` localStorage key. `App.svelte` uses inline `{#snippet}` blocks for `ResizeHandle` and `TabbedPanelContainer` across layout arms
+- Two independent panel visibility booleans (`leftPanelVisible`, `rightPanelVisible`) replace the old three-layout-mode system. Each rail has a dynamic tab bar driven by `leftRailTabs`/`rightRailTabs: RailTab[]` settings with mutual exclusion (a tab lives on one rail at a time). Layout state persists in `tandem:settings`. `App.svelte` uses inline `{#snippet}` blocks for `resizeHandle` and `tabbedPanel` (right rail); left rail is rendered inline
 
 ## Semantic Tokens
 - Token families defined in `index.html` `:root` (light) and `[data-theme="dark"]` blocks. Never use raw hex or non-neutral `rgba()` for semantic colors in `src/client/**/*.{ts,svelte}` — use `var(--tandem-*)` or import from `src/client/utils/colors.ts`. (`rgba(0,0,0,...)` / `rgba(255,255,255,...)` alpha values for shadows and overlays are fine.)

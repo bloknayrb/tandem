@@ -7,7 +7,6 @@ import {
 import type { TandemMode } from "../../shared/types.js";
 
 export type EditorFont = "serif" | "sans" | "mono";
-export type LeftSlotKind = "side" | "outline";
 export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
@@ -36,7 +35,7 @@ export interface TandemSettings {
   annotationPatterns: boolean;
   selectionToolbar: boolean;
   soloRailHidden: boolean;
-  leftSlot: { kind: LeftSlotKind };
+  leftRailTabs: RailTab[];
   rightRailTabs: RailTab[];
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
@@ -79,12 +78,24 @@ const DEFAULTS: TandemSettings = {
   selectionToolbar: true,
   soloRailHidden: true,
   panelHidden: false,
-  leftSlot: { kind: "outline" },
+  leftRailTabs: ["annotations", "outline"],
   rightRailTabs: ["annotations", "chat"],
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
 };
+
+const VALID_RAIL_TABS: RailTab[] = ["annotations", "chat", "outline"];
+
+function parseRailTabs(raw: unknown, fallback: RailTab[]): RailTab[] {
+  if (Array.isArray(raw)) {
+    const filtered = raw.filter((t: unknown) =>
+      VALID_RAIL_TABS.includes(t as RailTab),
+    ) as RailTab[];
+    return filtered.length > 0 ? filtered : fallback;
+  }
+  return fallback;
+}
 
 /**
  * Read and normalize settings from localStorage.
@@ -98,7 +109,8 @@ const DEFAULTS: TandemSettings = {
  * range check instead.
  *
  * v1→v2 migration: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
- * Runs once on upgrade; subsequent loads see schemaVersion=2 and skip it.
+ * v2 migration: `leftSlot.kind` → `leftRailTabs` (ordering preserved so the
+ * previously-active tab stays first). Subsequent loads ignore the legacy key.
  */
 export function loadSettings(): TandemSettings {
   let saved: string | null;
@@ -130,6 +142,18 @@ export function loadSettings(): TandemSettings {
         parsed = { ...parsed, leftPanelVisible, rightPanelVisible, schemaVersion: 2 };
         delete parsed.layout;
         delete parsed.panelHidden;
+      }
+      // v2 in-place migration: leftSlot.kind → leftRailTabs ordering.
+      // Preserve outline-first if the user had selected outline as their left panel.
+      let leftRailTabsFallback = DEFAULTS.leftRailTabs;
+      if (!Array.isArray(parsed.leftRailTabs)) {
+        const ls = parsed.leftSlot as { kind?: unknown } | undefined;
+        if (ls?.kind === "outline") {
+          console.warn("[tandem] migrating legacy leftSlot.kind=outline → leftRailTabs");
+          leftRailTabsFallback = ["outline", "annotations"];
+        } else if (ls?.kind === "side") {
+          console.warn("[tandem] migrating legacy leftSlot.kind=side → leftRailTabs");
+        }
       }
       return {
         leftPanelVisible: parsed.leftPanelVisible === true,
@@ -200,24 +224,8 @@ export function loadSettings(): TandemSettings {
           typeof parsed.holdAnnotationsWhileOffline === "boolean"
             ? parsed.holdAnnotationsWhileOffline
             : DEFAULTS.holdAnnotationsWhileOffline,
-        leftSlot: {
-          kind: (() => {
-            const ls = parsed.leftSlot as { kind?: unknown } | undefined;
-            return ls?.kind === "side" || ls?.kind === "outline"
-              ? (ls.kind as LeftSlotKind)
-              : DEFAULTS.leftSlot.kind;
-          })(),
-        },
-        rightRailTabs: (() => {
-          const VALID: RailTab[] = ["annotations", "chat", "outline"];
-          if (Array.isArray(parsed.rightRailTabs)) {
-            const filtered = parsed.rightRailTabs.filter((t: unknown) =>
-              VALID.includes(t as RailTab),
-            ) as RailTab[];
-            return filtered.length > 0 ? filtered : DEFAULTS.rightRailTabs;
-          }
-          return DEFAULTS.rightRailTabs;
-        })(),
+        leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
+        rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
@@ -249,5 +257,7 @@ export function mergeAndClampSettings(
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
+    leftRailTabs: merged.leftRailTabs.length > 0 ? merged.leftRailTabs : DEFAULTS.leftRailTabs,
+    rightRailTabs: merged.rightRailTabs.length > 0 ? merged.rightRailTabs : DEFAULTS.rightRailTabs,
   };
 }

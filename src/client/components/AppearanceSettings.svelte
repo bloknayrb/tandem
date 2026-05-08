@@ -3,7 +3,6 @@ import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
   Density,
   EditorFont,
-  LeftSlotKind,
   PanelOrder,
   PrimaryTab,
   TandemSettings,
@@ -69,11 +68,6 @@ const densityRg = createRadioGroup<Density>(
   () => settings.density,
   ["compact", "cozy", "spacious"] as const,
   (d) => onUpdate({ density: d }),
-);
-const leftSlotRg = createRadioGroup<LeftSlotKind>(
-  () => settings.leftSlot.kind,
-  ["side", "outline"] as const,
-  (k) => onUpdate({ leftSlot: { kind: k } }),
 );
 </script>
 
@@ -236,31 +230,6 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
         tabindex={editorFontRg.tabIndexFor(value)}
         onclick={() => onUpdate({ editorFont: value })}
         style={cardStyle(settings.editorFont === value)}
-      >
-        {label}
-      </button>
-    {/each}
-  </div>
-</div>
-
-<!-- Left Panel Content -->
-<div>
-  <div id="settings-left-slot-label" style={sectionLabelStyle}>Left Panel</div>
-  <div
-    role="radiogroup"
-    aria-labelledby="settings-left-slot-label"
-    tabindex="0"
-    onkeydown={leftSlotRg.handleKeyDown}
-    style="display: flex; gap: var(--tandem-space-2);"
-  >
-    {#each ([["side", "Annotations"], ["outline", "Outline"]] as const) as [value, label] (value)}
-      <button
-        data-testid={`left-slot-kind-radio-${value}`}
-        role="radio"
-        aria-checked={settings.leftSlot.kind === value}
-        tabindex={leftSlotRg.tabIndexFor(value)}
-        onclick={() => onUpdate({ leftSlot: { kind: value } })}
-        style={cardStyle(settings.leftSlot.kind === value)}
       >
         {label}
       </button>

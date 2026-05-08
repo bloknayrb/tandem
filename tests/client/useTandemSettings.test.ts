@@ -269,7 +269,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     annotationPatterns: false,
     selectionToolbar: true,
     soloRailHidden: true,
-    leftSlot: { kind: "side" },
+    leftRailTabs: ["annotations", "outline"],
     rightRailTabs: ["annotations", "chat"],
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
@@ -451,6 +451,125 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
   it("defaults selectionToolbar to true for non-boolean values", () => {
     writeRawSettings({ selectionToolbar: "nope" });
     expect(loadSettings().selectionToolbar).toBe(true);
+  });
+});
+
+describe("leftRailTabs and rightRailTabs", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function writeRawSettings(partial: Record<string, unknown>) {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
+  }
+
+  it("defaults leftRailTabs to [annotations, outline]", () => {
+    expect(loadSettings().leftRailTabs).toEqual(["annotations", "outline"]);
+  });
+
+  it("defaults rightRailTabs to [annotations, chat]", () => {
+    expect(loadSettings().rightRailTabs).toEqual(["annotations", "chat"]);
+  });
+
+  it("parses valid leftRailTabs", () => {
+    writeRawSettings({ leftRailTabs: ["outline", "chat"] });
+    expect(loadSettings().leftRailTabs).toEqual(["outline", "chat"]);
+  });
+
+  it("filters invalid entries from leftRailTabs, falls back to default if all invalid", () => {
+    writeRawSettings({ leftRailTabs: ["bogus", "invalid"] });
+    expect(loadSettings().leftRailTabs).toEqual(["annotations", "outline"]);
+  });
+
+  it("filters invalid entries but keeps valid ones", () => {
+    writeRawSettings({ leftRailTabs: ["outline", "bogus"] });
+    expect(loadSettings().leftRailTabs).toEqual(["outline"]);
+  });
+
+  it("falls back to default leftRailTabs when absent", () => {
+    writeRawSettings({ schemaVersion: 2 });
+    expect(loadSettings().leftRailTabs).toEqual(["annotations", "outline"]);
+  });
+
+  it("migrates legacy leftSlot.kind=outline → leftRailTabs with outline first", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeRawSettings({ schemaVersion: 2, leftSlot: { kind: "outline" } });
+    const s = loadSettings();
+    expect(s.leftRailTabs).toEqual(["outline", "annotations"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("migrating legacy leftSlot.kind=outline"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("migrates legacy leftSlot.kind=side → default leftRailTabs", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeRawSettings({ schemaVersion: 2, leftSlot: { kind: "side" } });
+    const s = loadSettings();
+    expect(s.leftRailTabs).toEqual(["annotations", "outline"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("migrating legacy leftSlot.kind=side"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("does not migrate if leftRailTabs already present (explicit overrides leftSlot)", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeRawSettings({ schemaVersion: 2, leftRailTabs: ["chat"], leftSlot: { kind: "outline" } });
+    const s = loadSettings();
+    expect(s.leftRailTabs).toEqual(["chat"]);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+});
+
+describe("mergeAndClampSettings — rail array clamps", () => {
+  const BASE: TandemSettings = {
+    leftPanelVisible: true,
+    rightPanelVisible: true,
+    schemaVersion: 2,
+    primaryTab: "chat",
+    panelOrder: "chat-editor-annotations",
+    editorWidthPercent: 75,
+    selectionDwellMs: 1000,
+    showAuthorship: true,
+    reduceMotion: false,
+    textSize: "m",
+    theme: "system",
+    accentHue: 275,
+    editorFont: "serif",
+    density: "cozy",
+    defaultMode: "tandem",
+    highContrast: false,
+    annotationPatterns: false,
+    selectionToolbar: true,
+    soloRailHidden: true,
+    leftRailTabs: ["annotations", "outline"],
+    rightRailTabs: ["annotations", "chat"],
+    degradedBannerDelayMs: 30000,
+    sidecarRetryStrategy: "exponential",
+    holdAnnotationsWhileOffline: true,
+  };
+
+  it("clamps leftRailTabs [] to default", () => {
+    const next = mergeAndClampSettings(BASE, { leftRailTabs: [] });
+    expect(next.leftRailTabs).toEqual(["annotations", "outline"]);
+  });
+
+  it("clamps rightRailTabs [] to default", () => {
+    const next = mergeAndClampSettings(BASE, { rightRailTabs: [] });
+    expect(next.rightRailTabs).toEqual(["annotations", "chat"]);
+  });
+
+  it("passes non-empty arrays through unchanged", () => {
+    const next = mergeAndClampSettings(BASE, { leftRailTabs: ["chat"] });
+    expect(next.leftRailTabs).toEqual(["chat"]);
   });
 });
 
