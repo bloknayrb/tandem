@@ -2,18 +2,28 @@
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import type { Annotation } from "../../shared/types";
+import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
 
 interface Props {
   editor: Editor | null;
   annotations?: Annotation[];
   focusTrigger?: number;
-  activeFilterType?: string;
+  activeFilterType?: FilterType;
+  activeFilterAuthor?: FilterAuthor;
+  activeFilterStatus?: FilterStatus;
 }
 
 type HeadingEntry = { text: string; level: number; pos: number };
 
-let { editor, annotations = [], focusTrigger = 0, activeFilterType = "all" }: Props = $props();
+let {
+  editor,
+  annotations = [],
+  focusTrigger = 0,
+  activeFilterType = "all",
+  activeFilterAuthor = "all",
+  activeFilterStatus = "all",
+}: Props = $props();
 
 let headings = $state<HeadingEntry[]>([]);
 let focusedIndex = $state<number>(-1);
@@ -135,12 +145,14 @@ function countAnnotationsInSection(sectionStart: number, sectionEnd: number): nu
   if (!ed || annotations.length === 0) return 0;
   let count = 0;
   for (const ann of annotations) {
-    // Apply type filter to match side panel's active filter
-    if (activeFilterType && activeFilterType !== "all") {
+    // Mirror all three active filters so counts match the side panel.
+    if (activeFilterType !== "all") {
       if (activeFilterType === "with-replacement") {
         if (!ann.suggestedText) continue;
       } else if (ann.type !== activeFilterType) continue;
     }
+    if (activeFilterAuthor !== "all" && ann.author !== activeFilterAuthor) continue;
+    if (activeFilterStatus !== "all" && ann.status !== activeFilterStatus) continue;
     try {
       const annPmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
       if (annPmFrom >= sectionStart && annPmFrom < sectionEnd) count++;

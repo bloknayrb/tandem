@@ -35,7 +35,13 @@ function handleHighlight(color: HighlightColor) {
   if (from === to) return;
   const flatFrom = pmPosToFlatOffset(state.doc, toPmPos(from));
   const flatTo = pmPosToFlatOffset(state.doc, toPmPos(to));
-  if (flatFrom === null || flatTo === null) return;
+  if (flatFrom === null || flatTo === null) {
+    console.warn(
+      "[FormattingBar] pmPosToFlatOffset returned null — CRDT position may be degraded",
+      { from, to },
+    );
+    return;
+  }
   toggleHighlight(ydoc, { from: flatFrom, to: flatTo }, color);
 }
 </script>
@@ -51,6 +57,7 @@ function handleHighlight(color: HighlightColor) {
   <!-- Left rail toggle -->
   <button
     type="button"
+    data-testid="formatting-bar-toggle-left"
     aria-label={panelVisible ? "Hide panel" : "Show panel"}
     aria-pressed={panelVisible}
     title={panelVisible ? "Hide panel" : "Show panel"}
@@ -81,12 +88,12 @@ function handleHighlight(color: HighlightColor) {
 
   <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 var(--tandem-space-2); flex-shrink: 0;"></div>
 
-  <!-- Right rail toggle -->
+  <!-- Right rail toggle — toggles shared panelHidden until independent left/right visibility lands -->
   <button
     type="button"
-    aria-label={rightPanelVisible ? "Hide right panel" : "Show right panel"}
+    aria-label={rightPanelVisible ? "Hide panels" : "Show panels"}
     aria-pressed={rightPanelVisible}
-    title={rightPanelVisible ? "Hide right panel" : "Show right panel"}
+    title={rightPanelVisible ? "Hide panels" : "Show panels"}
     data-testid="formatting-bar-toggle-right"
     onclick={onTogglePanelRight}
     style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);

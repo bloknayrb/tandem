@@ -16,6 +16,7 @@ import type { Editor } from "@tiptap/core";
 import type { ComponentProps } from "svelte";
 import type { Annotation } from "../../shared/types";
 import ChatPanel from "../panels/ChatPanel.svelte";
+import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import SidePanel from "../panels/SidePanel.svelte";
 import OutlinePanel from "./OutlinePanel.svelte";
 
@@ -27,7 +28,9 @@ type OutlineSlotProps = {
   editor: Editor | null;
   annotations?: Annotation[];
   focusTrigger?: number;
-  activeFilterType?: string;
+  activeFilterType?: FilterType;
+  activeFilterAuthor?: FilterAuthor;
+  activeFilterStatus?: FilterStatus;
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: discriminated union prop spread
@@ -56,6 +59,8 @@ const wrapStyle = $derived(
         annotations={(rest as OutlineSlotProps).annotations}
         focusTrigger={(rest as OutlineSlotProps).focusTrigger}
         activeFilterType={(rest as OutlineSlotProps).activeFilterType}
+        activeFilterAuthor={(rest as OutlineSlotProps).activeFilterAuthor}
+        activeFilterStatus={(rest as OutlineSlotProps).activeFilterStatus}
       />
     {:else}
       <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />

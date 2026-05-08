@@ -228,7 +228,15 @@ const effectivePanelHidden = $derived(
 );
 
 function togglePanel() {
-  settingsState.updateSettings({ panelHidden: !settingsState.settings.panelHidden });
+  if (effectivePanelHidden) {
+    // Show panel: clear both flags so solo-mode soloRailHidden doesn't keep it hidden.
+    settingsState.updateSettings({
+      panelHidden: false,
+      ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
+    });
+  } else {
+    settingsState.updateSettings({ panelHidden: true });
+  }
 }
 
 // Remembers the last non-three-panel layout so toggling off three-panel restores it.
@@ -396,7 +404,7 @@ const tutorial = createTutorial(
     {#if connectionBanner.showBanner}
       <ConnectionBanner
         onDismiss={connectionBanner.dismiss}
-        onRetry={() => { connectionBanner.dismiss(); yjsSync.reconnect(); }}
+        onRetry={() => { yjsSync.reconnect(); }}
       />
     {/if}
 
@@ -464,6 +472,8 @@ const tutorial = createTutorial(
                   annotations={modeGate.visibleAnnotations}
                   focusTrigger={outlineFocusTrigger}
                   activeFilterType={activeAnnotationFilter.type}
+                  activeFilterAuthor={activeAnnotationFilter.author}
+                  activeFilterStatus={activeAnnotationFilter.status}
                   onFilterChange={(type, author, status) => {
                     activeAnnotationFilter = { type, author, status };
                   }}
@@ -510,6 +520,8 @@ const tutorial = createTutorial(
                   annotations={modeGate.visibleAnnotations}
                   focusTrigger={outlineFocusTrigger}
                   activeFilterType={activeAnnotationFilter.type}
+                  activeFilterAuthor={activeAnnotationFilter.author}
+                  activeFilterStatus={activeAnnotationFilter.status}
                   onFilterChange={(type, author, status) => {
                     activeAnnotationFilter = { type, author, status };
                   }}

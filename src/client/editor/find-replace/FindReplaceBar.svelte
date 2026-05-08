@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Editor } from "@tiptap/core";
+import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import type { OpenTab } from "../../types.js";
 import {
@@ -29,6 +30,15 @@ type Scope = "doc" | "tabs";
 let scope = $state<Scope>("doc");
 let crossDocResults = $state<CrossDocMatch[]>([]);
 let crossDocSearching = $state(false);
+
+// Reset scope to "doc" when tabs drop to a single entry so in-doc find keeps working.
+$effect(() => {
+  if (tabs.length <= 1 && scope === "tabs") {
+    scope = "doc";
+    crossDocResults = [];
+    crossDocSearching = false;
+  }
+});
 
 function extractYdocText(ydoc: Y.Doc): string {
   const fragment = ydoc.getXmlFragment("default");
@@ -77,6 +87,7 @@ function searchYdoc(
 }
 
 let crossDocTimer: ReturnType<typeof setTimeout> | undefined;
+onDestroy(() => clearTimeout(crossDocTimer));
 
 function scheduleCrossDocSearch(q: string, cs: boolean) {
   clearTimeout(crossDocTimer);
@@ -401,12 +412,13 @@ async function handleReplaceAll() {
       <button
         data-testid="replace-btn"
         onclick={() => { if (editor) { replaceActive(editor.view, replaceText); tick++; } }}
-        disabled={matchCount === 0 || isReplacing}
+        disabled={matchCount === 0 || isReplacing || scope === "tabs"}
+        title={scope === "tabs" ? "Replace is not available in Open tabs mode" : undefined}
         style="
           padding: 4px 10px; font-size: var(--tandem-text-xs); cursor: pointer;
           border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
           background: var(--tandem-surface); color: var(--tandem-fg-muted);
-          opacity: {matchCount === 0 || isReplacing ? 0.4 : 1};
+          opacity: {matchCount === 0 || isReplacing || scope === 'tabs' ? 0.4 : 1};
         "
       >
         Replace
@@ -414,12 +426,13 @@ async function handleReplaceAll() {
       <button
         data-testid="replace-all-btn"
         onclick={handleReplaceAll}
-        disabled={matchCount === 0 || isReplacing}
+        disabled={matchCount === 0 || isReplacing || scope === "tabs"}
+        title={scope === "tabs" ? "Replace All is not available in Open tabs mode" : undefined}
         style="
           padding: 4px 10px; font-size: var(--tandem-text-xs); cursor: pointer;
           border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
           background: var(--tandem-surface); color: var(--tandem-fg-muted);
-          opacity: {matchCount === 0 || isReplacing ? 0.4 : 1};
+          opacity: {matchCount === 0 || isReplacing || scope === 'tabs' ? 0.4 : 1};
         "
       >
         {#if isReplacing && replaceProgress}

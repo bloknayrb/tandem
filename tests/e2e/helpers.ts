@@ -113,6 +113,13 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
   await tab.click();
   // The display toggle is synchronous CSS; no wait needed, but we return
   // control to the caller only after the click has resolved.
+
+  // FilterBar defaults to collapsed since feat(panels): collapsible filter bar
+  // (PR #578). Expand it so callers can immediately interact with filter controls.
+  const toggle = page.locator("[data-testid='filter-bar-toggle']");
+  if ((await toggle.count()) > 0) {
+    await toggle.click();
+  }
 }
 
 /** Success-payload shape for `tandem_status` consumed by `cleanupAllOpenDocuments`. */
