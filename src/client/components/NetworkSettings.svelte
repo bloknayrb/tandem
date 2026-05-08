@@ -46,8 +46,9 @@ const rowStyle =
 const subtextStyle =
   "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);";
 
-const transport = $derived(appInfo.info?.transport ?? "http");
+const transport = $derived(appInfo.info?.transport);
 const bindHost = $derived(appInfo.info?.bindHost);
+const bindPort = $derived(appInfo.info?.bindPort);
 const isHttp = $derived(transport === "http");
 const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
 </script>
@@ -83,7 +84,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
         {restarting ? "Restarting…" : "Restart sidecar"}
       </button>
     {:else}
-      <span style="font-size: 10px; color: var(--tandem-fg-subtle);">Restart via CLI: <code>tandem restart</code></span>
+      <span style="font-size: 10px; color: var(--tandem-fg-subtle);">Run <code>tandem stop &amp;&amp; tandem start</code> to restart</span>
     {/if}
   </div>
   {#if restartError}
@@ -99,7 +100,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
   <div
     style="display: flex; gap: var(--tandem-space-4); padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface); font-size: 12px; color: var(--tandem-fg);"
   >
-    <span><strong>Mode:</strong> {transport.toUpperCase()}</span>
+    <span><strong>Mode:</strong> {transport ? transport.toUpperCase() : "—"}</span>
     {#if bindHost}
       <span><strong>Host:</strong> {bindHost}</span>
     {/if}
@@ -113,7 +114,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     <div
       style="padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface-muted); font-size: 13px; color: var(--tandem-fg-subtle); display: inline-block;"
     >
-      {appInfo.info?.bindHost ? appInfo.info.bindHost.split(":").pop() : "3479"}
+      {bindPort ?? "—"}
     </div>
     <div style={subtextStyle}>Port used when transport is HTTP. To change, run <code>tandem start --port &lt;N&gt;</code>.</div>
   </div>
@@ -147,9 +148,9 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
   </div>
 </div>
 
-<!-- Retry Strategy -->
+<!-- Retry Strategy — TODO(v0.11.0): wire to yjsSync reconnect strategy -->
 <div>
-  <div style={labelStyle}>Reconnect Strategy</div>
+  <div style={labelStyle}>Reconnect Strategy <span style="font-size: 10px; color: var(--tandem-fg-subtle);">(not yet active)</span></div>
   <select
     data-testid="network-retry-strategy"
     value={settings.sidecarRetryStrategy}
@@ -164,7 +165,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
   </select>
 </div>
 
-<!-- Hold Annotations While Offline -->
+<!-- Hold Annotations While Offline — TODO(v0.11.0): wire to annotation queuing in useModeGate -->
 <label style={rowStyle}>
   <input
     type="checkbox"
@@ -174,10 +175,10 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       onUpdate({ holdAnnotationsWhileOffline: (e.target as HTMLInputElement).checked })}
     style="accent-color: var(--tandem-accent);"
   />
-  <span>Hold annotations while offline</span>
+  <span>Hold annotations while offline <span style="font-size: 10px; color: var(--tandem-fg-subtle);">(not yet active)</span></span>
 </label>
 <div style={subtextStyle}>
-  When enabled, annotation events queue locally and sync when the connection is restored.
+  When enabled, annotation events will queue locally and sync when the connection is restored.
 </div>
 
 <!-- Token Rotation -->

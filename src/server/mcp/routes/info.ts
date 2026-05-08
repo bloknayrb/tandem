@@ -23,6 +23,8 @@ export interface InfoHandlerDeps {
   transport?: "http" | "stdio";
   /** Bind host for HTTP transport (e.g. "127.0.0.1"). Undefined for stdio. */
   bindHost?: string;
+  /** MCP HTTP port number. Undefined for stdio. */
+  bindPort?: number;
 }
 
 /**
@@ -62,6 +64,9 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
 
     if (deps.bindHost !== undefined) {
       body.bindHost = deps.bindHost;
+    }
+    if (deps.bindPort !== undefined) {
+      body.bindPort = deps.bindPort;
     }
 
     // changelogPath is not sensitive — include whenever the file exists on disk.
