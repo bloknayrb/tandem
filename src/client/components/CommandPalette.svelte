@@ -238,10 +238,15 @@ function runResult(result: PaletteResult, _openInNewTab = false) {
     const ed = editor;
     if (!ed || ed.isDestroyed) return;
     const pos = result.pos;
-    const resolvedPos = ed.state.doc.resolve(pos + 1);
-    const selection = TextSelection.near(resolvedPos);
-    ed.view.dispatch(ed.state.tr.setSelection(selection).scrollIntoView());
-    ed.view.focus();
+    try {
+      // pos may be stale if a concurrent edit removed or shifted the heading.
+      const resolvedPos = ed.state.doc.resolve(pos + 1);
+      const selection = TextSelection.near(resolvedPos);
+      ed.view.dispatch(ed.state.tr.setSelection(selection).scrollIntoView());
+      ed.view.focus();
+    } catch {
+      // Stale position — palette already closed, silently ignore.
+    }
   } else if (result.kind === "annotation") {
     close();
     onFocusAnnotation?.(result.id.replace("annotation-", ""));
