@@ -431,7 +431,8 @@ test("Solo/Tandem mode toggle switches via toolbar and surfaces held annotations
   await expect(heldButton).toHaveCount(0, { timeout: 2_000 });
 });
 
-test("layout switches between tabbed and three-panel", async ({ page }) => {
+// Layout-mode (tabbed/tabbed-left/three-panel) removed in PR #580. See issue #581.
+test.skip("layout switches between tabbed and three-panel", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
@@ -473,7 +474,9 @@ test("layout switches between tabbed and three-panel", async ({ page }) => {
   await expect(tabbedHandle).toHaveCount(0, { timeout: 10_000 });
 });
 
-test("tabbed-left layout mounts left panel handle and keeps tabs visible", async ({ page }) => {
+test.skip("tabbed-left layout mounts left panel handle and keeps tabs visible", async ({
+  page,
+}) => {
   // This test covers the tabbed-left branch which
   // had zero E2E coverage — it has a left-side panel with its own resize
   // handle (left-panel-resize-handle) instead of the right-side tabbed
@@ -519,7 +522,7 @@ test("tabbed-left layout mounts left panel handle and keeps tabs visible", async
   });
 });
 
-test("three-panel layout resizes left/right widths independently", async ({ page }) => {
+test.skip("three-panel layout resizes left/right widths independently", async ({ page }) => {
   // Production wires the left handle to `tandem-left-panel-width` and the
   // right handle to `tandem-panel-width`. The regression this guards against
   // is #228's bundled-state bug where both handles wrote to the same key.
@@ -604,7 +607,7 @@ test("three-panel layout resizes left/right widths independently", async ({ page
   expect(afterReload.right).toBe(afterRightDrag.right);
 });
 
-test("panel-width drags clamp to [200, 600]", async ({ page }) => {
+test.skip("panel-width drags clamp to [200, 600]", async ({ page }) => {
   // Extreme drags in both directions must not exceed PANEL_MAX_WIDTH (600)
   // or drop below PANEL_MIN_WIDTH (200). Sign-inversion regressions on the
   // right handle would surface here before anywhere else.
@@ -668,7 +671,7 @@ test("panel-width drags clamp to [200, 600]", async ({ page }) => {
   expect(await readRight()).toBe(200);
 });
 
-test("three-panel left width survives a tabbed-layout round trip", async ({ page }) => {
+test.skip("three-panel left width survives a tabbed-layout round trip", async ({ page }) => {
   // Scenario: user resizes left panel in three-panel mode, switches to
   // tabbed (only the right key gets touched), switches back to three-panel.
   // The left width must still be what the user set. Guards against a

@@ -39,7 +39,10 @@ async function dragHandleBy(
   await page.mouse.up();
 }
 
-test("panel resize persists localStorage keys and keyboard Home/End works", async ({ page }) => {
+// Layout-mode (tabbed/tabbed-left/three-panel) removed in PR #580. See issue #581.
+test.skip("panel resize persists localStorage keys and keyboard Home/End works", async ({
+  page,
+}) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
