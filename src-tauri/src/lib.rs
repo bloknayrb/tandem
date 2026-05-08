@@ -332,10 +332,17 @@ pub fn run() {
         });
 }
 
-/// Kill the sidecar and let the supervisor loop restart it automatically.
+/// Kill the sidecar process and spawn it again.
 #[tauri::command]
 fn restart_sidecar(app: tauri::AppHandle) {
     kill_sidecar(&app);
+    let client = app.state::<reqwest::Client>().inner().clone();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = start_sidecar(&handle, &client).await {
+            eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
+        }
+    });
 }
 
 /// Kill the sidecar process if one is running.

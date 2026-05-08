@@ -243,7 +243,7 @@ function aboutRows() {
         info.toolCount === null ? "Tool count unavailable" : `${info.toolCount} tools available`,
     },
     { label: "MCP SDK", value: `MCP SDK ${info.mcpSdkVersion}` },
-    { label: "Transport", value: info.transport.toUpperCase() },
+    { label: "Transport", value: info.transport?.toUpperCase() ?? "—" },
   ];
 
   if (info.storagePath) rows.push({ label: "Storage", value: info.storagePath });

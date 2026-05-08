@@ -367,6 +367,7 @@ export async function startMcpServerHttp(
       changelogPath: CHANGELOG_PATH,
       transport: "http",
       bindHost: host,
+      bindPort: port,
     },
   );
 
