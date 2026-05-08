@@ -70,8 +70,8 @@ test("annotation buttons are disabled with no selection", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  // No selection → buttons must report disabled (Playwright reads the native
-  // `disabled` attribute; ToolbarButton sets it directly).
+  // No selection → all annotation buttons disabled.
+  // toolbar-highlight-btn is in FormattingBar but is selection-gated via canHighlight.
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeDisabled();
   await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeDisabled();
   await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeDisabled();

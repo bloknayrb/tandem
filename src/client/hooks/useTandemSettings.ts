@@ -69,7 +69,7 @@ const DEFAULTS: TandemSettings = {
   selectionToolbar: true,
   soloRailHidden: true,
   panelHidden: false,
-  leftSlot: { kind: "side" },
+  leftSlot: { kind: "outline" },
 };
 
 /**
