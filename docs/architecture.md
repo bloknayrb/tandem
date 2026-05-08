@@ -712,7 +712,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
 - Tiptap editor with collaboration extensions, connects to Hocuspocus via WebSocket (@hocuspocus/provider)
 - `App.svelte` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
-- `panel-layout.ts` -- Panel layout constants (default widths, min/max constraints) shared by `App.svelte` and `useDragResize`
+- `panel-layout.ts` -- Panel width constants (`PANEL_DEFAULT_WIDTH`, `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`) and `loadPanelWidth()`. `PanelLayout` type and `getRightWidth` were removed with the layout-mode refactor
 - `DocListEntry`, `OpenTab`, and `AppInfoData` types live in `src/client/types.ts`
 - `DocumentTabs` -- Tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
 - `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by SettingsPopover's ABOUT footer and View Changelog button

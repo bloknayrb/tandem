@@ -170,8 +170,18 @@ function jumpTo(entry: HeadingEntry, index: number) {
   try {
     const resolved = state.doc.resolve(entry.pos + 1);
     const sel = TextSelection.near(resolved);
-    ed.view.dispatch(state.tr.setSelection(sel).scrollIntoView());
+    ed.view.dispatch(state.tr.setSelection(sel));
     ed.view.focus();
+    // Scroll the heading to the top of the editor's scroll container.
+    const { node } = ed.view.domAtPos(entry.pos + 1);
+    const el = (node instanceof Element ? node : node.parentElement) as HTMLElement | null;
+    const scroller = (ed.view.dom.closest(".editor-scroll") ??
+      ed.view.dom.parentElement) as HTMLElement | null;
+    if (el && scroller) {
+      const elTop = el.getBoundingClientRect().top;
+      const scrollerTop = scroller.getBoundingClientRect().top;
+      scroller.scrollTop += elTop - scrollerTop - scroller.clientHeight * 0.05;
+    }
   } catch {
     // pos may have been invalidated by a concurrent edit — ignore
   }

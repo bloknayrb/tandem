@@ -166,6 +166,22 @@ $effect(() => {
 let activeRailTab = $state<"annotations" | "chat" | "outline">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
+let activeLeftRailTab = $state<"annotations" | "chat" | "outline">(
+  settingsState.settings.leftRailTabs[0] ?? "annotations",
+);
+
+// Reconcile active-tab pointers whenever the persisted rail arrays change
+// (e.g. after settings load, cross-rail move, or external settings update).
+$effect(() => {
+  if (!settingsState.settings.leftRailTabs.includes(activeLeftRailTab)) {
+    activeLeftRailTab = settingsState.settings.leftRailTabs[0];
+  }
+});
+$effect(() => {
+  if (!settingsState.settings.rightRailTabs.includes(activeRailTab)) {
+    activeRailTab = settingsState.settings.rightRailTabs[0];
+  }
+});
 
 const pendingAnnotationBadge = $derived(
   activeRailTab !== "annotations"
@@ -238,6 +254,38 @@ function togglePanel() {
   }
 }
 
+// Returns true if committed, false if blocked (would empty the other rail).
+function moveTabsBetweenRails(
+  side: "left" | "right",
+  newTabsForSide: ("annotations" | "chat" | "outline")[],
+): boolean {
+  const leftTabs = settingsState.settings.leftRailTabs;
+  const rightTabs = settingsState.settings.rightRailTabs;
+  const currentSide = side === "left" ? leftTabs : rightTabs;
+  const otherTabs = side === "left" ? rightTabs : leftTabs;
+  const newlyAdded = newTabsForSide.filter((t) => !currentSide.includes(t));
+  if (newlyAdded.length === 0) {
+    settingsState.updateSettings(
+      side === "left" ? { leftRailTabs: newTabsForSide } : { rightRailTabs: newTabsForSide },
+    );
+    return true;
+  }
+  const prunedOther = otherTabs.filter((t) => !newlyAdded.includes(t));
+  if (prunedOther.length === 0) {
+    console.warn(
+      "[tandem] cross-rail tab move blocked — would leave the %s rail empty",
+      side === "left" ? "right" : "left",
+    );
+    return false;
+  }
+  settingsState.updateSettings(
+    side === "left"
+      ? { leftRailTabs: newTabsForSide, rightRailTabs: prunedOther }
+      : { rightRailTabs: newTabsForSide, leftRailTabs: prunedOther },
+  );
+  return true;
+}
+
 function handleFilterChange(
   type: (typeof activeAnnotationFilter)["type"],
   author: (typeof activeAnnotationFilter)["author"],
@@ -303,7 +351,8 @@ $effect(() => {
     if ((e.ctrlKey || e.metaKey) && e.key === "f") {
       e.preventDefault();
       const isOutlineVisible =
-        effectiveLeftVisible && settingsState.settings.leftSlot.kind === "outline";
+        (effectiveLeftVisible && activeLeftRailTab === "outline") ||
+        (effectiveRightVisible && activeRailTab === "outline");
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
@@ -388,91 +437,85 @@ const tutorial = createTutorial(
          Left and right rails are independently shown/hidden around the stable editor column. -->
     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
       {#if effectiveLeftVisible}
+        {@const leftTabs = settingsState.settings.leftRailTabs}
+        {@const iconOnlyLeft = leftTabs.length > 3}
+        {@const disabledLeftTabs = settingsState.settings.rightRailTabs.length === 1 ? settingsState.settings.rightRailTabs : []}
         <div
           style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
         >
           <div
-            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+            style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
           >
-            <div
-              style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
-            >
-              {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
-            </div>
-            <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-              {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
-                <PanelSlot
-                  kind="chat"
-                  ctrlYdoc={yjsSync.bootstrapYdoc}
-                  {editor}
-                  activeDocId={yjsSync.activeTabId}
-                  {openDocs}
-                  claudeActive={yjsSync.claudeActive}
-                  claudeStatus={yjsSync.claudeStatus}
-                  {capturedAnchor}
-                  onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-                  reduceMotion={settingsState.settings.reduceMotion}
-                  visible={true}
-                />
-              {:else}
-                <PanelSlot
-                  kind={settingsState.settings.leftSlot.kind}
-                  annotations={modeGate.visibleAnnotations}
-                  focusTrigger={outlineFocusTrigger}
-                  activeFilterType={activeAnnotationFilter.type}
-                  activeFilterAuthor={activeAnnotationFilter.author}
-                  activeFilterStatus={activeAnnotationFilter.status}
-                  onFilterChange={(type, author, status) => {
-                    activeAnnotationFilter = { type, author, status };
-                  }}
-                  {editor}
-                  ydoc={activeTab?.ydoc ?? null}
-                  heldCount={modeGate.heldCount}
-                  tandemMode={modeState.tandemMode}
-                  onModeChange={modeState.setTandemMode}
-                  activeDocFormat={activeTab?.format}
-                  documentId={activeTab?.id}
-                  {activeAnnotationId}
-                  onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-                  reduceMotion={settingsState.settings.reduceMotion}
-                />
-              {/if}
+            {#if leftTabs.includes("annotations")}
+              <button
+                data-testid="left-annotations-tab"
+                onclick={() => { activeLeftRailTab = "annotations"; }}
+                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "annotations" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "annotations" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
+                title={iconOnlyLeft ? "Annotations" : undefined}
+              >{iconOnlyLeft ? "◨" : "Annotations"}</button>
+            {/if}
+            {#if leftTabs.includes("chat")}
+              <button
+                data-testid="left-chat-tab"
+                onclick={() => { activeLeftRailTab = "chat"; }}
+                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "chat" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "chat" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
+                title={iconOnlyLeft ? "Chat" : undefined}
+              >{iconOnlyLeft ? "💬" : "Chat"}</button>
+            {/if}
+            {#if leftTabs.includes("outline")}
+              <button
+                data-testid="left-outline-tab"
+                onclick={() => { activeLeftRailTab = "outline"; }}
+                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "outline" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "outline" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
+                title={iconOnlyLeft ? "Outline" : undefined}
+              >{iconOnlyLeft ? "≡" : "Outline"}</button>
+            {/if}
+            <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
+              <RailTabPicker
+                enabledTabs={leftTabs}
+                disabledTabs={disabledLeftTabs}
+                testIdPrefix="left-"
+                onTabsChange={(tabs) => { moveTabsBetweenRails("left", tabs); }}
+              />
             </div>
           </div>
           <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-            {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
-              <PanelSlot
-                kind="chat"
-                ctrlYdoc={yjsSync.bootstrapYdoc}
-                {editor}
-                activeDocId={yjsSync.activeTabId}
-                {openDocs}
-                claudeActive={yjsSync.claudeActive}
-                claudeStatus={yjsSync.claudeStatus}
-                {capturedAnchor}
-                onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-                reduceMotion={settingsState.settings.reduceMotion}
-                visible={true}
-              />
-            {:else}
-              <PanelSlot
-                kind={settingsState.settings.leftSlot.kind}
-                annotations={modeGate.visibleAnnotations}
-                focusTrigger={outlineFocusTrigger}
-                activeFilterType={activeAnnotationFilter.type}
-                onFilterChange={handleFilterChange}
-                {editor}
-                ydoc={activeTab?.ydoc ?? null}
-                heldCount={modeGate.heldCount}
-                tandemMode={modeState.tandemMode}
-                onModeChange={modeState.setTandemMode}
-                activeDocFormat={activeTab?.format}
-                documentId={activeTab?.id}
-                {activeAnnotationId}
-                onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-                reduceMotion={settingsState.settings.reduceMotion}
-              />
-            {/if}
+            <PanelSlot
+              kind="chat"
+              ctrlYdoc={yjsSync.bootstrapYdoc}
+              {editor}
+              activeDocId={yjsSync.activeTabId}
+              {openDocs}
+              claudeActive={yjsSync.claudeActive}
+              claudeStatus={yjsSync.claudeStatus}
+              {capturedAnchor}
+              onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+              reduceMotion={settingsState.settings.reduceMotion}
+              visible={activeLeftRailTab === "chat" && leftTabs.includes("chat")}
+            />
+            <PanelSlot
+              kind="side"
+              annotations={modeGate.visibleAnnotations}
+              activeFilterType={activeAnnotationFilter.type}
+              onFilterChange={handleFilterChange}
+              {editor}
+              ydoc={activeTab?.ydoc ?? null}
+              heldCount={modeGate.heldCount}
+              tandemMode={modeState.tandemMode}
+              onModeChange={modeState.setTandemMode}
+              activeDocFormat={activeTab?.format}
+              documentId={activeTab?.id}
+              {activeAnnotationId}
+              onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+              reduceMotion={settingsState.settings.reduceMotion}
+              visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
+            />
+            <PanelSlot
+              kind="outline"
+              focusTrigger={outlineFocusTrigger}
+              {editor}
+              visible={activeLeftRailTab === "outline" && leftTabs.includes("outline")}
+            />
           </div>
         </div>
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
@@ -743,10 +786,8 @@ const tutorial = createTutorial(
       <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
         <RailTabPicker
           enabledTabs={settingsState.settings.rightRailTabs}
-          onTabsChange={(tabs) => {
-            if (!tabs.includes(activeRailTab)) activeRailTab = tabs[0];
-            settingsState.updateSettings({ rightRailTabs: tabs });
-          }}
+          disabledTabs={settingsState.settings.leftRailTabs.length === 1 ? settingsState.settings.leftRailTabs : []}
+          onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
         />
       </div>
     </div>
