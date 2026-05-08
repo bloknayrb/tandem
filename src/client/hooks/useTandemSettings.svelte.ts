@@ -6,7 +6,6 @@ import { loadSettings, mergeAndClampSettings } from "./useTandemSettings.js";
 export type {
   Density,
   EditorFont,
-  LayoutMode,
   LeftSlotKind,
   PanelOrder,
   PrimaryTab,

@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { PANEL_WIDTH_KEYS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -43,14 +42,7 @@ import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
-import {
-  getRightWidth,
-  loadPanelWidth,
-  PANEL_DEFAULT_WIDTH,
-  PANEL_MAX_WIDTH,
-  PANEL_MIN_WIDTH,
-  type PanelLayout,
-} from "./panel-layout";
+import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { pmSelectionToFlat } from "./positions";
@@ -198,18 +190,8 @@ let activeAnnotationFilter = $state<{
   status: "all",
 });
 
-let panelLayout = $state<PanelLayout>(
-  (() => {
-    const initLayout = settingsState.settings.layout;
-    if (initLayout === "three-panel") {
-      return { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") };
-    } else if (initLayout === "tabbed-left") {
-      return { kind: "tabbed-left", left: loadPanelWidth("left") };
-    } else {
-      return { kind: "tabbed", right: loadPanelWidth("right") };
-    }
-  })(),
-);
+const leftPanelWidth = loadPanelWidth("left");
+const rightPanelWidth = loadPanelWidth("right");
 
 $effect(() => {
   const layout = settingsState.settings.layout;
@@ -230,9 +212,18 @@ $effect(() => {
   }
 });
 
-const effectivePanelHidden = $derived(
-  settingsState.settings.panelHidden ||
-    (modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
+const dragResizeRight = createDragResize({
+  side: "right",
+  initialWidth: rightPanelWidth,
+  getVisible: () => effectiveRightVisible,
+});
+
+// Left rail: no solo override (outline stays visible in solo mode).
+// Right rail: suppressed in solo when soloRailHidden is set.
+const effectiveLeftVisible = $derived(settingsState.settings.leftPanelVisible);
+const effectiveRightVisible = $derived(
+  settingsState.settings.rightPanelVisible &&
+    !(modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
 );
 
 function togglePanel() {
@@ -255,19 +246,6 @@ function handleFilterChange(
   activeAnnotationFilter = { type, author, status };
 }
 
-// Remembers the last non-three-panel layout so toggling off three-panel restores it.
-let prevNonThreePanelLayout: "tabbed" | "tabbed-left" = "tabbed";
-
-function toggleLayout() {
-  const current = settingsState.settings.layout;
-  if (current === "three-panel") {
-    settingsState.updateSettings({ layout: prevNonThreePanelLayout });
-  } else {
-    prevNonThreePanelLayout = current;
-    settingsState.updateSettings({ layout: "three-panel" });
-  }
-}
-
 const editorMaxWidth = $derived(
   settingsState.settings.editorWidthPercent < 100
     ? `${settingsState.settings.editorWidthPercent}%`
@@ -275,13 +253,6 @@ const editorMaxWidth = $derived(
 );
 const editorMargin = $derived(
   settingsState.settings.editorWidthPercent < 100 ? "0 auto" : undefined,
-);
-
-const dragResize = createDragResize(
-  () => panelLayout,
-  (updater) => {
-    panelLayout = updater(panelLayout);
-  },
 );
 
 function captureSelectionForChat() {
@@ -332,9 +303,7 @@ $effect(() => {
     if ((e.ctrlKey || e.metaKey) && e.key === "f") {
       e.preventDefault();
       const isOutlineVisible =
-        panelLayout.kind === "three-panel" &&
-        !effectivePanelHidden &&
-        settingsState.settings.leftSlot.kind === "outline";
+        effectiveLeftVisible && settingsState.settings.leftSlot.kind === "outline";
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
@@ -362,10 +331,6 @@ const tutorial = createTutorial(
   <TitleBar
     title={activeTab?.fileName}
     dirty={activeTabDirty}
-    panelVisible={!settingsState.settings.panelHidden}
-    onTogglePanel={togglePanel}
-    isThreePanel={panelLayout.kind === "three-panel"}
-    onToggleLayout={toggleLayout}
   />
   {#if !yjsSync.ready}
     <div
@@ -412,20 +377,22 @@ const tutorial = createTutorial(
     <FormattingBar
       {editor}
       ydoc={activeTab?.ydoc ?? null}
-      panelVisible={!settingsState.settings.panelHidden}
-      onTogglePanel={togglePanel}
-      rightPanelVisible={!effectivePanelHidden}
-      onTogglePanelRight={togglePanel}
+      leftPanelVisible={effectiveLeftVisible}
+      onToggleLeftPanel={toggleLeftPanel}
+      rightPanelVisible={effectiveRightVisible}
+      onToggleRightPanel={toggleRightPanel}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same
-         DOM position so the Editor component never remounts on layout changes.
-         Panels are conditionally shown/hidden around the stable editor column. -->
+         DOM position so the Editor component never remounts on panel toggles.
+         Left and right rails are independently shown/hidden around the stable editor column. -->
     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
-      {#if panelLayout.kind === "three-panel"}
-        {#if !effectivePanelHidden}
+      {#if effectiveLeftVisible}
+        <div
+          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
+        >
           <div
-            style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
+            style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
           >
             <div
               style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
@@ -472,13 +439,43 @@ const tutorial = createTutorial(
               {/if}
             </div>
           </div>
-          {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
-        {/if}
-      {:else if panelLayout.kind === "tabbed-left"}
-        {#if !effectivePanelHidden}
-          {@render tabbedPanel(panelLayout.left, "left")}
-          {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
-        {/if}
+          <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+            {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
+              <PanelSlot
+                kind="chat"
+                ctrlYdoc={yjsSync.bootstrapYdoc}
+                {editor}
+                activeDocId={yjsSync.activeTabId}
+                {openDocs}
+                claudeActive={yjsSync.claudeActive}
+                claudeStatus={yjsSync.claudeStatus}
+                {capturedAnchor}
+                onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+                reduceMotion={settingsState.settings.reduceMotion}
+                visible={true}
+              />
+            {:else}
+              <PanelSlot
+                kind={settingsState.settings.leftSlot.kind}
+                annotations={modeGate.visibleAnnotations}
+                focusTrigger={outlineFocusTrigger}
+                activeFilterType={activeAnnotationFilter.type}
+                onFilterChange={handleFilterChange}
+                {editor}
+                ydoc={activeTab?.ydoc ?? null}
+                heldCount={modeGate.heldCount}
+                tandemMode={modeState.tandemMode}
+                onModeChange={modeState.setTandemMode}
+                activeDocFormat={activeTab?.format}
+                documentId={activeTab?.id}
+                {activeAnnotationId}
+                onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+                reduceMotion={settingsState.settings.reduceMotion}
+              />
+            {/if}
+          </div>
+        </div>
+        {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
       {/if}
 
       {@render editorColumn()}
@@ -617,25 +614,17 @@ const tutorial = createTutorial(
       else if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -STEP;
       else if (e.key === "PageUp") delta = BIG_STEP;
       else if (e.key === "PageDown") delta = -BIG_STEP;
-      else if (e.key === "Home") delta = PANEL_MIN_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
-      else if (e.key === "End") delta = PANEL_MAX_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
+      else if (e.key === "Home") delta = PANEL_MIN_WIDTH - (side === "left" ? dragResizeLeft.width : dragResizeRight.width);
+      else if (e.key === "End") delta = PANEL_MAX_WIDTH - (side === "left" ? dragResizeLeft.width : dragResizeRight.width);
       if (delta !== null) {
         e.preventDefault();
         e.stopPropagation();
-        dragResize.handleResizeStep(side, delta);
+        if (side === "left") dragResizeLeft.handleResizeStep(delta);
+        else dragResizeRight.handleResizeStep(delta);
       }
     }}
-    onkeyup={(e) => {
-      const resizeKeys = ["ArrowRight","ArrowLeft","ArrowUp","ArrowDown","PageUp","PageDown","Home","End"];
-      if (!resizeKeys.includes(e.key)) return;
-      const layoutNow = panelLayout;
-      const w = side === "left"
-        ? ("left" in layoutNow ? layoutNow.left : PANEL_DEFAULT_WIDTH)
-        : getRightWidth(layoutNow);
-      const shouldPersist = (side === "left" && "left" in layoutNow) || (side === "right" && "right" in layoutNow);
-      if (shouldPersist) {
-        try { localStorage.setItem(PANEL_WIDTH_KEYS[side], String(w)); } catch {}
-      }
+    onkeyup={() => {
+      // Width is already persisted inside handleResizeStep on each keyboard step.
     }}
     style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; position: relative; z-index: var(--tandem-z-base);"
     onmouseenter={(e) => {

@@ -11,19 +11,19 @@ import { pmPosToFlatOffset } from "../positions";
 interface Props {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
-  panelVisible?: boolean;
-  onTogglePanel?: () => void;
+  leftPanelVisible?: boolean;
+  onToggleLeftPanel?: () => void;
   rightPanelVisible?: boolean;
-  onTogglePanelRight?: () => void;
+  onToggleRightPanel?: () => void;
 }
 
 const {
   editor,
   ydoc,
-  panelVisible = true,
-  onTogglePanel,
+  leftPanelVisible = false,
+  onToggleLeftPanel,
   rightPanelVisible = true,
-  onTogglePanelRight,
+  onToggleRightPanel,
 }: Props = $props();
 
 // Force-reactive tick — mirrors FormattingToolbar's pattern so that
@@ -85,8 +85,8 @@ function handleHighlight(color: HighlightColor) {
     title={panelVisible ? "Hide panel" : "Show panel"}
     onclick={onTogglePanel}
     style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
-      background: {panelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
-      color: {panelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
+      background: {leftPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
+      color: {leftPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
       cursor: pointer; display: flex; align-items: center; justify-content: center;
       margin-right: var(--tandem-space-2); flex-shrink: 0;"
   >
@@ -117,7 +117,7 @@ function handleHighlight(color: HighlightColor) {
     aria-pressed={rightPanelVisible}
     title={rightPanelVisible ? "Hide panels" : "Show panels"}
     data-testid="formatting-bar-toggle-right"
-    onclick={onTogglePanelRight}
+    onclick={onToggleRightPanel}
     style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
       background: {rightPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
       color: {rightPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
