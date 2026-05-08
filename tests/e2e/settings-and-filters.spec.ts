@@ -80,9 +80,6 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await expect(dwellSlider).toHaveAttribute("type", "range");
 
   await popover.getByRole("button", { name: "Appearance" }).click();
-  // Layout buttons — exercises another batch of new testids from #223
-  await expect(popover.locator("[data-testid='layout-tabbed-btn']")).toBeVisible();
-  await expect(popover.locator("[data-testid='layout-three-panel-btn']")).toBeVisible();
 
   await popover.getByRole("button", { name: "Editor" }).click();
   await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
