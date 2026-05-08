@@ -122,8 +122,12 @@ export function loadSettings(): TandemSettings {
   if (saved) {
     try {
       let parsed = JSON.parse(saved) as Record<string, unknown>;
+      // Guard: JSON.parse("null") returns null (valid JSON but not a settings object).
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        parsed = { leftPanelVisible: false, rightPanelVisible: true, schemaVersion: 2 };
+      }
       // v1→v2 migration: derive per-side visibility from old layout+panelHidden.
-      if (!parsed || typeof parsed !== "object" || parsed.schemaVersion !== 2) {
+      if (parsed.schemaVersion !== 2) {
         const panelHidden = parsed.panelHidden === true;
         let leftPanelVisible = false;
         let rightPanelVisible = true;

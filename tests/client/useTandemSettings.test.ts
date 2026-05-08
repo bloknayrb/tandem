@@ -98,6 +98,18 @@ describe("loadSettings — selectionDwellMs clamping", () => {
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
 
+  it("returns defaults without corrupt-JSON warning when stored value is JSON null", () => {
+    // JSON.stringify(null) = "null"; JSON.parse("null") = null (valid JSON, not a
+    // parse error). The old code would hit parsed.panelHidden on null and throw
+    // inside the migration block, triggering a misleading "corrupt" console.warn.
+    store.set(TANDEM_SETTINGS_KEY, "null");
+    const warnSpy = vi.spyOn(console, "warn");
+    const settings = loadSettings();
+    expect(settings.leftRailTabs).toEqual(["annotations", "outline"]);
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("corrupt"));
+    warnSpy.mockRestore();
+  });
+
   it("returns defaults when localStorage.getItem throws (incognito mode)", () => {
     vi.stubGlobal("localStorage", {
       getItem: () => {

@@ -3,7 +3,6 @@ import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
   Density,
   EditorFont,
-  PanelOrder,
   PrimaryTab,
   TandemSettings,
   TextSize,
@@ -48,11 +47,6 @@ const primaryTabRg = createRadioGroup<PrimaryTab>(
   () => settings.primaryTab,
   ["chat", "annotations"] as const,
   (p) => onUpdate({ primaryTab: p }),
-);
-const panelOrderRg = createRadioGroup<PanelOrder>(
-  () => settings.panelOrder,
-  ["chat-editor-annotations", "annotations-editor-chat"] as const,
-  (p) => onUpdate({ panelOrder: p }),
 );
 const textSizeRg = createRadioGroup<TextSize>(
   () => settings.textSize,
@@ -129,38 +123,6 @@ const densityRg = createRadioGroup<Density>(
   </div>
 </div>
 
-<!-- Panel Order -->
-<div>
-  <div id="settings-panel-order-label" style={sectionLabelStyle}>Panel Order</div>
-  <div
-    role="radiogroup"
-    aria-labelledby="settings-panel-order-label"
-    tabindex="0"
-    onkeydown={panelOrderRg.handleKeyDown}
-    style="display: flex; gap: var(--tandem-space-2);"
-  >
-    <button
-      data-testid="panel-order-cea-btn"
-      role="radio"
-      aria-checked={settings.panelOrder === "chat-editor-annotations"}
-      tabindex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
-      onclick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
-      style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
-    >
-      Chat | Editor | Ann.
-    </button>
-    <button
-      data-testid="panel-order-aec-btn"
-      role="radio"
-      aria-checked={settings.panelOrder === "annotations-editor-chat"}
-      tabindex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
-      onclick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
-      style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
-    >
-      Ann. | Editor | Chat
-    </button>
-  </div>
-</div>
 
 <!-- Text Size -->
 <div>

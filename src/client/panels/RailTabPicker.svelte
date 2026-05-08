@@ -68,7 +68,8 @@ $effect(() => {
       "
     >
       {#each ALL_TABS as tab}
-        {@const isDisabled = disabledTabs.includes(tab.id)}
+        {@const isLastEnabled = enabledTabs.length === 1 && enabledTabs.includes(tab.id)}
+        {@const isDisabled = disabledTabs.includes(tab.id) || isLastEnabled}
         <label
           title={isDisabled ? "Each rail must keep at least one tab" : undefined}
           style="
