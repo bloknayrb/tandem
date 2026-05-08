@@ -174,17 +174,17 @@ let activeLeftRailTab = $state<"annotations" | "chat" | "outline">(
 // (e.g. after settings load, cross-rail move, or external settings update).
 $effect(() => {
   if (!settingsState.settings.leftRailTabs.includes(activeLeftRailTab)) {
-    activeLeftRailTab = settingsState.settings.leftRailTabs[0];
+    activeLeftRailTab = settingsState.settings.leftRailTabs[0] ?? "annotations";
   }
 });
 $effect(() => {
   if (!settingsState.settings.rightRailTabs.includes(activeRailTab)) {
-    activeRailTab = settingsState.settings.rightRailTabs[0];
+    activeRailTab = settingsState.settings.rightRailTabs[0] ?? "chat";
   }
 });
 
 const pendingAnnotationBadge = $derived(
-  activeRailTab !== "annotations"
+  activeRailTab === "annotations"
     ? 0
     : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
 );
@@ -234,7 +234,15 @@ function toggleLeftPanel() {
 }
 
 function toggleRightPanel() {
-  settingsState.updateSettings({ rightPanelVisible: !settingsState.settings.rightPanelVisible });
+  if (effectiveRightVisible) {
+    settingsState.updateSettings({ rightPanelVisible: false });
+  } else {
+    // Also clear soloRailHidden so the panel actually shows in solo mode.
+    settingsState.updateSettings({
+      rightPanelVisible: true,
+      ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
+    });
+  }
 }
 
 // Returns true if committed, false if blocked (would empty the other rail).
