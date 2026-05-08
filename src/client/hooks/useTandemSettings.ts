@@ -77,7 +77,6 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   soloRailHidden: true,
-  panelHidden: false,
   leftRailTabs: ["annotations", "outline"],
   rightRailTabs: ["annotations", "chat"],
   degradedBannerDelayMs: 30000,

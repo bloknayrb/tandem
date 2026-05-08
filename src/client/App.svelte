@@ -209,23 +209,10 @@ let activeAnnotationFilter = $state<{
 const leftPanelWidth = loadPanelWidth("left");
 const rightPanelWidth = loadPanelWidth("right");
 
-$effect(() => {
-  const layout = settingsState.settings.layout;
-  const prev = untrack(() => panelLayout);
-  if (layout === "three-panel") {
-    if (prev.kind === "three-panel") return;
-    const right = "right" in prev ? prev.right : loadPanelWidth("right");
-    const left = "left" in prev ? prev.left : loadPanelWidth("left");
-    panelLayout = { kind: "three-panel", left, right };
-  } else if (layout === "tabbed-left") {
-    if (prev.kind === "tabbed-left") return;
-    const left = "left" in prev ? prev.left : loadPanelWidth("left");
-    panelLayout = { kind: "tabbed-left", left };
-  } else {
-    if (prev.kind === "tabbed") return;
-    const right = "right" in prev ? prev.right : loadPanelWidth("right");
-    panelLayout = { kind: "tabbed", right };
-  }
+const dragResizeLeft = createDragResize({
+  side: "left",
+  initialWidth: leftPanelWidth,
+  getVisible: () => effectiveLeftVisible,
 });
 
 const dragResizeRight = createDragResize({
@@ -242,16 +229,12 @@ const effectiveRightVisible = $derived(
     !(modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
 );
 
-function togglePanel() {
-  if (effectivePanelHidden) {
-    // Show panel: clear both flags so solo-mode soloRailHidden doesn't keep it hidden.
-    settingsState.updateSettings({
-      panelHidden: false,
-      ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
-    });
-  } else {
-    settingsState.updateSettings({ panelHidden: true });
-  }
+function toggleLeftPanel() {
+  settingsState.updateSettings({ leftPanelVisible: !settingsState.settings.leftPanelVisible });
+}
+
+function toggleRightPanel() {
+  settingsState.updateSettings({ rightPanelVisible: !settingsState.settings.rightPanelVisible });
 }
 
 // Returns true if committed, false if blocked (would empty the other rail).
@@ -497,6 +480,8 @@ const tutorial = createTutorial(
               kind="side"
               annotations={modeGate.visibleAnnotations}
               activeFilterType={activeAnnotationFilter.type}
+              activeFilterAuthor={activeAnnotationFilter.author}
+              activeFilterStatus={activeAnnotationFilter.status}
               onFilterChange={handleFilterChange}
               {editor}
               ydoc={activeTab?.ydoc ?? null}
@@ -523,63 +508,9 @@ const tutorial = createTutorial(
 
       {@render editorColumn()}
 
-      {#if panelLayout.kind === "three-panel"}
-        {#if !effectivePanelHidden}
-          {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
-          <div
-            style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
-          >
-            <div
-              style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
-            >
-              {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
-            </div>
-            <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-              {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
-                <PanelSlot
-                  kind={settingsState.settings.leftSlot.kind}
-                  annotations={modeGate.visibleAnnotations}
-                  focusTrigger={outlineFocusTrigger}
-                  activeFilterType={activeAnnotationFilter.type}
-                  activeFilterAuthor={activeAnnotationFilter.author}
-                  activeFilterStatus={activeAnnotationFilter.status}
-                  onFilterChange={(type, author, status) => {
-                    activeAnnotationFilter = { type, author, status };
-                  }}
-                  {editor}
-                  ydoc={activeTab?.ydoc ?? null}
-                  heldCount={modeGate.heldCount}
-                  tandemMode={modeState.tandemMode}
-                  onModeChange={modeState.setTandemMode}
-                  activeDocFormat={activeTab?.format}
-                  documentId={activeTab?.id}
-                  {activeAnnotationId}
-                  onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-                  reduceMotion={settingsState.settings.reduceMotion}
-                />
-              {:else}
-                <PanelSlot
-                  kind="chat"
-                  ctrlYdoc={yjsSync.bootstrapYdoc}
-                  {editor}
-                  activeDocId={yjsSync.activeTabId}
-                  {openDocs}
-                  claudeActive={yjsSync.claudeActive}
-                  claudeStatus={yjsSync.claudeStatus}
-                  {capturedAnchor}
-                  onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-                  reduceMotion={settingsState.settings.reduceMotion}
-                  visible={true}
-                />
-              {/if}
-            </div>
-          </div>
-        {/if}
-      {:else if panelLayout.kind === "tabbed"}
-        {#if !effectivePanelHidden}
-          {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
-          {@render tabbedPanel(getRightWidth(panelLayout), "right")}
-        {/if}
+      {#if effectiveRightVisible}
+        {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
+        {@render tabbedPanel(dragResizeRight.width, "right")}
       {/if}
     </div>
 
