@@ -23,7 +23,10 @@ test.afterEach(async () => {
   cleanupFixtureDir(tmpDir);
 });
 
-test("layout switching preserves the mounted editor and persisted layout", async ({ page }) => {
+// Layout-mode (tabbed/tabbed-left/three-panel) removed in PR #580. See issue #581.
+test.skip("layout switching preserves the mounted editor and persisted layout", async ({
+  page,
+}) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
