@@ -80,10 +80,10 @@ function handleHighlight(color: HighlightColor) {
   <button
     type="button"
     data-testid="formatting-bar-toggle-left"
-    aria-label={panelVisible ? "Hide panel" : "Show panel"}
-    aria-pressed={panelVisible}
-    title={panelVisible ? "Hide panel" : "Show panel"}
-    onclick={onTogglePanel}
+    aria-label={leftPanelVisible ? "Hide panel" : "Show panel"}
+    aria-pressed={leftPanelVisible}
+    title={leftPanelVisible ? "Hide panel" : "Show panel"}
+    onclick={onToggleLeftPanel}
     style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
       background: {leftPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
       color: {leftPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};

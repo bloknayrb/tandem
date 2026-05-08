@@ -16,8 +16,6 @@ interface Props {
   activeFilterStatus?: FilterStatus;
 }
 
-type HeadingEntry = { text: string; level: number; pos: number };
-
 let {
   editor,
   annotations = [],
