@@ -237,6 +237,8 @@ export function createAnnotation(
     id,
     author: "claude" as const,
     type,
+    // Claude-created annotations are always outbound (visible to Claude); extras may override
+    audience: "outbound" as const,
     range: anchored.range,
     ...(anchored.relRange ? { relRange: anchored.relRange } : {}),
     content,

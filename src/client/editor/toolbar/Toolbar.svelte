@@ -194,10 +194,13 @@ function createAnnotation(
   const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
 
   const id = generateAnnotationId();
+  // highlights and notes are user-private; comments are Claude-visible
+  const audience = type === "highlight" || type === "note" ? "private" : "outbound";
   const annotation = {
     id,
     author: "user" as const,
     type,
+    audience,
     range: { from: flatFrom, to: flatTo },
     content,
     status: "pending" as const,

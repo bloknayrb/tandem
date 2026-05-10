@@ -18,8 +18,7 @@ export type SanitizationEvent =
   | { kind: "question-to-comment"; id: string }
   | { kind: "malformed-suggestion-json"; id: string }
   | { kind: "unknown-type"; id: string; rawType: string }
-  | { kind: "import-note-to-comment"; id: string }
-  | { kind: "audience-derived"; id: string };
+  | { kind: "import-note-to-comment"; id: string };
 
 /**
  * Required callback invoked once per lossy rewrite. Sync only — Promise
@@ -69,19 +68,16 @@ export function sanitizeAnnotation(
   // AR1: derive audience before `base` is built so it flows through all early-return paths.
   // "flag" is explicit — it hasn't been mutated to "note" at this point.
   // Import annotations are always private initially; users triage Word comments before Claude sees them.
-  let derivedAudience: "private" | "outbound";
-  if (ann.audience === "private" || ann.audience === "outbound") {
-    derivedAudience = ann.audience;
-  } else {
-    derivedAudience =
-      ann.author === "import" ||
-      ann.type === "highlight" ||
-      ann.type === "note" ||
-      ann.type === "flag"
+  // Computing a default is normative behavior, not a lossy migration — no event emitted.
+  const derivedAudience: "private" | "outbound" =
+    ann.audience === "private" || ann.audience === "outbound"
+      ? ann.audience
+      : ann.author === "import" ||
+          ann.type === "highlight" ||
+          ann.type === "note" ||
+          ann.type === "flag"
         ? "private"
         : "outbound";
-    emit({ kind: "audience-derived", id: ann.id });
-  }
 
   // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
   const base = {
