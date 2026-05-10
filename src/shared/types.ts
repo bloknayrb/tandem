@@ -93,6 +93,12 @@ interface AnnotationBase {
   rev?: number;
   /** When true, marks this annotation as created during Solo mode. Consumers use this to hold back display until mode changes. */
   heldInSolo?: boolean;
+  /** Audience: 'private' = personal (note/highlight), 'outbound' = visible to Claude. Derived by AR1 migration on read for legacy annotations. */
+  audience?: "private" | "outbound";
+  /** Set when this annotation was promoted from a note via "Send to Claude". */
+  promotedFrom?: "note";
+  /** For import-author annotations: original Word author and source file. */
+  importSource?: { author: string; file: string };
 }
 
 /**
