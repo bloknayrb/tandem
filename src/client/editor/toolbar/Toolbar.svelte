@@ -27,6 +27,8 @@ interface Props {
   settingsBtn?: HTMLButtonElement | null;
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
+  showAuthorship?: boolean;
+  onAuthorshipChange?: (visible: boolean) => void;
   selectionToolbar?: boolean;
   suppressSelectionToolbar?: boolean;
 }
@@ -38,6 +40,8 @@ let {
   settingsBtn = $bindable(null),
   tandemMode,
   onModeChange,
+  showAuthorship = false,
+  onAuthorshipChange,
   selectionToolbar = true,
   suppressSelectionToolbar = false,
 }: Props = $props();
@@ -395,6 +399,15 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 
   <div style="flex: 1;"></div>
   <div style="display: flex; align-items: center; gap: var(--tandem-space-3);">
+    {#if onAuthorshipChange}
+      <ToolbarButton
+        label="Authorship"
+        testId="toolbar-authorship-toggle"
+        ariaLabel={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
+        active={showAuthorship}
+        onClick={() => onAuthorshipChange!(!showAuthorship)}
+      />
+    {/if}
     {#if tandemMode && onModeChange}
       <ModeToggle {tandemMode} {onModeChange} />
     {/if}

@@ -401,6 +401,8 @@ const tutorial = createTutorial(
       bind:settingsBtn={settingsBtnEl}
       tandemMode={modeState.tandemMode}
       onModeChange={modeState.setTandemMode}
+      showAuthorship={settingsState.settings.showAuthorship}
+      onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
     />
