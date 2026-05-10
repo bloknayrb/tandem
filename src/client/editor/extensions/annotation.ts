@@ -58,6 +58,7 @@ function buildDecorations(
           class: `tandem-highlight tandem-highlight--${color}`,
           style: `background: ${bg}; border-radius: var(--tandem-r-1); padding: 1px 0;`,
           "data-annotation-id": ann.id,
+          "data-annotation-author": ann.author,
           "aria-label": `Highlight annotation (${color})`,
         };
         break;
@@ -70,14 +71,25 @@ function buildDecorations(
             style:
               "background: var(--tandem-suggestion-bg); text-decoration: underline wavy var(--tandem-suggestion); text-underline-offset: 3px;",
             "data-annotation-id": ann.id,
+            "data-annotation-author": ann.author,
             "aria-label": "Replacement annotation",
           };
+        } else if (ann.author === "claude") {
+          // Claude comment → solid underline (distinguishable from user's dashed)
+          attrs = {
+            class: "tandem-comment tandem-comment--claude",
+            style: "border-bottom: 2px solid var(--tandem-author-claude); padding-bottom: 1px;",
+            "data-annotation-id": ann.id,
+            "data-annotation-author": ann.author,
+            "aria-label": "Claude comment annotation",
+          };
         } else {
-          // Plain comment → dashed blue underline
+          // User/import comment → dashed blue underline
           attrs = {
             class: "tandem-comment",
             style: "border-bottom: 2px dashed var(--tandem-author-user); padding-bottom: 1px;",
             "data-annotation-id": ann.id,
+            "data-annotation-author": ann.author,
             "aria-label": "Comment annotation",
           };
         }
@@ -87,6 +99,7 @@ function buildDecorations(
           class: "tandem-note",
           style: "border-bottom: 2px dotted var(--tandem-fg-muted); padding-bottom: 1px;",
           "data-annotation-id": ann.id,
+          "data-annotation-author": ann.author,
           "aria-label": "Note annotation",
         };
         break;
