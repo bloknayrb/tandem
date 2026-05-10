@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
+import { untrack } from "svelte";
 import * as Y from "yjs";
 import {
   HIGHLIGHT_COLOR_VARS,
@@ -11,15 +12,12 @@ import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import { toggleHighlight } from "./highlight-toggle";
-import InputGroup from "./InputGroup.svelte";
 import ModeToggle from "./ModeToggle.svelte";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
 } from "./selection-toolbar";
 import ToolbarButton from "./ToolbarButton.svelte";
-
-type ToolbarMode = "idle" | "comment" | "note";
 
 interface Props {
   editor: TiptapEditor | null;
@@ -46,12 +44,10 @@ let {
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{ left: number; top: number } | null>(null);
-let inputPosition = $state<{ left: number; top: number } | null>(null);
 let toolbarEl = $state<HTMLDivElement | null>(null);
-let mode = $state<ToolbarMode>("idle");
-let modeText = $state("");
-let capturedRange: { from: number; to: number } | null = null;
-let activeInputEl = $state<HTMLInputElement | null>(null);
+let annotationText = $state("");
+let capturedRange = $state<{ from: number; to: number } | null>(null);
+let textareaEl = $state<HTMLTextAreaElement | null>(null);
 
 let toolbarHeight = $state(0);
 let toolbarWidth = $state(0);
@@ -59,6 +55,11 @@ let viewportHeight = $state(window.innerHeight);
 let viewportWidth = $state(window.innerWidth);
 
 const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
+
+const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
+const showPopup = $derived(
+  selectionToolbar && !suppressSelectionToolbar && canAnnotate && selectionPosition !== null,
+);
 
 function updateSelectionAffordance(ed: TiptapEditor) {
   const { from, to } = ed.state.selection;
@@ -121,20 +122,22 @@ $effect(() => {
   }
 
   window.addEventListener("resize", scheduleUpdate);
-  document.addEventListener("scroll", dismissSelectionToolbar, true);
+  document.addEventListener("scroll", handleScrollDismiss, true);
   return () => {
     cancelAnimationFrame(frame);
     window.removeEventListener("resize", scheduleUpdate);
-    document.removeEventListener("scroll", dismissSelectionToolbar, true);
+    document.removeEventListener("scroll", handleScrollDismiss, true);
   };
 });
 
 $effect(() => {
   const ed = editor;
   const el = toolbarEl;
-  if (!ed || !el || !selectionPosition || inInputMode) return;
+  if (!ed || !el || !selectionPosition) return;
 
   const updateToolbarMetrics = () => {
+    // Skip position jitter while textarea is focused
+    if (document.activeElement === textareaEl) return;
     const rect = el.getBoundingClientRect();
     toolbarHeight = rect.height;
     toolbarWidth = rect.width;
@@ -147,8 +150,34 @@ $effect(() => {
   return () => observer.disconnect();
 });
 
+// Capture selection when popup appears, clear on dismiss
 $effect(() => {
-  if (mode !== "idle") activeInputEl?.focus();
+  if (showPopup && !capturedRange) captureSelectionRange();
+  if (!showPopup) {
+    capturedRange = null;
+    // Only clear draft text if user isn't actively typing (prevents resize-glitch data loss)
+    if (document.activeElement !== textareaEl) annotationText = "";
+  }
+});
+
+// Auto-focus textarea when popup appears (untrack to avoid bind:this reactive loop)
+$effect(() => {
+  if (showPopup) {
+    untrack(() => textareaEl?.focus());
+  }
+});
+
+$effect(() => {
+  if (!showPopup) return;
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    dismissPopup();
+  }
+
+  window.addEventListener("keydown", handleKeyDown);
+  return () => window.removeEventListener("keydown", handleKeyDown);
 });
 
 function createAnnotation(
@@ -187,13 +216,6 @@ function captureSelectionRange() {
   capturedRange = { from, to };
 }
 
-function resetAndFocusEditor() {
-  capturedRange = null;
-  editor?.chain().focus().run();
-}
-
-const inInputMode = $derived(mode !== "idle");
-
 function handleHighlight(color: HighlightColor) {
   if (!editor || !ydoc) return;
 
@@ -214,117 +236,51 @@ function onKeyActivate(handler: (e: MouseEvent) => void) {
   };
 }
 
-function handleModeStart(targetMode: ToolbarMode) {
-  return (e: MouseEvent) => {
-    e.preventDefault();
-    if (!selectionPosition) {
-      console.warn("[tandem] mode-start skipped — selection position unavailable");
-      return;
-    }
-    captureSelectionRange();
-    inputPosition = selectionPosition;
-    mode = targetMode;
-    modeText = "";
-  };
+function handleScrollDismiss(event: Event) {
+  // Don't dismiss if scroll originated inside the popup (e.g., textarea scrolling)
+  if (toolbarEl && event.target instanceof Node && toolbarEl.contains(event.target)) return;
+  dismissPopup();
 }
 
-const startComment = handleModeStart("comment");
-const startNote = handleModeStart("note");
-
-function dismissSelectionToolbar() {
-  if (inInputMode) return;
+function dismissPopup() {
   hasSelection = false;
   selectionPosition = null;
   capturedRange = null;
-  inputPosition = null;
-  mode = "idle";
-  modeText = "";
-}
-
-function handleModeCancel() {
-  mode = "idle";
-  modeText = "";
-  inputPosition = null;
-  resetAndFocusEditor();
-}
-
-function handleModeSubmit() {
-  if (mode === "note") {
-    createAnnotation("note", modeText.trim());
-  } else {
-    if (!modeText.trim()) {
-      handleModeCancel();
-      return;
-    }
-    createAnnotation("comment", modeText.trim());
-  }
-
-  mode = "idle";
-  modeText = "";
-  inputPosition = null;
+  annotationText = "";
   editor?.chain().focus().run();
 }
 
-function handleModeKeyDown(e: KeyboardEvent) {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    handleModeSubmit();
-  } else if (e.key === "Escape") {
-    handleModeCancel();
-  }
+function submitAsComment() {
+  if (!annotationText.trim()) return;
+  createAnnotation("comment", annotationText.trim());
+  annotationText = "";
 }
 
-const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
-const showMiniToolbar = $derived(
-  selectionToolbar &&
-    !suppressSelectionToolbar &&
-    canAnnotate &&
-    !inInputMode &&
-    selectionPosition !== null,
-);
+function submitAsNote() {
+  createAnnotation("note", annotationText.trim());
+  annotationText = "";
+}
 
-$effect(() => {
-  if (!showMiniToolbar && !inInputMode) return;
-
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key !== "Escape") return;
+function handleTextareaKeyDown(e: KeyboardEvent) {
+  if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    if (inInputMode) {
-      handleModeCancel();
-    } else {
-      dismissSelectionToolbar();
-      editor?.chain().focus().run();
-    }
+    submitAsComment(); // Enter = primary action (Comment)
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    dismissPopup();
   }
-
-  window.addEventListener("keydown", handleKeyDown);
-  return () => window.removeEventListener("keydown", handleKeyDown);
-});
+}
 </script>
 
-{#if (showMiniToolbar && selectionPosition) || (inInputMode && inputPosition)}
-  {@const floatPos = inInputMode ? inputPosition! : selectionPosition!}
+{#if showPopup && selectionPosition}
   <div
     bind:this={toolbarEl}
-    role={inInputMode ? "dialog" : "toolbar"}
-    aria-label={inInputMode ? (mode === "comment" ? "Add comment" : "Add note") : "Selection tools"}
-    style={`position: fixed; left: ${floatPos.left}px; top: ${floatPos.top}px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 1px; padding: 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: var(--tandem-z-modal); white-space: nowrap;`}
+    role="toolbar"
+    aria-label="Selection tools"
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
   >
-    {#if inInputMode}
-      <InputGroup
-        bind:inputEl={activeInputEl}
-        value={modeText}
-        onChange={(v) => (modeText = v)}
-        onKeyDown={handleModeKeyDown}
-        onSubmit={handleModeSubmit}
-        onCancel={handleModeCancel}
-        placeholder={mode === "comment" ? "Add a comment..." : "Add a note to yourself..."}
-        submitLabel="Add"
-        borderColor={mode === "comment" ? "var(--tandem-author-user)" : "var(--tandem-fg-muted)"}
-        canSubmit={mode === "comment" ? !!modeText.trim() : true}
-        testIdPrefix={mode === "comment" ? "toolbar-comment" : "toolbar-note"}
-      />
-    {:else}
+    <!-- Row 1: Quick actions (formatting + highlights) -->
+    <div style="display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--tandem-border);">
       <button
         type="button"
         aria-label="Bold"
@@ -335,9 +291,7 @@ $effect(() => {
         }}
         onclick={onKeyActivate(() => editor?.chain().focus().toggleBold().run())}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 700; cursor: pointer;"
-      >
-        B
-      </button>
+      >B</button>
       <button
         type="button"
         aria-label="Italic"
@@ -348,14 +302,13 @@ $effect(() => {
         }}
         onclick={onKeyActivate(() => editor?.chain().focus().toggleItalic().run())}
         style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-style: italic; cursor: pointer;"
-      >
-        I
-      </button>
+      >I</button>
       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
         {#each MINI_HIGHLIGHT_COLORS as color}
           <button
             type="button"
+            data-testid={`popup-highlight-${color}`}
             aria-label={`Highlight ${color}`}
             title={`Highlight ${color}`}
             onmousedown={(e) => {
@@ -371,28 +324,39 @@ $effect(() => {
           ></button>
         {/each}
       </div>
-      <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+    </div>
+
+    <!-- Row 2: Annotation textarea -->
+    <div style="padding: 6px 8px;">
+      <textarea
+        bind:this={textareaEl}
+        data-testid="popup-annotation-input"
+        bind:value={annotationText}
+        onkeydown={handleTextareaKeyDown}
+        placeholder="Write a note or instruction..."
+        rows={1}
+        style="width: 100%; box-sizing: border-box; field-sizing: content; min-height: 28px; max-height: 120px; overflow-y: auto; resize: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; padding: 4px 6px; outline: none; font-family: inherit;"
+      ></textarea>
+    </div>
+
+    <!-- Row 3: Submit buttons -->
+    <div style="display: flex; justify-content: space-between; gap: 6px; padding: 4px 8px 6px;">
       <button
         type="button"
+        data-testid="popup-note-submit"
+        aria-label="Note to self"
+        onclick={submitAsNote}
+        style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
+      >Note to self</button>
+      <button
+        type="button"
+        data-testid="popup-comment-submit"
         aria-label="Comment on selection"
-        title="Comment on selection"
-        onmousedown={startComment}
-        onclick={onKeyActivate(startComment)}
-        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
-      >
-        Comment
-      </button>
-      <button
-        type="button"
-        aria-label="Private note on selection"
-        title="Private note on selection"
-        onmousedown={startNote}
-        onclick={onKeyActivate(startNote)}
-        style="height: 28px; padding: 0 10px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
-      >
-        Note
-      </button>
-    {/if}
+        disabled={!annotationText.trim()}
+        onclick={submitAsComment}
+        style={`flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; opacity: ${annotationText.trim() ? "1" : "0.4"};`}
+      >Comment</button>
+    </div>
   </div>
 {/if}
 
@@ -416,17 +380,23 @@ $effect(() => {
   <ToolbarButton
     label="Comment"
     testId="toolbar-comment-btn"
-    disabled={!canAnnotate || inInputMode}
+    disabled={!canAnnotate}
     disabledTitle="Select text first"
-    onMouseDown={startComment}
+    onMouseDown={(e) => {
+      e.preventDefault();
+      textareaEl?.focus();
+    }}
   />
 
   <ToolbarButton
     label="Note"
     testId="toolbar-note-btn"
-    disabled={!canAnnotate || inInputMode}
+    disabled={!canAnnotate}
     disabledTitle="Select text first"
-    onMouseDown={startNote}
+    onMouseDown={(e) => {
+      e.preventDefault();
+      textareaEl?.focus();
+    }}
   />
 
   <div style="flex: 1;"></div>
