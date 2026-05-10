@@ -66,22 +66,22 @@ export function sanitizeAnnotation(
     }
   };
 
-  // AR1: derive audience for annotations that predate the audience model.
-  // Must run before `base` is built so the derived value flows through all
-  // early-return paths via the base spread.
-  // "flag" is explicit: it hasn't been mutated to "note" at this point.
-  // Import annotations are always private initially — users triage Word
-  // comments before Claude sees them (design brief §Import behavior).
-  const derivedAudience: "private" | "outbound" =
-    ann.audience !== undefined
-      ? ann.audience
-      : ann.author === "import" ||
-          ann.type === "highlight" ||
-          ann.type === "note" ||
-          ann.type === "flag"
+  // AR1: derive audience before `base` is built so it flows through all early-return paths.
+  // "flag" is explicit — it hasn't been mutated to "note" at this point.
+  // Import annotations are always private initially; users triage Word comments before Claude sees them.
+  let derivedAudience: "private" | "outbound";
+  if (ann.audience !== undefined) {
+    derivedAudience = ann.audience;
+  } else {
+    derivedAudience =
+      ann.author === "import" ||
+      ann.type === "highlight" ||
+      ann.type === "note" ||
+      ann.type === "flag"
         ? "private"
         : "outbound";
-  if (ann.audience === undefined) emit({ kind: "audience-derived", id: ann.id });
+    emit({ kind: "audience-derived", id: ann.id });
+  }
 
   // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
   const base = {
