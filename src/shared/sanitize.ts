@@ -70,7 +70,7 @@ export function sanitizeAnnotation(
   // "flag" is explicit — it hasn't been mutated to "note" at this point.
   // Import annotations are always private initially; users triage Word comments before Claude sees them.
   let derivedAudience: "private" | "outbound";
-  if (ann.audience !== undefined) {
+  if (ann.audience === "private" || ann.audience === "outbound") {
     derivedAudience = ann.audience;
   } else {
     derivedAudience =
