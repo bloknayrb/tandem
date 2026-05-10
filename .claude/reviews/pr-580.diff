@@ -1,0 +1,2260 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 73e6b22..c92a875 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -66,7 +66,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
+ - Selection events use dwell-time gating (default 1s) — only fire after the user holds a selection steady
+ - ADR-027: notes are user-private; Claude never reads them via MCP tools or channel events
+ - File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`. `openFileByPath` accepts an optional `readOnly` flag to force read-only mode (used by the View Changelog button)
+-- Three layout modes: `tabbed` (panel right, default), `tabbed-left` (panel left), `three-panel` (annotations left, chat right). Layout state persists in `tandem:settings` localStorage key. `App.svelte` uses inline `{#snippet}` blocks for `ResizeHandle` and `TabbedPanelContainer` across layout arms
++- Two independent panel visibility booleans (`leftPanelVisible`, `rightPanelVisible`) replace the old three-layout-mode system. Each rail has a dynamic tab bar driven by `leftRailTabs`/`rightRailTabs: RailTab[]` settings with mutual exclusion (a tab lives on one rail at a time). Layout state persists in `tandem:settings`. `App.svelte` uses inline `{#snippet}` blocks for `resizeHandle` and `tabbedPanel` (right rail); left rail is rendered inline
+ 
+ ## Semantic Tokens
+ - Token families defined in `index.html` `:root` (light) and `[data-theme="dark"]` blocks. Never use raw hex or non-neutral `rgba()` for semantic colors in `src/client/**/*.{ts,svelte}` — use `var(--tandem-*)` or import from `src/client/utils/colors.ts`. (`rgba(0,0,0,...)` / `rgba(255,255,255,...)` alpha values for shadows and overlays are fine.)
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 6f076a8..6d7a28c 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -712,7 +712,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
+ - `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
+ - Tiptap editor with collaboration extensions, connects to Hocuspocus via WebSocket (@hocuspocus/provider)
+ - `App.svelte` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
+-- `panel-layout.ts` -- Panel layout constants (default widths, min/max constraints) shared by `App.svelte` and `useDragResize`
++- `panel-layout.ts` -- Panel width constants (`PANEL_DEFAULT_WIDTH`, `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`) and `loadPanelWidth()`. `PanelLayout` type and `getRightWidth` were removed with the layout-mode refactor
+ - `DocListEntry`, `OpenTab`, and `AppInfoData` types live in `src/client/types.ts`
+ - `DocumentTabs` -- Tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
+ - `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by SettingsPopover's ABOUT footer and View Changelog button
+diff --git a/src/client/App.svelte b/src/client/App.svelte
+index 1e7abcb..68a49eb 100644
+--- a/src/client/App.svelte
++++ b/src/client/App.svelte
+@@ -1,7 +1,6 @@
+ <script lang="ts">
+ import type { Editor as TiptapEditor } from "@tiptap/core";
+ import { onDestroy, untrack } from "svelte";
+-import { PANEL_WIDTH_KEYS, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../shared/constants";
+ import { isUploadPath } from "../shared/paths";
+ import { toPmPos } from "../shared/positions/types";
+ import type { CapturedAnchor } from "../shared/types";
+@@ -35,6 +34,7 @@ import { shouldShowInMode } from "./hooks/useModeGate";
+ import { createNotifications } from "./hooks/useNotifications.svelte";
+ import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
+ import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
++import { createTabDirty } from "./hooks/useTabDirty.svelte.js";
+ import { createTabOrder } from "./hooks/useTabOrder.svelte";
+ import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
+ import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+@@ -42,15 +42,9 @@ import { createTheme } from "./hooks/useTheme.svelte";
+ import { createTutorial } from "./hooks/useTutorial.svelte";
+ import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
+ import { createYjsSync } from "./hooks/yjsSync.svelte";
+-import {
+-  getRightWidth,
+-  loadPanelWidth,
+-  PANEL_DEFAULT_WIDTH,
+-  PANEL_MAX_WIDTH,
+-  PANEL_MIN_WIDTH,
+-  type PanelLayout,
+-} from "./panel-layout";
++import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
+ import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
++import RailTabPicker from "./panels/RailTabPicker.svelte";
+ import { pmSelectionToFlat } from "./positions";
+ import FormattingBar from "./shell/FormattingBar.svelte";
+ import TitleBar from "./shell/TitleBar.svelte";
+@@ -169,10 +163,30 @@ $effect(() => {
+   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
+ });
+ 
+-let showChat = $state(settingsState.settings.primaryTab === "chat");
++let activeRailTab = $state<"annotations" | "chat" | "outline">(
++  settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
++);
++let activeLeftRailTab = $state<"annotations" | "chat" | "outline">(
++  settingsState.settings.leftRailTabs[0] ?? "annotations",
++);
++
++// Reconcile active-tab pointers whenever the persisted rail arrays change
++// (e.g. after settings load, cross-rail move, or external settings update).
++$effect(() => {
++  if (!settingsState.settings.leftRailTabs.includes(activeLeftRailTab)) {
++    activeLeftRailTab = settingsState.settings.leftRailTabs[0];
++  }
++});
++$effect(() => {
++  if (!settingsState.settings.rightRailTabs.includes(activeRailTab)) {
++    activeRailTab = settingsState.settings.rightRailTabs[0];
++  }
++});
+ 
+ const pendingAnnotationBadge = $derived(
+-  !showChat ? 0 : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
++  activeRailTab !== "annotations"
++    ? 0
++    : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
+ );
+ 
+ let activeAnnotationId = $state<string | null>(null);
+@@ -192,66 +206,75 @@ let activeAnnotationFilter = $state<{
+   status: "all",
+ });
+ 
+-let panelLayout = $state<PanelLayout>(
+-  (() => {
+-    const initLayout = settingsState.settings.layout;
+-    if (initLayout === "three-panel") {
+-      return { kind: "three-panel", left: loadPanelWidth("left"), right: loadPanelWidth("right") };
+-    } else if (initLayout === "tabbed-left") {
+-      return { kind: "tabbed-left", left: loadPanelWidth("left") };
+-    } else {
+-      return { kind: "tabbed", right: loadPanelWidth("right") };
+-    }
+-  })(),
+-);
++const leftPanelWidth = loadPanelWidth("left");
++const rightPanelWidth = loadPanelWidth("right");
+ 
+-$effect(() => {
+-  const layout = settingsState.settings.layout;
+-  const prev = untrack(() => panelLayout);
+-  if (layout === "three-panel") {
+-    if (prev.kind === "three-panel") return;
+-    const right = "right" in prev ? prev.right : loadPanelWidth("right");
+-    const left = "left" in prev ? prev.left : loadPanelWidth("left");
+-    panelLayout = { kind: "three-panel", left, right };
+-  } else if (layout === "tabbed-left") {
+-    if (prev.kind === "tabbed-left") return;
+-    const left = "left" in prev ? prev.left : loadPanelWidth("left");
+-    panelLayout = { kind: "tabbed-left", left };
+-  } else {
+-    if (prev.kind === "tabbed") return;
+-    const right = "right" in prev ? prev.right : loadPanelWidth("right");
+-    panelLayout = { kind: "tabbed", right };
+-  }
++const dragResizeLeft = createDragResize({
++  side: "left",
++  initialWidth: leftPanelWidth,
++  getVisible: () => effectiveLeftVisible,
+ });
+ 
+-const effectivePanelHidden = $derived(
+-  settingsState.settings.panelHidden ||
+-    (modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
++const dragResizeRight = createDragResize({
++  side: "right",
++  initialWidth: rightPanelWidth,
++  getVisible: () => effectiveRightVisible,
++});
++
++// Left rail: no solo override (outline stays visible in solo mode).
++// Right rail: suppressed in solo when soloRailHidden is set.
++const effectiveLeftVisible = $derived(settingsState.settings.leftPanelVisible);
++const effectiveRightVisible = $derived(
++  settingsState.settings.rightPanelVisible &&
++    !(modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
+ );
+ 
+-function togglePanel() {
+-  if (effectivePanelHidden) {
+-    // Show panel: clear both flags so solo-mode soloRailHidden doesn't keep it hidden.
+-    settingsState.updateSettings({
+-      panelHidden: false,
+-      ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
+-    });
+-  } else {
+-    settingsState.updateSettings({ panelHidden: true });
+-  }
++function toggleLeftPanel() {
++  settingsState.updateSettings({ leftPanelVisible: !settingsState.settings.leftPanelVisible });
+ }
+ 
+-// Remembers the last non-three-panel layout so toggling off three-panel restores it.
+-let prevNonThreePanelLayout: "tabbed" | "tabbed-left" = "tabbed";
++function toggleRightPanel() {
++  settingsState.updateSettings({ rightPanelVisible: !settingsState.settings.rightPanelVisible });
++}
+ 
+-function toggleLayout() {
+-  const current = settingsState.settings.layout;
+-  if (current === "three-panel") {
+-    settingsState.updateSettings({ layout: prevNonThreePanelLayout });
+-  } else {
+-    prevNonThreePanelLayout = current;
+-    settingsState.updateSettings({ layout: "three-panel" });
++// Returns true if committed, false if blocked (would empty the other rail).
++function moveTabsBetweenRails(
++  side: "left" | "right",
++  newTabsForSide: ("annotations" | "chat" | "outline")[],
++): boolean {
++  const leftTabs = settingsState.settings.leftRailTabs;
++  const rightTabs = settingsState.settings.rightRailTabs;
++  const currentSide = side === "left" ? leftTabs : rightTabs;
++  const otherTabs = side === "left" ? rightTabs : leftTabs;
++  const newlyAdded = newTabsForSide.filter((t) => !currentSide.includes(t));
++  if (newlyAdded.length === 0) {
++    settingsState.updateSettings(
++      side === "left" ? { leftRailTabs: newTabsForSide } : { rightRailTabs: newTabsForSide },
++    );
++    return true;
++  }
++  const prunedOther = otherTabs.filter((t) => !newlyAdded.includes(t));
++  if (prunedOther.length === 0) {
++    console.warn(
++      "[tandem] cross-rail tab move blocked — would leave the %s rail empty",
++      side === "left" ? "right" : "left",
++    );
++    return false;
+   }
++  settingsState.updateSettings(
++    side === "left"
++      ? { leftRailTabs: newTabsForSide, rightRailTabs: prunedOther }
++      : { rightRailTabs: newTabsForSide, leftRailTabs: prunedOther },
++  );
++  return true;
++}
++
++function handleFilterChange(
++  type: (typeof activeAnnotationFilter)["type"],
++  author: (typeof activeAnnotationFilter)["author"],
++  status: (typeof activeAnnotationFilter)["status"],
++) {
++  activeAnnotationFilter = { type, author, status };
+ }
+ 
+ const editorMaxWidth = $derived(
+@@ -263,15 +286,8 @@ const editorMargin = $derived(
+   settingsState.settings.editorWidthPercent < 100 ? "0 auto" : undefined,
+ );
+ 
+-const dragResize = createDragResize(
+-  () => panelLayout,
+-  (updater) => {
+-    panelLayout = updater(panelLayout);
+-  },
+-);
+-
+ function captureSelectionForChat() {
+-  if (showChat) return;
++  if (activeRailTab === "chat") return;
+   if (!editor) return;
+   const { from, to } = editor.state.selection;
+   if (from === to) return;
+@@ -318,9 +334,8 @@ $effect(() => {
+     if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+       e.preventDefault();
+       const isOutlineVisible =
+-        panelLayout.kind === "three-panel" &&
+-        !effectivePanelHidden &&
+-        settingsState.settings.leftSlot.kind === "outline";
++        (effectiveLeftVisible && activeLeftRailTab === "outline") ||
++        (effectiveRightVisible && activeRailTab === "outline");
+       if (isOutlineVisible) {
+         outlineFocusTrigger += 1;
+       } else {
+@@ -334,43 +349,8 @@ $effect(() => {
+ 
+ const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
+ 
+-// Track dirty state for the active tab so TitleBar can show the unsaved dot.
+-let activeTabDirty = $state(false);
+-$effect(() => {
+-  const tab = activeTab;
+-  if (!tab || tab.readOnly) {
+-    activeTabDirty = false;
+-    return;
+-  }
+-  const fragment = tab.ydoc.getXmlFragment("default");
+-  const meta = tab.ydoc.getMap(Y_MAP_DOCUMENT_META);
+-  let armed = false;
+-  let baseline: number | null = null;
+-  activeTabDirty = false;
+-  const armTimer = setTimeout(() => {
+-    armed = true;
+-    baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
+-  }, 500);
+-  const onFragmentChange = () => {
+-    if (armed) activeTabDirty = true;
+-  };
+-  fragment.observeDeep(onFragmentChange);
+-  const onMetaChange = (event: import("yjs").YMapEvent<unknown>) => {
+-    if (!event.keysChanged.has(Y_MAP_SAVED_AT_VERSION)) return;
+-    if (!armed) return;
+-    const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
+-    if (saved !== undefined && saved !== baseline) {
+-      baseline = saved;
+-      activeTabDirty = false;
+-    }
+-  };
+-  meta.observe(onMetaChange);
+-  return () => {
+-    clearTimeout(armTimer);
+-    fragment.unobserveDeep(onFragmentChange);
+-    meta.unobserve(onMetaChange);
+-  };
+-});
++const tabDirtyState = createTabDirty(() => activeTab);
++const activeTabDirty = $derived(tabDirtyState.dirty);
+ 
+ const tutorial = createTutorial(
+   () => modeGate.visibleAnnotations,
+@@ -383,10 +363,6 @@ const tutorial = createTutorial(
+   <TitleBar
+     title={activeTab?.fileName}
+     dirty={activeTabDirty}
+-    panelVisible={!settingsState.settings.panelHidden}
+-    onTogglePanel={togglePanel}
+-    isThreePanel={panelLayout.kind === "three-panel"}
+-    onToggleLayout={toggleLayout}
+   />
+   {#if !yjsSync.ready}
+     <div
+@@ -433,134 +409,108 @@ const tutorial = createTutorial(
+     <FormattingBar
+       {editor}
+       ydoc={activeTab?.ydoc ?? null}
+-      panelVisible={!settingsState.settings.panelHidden}
+-      onTogglePanel={togglePanel}
+-      rightPanelVisible={!effectivePanelHidden}
+-      onTogglePanelRight={togglePanel}
++      leftPanelVisible={effectiveLeftVisible}
++      onToggleLeftPanel={toggleLeftPanel}
++      rightPanelVisible={effectiveRightVisible}
++      onToggleRightPanel={toggleRightPanel}
+     />
+ 
+     <!-- Single persistent container — editor column is always rendered in the same
+-         DOM position so the Editor component never remounts on layout changes.
+-         Panels are conditionally shown/hidden around the stable editor column. -->
++         DOM position so the Editor component never remounts on panel toggles.
++         Left and right rails are independently shown/hidden around the stable editor column. -->
+     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
+-      {#if panelLayout.kind === "three-panel"}
+-        {#if !effectivePanelHidden}
++      {#if effectiveLeftVisible}
++        {@const leftTabs = settingsState.settings.leftRailTabs}
++        {@const iconOnlyLeft = leftTabs.length > 3}
++        {@const disabledLeftTabs = settingsState.settings.rightRailTabs.length === 1 ? settingsState.settings.rightRailTabs : []}
++        <div
++          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
++        >
+           <div
+-            style={`display: flex; flex-direction: column; width: ${panelLayout.left}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
++            style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
+           >
+-            <div
+-              style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+-            >
+-              {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Chat" : "Annotations"}
+-            </div>
+-            <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+-              {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
+-                <PanelSlot
+-                  kind="chat"
+-                  ctrlYdoc={yjsSync.bootstrapYdoc}
+-                  {editor}
+-                  activeDocId={yjsSync.activeTabId}
+-                  {openDocs}
+-                  claudeActive={yjsSync.claudeActive}
+-                  claudeStatus={yjsSync.claudeStatus}
+-                  {capturedAnchor}
+-                  onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+-                  reduceMotion={settingsState.settings.reduceMotion}
+-                  visible={true}
+-                />
+-              {:else}
+-                <PanelSlot
+-                  kind={settingsState.settings.leftSlot.kind}
+-                  annotations={modeGate.visibleAnnotations}
+-                  focusTrigger={outlineFocusTrigger}
+-                  activeFilterType={activeAnnotationFilter.type}
+-                  activeFilterAuthor={activeAnnotationFilter.author}
+-                  activeFilterStatus={activeAnnotationFilter.status}
+-                  onFilterChange={(type, author, status) => {
+-                    activeAnnotationFilter = { type, author, status };
+-                  }}
+-                  {editor}
+-                  ydoc={activeTab?.ydoc ?? null}
+-                  heldCount={modeGate.heldCount}
+-                  tandemMode={modeState.tandemMode}
+-                  onModeChange={modeState.setTandemMode}
+-                  activeDocFormat={activeTab?.format}
+-                  documentId={activeTab?.id}
+-                  {activeAnnotationId}
+-                  onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+-                  reduceMotion={settingsState.settings.reduceMotion}
+-                />
+-              {/if}
++            {#if leftTabs.includes("annotations")}
++              <button
++                data-testid="left-annotations-tab"
++                onclick={() => { activeLeftRailTab = "annotations"; }}
++                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "annotations" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "annotations" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
++                title={iconOnlyLeft ? "Annotations" : undefined}
++              >{iconOnlyLeft ? "◨" : "Annotations"}</button>
++            {/if}
++            {#if leftTabs.includes("chat")}
++              <button
++                data-testid="left-chat-tab"
++                onclick={() => { activeLeftRailTab = "chat"; }}
++                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "chat" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "chat" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
++                title={iconOnlyLeft ? "Chat" : undefined}
++              >{iconOnlyLeft ? "💬" : "Chat"}</button>
++            {/if}
++            {#if leftTabs.includes("outline")}
++              <button
++                data-testid="left-outline-tab"
++                onclick={() => { activeLeftRailTab = "outline"; }}
++                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "outline" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "outline" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
++                title={iconOnlyLeft ? "Outline" : undefined}
++              >{iconOnlyLeft ? "≡" : "Outline"}</button>
++            {/if}
++            <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
++              <RailTabPicker
++                enabledTabs={leftTabs}
++                disabledTabs={disabledLeftTabs}
++                testIdPrefix="left-"
++                onTabsChange={(tabs) => { moveTabsBetweenRails("left", tabs); }}
++              />
+             </div>
+           </div>
+-          {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
+-        {/if}
+-      {:else if panelLayout.kind === "tabbed-left"}
+-        {#if !effectivePanelHidden}
+-          {@render tabbedPanel(panelLayout.left, "left")}
+-          {@render resizeHandle("left", (e) => dragResize.handleResizeStart(e, "left"), undefined, panelLayout.left)}
+-        {/if}
++          <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
++            <PanelSlot
++              kind="chat"
++              ctrlYdoc={yjsSync.bootstrapYdoc}
++              {editor}
++              activeDocId={yjsSync.activeTabId}
++              {openDocs}
++              claudeActive={yjsSync.claudeActive}
++              claudeStatus={yjsSync.claudeStatus}
++              {capturedAnchor}
++              onCapturedAnchorChange={(a) => (capturedAnchor = a)}
++              reduceMotion={settingsState.settings.reduceMotion}
++              visible={activeLeftRailTab === "chat" && leftTabs.includes("chat")}
++            />
++            <PanelSlot
++              kind="side"
++              annotations={modeGate.visibleAnnotations}
++              activeFilterType={activeAnnotationFilter.type}
++              activeFilterAuthor={activeAnnotationFilter.author}
++              activeFilterStatus={activeAnnotationFilter.status}
++              onFilterChange={handleFilterChange}
++              {editor}
++              ydoc={activeTab?.ydoc ?? null}
++              heldCount={modeGate.heldCount}
++              tandemMode={modeState.tandemMode}
++              onModeChange={modeState.setTandemMode}
++              activeDocFormat={activeTab?.format}
++              documentId={activeTab?.id}
++              {activeAnnotationId}
++              onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
++              reduceMotion={settingsState.settings.reduceMotion}
++              visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
++            />
++            <PanelSlot
++              kind="outline"
++              focusTrigger={outlineFocusTrigger}
++              {editor}
++              visible={activeLeftRailTab === "outline" && leftTabs.includes("outline")}
++            />
++          </div>
++        </div>
++        {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
+       {/if}
+ 
+       {@render editorColumn()}
+ 
+-      {#if panelLayout.kind === "three-panel"}
+-        {#if !effectivePanelHidden}
+-          {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), undefined, getRightWidth(panelLayout))}
+-          <div
+-            style={`display: flex; flex-direction: column; width: ${getRightWidth(panelLayout)}px; border-left: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
+-          >
+-            <div
+-              style="padding: var(--tandem-space-2) var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: 10px; font-weight: 500; color: var(--tandem-fg-subtle); border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); text-transform: uppercase; letter-spacing: 0.06em;"
+-            >
+-              {settingsState.settings.panelOrder === "chat-editor-annotations" ? "Annotations" : "Chat"}
+-            </div>
+-            <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+-              {#if settingsState.settings.panelOrder === "chat-editor-annotations"}
+-                <PanelSlot
+-                  kind={settingsState.settings.leftSlot.kind}
+-                  annotations={modeGate.visibleAnnotations}
+-                  focusTrigger={outlineFocusTrigger}
+-                  activeFilterType={activeAnnotationFilter.type}
+-                  activeFilterAuthor={activeAnnotationFilter.author}
+-                  activeFilterStatus={activeAnnotationFilter.status}
+-                  onFilterChange={(type, author, status) => {
+-                    activeAnnotationFilter = { type, author, status };
+-                  }}
+-                  {editor}
+-                  ydoc={activeTab?.ydoc ?? null}
+-                  heldCount={modeGate.heldCount}
+-                  tandemMode={modeState.tandemMode}
+-                  onModeChange={modeState.setTandemMode}
+-                  activeDocFormat={activeTab?.format}
+-                  documentId={activeTab?.id}
+-                  {activeAnnotationId}
+-                  onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+-                  reduceMotion={settingsState.settings.reduceMotion}
+-                />
+-              {:else}
+-                <PanelSlot
+-                  kind="chat"
+-                  ctrlYdoc={yjsSync.bootstrapYdoc}
+-                  {editor}
+-                  activeDocId={yjsSync.activeTabId}
+-                  {openDocs}
+-                  claudeActive={yjsSync.claudeActive}
+-                  claudeStatus={yjsSync.claudeStatus}
+-                  {capturedAnchor}
+-                  onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+-                  reduceMotion={settingsState.settings.reduceMotion}
+-                  visible={true}
+-                />
+-              {/if}
+-            </div>
+-          </div>
+-        {/if}
+-      {:else if panelLayout.kind === "tabbed"}
+-        {#if !effectivePanelHidden}
+-          {@render resizeHandle("right", (e) => dragResize.handleResizeStart(e, "right"), "panel-resize-handle", getRightWidth(panelLayout))}
+-          {@render tabbedPanel(getRightWidth(panelLayout), "right")}
+-        {/if}
++      {#if effectiveRightVisible}
++        {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
++        {@render tabbedPanel(dragResizeRight.width, "right")}
+       {/if}
+     </div>
+ 
+@@ -638,25 +588,17 @@ const tutorial = createTutorial(
+       else if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -STEP;
+       else if (e.key === "PageUp") delta = BIG_STEP;
+       else if (e.key === "PageDown") delta = -BIG_STEP;
+-      else if (e.key === "Home") delta = PANEL_MIN_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
+-      else if (e.key === "End") delta = PANEL_MAX_WIDTH - (side === "left" ? (panelLayout.kind !== "tabbed" && "left" in panelLayout ? panelLayout.left : PANEL_DEFAULT_WIDTH) : getRightWidth(panelLayout));
++      else if (e.key === "Home") delta = PANEL_MIN_WIDTH - (side === "left" ? dragResizeLeft.width : dragResizeRight.width);
++      else if (e.key === "End") delta = PANEL_MAX_WIDTH - (side === "left" ? dragResizeLeft.width : dragResizeRight.width);
+       if (delta !== null) {
+         e.preventDefault();
+         e.stopPropagation();
+-        dragResize.handleResizeStep(side, delta);
++        if (side === "left") dragResizeLeft.handleResizeStep(delta);
++        else dragResizeRight.handleResizeStep(delta);
+       }
+     }}
+-    onkeyup={(e) => {
+-      const resizeKeys = ["ArrowRight","ArrowLeft","ArrowUp","ArrowDown","PageUp","PageDown","Home","End"];
+-      if (!resizeKeys.includes(e.key)) return;
+-      const layoutNow = panelLayout;
+-      const w = side === "left"
+-        ? ("left" in layoutNow ? layoutNow.left : PANEL_DEFAULT_WIDTH)
+-        : getRightWidth(layoutNow);
+-      const shouldPersist = (side === "left" && "left" in layoutNow) || (side === "right" && "right" in layoutNow);
+-      if (shouldPersist) {
+-        try { localStorage.setItem(PANEL_WIDTH_KEYS[side], String(w)); } catch {}
+-      }
++    onkeyup={() => {
++      // Width is already persisted inside handleResizeStep on each keyboard step.
+     }}
+     style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; position: relative; z-index: var(--tandem-z-base);"
+     onmouseenter={(e) => {
+@@ -690,8 +632,8 @@ const tutorial = createTutorial(
+         {activeAnnotationId}
+         onEditorReady={(ed) => (editor = ed)}
+         onAnnotationClick={(id) => {
+-          showChat = false;
+-          activeAnnotationId = id;
++          activeRailTab = "annotations";
++                    activeAnnotationId = id;
+         }}
+         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
+       />
+@@ -726,34 +668,59 @@ const tutorial = createTutorial(
+ {/snippet}
+ 
+ {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
++  {@const enabledTabs = settingsState.settings.rightRailTabs}
++  {@const iconOnly = enabledTabs.length > 3}
+   <div
+     style={`display: flex; flex-direction: column; width: ${width}px; ${borderSide === "left" ? "border-right" : "border-left"}: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
+   >
+     <div
+-      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-3); gap: 2px;"
++      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
+     >
+-      <button
+-        data-testid="annotations-tab"
+-        onclick={() => (showChat = false)}
+-        style={`flex: 1; padding: 0 var(--tandem-space-3); font-size: 12px; font-weight: 500; border: none; border-bottom: ${showChat ? "2px solid transparent" : "2px solid var(--tandem-accent)"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg-subtle)" : "var(--tandem-fg)"}; position: relative;`}
+-      >
+-        Annotations
+-        {#if showChat && pendingAnnotationBadge > 0}
+-          <span
+-            style="position: absolute; top: 2px; right: 6px; background: var(--tandem-error); color: var(--tandem-error-fg); font-size: 9px; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700;"
+-          >
+-            {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+-          </span>
+-        {/if}
+-      </button>
+-      <button
+-        data-testid="chat-tab"
+-        onmousedown={captureSelectionForChat}
+-        onclick={() => (showChat = true)}
+-        style={`flex: 1; padding: 0 var(--tandem-space-3); font-size: 12px; font-weight: 500; border: none; border-bottom: ${showChat ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${showChat ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; position: relative;`}
+-      >
+-        Chat
+-      </button>
++      {#if enabledTabs.includes("annotations")}
++        <button
++          data-testid="annotations-tab"
++          onclick={() => { activeRailTab = "annotations"; }}
++          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "annotations" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "annotations" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; position: relative; white-space: nowrap;`}
++          title={iconOnly ? "Annotations" : undefined}
++        >
++          {#if iconOnly}◨{:else}Annotations{/if}
++          {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
++            <span
++              style="position: absolute; top: 2px; right: 2px; background: var(--tandem-error); color: var(--tandem-error-fg); font-size: 9px; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700;"
++            >
++              {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
++            </span>
++          {/if}
++        </button>
++      {/if}
++      {#if enabledTabs.includes("chat")}
++        <button
++          data-testid="chat-tab"
++          onmousedown={captureSelectionForChat}
++          onclick={() => { activeRailTab = "chat";  }}
++          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "chat" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "chat" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
++          title={iconOnly ? "Chat" : undefined}
++        >
++          {#if iconOnly}💬{:else}Chat{/if}
++        </button>
++      {/if}
++      {#if enabledTabs.includes("outline")}
++        <button
++          data-testid="outline-tab"
++          onclick={() => { activeRailTab = "outline"; }}
++          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "outline" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "outline" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
++          title={iconOnly ? "Outline" : undefined}
++        >
++          {#if iconOnly}≡{:else}Outline{/if}
++        </button>
++      {/if}
++      <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
++        <RailTabPicker
++          enabledTabs={settingsState.settings.rightRailTabs}
++          disabledTabs={settingsState.settings.leftRailTabs.length === 1 ? settingsState.settings.leftRailTabs : []}
++          onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
++        />
++      </div>
+     </div>
+     <PanelSlot
+       kind="chat"
+@@ -766,7 +733,7 @@ const tutorial = createTutorial(
+       {capturedAnchor}
+       onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+       reduceMotion={settingsState.settings.reduceMotion}
+-      visible={showChat}
++      visible={activeRailTab === "chat" && enabledTabs.includes("chat")}
+     />
+     <PanelSlot
+       kind="side"
+@@ -784,7 +751,17 @@ const tutorial = createTutorial(
+       onFilterChange={(type, author, status) => {
+         activeAnnotationFilter = { type, author, status };
+       }}
+-      visible={!showChat}
++      visible={activeRailTab === "annotations" && enabledTabs.includes("annotations")}
+     />
++    {#if enabledTabs.includes("outline")}
++      <PanelSlot
++        kind="outline"
++        {editor}
++        annotations={modeGate.visibleAnnotations}
++        focusTrigger={outlineFocusTrigger}
++        activeFilterType={activeAnnotationFilter.type}
++        visible={activeRailTab === "outline"}
++      />
++    {/if}
+   </div>
+ {/snippet}
+diff --git a/src/client/actions/static-shortcuts.ts b/src/client/actions/static-shortcuts.ts
+new file mode 100644
+index 0000000..148b3d1
+--- /dev/null
++++ b/src/client/actions/static-shortcuts.ts
+@@ -0,0 +1,10 @@
++export const STATIC_SHORTCUT_ROWS = [
++  { keys: "Ctrl+B", description: "Bold" },
++  { keys: "Ctrl+I", description: "Italic" },
++  { keys: "Ctrl+Z", description: "Undo" },
++  { keys: "Ctrl+Y", description: "Redo" },
++  { keys: "Ctrl+F", description: "Find / Replace" },
++  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
++  { keys: "Ctrl+Tab", description: "Next document tab" },
++  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
++] as const;
+diff --git a/src/client/components/AppearanceSettings.svelte b/src/client/components/AppearanceSettings.svelte
+index 19982be..82291ef 100644
+--- a/src/client/components/AppearanceSettings.svelte
++++ b/src/client/components/AppearanceSettings.svelte
+@@ -3,8 +3,6 @@ import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
+ import type {
+   Density,
+   EditorFont,
+-  LayoutMode,
+-  LeftSlotKind,
+   PanelOrder,
+   PrimaryTab,
+   TandemSettings,
+@@ -18,30 +16,11 @@ interface Props {
+   onUpdate: (partial: Partial<TandemSettings>) => void;
+ }
+ 
+-let { open, settings, onUpdate }: Props = $props();
++let { open: _open, settings, onUpdate }: Props = $props();
+ 
+ const sectionLabelStyle =
+   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
+ 
+-let viewportWidth = $state(window.innerWidth);
+-const threePanelDisabled = $derived(viewportWidth < 768);
+-
+-$effect(() => {
+-  if (!open) return;
+-  viewportWidth = window.innerWidth;
+-  const handler = () => {
+-    viewportWidth = window.innerWidth;
+-  };
+-  window.addEventListener("resize", handler);
+-  return () => window.removeEventListener("resize", handler);
+-});
+-
+-const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; icon: string }> = [
+-  { value: "tabbed", label: "Tabbed", icon: "[=|]" },
+-  { value: "tabbed-left", label: "Tabbed-Left", icon: "[|=]" },
+-  { value: "three-panel", label: "Three-Panel", icon: "[|||]" },
+-];
+-
+ function cardStyle(selected: boolean, disabled?: boolean): string {
+   return [
+     "flex: 1;",
+@@ -65,12 +44,6 @@ const themeRg = createRadioGroup<ThemePreference>(
+   ["light", "dark", "system"] as const,
+   (t) => onUpdate({ theme: t }),
+ );
+-const layoutRg = createRadioGroup<LayoutMode>(
+-  () => settings.layout,
+-  ["tabbed", "tabbed-left", "three-panel"] as const,
+-  (l) => onUpdate({ layout: l }),
+-  (l) => l === "three-panel" && threePanelDisabled,
+-);
+ const primaryTabRg = createRadioGroup<PrimaryTab>(
+   () => settings.primaryTab,
+   ["chat", "annotations"] as const,
+@@ -96,16 +69,6 @@ const densityRg = createRadioGroup<Density>(
+   ["compact", "cozy", "spacious"] as const,
+   (d) => onUpdate({ density: d }),
+ );
+-
+-const leftSlotDisabled = $derived(settings.layout === "tabbed");
+-
+-const leftSlotRg = createRadioGroup<LeftSlotKind>(
+-  () => settings.leftSlot.kind,
+-  ["side", "outline"] as const,
+-  (k) => {
+-    if (!leftSlotDisabled) onUpdate({ leftSlot: { kind: k } });
+-  },
+-);
+ </script>
+ 
+ <!-- Theme -->
+@@ -133,109 +96,71 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
+   </div>
+ </div>
+ 
+-<!-- Layout mode -->
++<!-- Default Tab -->
+ <div>
+-  <div id="settings-layout-label" style={sectionLabelStyle}>Layout</div>
++  <div id="settings-default-tab-label" style={sectionLabelStyle}>Default Tab</div>
+   <div
+     role="radiogroup"
+-    aria-labelledby="settings-layout-label"
++    aria-labelledby="settings-default-tab-label"
+     tabindex="0"
+-    onkeydown={layoutRg.handleKeyDown}
+-    style="display: flex; gap: 8px; flex-wrap: wrap;"
++    onkeydown={primaryTabRg.handleKeyDown}
++    style="display: flex; gap: var(--tandem-space-2);"
+   >
+-    {#each LAYOUT_OPTIONS as { value, label, icon } (value)}
+-      {@const disabled = value === "three-panel" && threePanelDisabled}
+-      <button
+-        data-testid={`layout-${value}-btn`}
+-        role="radio"
+-        aria-checked={settings.layout === value}
+-        aria-disabled={disabled || undefined}
+-        tabindex={layoutRg.tabIndexFor(value)}
+-        onclick={() => { if (!disabled) onUpdate({ layout: value }); }}
+-        style={cardStyle(settings.layout === value, disabled)}
+-        title={disabled ? "Requires viewport wider than 768px" : undefined}
+-      >
+-        <div style="font-size: 18px; margin-bottom: 2px;">{icon}</div>
+-        {label}
+-      </button>
+-    {/each}
++    <button
++      data-testid="default-tab-chat-btn"
++      role="radio"
++      aria-checked={settings.primaryTab === "chat"}
++      tabindex={primaryTabRg.tabIndexFor("chat")}
++      onclick={() => onUpdate({ primaryTab: "chat" })}
++      style={cardStyle(settings.primaryTab === "chat")}
++    >
++      Chat
++    </button>
++    <button
++      data-testid="default-tab-annotations-btn"
++      role="radio"
++      aria-checked={settings.primaryTab === "annotations"}
++      tabindex={primaryTabRg.tabIndexFor("annotations")}
++      onclick={() => onUpdate({ primaryTab: "annotations" })}
++      style={cardStyle(settings.primaryTab === "annotations")}
++    >
++      Annotations
++    </button>
+   </div>
+-  {#if threePanelDisabled}
+-    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+-      Three-panel requires a wider viewport
+-    </div>
+-  {/if}
+ </div>
+ 
+-<!-- Default tab (tabbed and tabbed-left modes) -->
+-{#if settings.layout === "tabbed" || settings.layout === "tabbed-left"}
+-  <div>
+-    <div id="settings-default-tab-label" style={sectionLabelStyle}>Default Tab</div>
+-    <div
+-      role="radiogroup"
+-      aria-labelledby="settings-default-tab-label"
+-      tabindex="0"
+-      onkeydown={primaryTabRg.handleKeyDown}
+-      style="display: flex; gap: var(--tandem-space-2);"
++<!-- Panel Order -->
++<div>
++  <div id="settings-panel-order-label" style={sectionLabelStyle}>Panel Order</div>
++  <div
++    role="radiogroup"
++    aria-labelledby="settings-panel-order-label"
++    tabindex="0"
++    onkeydown={panelOrderRg.handleKeyDown}
++    style="display: flex; gap: var(--tandem-space-2);"
++  >
++    <button
++      data-testid="panel-order-cea-btn"
++      role="radio"
++      aria-checked={settings.panelOrder === "chat-editor-annotations"}
++      tabindex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
++      onclick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
++      style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
+     >
+-      <button
+-        data-testid="default-tab-chat-btn"
+-        role="radio"
+-        aria-checked={settings.primaryTab === "chat"}
+-        tabindex={primaryTabRg.tabIndexFor("chat")}
+-        onclick={() => onUpdate({ primaryTab: "chat" })}
+-        style={cardStyle(settings.primaryTab === "chat")}
+-      >
+-        Chat
+-      </button>
+-      <button
+-        data-testid="default-tab-annotations-btn"
+-        role="radio"
+-        aria-checked={settings.primaryTab === "annotations"}
+-        tabindex={primaryTabRg.tabIndexFor("annotations")}
+-        onclick={() => onUpdate({ primaryTab: "annotations" })}
+-        style={cardStyle(settings.primaryTab === "annotations")}
+-      >
+-        Annotations
+-      </button>
+-    </div>
+-  </div>
+-{/if}
+-
+-<!-- Panel order (three-panel mode only) -->
+-{#if settings.layout === "three-panel"}
+-  <div>
+-    <div id="settings-panel-order-label" style={sectionLabelStyle}>Panel Order</div>
+-    <div
+-      role="radiogroup"
+-      aria-labelledby="settings-panel-order-label"
+-      tabindex="0"
+-      onkeydown={panelOrderRg.handleKeyDown}
+-      style="display: flex; gap: var(--tandem-space-2);"
++      Chat | Editor | Ann.
++    </button>
++    <button
++      data-testid="panel-order-aec-btn"
++      role="radio"
++      aria-checked={settings.panelOrder === "annotations-editor-chat"}
++      tabindex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
++      onclick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
++      style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
+     >
+-      <button
+-        data-testid="panel-order-cea-btn"
+-        role="radio"
+-        aria-checked={settings.panelOrder === "chat-editor-annotations"}
+-        tabindex={panelOrderRg.tabIndexFor("chat-editor-annotations")}
+-        onclick={() => onUpdate({ panelOrder: "chat-editor-annotations" })}
+-        style={cardStyle(settings.panelOrder === "chat-editor-annotations")}
+-      >
+-        Chat | Editor | Ann.
+-      </button>
+-      <button
+-        data-testid="panel-order-aec-btn"
+-        role="radio"
+-        aria-checked={settings.panelOrder === "annotations-editor-chat"}
+-        tabindex={panelOrderRg.tabIndexFor("annotations-editor-chat")}
+-        onclick={() => onUpdate({ panelOrder: "annotations-editor-chat" })}
+-        style={cardStyle(settings.panelOrder === "annotations-editor-chat")}
+-      >
+-        Ann. | Editor | Chat
+-      </button>
+-    </div>
++      Ann. | Editor | Chat
++    </button>
+   </div>
+-{/if}
++</div>
+ 
+ <!-- Text Size -->
+ <div>
+@@ -271,7 +196,7 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
+   <div style="display: flex; align-items: center; gap: 8px;">
+     <span
+       aria-hidden="true"
+-    style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: var(--tandem-r-1); flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
++      style="display: inline-block; width: 16px; height: 16px; background: var(--tandem-accent); border-radius: var(--tandem-r-1); flex-shrink: 0; border: 1px solid var(--tandem-border-strong);"
+     ></span>
+     <input
+       data-testid="accent-hue-slider"
+@@ -312,39 +237,6 @@ const leftSlotRg = createRadioGroup<LeftSlotKind>(
+   </div>
+ </div>
+ 
+-<!-- Left Panel Content — disabled when layout has no left panel -->
+-<div>
+-  <div id="settings-left-slot-label" style={sectionLabelStyle}>Left Panel</div>
+-  <div
+-    role="radiogroup"
+-    aria-labelledby="settings-left-slot-label"
+-    aria-disabled={leftSlotDisabled}
+-    tabindex={leftSlotDisabled ? -1 : 0}
+-    onkeydown={leftSlotRg.handleKeyDown}
+-    style="display: flex; gap: var(--tandem-space-2);"
+-  >
+-    {#each ([["side", "Annotations"], ["outline", "Outline"]] as const) as [value, label] (value)}
+-      <button
+-        data-testid={`left-slot-kind-radio-${value}`}
+-        role="radio"
+-        aria-checked={settings.leftSlot.kind === value}
+-        aria-disabled={leftSlotDisabled || undefined}
+-        tabindex={leftSlotDisabled ? -1 : leftSlotRg.tabIndexFor(value)}
+-        onclick={() => { if (!leftSlotDisabled) onUpdate({ leftSlot: { kind: value } }); }}
+-        style={cardStyle(settings.leftSlot.kind === value, leftSlotDisabled)}
+-        title={leftSlotDisabled ? "Switch to Tabbed-Left or Three-Panel to use the left panel" : undefined}
+-      >
+-        {label}
+-      </button>
+-    {/each}
+-  </div>
+-  {#if leftSlotDisabled}
+-    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+-      Switch to Tabbed-Left or Three-Panel layout to enable the left panel
+-    </div>
+-  {/if}
+-</div>
+-
+ <!-- Density -->
+ <div>
+   <div id="settings-density-label" style={sectionLabelStyle}>Spacing Density</div>
+diff --git a/src/client/components/CommandPalette.svelte b/src/client/components/CommandPalette.svelte
+index 4a8b6ef..a81cad5 100644
+--- a/src/client/components/CommandPalette.svelte
++++ b/src/client/components/CommandPalette.svelte
+@@ -3,6 +3,8 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
+ import { TextSelection } from "prosemirror-state";
+ import type { Annotation } from "../../shared/types.js";
+ import { type Action, getActionsMap } from "../actions/registry.svelte.js";
++import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
++import { walkHeadings } from "../utils/headings.js";
+ 
+ // ---------------------------------------------------------------------------
+ // Prop types
+@@ -27,34 +29,11 @@ let selectedIndex = $state(0);
+ let inputEl = $state<HTMLInputElement | null>(null);
+ 
+ // Detect routing prefix
+-const activePrefix = $derived(
+-  query.startsWith("#")
+-    ? "#"
+-    : query.startsWith("@")
+-      ? "@"
+-      : query.startsWith("?")
+-        ? "?"
+-        : query.startsWith(">")
+-          ? ">"
+-          : null,
+-);
++const PREFIXES = ["#", "@", "?", ">"] as const;
++type Prefix = (typeof PREFIXES)[number];
++const activePrefix = $derived<Prefix | null>(PREFIXES.find((p) => query.startsWith(p)) ?? null);
+ const searchText = $derived((activePrefix ? query.slice(1) : query).trim().toLowerCase());
+ 
+-// ---------------------------------------------------------------------------
+-// Static shortcut rows (mirrors HelpModal)
+-// ---------------------------------------------------------------------------
+-
+-const STATIC_SHORTCUT_ROWS = [
+-  { keys: "Ctrl+B", description: "Bold" },
+-  { keys: "Ctrl+I", description: "Italic" },
+-  { keys: "Ctrl+Z", description: "Undo" },
+-  { keys: "Ctrl+Y", description: "Redo" },
+-  { keys: "Ctrl+F", description: "Find / Replace" },
+-  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
+-  { keys: "Ctrl+Tab", description: "Next document tab" },
+-  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
+-];
+-
+ // ---------------------------------------------------------------------------
+ // Result types
+ // ---------------------------------------------------------------------------
+@@ -107,23 +86,9 @@ const headingResults = $derived.by((): HeadingResult[] => {
+   const ed = editor;
+   if (!ed || ed.isDestroyed) return [];
+   const q = searchText;
+-  const results: HeadingResult[] = [];
+-  let idx = 0;
+-  ed.state.doc.descendants((node, pos) => {
+-    if (node.type.name === "heading" && node.attrs.level <= 3) {
+-      const text = node.textContent;
+-      if (!q || text.toLowerCase().includes(q)) {
+-        results.push({
+-          kind: "heading",
+-          id: `heading-${idx++}`,
+-          text,
+-          level: node.attrs.level as number,
+-          pos,
+-        });
+-      }
+-    }
+-  });
+-  return results;
++  return walkHeadings(ed)
++    .filter((h) => !q || h.text.toLowerCase().includes(q))
++    .map((h, idx) => ({ kind: "heading" as const, id: `heading-${idx}`, ...h }));
+ });
+ 
+ // Annotations: `@` prefix — lazy, reactive on `annotations` prop change
+@@ -208,16 +173,16 @@ $effect(() => {
+ // Input placeholder by mode
+ // ---------------------------------------------------------------------------
+ 
++const PREFIX_PLACEHOLDER: Record<string, string> = {
++  "#": "Search headings…",
++  "@": "Search annotations…",
++  "?": "Search shortcuts…",
++  ">": "Search commands…",
++};
+ const placeholder = $derived(
+-  activePrefix === "#"
+-    ? "Search headings…"
+-    : activePrefix === "@"
+-      ? "Search annotations…"
+-      : activePrefix === "?"
+-        ? "Search shortcuts…"
+-        : activePrefix === ">"
+-          ? "Search commands…"
+-          : "Type a command, # headings, @ annotations, ? shortcuts…",
++  activePrefix
++    ? PREFIX_PLACEHOLDER[activePrefix]
++    : "Type a command, # headings, @ annotations, ? shortcuts…",
+ );
+ 
+ // ---------------------------------------------------------------------------
+@@ -228,12 +193,11 @@ function close() {
+   onClose();
+ }
+ 
+-function runResult(result: PaletteResult, _openInNewTab = false) {
++function runResult(result: PaletteResult) {
+   if (result.kind === "action") {
+     close();
+     void result.action.run();
+   } else if (result.kind === "heading") {
+-    // Jump to heading in editor. _openInNewTab reserved for cross-doc heading navigation (future).
+     close();
+     const ed = editor;
+     if (!ed || ed.isDestroyed) return;
+@@ -265,8 +229,7 @@ function handleKeydown(e: KeyboardEvent) {
+   } else if (e.key === "Enter") {
+     e.preventDefault();
+     const result = allResults[selectedIndex];
+-    const openInNewTab = e.ctrlKey || e.metaKey;
+-    if (result) runResult(result, openInNewTab);
++    if (result) runResult(result);
+   } else if (e.key === "Escape") {
+     e.preventDefault();
+     close();
+@@ -276,16 +239,6 @@ function handleKeydown(e: KeyboardEvent) {
+ function handleBackdropClick(e: MouseEvent) {
+   if (e.target === e.currentTarget) close();
+ }
+-
+-// Heading level label
+-function headingLabel(level: number): string {
+-  return `H${level}`;
+-}
+-
+-// Annotation type label
+-function annotationTypeLabel(type: string): string {
+-  return type.charAt(0).toUpperCase() + type.slice(1);
+-}
+ </script>
+ 
+ {#if open}
+@@ -393,7 +346,7 @@ function annotationTypeLabel(type: string): string {
+                     color: var(--tandem-fg-subtle);
+                     font-family: var(--tandem-font-mono);
+                     min-width: 20px;
+-                  ">{headingLabel(result.level)}</span>
++                  ">H{result.level}</span>
+                   <span style="font-size: var(--tandem-text-sm); padding-left: calc({result.level - 1} * var(--tandem-space-2));">{result.text}</span>
+                 </span>
+               {:else if result.kind === "annotation"}
+@@ -404,7 +357,7 @@ function annotationTypeLabel(type: string): string {
+                   {/if}
+                 </span>
+                 <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); flex-shrink: 0; margin-left: var(--tandem-space-2);">
+-                  {annotationTypeLabel(result.annotationType)}
++                  {result.annotationType.charAt(0).toUpperCase() + result.annotationType.slice(1)}
+                 </span>
+               {:else if result.kind === "shortcut"}
+                 <span style="font-size: var(--tandem-text-sm);">{result.description}</span>
+diff --git a/src/client/components/HelpModal.svelte b/src/client/components/HelpModal.svelte
+index 6365b0e..041c891 100644
+--- a/src/client/components/HelpModal.svelte
++++ b/src/client/components/HelpModal.svelte
+@@ -1,18 +1,7 @@
+ <script lang="ts">
+ import { untrack } from "svelte";
+ import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
+-
+-// Static shortcuts not in the action registry (formatting, navigation, help)
+-const STATIC_SHORTCUT_ROWS = [
+-  { keys: "Ctrl+B", description: "Bold" },
+-  { keys: "Ctrl+I", description: "Italic" },
+-  { keys: "Ctrl+Z", description: "Undo" },
+-  { keys: "Ctrl+Y", description: "Redo" },
+-  { keys: "Ctrl+F", description: "Find / Replace" },
+-  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
+-  { keys: "Ctrl+Tab", description: "Next document tab" },
+-  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
+-];
++import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
+ 
+ // Registry-derived sections — same source as Settings → Shortcuts tab
+ const registryShortcutSections = $derived.by(() => {
+diff --git a/src/client/components/OutlinePanel.svelte b/src/client/components/OutlinePanel.svelte
+index e249578..ae98ed0 100644
+--- a/src/client/components/OutlinePanel.svelte
++++ b/src/client/components/OutlinePanel.svelte
+@@ -1,9 +1,11 @@
+ <script lang="ts">
+ import type { Editor } from "@tiptap/core";
+ import { TextSelection } from "prosemirror-state";
++import { untrack } from "svelte";
+ import type { Annotation } from "../../shared/types";
+ import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
+ import { flatOffsetToPmPos } from "../positions";
++import { type HeadingEntry, walkHeadings } from "../utils/headings";
+ 
+ interface Props {
+   editor: Editor | null;
+@@ -14,8 +16,6 @@ interface Props {
+   activeFilterStatus?: FilterStatus;
+ }
+ 
+-type HeadingEntry = { text: string; level: number; pos: number };
+-
+ let {
+   editor,
+   annotations = [],
+@@ -32,18 +32,6 @@ let searchQuery = $state("");
+ let searchInput = $state<HTMLInputElement | null>(null);
+ let scrollSpyIndex = $state<number>(-1);
+ 
+-// Walk the doc and return heading entries. Mirrors doc.descendants pattern
+-// from authorship.ts:78.
+-function walkHeadings(ed: Editor): HeadingEntry[] {
+-  const result: HeadingEntry[] = [];
+-  ed.state.doc.descendants((node, pos) => {
+-    if (node.type.name === "heading" && node.attrs.level <= 3) {
+-      result.push({ text: node.textContent, level: node.attrs.level as number, pos });
+-    }
+-  });
+-  return result;
+-}
+-
+ $effect(() => {
+   const ed = editor;
+   if (!ed || ed.isDestroyed) {
+@@ -52,8 +40,13 @@ $effect(() => {
+   }
+ 
+   headings = walkHeadings(ed);
+-  itemEls = itemEls.slice(0, headings.length);
+-  if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
++  // Use untrack to avoid a self-referential read→write cycle on itemEls.
++  // .slice() always returns a new array reference; tracking it would cause
++  // effect_update_depth_exceeded. focusedIndex has the same issue.
++  untrack(() => {
++    itemEls = itemEls.slice(0, headings.length);
++    if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
++  });
+ 
+   const handler = () => {
+     headings = walkHeadings(ed);
+@@ -139,11 +132,13 @@ function handleSearchKeydown(e: KeyboardEvent) {
+   }
+ }
+ 
+-// Per-heading annotation counts (filter-aware when activeFilterType is set).
+-function countAnnotationsInSection(sectionStart: number, sectionEnd: number): number {
++const headingAnnotationCounts = $derived.by(() => {
+   const ed = editor;
+-  if (!ed || annotations.length === 0) return 0;
+-  let count = 0;
++  if (!ed || ed.isDestroyed || headings.length === 0) return [] as number[];
++  const docEnd = ed.state.doc.content.size;
++
++  // Single pass: resolve all annotation PM positions, then bucket per heading.
++  const annPositions: number[] = [];
+   for (const ann of annotations) {
+     // Mirror all three active filters so counts match the side panel.
+     if (activeFilterType !== "all") {
+@@ -154,23 +149,15 @@ function countAnnotationsInSection(sectionStart: number, sectionEnd: number): nu
+     if (activeFilterAuthor !== "all" && ann.author !== activeFilterAuthor) continue;
+     if (activeFilterStatus !== "all" && ann.status !== activeFilterStatus) continue;
+     try {
+-      const annPmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
+-      if (annPmFrom >= sectionStart && annPmFrom < sectionEnd) count++;
++      annPositions.push(flatOffsetToPmPos(ed.state.doc, ann.range.from));
+     } catch {
+       // skip annotations with invalid ranges
+     }
+   }
+-  return count;
+-}
+ 
+-const headingAnnotationCounts = $derived.by(() => {
+-  const ed = editor;
+-  if (!ed || ed.isDestroyed || headings.length === 0) return [] as number[];
+-  const docEnd = ed.state.doc.content.size;
+   return headings.map((h, i) => {
+-    const sectionStart = h.pos;
+     const sectionEnd = i + 1 < headings.length ? headings[i + 1].pos : docEnd;
+-    return countAnnotationsInSection(sectionStart, sectionEnd);
++    return annPositions.filter((p) => p >= h.pos && p < sectionEnd).length;
+   });
+ });
+ 
+@@ -181,8 +168,18 @@ function jumpTo(entry: HeadingEntry, index: number) {
+   try {
+     const resolved = state.doc.resolve(entry.pos + 1);
+     const sel = TextSelection.near(resolved);
+-    ed.view.dispatch(state.tr.setSelection(sel).scrollIntoView());
++    ed.view.dispatch(state.tr.setSelection(sel));
+     ed.view.focus();
++    // Scroll the heading to the top of the editor's scroll container.
++    const { node } = ed.view.domAtPos(entry.pos + 1);
++    const el = (node instanceof Element ? node : node.parentElement) as HTMLElement | null;
++    const scroller = (ed.view.dom.closest(".editor-scroll") ??
++      ed.view.dom.parentElement) as HTMLElement | null;
++    if (el && scroller) {
++      const elTop = el.getBoundingClientRect().top;
++      const scrollerTop = scroller.getBoundingClientRect().top;
++      scroller.scrollTop += elTop - scrollerTop - scroller.clientHeight * 0.05;
++    }
+   } catch {
+     // pos may have been invalidated by a concurrent edit — ignore
+   }
+@@ -289,8 +286,7 @@ function handleKeyDown(e: KeyboardEvent) {
+                     "var(--tandem-surface-hover, var(--tandem-surface-muted))";
+               }}
+               onmouseleave={(e) => {
+-                if (!isActive)
+-                  (e.currentTarget as HTMLButtonElement).style.background = isActive ? "var(--tandem-accent-bg)" : "none";
++                if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "none";
+               }}
+             >
+               <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+diff --git a/src/client/hooks/useDragResize.svelte.ts b/src/client/hooks/useDragResize.svelte.ts
+index f187539..16c3f32 100644
+--- a/src/client/hooks/useDragResize.svelte.ts
++++ b/src/client/hooks/useDragResize.svelte.ts
+@@ -1,30 +1,42 @@
+ import { PANEL_WIDTH_KEYS, type PanelSide } from "../../shared/constants.js";
+-import {
+-  getRightWidth,
+-  PANEL_DEFAULT_WIDTH,
+-  PANEL_MAX_WIDTH,
+-  PANEL_MIN_WIDTH,
+-  type PanelLayout,
+-} from "../panel-layout.js";
++import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "../panel-layout.js";
+ 
+ export interface DragResizeState {
+-  handleResizeStart: (e: MouseEvent, side: PanelSide) => void;
+-  handleResizeStep: (side: PanelSide, deltaPx: number) => void;
++  readonly width: number;
++  handleResizeStart: (e: MouseEvent) => void;
++  handleResizeStep: (deltaPx: number) => void;
+ }
+ 
+ /**
+- * Svelte 5 port of `useDragResize`.
++ * Svelte 5 per-side drag-to-resize hook.
+  *
+- * Encapsulates drag-to-resize logic for side panels. Attaches and cleans up
+- * mousemove/mouseup listeners atomically. Accepts getters for reactive inputs.
++ * Mount one instance per visible rail. Each instance owns its own width and
++ * persists to the corresponding localStorage key on drag-end or keyboard step.
++ * Drag is aborted when the panel closes mid-drag (getVisible returns false).
+  */
+-export function createDragResize(
+-  getPanelLayout: () => PanelLayout,
+-  setPanelLayout: (updater: (prev: PanelLayout) => PanelLayout) => void,
+-): DragResizeState {
++export function createDragResize(opts: {
++  side: PanelSide;
++  initialWidth: number;
++  getVisible: () => boolean;
++}): DragResizeState {
++  const { side } = opts;
++  const storageKey = PANEL_WIDTH_KEYS[side];
++
++  let width = $state(opts.initialWidth);
+   let dragListeners: { move: (e: MouseEvent) => void; up: () => void } | null = null;
+ 
+-  // Clean up drag listeners if the component is destroyed mid-drag
++  // Abort drag if the panel is hidden while a drag is in progress.
++  $effect(() => {
++    const visible = opts.getVisible();
++    if (!visible && dragListeners) {
++      document.removeEventListener("mousemove", dragListeners.move);
++      document.removeEventListener("mouseup", dragListeners.up);
++      dragListeners = null;
++      document.body.style.userSelect = "";
++      document.body.style.cursor = "";
++    }
++  });
++
+   $effect(() => {
+     return () => {
+       if (dragListeners) {
+@@ -37,17 +49,10 @@ export function createDragResize(
+     };
+   });
+ 
+-  const handleResizeStart = (e: MouseEvent, side: PanelSide) => {
++  const handleResizeStart = (e: MouseEvent) => {
+     e.preventDefault();
+     const startX = e.clientX;
+-    const current = getPanelLayout();
+-    let startWidth: number;
+-    if (side === "left") {
+-      startWidth = "left" in current ? current.left : PANEL_DEFAULT_WIDTH;
+-    } else {
+-      startWidth = getRightWidth(current);
+-    }
+-    const storageKey = PANEL_WIDTH_KEYS[side];
++    const startWidth = width;
+     let latestWidth = startWidth;
+ 
+     document.body.style.userSelect = "none";
+@@ -55,18 +60,10 @@ export function createDragResize(
+ 
+     const onMouseMove = (ev: MouseEvent) => {
+       const delta = ev.clientX - startX;
++      // Left panel: drag right = wider. Right panel: drag right = narrower.
+       const next = side === "left" ? startWidth + delta : startWidth - delta;
+       latestWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, next));
+-      setPanelLayout((prev) => {
+-        if (side === "right") {
+-          if (prev.kind === "three-panel") return { ...prev, right: latestWidth };
+-          if (prev.kind === "tabbed") return { kind: "tabbed", right: latestWidth };
+-          return prev;
+-        }
+-        if (prev.kind === "three-panel") return { ...prev, left: latestWidth };
+-        if (prev.kind === "tabbed-left") return { ...prev, left: latestWidth };
+-        return prev;
+-      });
++      width = latestWidth;
+     };
+ 
+     const onMouseUp = () => {
+@@ -75,10 +72,7 @@ export function createDragResize(
+       dragListeners = null;
+       document.body.style.userSelect = "";
+       document.body.style.cursor = "";
+-      const layoutNow = getPanelLayout();
+-      const shouldPersist =
+-        (side === "left" && "left" in layoutNow) || (side === "right" && "right" in layoutNow);
+-      if (shouldPersist) {
++      if (opts.getVisible()) {
+         try {
+           localStorage.setItem(storageKey, String(latestWidth));
+         } catch (err) {
+@@ -92,26 +86,23 @@ export function createDragResize(
+     document.addEventListener("mouseup", onMouseUp);
+   };
+ 
+-  const handleResizeStep = (side: PanelSide, deltaPx: number) => {
+-    const current = getPanelLayout();
+-    const currentWidth =
+-      side === "left"
+-        ? "left" in current
+-          ? current.left
+-          : PANEL_DEFAULT_WIDTH
+-        : getRightWidth(current);
+-    const next = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, currentWidth + deltaPx));
+-    setPanelLayout((prev) => {
+-      if (side === "right") {
+-        if (prev.kind === "three-panel") return { ...prev, right: next };
+-        if (prev.kind === "tabbed") return { kind: "tabbed", right: next };
+-        return prev;
++  const handleResizeStep = (deltaPx: number) => {
++    const next = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, width + deltaPx));
++    width = next;
++    if (opts.getVisible()) {
++      try {
++        localStorage.setItem(storageKey, String(next));
++      } catch (err) {
++        console.warn(`[tandem] failed to persist ${storageKey}:`, err);
+       }
+-      if (prev.kind === "three-panel") return { ...prev, left: next };
+-      if (prev.kind === "tabbed-left") return { ...prev, left: next };
+-      return prev;
+-    });
++    }
+   };
+ 
+-  return { handleResizeStart, handleResizeStep };
++  return {
++    get width() {
++      return width;
++    },
++    handleResizeStart,
++    handleResizeStep,
++  };
+ }
+diff --git a/src/client/hooks/useTabDirty.svelte.ts b/src/client/hooks/useTabDirty.svelte.ts
+index bac01f0..55b508c 100644
+--- a/src/client/hooks/useTabDirty.svelte.ts
++++ b/src/client/hooks/useTabDirty.svelte.ts
+@@ -13,13 +13,13 @@ export interface TabDirtyState {
+  * reactively. Adds `keysChanged` filtering on the meta observer (missing
+  * from the original React version).
+  */
+-export function createTabDirty(getTab: () => OpenTab): TabDirtyState {
++export function createTabDirty(getTab: () => OpenTab | undefined): TabDirtyState {
+   let dirty = $state(false);
+ 
+   $effect(() => {
+     const tab = getTab();
+ 
+-    if (tab.readOnly) {
++    if (!tab || tab.readOnly) {
+       dirty = false;
+       return;
+     }
+diff --git a/src/client/hooks/useTandemSettings.svelte.ts b/src/client/hooks/useTandemSettings.svelte.ts
+index f3c78df..862d8cd 100644
+--- a/src/client/hooks/useTandemSettings.svelte.ts
++++ b/src/client/hooks/useTandemSettings.svelte.ts
+@@ -6,10 +6,9 @@ import { loadSettings, mergeAndClampSettings } from "./useTandemSettings.js";
+ export type {
+   Density,
+   EditorFont,
+-  LayoutMode,
+-  LeftSlotKind,
+   PanelOrder,
+   PrimaryTab,
++  RailTab,
+   SidecarRetryStrategy,
+   TandemSettings,
+   TextSize,
+diff --git a/src/client/hooks/useTandemSettings.ts b/src/client/hooks/useTandemSettings.ts
+index 73e7067..7f3f480 100644
+--- a/src/client/hooks/useTandemSettings.ts
++++ b/src/client/hooks/useTandemSettings.ts
+@@ -6,18 +6,19 @@ import {
+ } from "../../shared/constants";
+ import type { TandemMode } from "../../shared/types.js";
+ 
+-export type LayoutMode = "tabbed" | "three-panel" | "tabbed-left";
+ export type EditorFont = "serif" | "sans" | "mono";
+-export type LeftSlotKind = "side" | "outline";
+ export type Density = "compact" | "cozy" | "spacious";
+ export type PrimaryTab = "chat" | "annotations";
+ export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
+ export type TextSize = "s" | "m" | "l";
+ export type ThemePreference = "light" | "dark" | "system";
+ export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
++export type RailTab = "annotations" | "chat" | "outline";
+ 
+ export interface TandemSettings {
+-  layout: LayoutMode;
++  leftPanelVisible: boolean;
++  rightPanelVisible: boolean;
++  schemaVersion: number;
+   primaryTab: PrimaryTab;
+   panelOrder: PanelOrder;
+   editorWidthPercent: number;
+@@ -34,8 +35,8 @@ export interface TandemSettings {
+   annotationPatterns: boolean;
+   selectionToolbar: boolean;
+   soloRailHidden: boolean;
+-  panelHidden: boolean;
+-  leftSlot: { kind: LeftSlotKind };
++  leftRailTabs: RailTab[];
++  rightRailTabs: RailTab[];
+   degradedBannerDelayMs: number;
+   // TODO(v0.11.0): wire to yjsSync reconnect strategy
+   sidecarRetryStrategy: SidecarRetryStrategy;
+@@ -57,7 +58,9 @@ function prefersReducedMotion(): boolean {
+ }
+ 
+ const DEFAULTS: TandemSettings = {
+-  layout: "tabbed",
++  leftPanelVisible: false,
++  rightPanelVisible: true,
++  schemaVersion: 2,
+   primaryTab: "annotations",
+   panelOrder: "chat-editor-annotations",
+   editorWidthPercent: 100,
+@@ -74,13 +77,25 @@ const DEFAULTS: TandemSettings = {
+   annotationPatterns: false,
+   selectionToolbar: true,
+   soloRailHidden: true,
+-  panelHidden: false,
+-  leftSlot: { kind: "outline" },
++  leftRailTabs: ["annotations", "outline"],
++  rightRailTabs: ["annotations", "chat"],
+   degradedBannerDelayMs: 30000,
+   sidecarRetryStrategy: "exponential",
+   holdAnnotationsWhileOffline: true,
+ };
+ 
++const VALID_RAIL_TABS: RailTab[] = ["annotations", "chat", "outline"];
++
++function parseRailTabs(raw: unknown, fallback: RailTab[]): RailTab[] {
++  if (Array.isArray(raw)) {
++    const filtered = raw.filter((t: unknown) =>
++      VALID_RAIL_TABS.includes(t as RailTab),
++    ) as RailTab[];
++    return filtered.length > 0 ? filtered : fallback;
++  }
++  return fallback;
++}
++
+ /**
+  * Read and normalize settings from localStorage.
+  *
+@@ -91,6 +106,10 @@ const DEFAULTS: TandemSettings = {
+  * intentional — `0` is not a valid dwell or width anyway). `accentHue` is
+  * the exception: hue 0 (red) is valid, so it uses an explicit `typeof`
+  * range check instead.
++ *
++ * v1→v2 migration: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
++ * v2 migration: `leftSlot.kind` → `leftRailTabs` (ordering preserved so the
++ * previously-active tab stays first). Subsequent loads ignore the legacy key.
+  */
+ export function loadSettings(): TandemSettings {
+   let saved: string | null;
+@@ -102,14 +121,43 @@ export function loadSettings(): TandemSettings {
+   }
+   if (saved) {
+     try {
+-      const parsed = JSON.parse(saved);
++      let parsed = JSON.parse(saved) as Record<string, unknown>;
++      // v1→v2 migration: derive per-side visibility from old layout+panelHidden.
++      if (!parsed || typeof parsed !== "object" || parsed.schemaVersion !== 2) {
++        const panelHidden = parsed.panelHidden === true;
++        let leftPanelVisible = false;
++        let rightPanelVisible = true;
++        if (panelHidden) {
++          leftPanelVisible = false;
++          rightPanelVisible = false;
++        } else if (parsed.layout === "three-panel") {
++          leftPanelVisible = true;
++          rightPanelVisible = true;
++        } else if (parsed.layout === "tabbed-left") {
++          leftPanelVisible = true;
++          rightPanelVisible = false;
++        }
++        // "tabbed" or no recognizable layout → defaults (left hidden, right visible)
++        parsed = { ...parsed, leftPanelVisible, rightPanelVisible, schemaVersion: 2 };
++        delete parsed.layout;
++        delete parsed.panelHidden;
++      }
++      // v2 in-place migration: leftSlot.kind → leftRailTabs ordering.
++      // Preserve outline-first if the user had selected outline as their left panel.
++      let leftRailTabsFallback = DEFAULTS.leftRailTabs;
++      if (!Array.isArray(parsed.leftRailTabs)) {
++        const ls = parsed.leftSlot as { kind?: unknown } | undefined;
++        if (ls?.kind === "outline") {
++          console.warn("[tandem] migrating legacy leftSlot.kind=outline → leftRailTabs");
++          leftRailTabsFallback = ["outline", "annotations"];
++        } else if (ls?.kind === "side") {
++          console.warn("[tandem] migrating legacy leftSlot.kind=side → leftRailTabs");
++        }
++      }
+       return {
+-        layout:
+-          parsed.layout === "three-panel" ||
+-          parsed.layout === "tabbed" ||
+-          parsed.layout === "tabbed-left"
+-            ? parsed.layout
+-            : DEFAULTS.layout,
++        leftPanelVisible: parsed.leftPanelVisible === true,
++        rightPanelVisible: parsed.rightPanelVisible !== false,
++        schemaVersion: 2,
+         primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
+         panelOrder:
+           parsed.panelOrder === "annotations-editor-chat"
+@@ -159,7 +207,6 @@ export function loadSettings(): TandemSettings {
+         annotationPatterns: parsed.annotationPatterns === true,
+         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
+-        panelHidden: parsed.panelHidden === true,
+         degradedBannerDelayMs:
+           typeof parsed.degradedBannerDelayMs === "number" &&
+           parsed.degradedBannerDelayMs >= 5000 &&
+@@ -176,12 +223,8 @@ export function loadSettings(): TandemSettings {
+           typeof parsed.holdAnnotationsWhileOffline === "boolean"
+             ? parsed.holdAnnotationsWhileOffline
+             : DEFAULTS.holdAnnotationsWhileOffline,
+-        leftSlot: {
+-          kind:
+-            parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
+-              ? parsed.leftSlot.kind
+-              : DEFAULTS.leftSlot.kind,
+-        },
++        leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
++        rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
+       };
+     } catch (err) {
+       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
+@@ -213,5 +256,7 @@ export function mergeAndClampSettings(
+       ? Math.max(0, Math.min(360, merged.accentHue))
+       : DEFAULTS.accentHue,
+     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
++    leftRailTabs: merged.leftRailTabs.length > 0 ? merged.leftRailTabs : DEFAULTS.leftRailTabs,
++    rightRailTabs: merged.rightRailTabs.length > 0 ? merged.rightRailTabs : DEFAULTS.rightRailTabs,
+   };
+ }
+diff --git a/src/client/panel-layout.ts b/src/client/panel-layout.ts
+index a6922da..e01e850 100644
+--- a/src/client/panel-layout.ts
++++ b/src/client/panel-layout.ts
+@@ -1,29 +1,9 @@
+ import { PANEL_WIDTH_KEYS, type PanelSide } from "../shared/constants";
+ 
+-/**
+- * Client-local UI state describing the current side-panel arrangement.
+- *
+- * Discriminated union: each variant carries only the width(s) it uses.
+- * `right` is present in layouts with a right panel (tabbed, three-panel).
+- * `left` is present in layouts with a left panel (three-panel, tabbed-left).
+- *
+- * Purely in-memory: widths still persist individually via `PANEL_WIDTH_KEYS`
+- * in localStorage. Keeping this client-side (not in `src/shared/types.ts`)
+- * avoids overlap with the parallel Annotation type refactor (#233).
+- */
+-export type PanelLayout =
+-  | { kind: "tabbed"; right: number }
+-  | { kind: "three-panel"; left: number; right: number }
+-  | { kind: "tabbed-left"; left: number };
+-
+ export const PANEL_MIN_WIDTH = 200;
+ export const PANEL_MAX_WIDTH = 600;
+ export const PANEL_DEFAULT_WIDTH = 300;
+ 
+-export function getRightWidth(layout: PanelLayout): number {
+-  return "right" in layout ? layout.right : PANEL_DEFAULT_WIDTH;
+-}
+-
+ export function loadPanelWidth(side: PanelSide): number {
+   const key = PANEL_WIDTH_KEYS[side];
+   try {
+diff --git a/src/client/panels/RailTabPicker.svelte b/src/client/panels/RailTabPicker.svelte
+new file mode 100644
+index 0000000..25bb77b
+--- /dev/null
++++ b/src/client/panels/RailTabPicker.svelte
+@@ -0,0 +1,95 @@
++<script lang="ts">
++import type { RailTab } from "../hooks/useTandemSettings";
++
++interface Props {
++  enabledTabs: RailTab[];
++  disabledTabs?: RailTab[];
++  testIdPrefix?: string;
++  onTabsChange: (tabs: RailTab[]) => void;
++}
++
++let { enabledTabs, disabledTabs = [], testIdPrefix = "", onTabsChange }: Props = $props();
++
++let open = $state(false);
++
++const ALL_TABS: { id: RailTab; label: string }[] = [
++  { id: "annotations", label: "Annotations" },
++  { id: "chat", label: "Chat" },
++  { id: "outline", label: "Outline" },
++];
++
++function toggle(tab: RailTab) {
++  if (disabledTabs.includes(tab)) return;
++  const next = enabledTabs.includes(tab)
++    ? enabledTabs.filter((t) => t !== tab)
++    : [...enabledTabs, tab];
++  // Always keep at least one tab enabled
++  if (next.length > 0) onTabsChange(next);
++}
++
++function handleClickOutside(e: MouseEvent) {
++  const target = e.target as Element;
++  if (!target.closest(".rail-tab-picker")) {
++    open = false;
++  }
++}
++
++$effect(() => {
++  if (open) {
++    document.addEventListener("click", handleClickOutside, true);
++    return () => document.removeEventListener("click", handleClickOutside, true);
++  }
++});
++</script>
++
++<div class="rail-tab-picker" style="position: relative; display: flex; align-items: center;">
++  <button
++    data-testid={`${testIdPrefix}rail-tab-picker-btn`}
++    aria-label="Configure tabs"
++    aria-expanded={open}
++    onclick={(e) => { e.stopPropagation(); open = !open; }}
++    style="
++      width: 22px; height: 22px; border: none; background: transparent;
++      cursor: pointer; border-radius: var(--tandem-r-2);
++      color: var(--tandem-fg-subtle); font-size: 14px; line-height: 1;
++      display: flex; align-items: center; justify-content: center;
++      padding: 0;
++    "
++  >+</button>
++
++  {#if open}
++    <div
++      data-testid={`${testIdPrefix}rail-tab-picker-dropdown`}
++      style="
++        position: absolute; top: 100%; right: 0; z-index: var(--tandem-z-dropdown, 200);
++        background: var(--tandem-surface); border: 1px solid var(--tandem-border);
++        border-radius: var(--tandem-r-3); box-shadow: var(--tandem-shadow-2);
++        padding: var(--tandem-space-2); min-width: 140px;
++      "
++    >
++      {#each ALL_TABS as tab}
++        {@const isDisabled = disabledTabs.includes(tab.id)}
++        <label
++          title={isDisabled ? "Each rail must keep at least one tab" : undefined}
++          style="
++            display: flex; align-items: center; gap: var(--tandem-space-2);
++            padding: var(--tandem-space-1) var(--tandem-space-2);
++            cursor: {isDisabled ? 'not-allowed' : 'pointer'}; border-radius: var(--tandem-r-2);
++            font-size: var(--tandem-text-sm); color: {isDisabled ? 'var(--tandem-fg-subtle)' : 'var(--tandem-fg)'};
++            opacity: {isDisabled ? 0.5 : 1};
++          "
++        >
++          <input
++            type="checkbox"
++            data-testid={`${testIdPrefix}rail-tab-picker-${tab.id}`}
++            checked={enabledTabs.includes(tab.id)}
++            disabled={isDisabled}
++            onchange={() => toggle(tab.id)}
++            style="accent-color: var(--tandem-accent);"
++          />
++          {tab.label}
++        </label>
++      {/each}
++    </div>
++  {/if}
++</div>
+diff --git a/src/client/shell/FormattingBar.svelte b/src/client/shell/FormattingBar.svelte
+index a0b910c..0a0dd9b 100644
+--- a/src/client/shell/FormattingBar.svelte
++++ b/src/client/shell/FormattingBar.svelte
+@@ -11,19 +11,19 @@ import { pmPosToFlatOffset } from "../positions";
+ interface Props {
+   editor: TiptapEditor | null;
+   ydoc: Y.Doc | null;
+-  panelVisible?: boolean;
+-  onTogglePanel?: () => void;
++  leftPanelVisible?: boolean;
++  onToggleLeftPanel?: () => void;
+   rightPanelVisible?: boolean;
+-  onTogglePanelRight?: () => void;
++  onToggleRightPanel?: () => void;
+ }
+ 
+ const {
+   editor,
+   ydoc,
+-  panelVisible = true,
+-  onTogglePanel,
++  leftPanelVisible = false,
++  onToggleLeftPanel,
+   rightPanelVisible = true,
+-  onTogglePanelRight,
++  onToggleRightPanel,
+ }: Props = $props();
+ 
+ // Force-reactive tick — mirrors FormattingToolbar's pattern so that
+@@ -80,13 +80,13 @@ function handleHighlight(color: HighlightColor) {
+   <button
+     type="button"
+     data-testid="formatting-bar-toggle-left"
+-    aria-label={panelVisible ? "Hide panel" : "Show panel"}
+-    aria-pressed={panelVisible}
+-    title={panelVisible ? "Hide panel" : "Show panel"}
+-    onclick={onTogglePanel}
++    aria-label={leftPanelVisible ? "Hide panel" : "Show panel"}
++    aria-pressed={leftPanelVisible}
++    title={leftPanelVisible ? "Hide panel" : "Show panel"}
++    onclick={onToggleLeftPanel}
+     style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
+-      background: {panelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
+-      color: {panelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
++      background: {leftPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
++      color: {leftPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
+       cursor: pointer; display: flex; align-items: center; justify-content: center;
+       margin-right: var(--tandem-space-2); flex-shrink: 0;"
+   >
+@@ -117,7 +117,7 @@ function handleHighlight(color: HighlightColor) {
+     aria-pressed={rightPanelVisible}
+     title={rightPanelVisible ? "Hide panels" : "Show panels"}
+     data-testid="formatting-bar-toggle-right"
+-    onclick={onTogglePanelRight}
++    onclick={onToggleRightPanel}
+     style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
+       background: {rightPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
+       color: {rightPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
+diff --git a/src/client/shell/TitleBar.svelte b/src/client/shell/TitleBar.svelte
+index d4a8315..fcaa5b5 100644
+--- a/src/client/shell/TitleBar.svelte
++++ b/src/client/shell/TitleBar.svelte
+@@ -6,19 +6,8 @@ import { onDestroy, onMount } from "svelte";
+ interface Props {
+   title?: string;
+   dirty?: boolean;
+-  panelVisible?: boolean;
+-  onTogglePanel?: () => void;
+-  isThreePanel?: boolean;
+-  onToggleLayout?: () => void;
+ }
+-const {
+-  title = "Tandem",
+-  dirty = false,
+-  panelVisible = true,
+-  onTogglePanel,
+-  isThreePanel = false,
+-  onToggleLayout,
+-}: Props = $props();
++const { title = "Tandem", dirty = false }: Props = $props();
+ 
+ let win: TauriWindow | null = null;
+ let isMaximized = $state(false);
+@@ -97,41 +86,7 @@ async function close() {
+ 		<div class="title-bar-left" data-tauri-drag-region>
+ 			<span class="title-bar-title">{title ?? "Tandem"}{#if dirty}<span class="title-bar-dirty" aria-label="unsaved changes"></span>{/if}</span>
+ 		</div>
+-		<div class="title-bar-chrome">
+-			{#if onTogglePanel}
+-				<button
+-					type="button"
+-					class="title-bar-chrome-btn"
+-					class:active={panelVisible}
+-					data-testid="title-bar-toggle-panel"
+-					aria-label={panelVisible ? "Hide panel" : "Show panel"}
+-					aria-pressed={panelVisible}
+-					onclick={onTogglePanel}
+-				>
+-					<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+-						<rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
+-						<line x1="9" y1="1" x2="9" y2="13" stroke="currentColor" stroke-width="1.2"/>
+-					</svg>
+-				</button>
+-			{/if}
+-			{#if onToggleLayout}
+-				<button
+-					type="button"
+-					class="title-bar-chrome-btn"
+-					class:active={isThreePanel}
+-					data-testid="title-bar-toggle-layout"
+-					aria-label={isThreePanel ? "Single panel layout" : "Three-panel layout"}
+-					aria-pressed={isThreePanel}
+-					onclick={onToggleLayout}
+-				>
+-					<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+-						<rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
+-						<line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" stroke-width="1.2"/>
+-						<line x1="9" y1="1" x2="9" y2="13" stroke="currentColor" stroke-width="1.2"/>
+-					</svg>
+-				</button>
+-			{/if}
+-		</div>
++		<div class="title-bar-chrome"></div>
+ 		<div class="title-bar-controls">
+ 			<button type="button" class="title-bar-btn" aria-label="Minimize" onclick={minimize}>
+ 				<svg
+@@ -246,34 +201,6 @@ async function close() {
+ 		padding: 0 var(--tandem-space-2);
+ 	}
+ 
+-	.title-bar-chrome-btn {
+-		display: flex;
+-		align-items: center;
+-		justify-content: center;
+-		width: 28px;
+-		height: 22px;
+-		border: none;
+-		background: transparent;
+-		color: var(--tandem-fg-subtle);
+-		cursor: pointer;
+-		border-radius: var(--tandem-r-2);
+-		transition: background 0.1s, color 0.1s;
+-	}
+-
+-	.title-bar-chrome-btn:hover {
+-		background: var(--tandem-surface-muted);
+-		color: var(--tandem-fg);
+-	}
+-
+-	.title-bar-chrome-btn.active {
+-		color: var(--tandem-accent);
+-	}
+-
+-	.title-bar-chrome-btn:focus-visible {
+-		outline: 2px solid var(--tandem-accent);
+-		outline-offset: -2px;
+-	}
+-
+ 	.title-bar-controls {
+ 		display: flex;
+ 		height: 100%;
+@@ -330,16 +257,5 @@ async function close() {
+ 			color: HighlightText;
+ 		}
+ 
+-		.title-bar-chrome-btn {
+-			background: ButtonFace;
+-			color: ButtonText;
+-			border: 1px solid ButtonText;
+-		}
+-
+-		.title-bar-chrome-btn:hover,
+-		.title-bar-chrome-btn.active {
+-			background: Highlight;
+-			color: HighlightText;
+-		}
+ 	}
+ </style>
+diff --git a/src/client/utils/headings.ts b/src/client/utils/headings.ts
+new file mode 100644
+index 0000000..6a0a7d1
+--- /dev/null
++++ b/src/client/utils/headings.ts
+@@ -0,0 +1,13 @@
++import type { Editor } from "@tiptap/core";
++
++export type HeadingEntry = { text: string; level: number; pos: number };
++
++export function walkHeadings(ed: Editor): HeadingEntry[] {
++  const result: HeadingEntry[] = [];
++  ed.state.doc.descendants((node, pos) => {
++    if (node.type.name === "heading" && node.attrs.level <= 3) {
++      result.push({ text: node.textContent, level: node.attrs.level as number, pos });
++    }
++  });
++  return result;
++}
+diff --git a/tests/client/panel-layout.test.ts b/tests/client/panel-layout.test.ts
+deleted file mode 100644
+index f2e00c2..0000000
+--- a/tests/client/panel-layout.test.ts
++++ /dev/null
+@@ -1,43 +0,0 @@
+-import { describe, expect, it } from "vitest";
+-import {
+-  getRightWidth,
+-  PANEL_DEFAULT_WIDTH,
+-  PANEL_MAX_WIDTH,
+-  PANEL_MIN_WIDTH,
+-  type PanelLayout,
+-} from "../../src/client/panel-layout.js";
+-
+-describe("getRightWidth", () => {
+-  it("returns right width for tabbed layout", () => {
+-    const layout: PanelLayout = { kind: "tabbed", right: 400 };
+-    expect(getRightWidth(layout)).toBe(400);
+-  });
+-
+-  it("returns right width for three-panel layout", () => {
+-    const layout: PanelLayout = { kind: "three-panel", left: 250, right: 350 };
+-    expect(getRightWidth(layout)).toBe(350);
+-  });
+-
+-  it("returns PANEL_DEFAULT_WIDTH for tabbed-left layout", () => {
+-    const layout: PanelLayout = { kind: "tabbed-left", left: 250 };
+-    expect(getRightWidth(layout)).toBe(PANEL_DEFAULT_WIDTH);
+-  });
+-});
+-
+-describe("tabbed-left layout variant", () => {
+-  it("only carries a left width (no right property)", () => {
+-    const layout: PanelLayout = { kind: "tabbed-left", left: 320 };
+-    expect(layout.kind).toBe("tabbed-left");
+-    expect("left" in layout).toBe(true);
+-    expect("right" in layout).toBe(false);
+-  });
+-
+-  it("PANEL_MIN_WIDTH and PANEL_MAX_WIDTH bound left panel width", () => {
+-    // These bounds are enforced by loadPanelWidth — verify the constants are
+-    // sane so the clamping contract is testable without localStorage.
+-    expect(PANEL_MIN_WIDTH).toBeGreaterThan(0);
+-    expect(PANEL_MAX_WIDTH).toBeGreaterThan(PANEL_MIN_WIDTH);
+-    expect(PANEL_DEFAULT_WIDTH).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH);
+-    expect(PANEL_DEFAULT_WIDTH).toBeLessThanOrEqual(PANEL_MAX_WIDTH);
+-  });
+-});
+diff --git a/tests/client/useTandemSettings.test.ts b/tests/client/useTandemSettings.test.ts
+index 7c5d726..35c5740 100644
+--- a/tests/client/useTandemSettings.test.ts
++++ b/tests/client/useTandemSettings.test.ts
+@@ -52,7 +52,9 @@ describe("loadSettings — selectionDwellMs clamping", () => {
+ 
+   it("returns default when no settings are stored", () => {
+     const settings = loadSettings();
+-    expect(settings.layout).toBe("tabbed");
++    expect(settings.leftPanelVisible).toBe(false);
++    expect(settings.rightPanelVisible).toBe(true);
++    expect(settings.schemaVersion).toBe(2);
+     expect(settings.editorWidthPercent).toBe(100);
+     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
+   });
+@@ -248,7 +250,9 @@ describe("useTandemSettings — updateSettings write path", () => {
+   // render environment (no @testing-library/react in this project).
+ 
+   const BASE: TandemSettings = {
+-    layout: "three-panel",
++    leftPanelVisible: true,
++    rightPanelVisible: true,
++    schemaVersion: 2,
+     primaryTab: "chat",
+     panelOrder: "chat-editor-annotations",
+     editorWidthPercent: 75,
+@@ -265,6 +269,11 @@ describe("useTandemSettings — updateSettings write path", () => {
+     annotationPatterns: false,
+     selectionToolbar: true,
+     soloRailHidden: true,
++    leftRailTabs: ["annotations", "outline"],
++    rightRailTabs: ["annotations", "chat"],
++    degradedBannerDelayMs: 30000,
++    sidecarRetryStrategy: "exponential",
++    holdAnnotationsWhileOffline: true,
+   };
+ 
+   it("clamps editorWidthPercent above 100 down to 100", () => {
+@@ -290,7 +299,8 @@ describe("useTandemSettings — updateSettings write path", () => {
+   it("preserves unchanged fields when a single field is updated", () => {
+     const next = mergeAndClampSettings(BASE, { theme: "dark" });
+     expect(next.theme).toBe("dark");
+-    expect(next.layout).toBe(BASE.layout);
++    expect(next.leftPanelVisible).toBe(BASE.leftPanelVisible);
++    expect(next.rightPanelVisible).toBe(BASE.rightPanelVisible);
+     expect(next.primaryTab).toBe(BASE.primaryTab);
+     expect(next.panelOrder).toBe(BASE.panelOrder);
+     expect(next.editorWidthPercent).toBe(BASE.editorWidthPercent);
+@@ -345,13 +355,20 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
+   });
+ 
+   it("defaults showAuthorship to true for upgrading users (key absent from existing blob)", () => {
+-    writeRawSettings({ layout: "three-panel", editorWidthPercent: 75 });
++    writeRawSettings({
++      schemaVersion: 2,
++      leftPanelVisible: true,
++      rightPanelVisible: true,
++      editorWidthPercent: 75,
++    });
+     expect(loadSettings().showAuthorship).toBe(true);
+   });
+ 
+-  it("accepts tabbed-left as a valid layout", () => {
++  it("migrates old layout:'tabbed-left' to leftPanelVisible:true, rightPanelVisible:false", () => {
+     writeRawSettings({ layout: "tabbed-left" });
+-    expect(loadSettings().layout).toBe("tabbed-left");
++    const s = loadSettings();
++    expect(s.leftPanelVisible).toBe(true);
++    expect(s.rightPanelVisible).toBe(false);
+   });
+ 
+   it("preserves accentHue: 0 (red) — not falsy-defaulted", () => {
+@@ -437,6 +454,125 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
+   });
+ });
+ 
++describe("leftRailTabs and rightRailTabs", () => {
++  let store: Map<string, string>;
++
++  beforeEach(() => {
++    store = installLocalStorageStub();
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++  });
++
++  function writeRawSettings(partial: Record<string, unknown>) {
++    store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
++  }
++
++  it("defaults leftRailTabs to [annotations, outline]", () => {
++    expect(loadSettings().leftRailTabs).toEqual(["annotations", "outline"]);
++  });
++
++  it("defaults rightRailTabs to [annotations, chat]", () => {
++    expect(loadSettings().rightRailTabs).toEqual(["annotations", "chat"]);
++  });
++
++  it("parses valid leftRailTabs", () => {
++    writeRawSettings({ leftRailTabs: ["outline", "chat"] });
++    expect(loadSettings().leftRailTabs).toEqual(["outline", "chat"]);
++  });
++
++  it("filters invalid entries from leftRailTabs, falls back to default if all invalid", () => {
++    writeRawSettings({ leftRailTabs: ["bogus", "invalid"] });
++    expect(loadSettings().leftRailTabs).toEqual(["annotations", "outline"]);
++  });
++
++  it("filters invalid entries but keeps valid ones", () => {
++    writeRawSettings({ leftRailTabs: ["outline", "bogus"] });
++    expect(loadSettings().leftRailTabs).toEqual(["outline"]);
++  });
++
++  it("falls back to default leftRailTabs when absent", () => {
++    writeRawSettings({ schemaVersion: 2 });
++    expect(loadSettings().leftRailTabs).toEqual(["annotations", "outline"]);
++  });
++
++  it("migrates legacy leftSlot.kind=outline → leftRailTabs with outline first", () => {
++    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
++    writeRawSettings({ schemaVersion: 2, leftSlot: { kind: "outline" } });
++    const s = loadSettings();
++    expect(s.leftRailTabs).toEqual(["outline", "annotations"]);
++    expect(warnSpy).toHaveBeenCalledWith(
++      expect.stringContaining("migrating legacy leftSlot.kind=outline"),
++    );
++    warnSpy.mockRestore();
++  });
++
++  it("migrates legacy leftSlot.kind=side → default leftRailTabs", () => {
++    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
++    writeRawSettings({ schemaVersion: 2, leftSlot: { kind: "side" } });
++    const s = loadSettings();
++    expect(s.leftRailTabs).toEqual(["annotations", "outline"]);
++    expect(warnSpy).toHaveBeenCalledWith(
++      expect.stringContaining("migrating legacy leftSlot.kind=side"),
++    );
++    warnSpy.mockRestore();
++  });
++
++  it("does not migrate if leftRailTabs already present (explicit overrides leftSlot)", () => {
++    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
++    writeRawSettings({ schemaVersion: 2, leftRailTabs: ["chat"], leftSlot: { kind: "outline" } });
++    const s = loadSettings();
++    expect(s.leftRailTabs).toEqual(["chat"]);
++    expect(warnSpy).not.toHaveBeenCalled();
++    warnSpy.mockRestore();
++  });
++});
++
++describe("mergeAndClampSettings — rail array clamps", () => {
++  const BASE: TandemSettings = {
++    leftPanelVisible: true,
++    rightPanelVisible: true,
++    schemaVersion: 2,
++    primaryTab: "chat",
++    panelOrder: "chat-editor-annotations",
++    editorWidthPercent: 75,
++    selectionDwellMs: 1000,
++    showAuthorship: true,
++    reduceMotion: false,
++    textSize: "m",
++    theme: "system",
++    accentHue: 275,
++    editorFont: "serif",
++    density: "cozy",
++    defaultMode: "tandem",
++    highContrast: false,
++    annotationPatterns: false,
++    selectionToolbar: true,
++    soloRailHidden: true,
++    leftRailTabs: ["annotations", "outline"],
++    rightRailTabs: ["annotations", "chat"],
++    degradedBannerDelayMs: 30000,
++    sidecarRetryStrategy: "exponential",
++    holdAnnotationsWhileOffline: true,
++  };
++
++  it("clamps leftRailTabs [] to default", () => {
++    const next = mergeAndClampSettings(BASE, { leftRailTabs: [] });
++    expect(next.leftRailTabs).toEqual(["annotations", "outline"]);
++  });
++
++  it("clamps rightRailTabs [] to default", () => {
++    const next = mergeAndClampSettings(BASE, { rightRailTabs: [] });
++    expect(next.rightRailTabs).toEqual(["annotations", "chat"]);
++  });
++
++  it("passes non-empty arrays through unchanged", () => {
++    const next = mergeAndClampSettings(BASE, { leftRailTabs: ["chat"] });
++    expect(next.leftRailTabs).toEqual(["chat"]);
++  });
++});
++
+ describe("soloRailHidden setting", () => {
+   let store: Map<string, string>;
+ 

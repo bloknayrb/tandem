@@ -9,6 +9,19 @@
             "command": "bash .claude/hooks/block-sensitive.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/block-no-verify.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/block-e2e-port-kill.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -30,6 +43,22 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/check-extract-markdown.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-console-log.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/svelte-check-on-edit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-token-violation.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/related-test.sh"
           }
         ]
       }

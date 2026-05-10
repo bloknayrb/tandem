@@ -1,0 +1,613 @@
+diff --git a/index.html b/index.html
+index 561b816..74ec924 100644
+--- a/index.html
++++ b/index.html
+@@ -99,6 +99,9 @@
+         --tandem-highlight-blue: rgba(33, 150, 243, 0.3);
+         --tandem-highlight-pink: rgba(236, 72, 153, 0.3);
+         --tandem-h-fmtbar: 36px;
++        --tandem-page-bg: #e8e8e8;
++        --tandem-page-paper: #ffffff;
++        --tandem-page-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+         /* density spacing scale — cozy defaults */
+         --tandem-space-1: 4px;
+         --tandem-space-2: 8px;
+@@ -189,6 +192,9 @@
+         --tandem-highlight-green: rgba(72, 200, 80, 0.38);
+         --tandem-highlight-blue: rgba(56, 168, 255, 0.38);
+         --tandem-highlight-pink: rgba(240, 80, 160, 0.38);
++        --tandem-page-bg: #2a2a2a;
++        --tandem-page-paper: #1a1a1a;
++        --tandem-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+       }
+ 
+       /* density spacing scale — cozy is the default (matches :root values) */
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 697b6a0..75f9041 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -321,6 +321,7 @@ pub fn run() {
+             cowork_uninstall_from_workspace,
+             cowork_set_lan_ip_override,
+             cowork_retry_admin_elevation,
++            restart_sidecar,
+         ])
+         .build(tauri::generate_context!())
+         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
+@@ -331,6 +332,12 @@ pub fn run() {
+         });
+ }
+ 
++/// Kill the sidecar and let the supervisor loop restart it automatically.
++#[tauri::command]
++fn restart_sidecar(app: tauri::AppHandle) {
++    kill_sidecar(&app);
++}
++
+ /// Kill the sidecar process if one is running.
+ fn kill_sidecar(handle: &tauri::AppHandle) {
+     let state: tauri::State<'_, SidecarState> = handle.state();
+diff --git a/src/client/App.svelte b/src/client/App.svelte
+index 8e8ff29..1e7abcb 100644
+--- a/src/client/App.svelte
++++ b/src/client/App.svelte
+@@ -18,6 +18,7 @@ import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
+ import SettingsPopover from "./components/SettingsPopover.svelte";
+ import ToastContainer from "./components/ToastContainer.svelte";
+ import { isTauriRuntime } from "./cowork/cowork-helpers";
++import DocxPageContainer from "./editor/DocxPageContainer.svelte";
+ import Editor from "./editor/Editor.svelte";
+ import { authorshipPluginKey } from "./editor/extensions/authorship";
+ import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+@@ -104,7 +105,10 @@ const modeGate = $derived.by(() => {
+ 
+   return { visibleAnnotations, heldCount };
+ });
+-const connectionBanner = createConnectionBanner(() => yjsSync.disconnectedSince);
++const connectionBanner = createConnectionBanner(
++  () => yjsSync.disconnectedSince,
++  () => settingsState.settings.degradedBannerDelayMs,
++);
+ createWebViewZoom();
+ 
+ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
+@@ -582,6 +586,8 @@ const tutorial = createTutorial(
+       onUpdate={settingsState.updateSettings}
+       returnFocusEl={settingsBtnEl}
+       anchorEl={settingsBtnEl}
++      connected={yjsSync.connected}
++      reconnectAttempts={yjsSync.reconnectAttempts}
+     />
+ 
+     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+@@ -676,26 +682,39 @@ const tutorial = createTutorial(
+       visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+       documentId={activeTab?.id}
+     />
+-    <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
+-      {#if activeTab}
++    {#snippet editorContent()}
++      <Editor
++        ydoc={activeTab!.ydoc}
++        provider={activeTab!.provider}
++        readOnly={yjsSync.readOnly}
++        {activeAnnotationId}
++        onEditorReady={(ed) => (editor = ed)}
++        onAnnotationClick={(id) => {
++          showChat = false;
++          activeAnnotationId = id;
++        }}
++        onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
++      />
++    {/snippet}
++    <!-- DocxPageContainer wraps Editor for .docx; format is stable per activeTab.id key guard —
++         both branches share the same onEditorReady to update the editor ref -->
++    {#if activeTab?.format === "docx"}
++      <DocxPageContainer>
+         {#key activeTab.id}
+-          <Editor
+-            ydoc={activeTab.ydoc}
+-            provider={activeTab.provider}
+-            readOnly={yjsSync.readOnly}
+-            {activeAnnotationId}
+-            onEditorReady={(ed) => (editor = ed)}
+-            onAnnotationClick={(id) => {
+-              showChat = false;
+-              activeAnnotationId = id;
+-            }}
+-            onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
+-          />
++          {@render editorContent()}
+         {/key}
+-      {:else}
+-        <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
+-      {/if}
+-    </div>
++      </DocxPageContainer>
++    {:else}
++      <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
++        {#if activeTab}
++          {#key activeTab.id}
++            {@render editorContent()}
++          {/key}
++        {:else}
++          <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
++        {/if}
++      </div>
++    {/if}
+     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
+     <FindReplaceBar
+       {editor}
+diff --git a/src/client/components/NetworkSettings.svelte b/src/client/components/NetworkSettings.svelte
+new file mode 100644
+index 0000000..7661170
+--- /dev/null
++++ b/src/client/components/NetworkSettings.svelte
+@@ -0,0 +1,194 @@
++<script lang="ts">
++import { isTauriRuntime } from "../cowork/cowork-helpers.js";
++import { createAppInfo } from "../hooks/useAppInfo.svelte.js";
++import type { SidecarRetryStrategy, TandemSettings } from "../hooks/useTandemSettings.svelte.js";
++
++interface Props {
++  open: boolean;
++  settings: TandemSettings;
++  onUpdate: (partial: Partial<TandemSettings>) => void;
++  connected: boolean;
++  reconnectAttempts: number;
++}
++
++const { open, settings, onUpdate, connected, reconnectAttempts }: Props = $props();
++
++const appInfo = createAppInfo(() => open);
++const isTauri = isTauriRuntime();
++
++let restartError = $state<string | null>(null);
++let restarting = $state(false);
++
++async function handleRestartSidecar(): Promise<void> {
++  if (!isTauri) return;
++  restarting = true;
++  restartError = null;
++  try {
++    const { invoke } = await import("@tauri-apps/api/core");
++    await invoke("restart_sidecar");
++  } catch (e) {
++    restartError = e instanceof Error ? e.message : String(e);
++  } finally {
++    restarting = false;
++  }
++}
++
++const RETRY_OPTIONS: Array<{ value: SidecarRetryStrategy; label: string }> = [
++  { value: "exponential", label: "Exponential backoff" },
++  { value: "constant-2s", label: "Constant (2s)" },
++  { value: "manual", label: "Manual only" },
++];
++
++const labelStyle =
++  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
++const rowStyle =
++  "display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;";
++const subtextStyle =
++  "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);";
++
++const transport = $derived(appInfo.info?.transport ?? "http");
++const bindHost = $derived(appInfo.info?.bindHost);
++const isHttp = $derived(transport === "http");
++const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
++</script>
++
++<!-- Connection Status -->
++<div>
++  <div style={labelStyle}>Connection Status</div>
++  <div
++    style="display: flex; align-items: center; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface);"
++  >
++    <span
++      style="width: 8px; height: 8px; border-radius: var(--tandem-r-circle); background: {connected
++        ? 'var(--tandem-success)'
++        : 'var(--tandem-error)'}; flex-shrink: 0;"
++      aria-hidden="true"
++    ></span>
++    <span style="font-size: 12px; color: var(--tandem-fg); flex: 1;">
++      {connected ? "Connected to claude-sidecar" : "Disconnected"}
++      {#if reconnectAttempts > 0}
++        <span style="color: var(--tandem-fg-subtle);">· {reconnectAttempts} retry attempt{reconnectAttempts === 1 ? "" : "s"}</span>
++      {/if}
++    </span>
++    {#if isTauri}
++      <button
++        type="button"
++        data-testid="network-restart-sidecar"
++        disabled={restarting}
++        onclick={handleRestartSidecar}
++        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer; opacity: {restarting
++          ? 0.5
++          : 1};"
++      >
++        {restarting ? "Restarting…" : "Restart sidecar"}
++      </button>
++    {:else}
++      <span style="font-size: 10px; color: var(--tandem-fg-subtle);">Restart via CLI: <code>tandem restart</code></span>
++    {/if}
++  </div>
++  {#if restartError}
++    <div style="font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);">
++      {restartError}
++    </div>
++  {/if}
++</div>
++
++<!-- Sidecar Transport -->
++<div>
++  <div style={labelStyle}>Transport</div>
++  <div
++    style="display: flex; gap: var(--tandem-space-4); padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface); font-size: 12px; color: var(--tandem-fg);"
++  >
++    <span><strong>Mode:</strong> {transport.toUpperCase()}</span>
++    {#if bindHost}
++      <span><strong>Host:</strong> {bindHost}</span>
++    {/if}
++  </div>
++</div>
++
++<!-- Loopback Port (HTTP only, read-only — port changes require CLI/server restart) -->
++{#if isHttp}
++  <div>
++    <div style={labelStyle}>Loopback Port</div>
++    <div
++      style="padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface-muted); font-size: 13px; color: var(--tandem-fg-subtle); display: inline-block;"
++    >
++      {appInfo.info?.bindHost ? appInfo.info.bindHost.split(":").pop() : "3479"}
++    </div>
++    <div style={subtextStyle}>Port used when transport is HTTP. To change, run <code>tandem start --port &lt;N&gt;</code>.</div>
++  </div>
++{/if}
++
++<!-- Degraded Banner Delay -->
++<div>
++  <div style={labelStyle}>
++    Show degraded banner after:
++    <span style="font-weight: 400; text-transform: none;">
++      {settings.degradedBannerDelayMs / 1000}s
++    </span>
++  </div>
++  <input
++    data-testid="network-degraded-delay-slider"
++    type="range"
++    min="5000"
++    max="120000"
++    step="5000"
++    value={settings.degradedBannerDelayMs}
++    oninput={(e) =>
++      onUpdate({ degradedBannerDelayMs: Number((e.target as HTMLInputElement).value) })}
++    style="width: 100%; accent-color: var(--tandem-accent);"
++    aria-label="Degraded banner delay"
++  />
++  <div
++    style="display: flex; justify-content: space-between; font-size: 10px; color: var(--tandem-fg-subtle);"
++  >
++    <span>5s</span>
++    <span>120s</span>
++  </div>
++</div>
++
++<!-- Retry Strategy -->
++<div>
++  <div style={labelStyle}>Reconnect Strategy</div>
++  <select
++    data-testid="network-retry-strategy"
++    value={settings.sidecarRetryStrategy}
++    onchange={(e) =>
++      onUpdate({ sidecarRetryStrategy: (e.target as HTMLSelectElement).value as SidecarRetryStrategy })}
++    style="width: 100%; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: pointer;"
++    aria-label="Reconnect retry strategy"
++  >
++    {#each RETRY_OPTIONS as opt (opt.value)}
++      <option value={opt.value}>{opt.label}</option>
++    {/each}
++  </select>
++</div>
++
++<!-- Hold Annotations While Offline -->
++<label style={rowStyle}>
++  <input
++    type="checkbox"
++    data-testid="network-hold-annotations-toggle"
++    checked={settings.holdAnnotationsWhileOffline}
++    onchange={(e) =>
++      onUpdate({ holdAnnotationsWhileOffline: (e.target as HTMLInputElement).checked })}
++    style="accent-color: var(--tandem-accent);"
++  />
++  <span>Hold annotations while offline</span>
++</label>
++<div style={subtextStyle}>
++  When enabled, annotation events queue locally and sync when the connection is restored.
++</div>
++
++<!-- Token Rotation -->
++{#if tokenRotatedAt !== undefined}
++  <div>
++    <div style={labelStyle}>Token Rotation</div>
++    <div style="font-size: 12px; color: var(--tandem-fg);">
++      {tokenRotatedAt === null
++        ? "Auth token not yet created"
++        : `Last rotated: ${new Date(tokenRotatedAt).toLocaleString()}`}
++    </div>
++    <div style={subtextStyle}>To rotate: run <code>tandem rotate-token</code> in the CLI.</div>
++  </div>
++{/if}
+diff --git a/src/client/components/SettingsPopover.svelte b/src/client/components/SettingsPopover.svelte
+index a84054e..50ea1f3 100644
+--- a/src/client/components/SettingsPopover.svelte
++++ b/src/client/components/SettingsPopover.svelte
+@@ -13,6 +13,7 @@ import { API_BASE } from "../utils/fileUpload";
+ import AccessibilitySettings from "./AccessibilitySettings.svelte";
+ import AppearanceSettings from "./AppearanceSettings.svelte";
+ import EditorSettings from "./EditorSettings.svelte";
++import NetworkSettings from "./NetworkSettings.svelte";
+ 
+ const HEADING_ID = "tandem-settings-heading";
+ const FOCUSABLE_SELECTOR =
+@@ -20,6 +21,7 @@ const FOCUSABLE_SELECTOR =
+ type SettingsSection =
+   | "appearance"
+   | "editor"
++  | "network"
+   | "accessibility"
+   | "collaboration"
+   | "claude-code"
+@@ -29,6 +31,7 @@ type SettingsSection =
+ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
+   { id: "appearance", label: "Appearance" },
+   { id: "editor", label: "Editor" },
++  { id: "network", label: "Network" },
+   { id: "accessibility", label: "Accessibility" },
+   { id: "collaboration", label: "Collaboration" },
+   { id: "claude-code", label: "Claude Code/Cowork" },
+@@ -72,9 +75,20 @@ interface Props {
+   onUpdate: (partial: Partial<TandemSettings>) => void;
+   returnFocusEl?: HTMLElement | null;
+   anchorEl?: HTMLElement | null;
++  connected?: boolean;
++  reconnectAttempts?: number;
+ }
+ 
+-let { open, onClose, settings, onUpdate, returnFocusEl, anchorEl }: Props = $props();
++let {
++  open,
++  onClose,
++  settings,
++  onUpdate,
++  returnFocusEl,
++  anchorEl,
++  connected = false,
++  reconnectAttempts = 0,
++}: Props = $props();
+ 
+ let popoverEl: HTMLDivElement | undefined = $state();
+ let inputEl: HTMLInputElement | undefined = $state();
+@@ -381,6 +395,14 @@ function aboutRows() {
+             <AppearanceSettings {open} {settings} {onUpdate} />
+           {:else if activeSection === "editor"}
+             <EditorSettings {settings} {onUpdate} />
++          {:else if activeSection === "network"}
++            <NetworkSettings
++              {open}
++              {settings}
++              {onUpdate}
++              {connected}
++              {reconnectAttempts}
++            />
+           {:else if activeSection === "accessibility"}
+             <AccessibilitySettings {settings} {onUpdate} />
+           {:else if activeSection === "claude-code"}
+diff --git a/src/client/editor/DocxPageContainer.svelte b/src/client/editor/DocxPageContainer.svelte
+new file mode 100644
+index 0000000..e8140a1
+--- /dev/null
++++ b/src/client/editor/DocxPageContainer.svelte
+@@ -0,0 +1,37 @@
++<script lang="ts">
++import type { Snippet } from "svelte";
++
++interface Props {
++  children: Snippet;
++}
++
++const { children }: Props = $props();
++</script>
++
++<div class="docx-canvas">
++  <div class="docx-sheet">
++    {@render children()}
++  </div>
++</div>
++
++<style>
++  .docx-canvas {
++    background: var(--tandem-page-bg);
++    /* overflow: visible — must NOT create a new scroll ancestor */
++    overflow: visible;
++    padding: var(--tandem-space-6) var(--tandem-space-4);
++    min-height: 100%;
++    box-sizing: border-box;
++  }
++
++  .docx-sheet {
++    position: relative; /* anchor for authorship gutter ::before at left: -14px */
++    background: var(--tandem-page-paper);
++    box-shadow: var(--tandem-page-shadow);
++    max-width: 816px; /* US letter ~8.5in at 96dpi */
++    margin: 0 auto;
++    padding: var(--tandem-space-7) var(--tandem-space-6);
++    box-sizing: border-box;
++    min-height: 1056px; /* US letter ~11in at 96dpi */
++  }
++</style>
+diff --git a/src/client/hooks/useConnectionBanner.svelte.ts b/src/client/hooks/useConnectionBanner.svelte.ts
+index 49cce44..6a4002f 100644
+--- a/src/client/hooks/useConnectionBanner.svelte.ts
++++ b/src/client/hooks/useConnectionBanner.svelte.ts
+@@ -9,14 +9,14 @@ export interface ConnectionBannerState {
+  * Svelte 5 port of `useConnectionBanner`.
+  *
+  * Tracks prolonged-disconnect state and surfaces a dismissible banner signal.
+- * Shows after PROLONGED_DISCONNECT_MS of continuous disconnection.
+- * Resets (hidden, undismissed) when the connection recovers.
++ * Shows after `getDelayMs()` ms of continuous disconnection (defaults to
++ * PROLONGED_DISCONNECT_MS). Resets when the connection recovers.
+  *
+- * Accepts a getter for `disconnectedSince` so callers with `$state` values
+- * propagate reactively.
++ * Accepts getters so callers with `$state` values propagate reactively.
+  */
+ export function createConnectionBanner(
+   getDisconnectedSince: () => number | null,
++  getDelayMs: () => number = () => PROLONGED_DISCONNECT_MS,
+ ): ConnectionBannerState {
+   let showDisconnectBanner = $state(false);
+   let disconnectBannerDismissed = $state(false);
+@@ -29,7 +29,7 @@ export function createConnectionBanner(
+       return;
+     }
+     const elapsed = Date.now() - disconnectedSince;
+-    const remaining = PROLONGED_DISCONNECT_MS - elapsed;
++    const remaining = getDelayMs() - elapsed;
+     if (remaining <= 0) {
+       showDisconnectBanner = true;
+       return;
+diff --git a/src/client/hooks/useTandemSettings.svelte.ts b/src/client/hooks/useTandemSettings.svelte.ts
+index 80cd1b1..f3c78df 100644
+--- a/src/client/hooks/useTandemSettings.svelte.ts
++++ b/src/client/hooks/useTandemSettings.svelte.ts
+@@ -10,6 +10,7 @@ export type {
+   LeftSlotKind,
+   PanelOrder,
+   PrimaryTab,
++  SidecarRetryStrategy,
+   TandemSettings,
+   TextSize,
+   ThemePreference,
+diff --git a/src/client/hooks/useTandemSettings.ts b/src/client/hooks/useTandemSettings.ts
+index d3ec096..73e7067 100644
+--- a/src/client/hooks/useTandemSettings.ts
++++ b/src/client/hooks/useTandemSettings.ts
+@@ -14,6 +14,7 @@ export type PrimaryTab = "chat" | "annotations";
+ export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
+ export type TextSize = "s" | "m" | "l";
+ export type ThemePreference = "light" | "dark" | "system";
++export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
+ 
+ export interface TandemSettings {
+   layout: LayoutMode;
+@@ -35,6 +36,11 @@ export interface TandemSettings {
+   soloRailHidden: boolean;
+   panelHidden: boolean;
+   leftSlot: { kind: LeftSlotKind };
++  degradedBannerDelayMs: number;
++  // TODO(v0.11.0): wire to yjsSync reconnect strategy
++  sidecarRetryStrategy: SidecarRetryStrategy;
++  // TODO(v0.11.0): wire to annotation queuing in useModeGate
++  holdAnnotationsWhileOffline: boolean;
+ }
+ 
+ export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
+@@ -70,6 +76,9 @@ const DEFAULTS: TandemSettings = {
+   soloRailHidden: true,
+   panelHidden: false,
+   leftSlot: { kind: "outline" },
++  degradedBannerDelayMs: 30000,
++  sidecarRetryStrategy: "exponential",
++  holdAnnotationsWhileOffline: true,
+ };
+ 
+ /**
+@@ -151,6 +160,22 @@ export function loadSettings(): TandemSettings {
+         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
+         panelHidden: parsed.panelHidden === true,
++        degradedBannerDelayMs:
++          typeof parsed.degradedBannerDelayMs === "number" &&
++          parsed.degradedBannerDelayMs >= 5000 &&
++          parsed.degradedBannerDelayMs <= 120000
++            ? parsed.degradedBannerDelayMs
++            : DEFAULTS.degradedBannerDelayMs,
++        sidecarRetryStrategy:
++          parsed.sidecarRetryStrategy === "exponential" ||
++          parsed.sidecarRetryStrategy === "constant-2s" ||
++          parsed.sidecarRetryStrategy === "manual"
++            ? parsed.sidecarRetryStrategy
++            : DEFAULTS.sidecarRetryStrategy,
++        holdAnnotationsWhileOffline:
++          typeof parsed.holdAnnotationsWhileOffline === "boolean"
++            ? parsed.holdAnnotationsWhileOffline
++            : DEFAULTS.holdAnnotationsWhileOffline,
+         leftSlot: {
+           kind:
+             parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
+@@ -187,5 +212,6 @@ export function mergeAndClampSettings(
+     accentHue: Number.isFinite(merged.accentHue)
+       ? Math.max(0, Math.min(360, merged.accentHue))
+       : DEFAULTS.accentHue,
++    degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
+   };
+ }
+diff --git a/src/client/types.ts b/src/client/types.ts
+index f8f0b43..8837382 100644
+--- a/src/client/types.ts
++++ b/src/client/types.ts
+@@ -78,7 +78,8 @@ export interface AppInfoData {
+   version: string;
+   toolCount: number | null;
+   mcpSdkVersion: string;
+-  transport: "http";
++  transport: "http" | "stdio";
++  bindHost?: string;
+   /** Loopback-only: absolute path to session storage directory. */
+   storagePath?: string;
+   /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
+diff --git a/src/server/mcp/routes/info.ts b/src/server/mcp/routes/info.ts
+index 803733f..c285677 100644
+--- a/src/server/mcp/routes/info.ts
++++ b/src/server/mcp/routes/info.ts
+@@ -19,6 +19,10 @@ export interface InfoHandlerDeps {
+    * Undefined if the file does not exist (e.g. stripped production builds).
+    */
+   changelogPath?: string;
++  /** Active MCP transport mode. */
++  transport?: "http" | "stdio";
++  /** Bind host for HTTP transport (e.g. "127.0.0.1"). Undefined for stdio. */
++  bindHost?: string;
+ }
+ 
+ /**
+@@ -53,9 +57,13 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
+       version: deps.version,
+       toolCount: deps.toolCount,
+       mcpSdkVersion: deps.mcpSdkVersion,
+-      transport: "http",
++      transport: deps.transport ?? "http",
+     };
+ 
++    if (deps.bindHost !== undefined) {
++      body.bindHost = deps.bindHost;
++    }
++
+     // changelogPath is not sensitive — include whenever the file exists on disk.
+     if (deps.changelogPath !== undefined) {
+       body.changelogPath = deps.changelogPath;
+diff --git a/src/server/mcp/server.ts b/src/server/mcp/server.ts
+index 691b9e4..f32cc6b 100644
+--- a/src/server/mcp/server.ts
++++ b/src/server/mcp/server.ts
+@@ -365,6 +365,8 @@ export async function startMcpServerHttp(
+       storagePath: SESSION_DIR,
+       getTokenFilePath,
+       changelogPath: CHANGELOG_PATH,
++      transport: "http",
++      bindHost: host,
+     },
+   );
+ 
