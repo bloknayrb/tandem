@@ -87,5 +87,13 @@ export function relaySanitizationEvent(
     case "audience-derived":
       logLegacyMigration(docHash, event.kind);
       return;
+    default: {
+      // Compile-time exhaustiveness: adding a new SanitizationEvent kind without a
+      // matching case here becomes a TypeScript error. Never remove this arm.
+      const _exhaustive: never = event;
+      console.error(
+        `[ANNOTATION-STORE] unhandled SanitizationEvent kind: ${(_exhaustive as SanitizationEvent).kind}`,
+      );
+    }
   }
 }

@@ -39,10 +39,34 @@ describe("AR1: audience derivation for legacy annotations", () => {
     expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
   });
 
-  it("derives audience:outbound for legacy comment", () => {
+  it("derives audience:outbound for legacy comment (claude author)", () => {
     const { result, events } = collect({ ...baseAnn, author: "claude", type: "comment" });
     expect(result.audience).toBe("outbound");
     expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+  });
+
+  it("derives audience:outbound for legacy comment (user author)", () => {
+    // user-authored comments are Claude-visible per design brief — comment = outbound type
+    const { result, events } = collect({ ...baseAnn, author: "user", type: "comment" });
+    expect(result.audience).toBe("outbound");
+    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+  });
+
+  it("derives audience:outbound for legacy question (comment after migration)", () => {
+    const { result, events } = collect({ ...baseAnn, type: "question" });
+    expect(result.type).toBe("comment");
+    expect(result.audience).toBe("outbound");
+    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === "question-to-comment")).toBe(true);
+  });
+
+  it("derives audience:outbound for unknown type (coerced to comment)", () => {
+    const { result, events } = collect({ ...baseAnn, type: "mystery-type" });
+    expect(result.type).toBe("comment");
+    expect(result.audience).toBe("outbound");
+    // Both audience-derived and unknown-type events must fire
+    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === "unknown-type")).toBe(true);
   });
 
   it("import annotation gets audience:private (user triages before Claude sees them)", () => {
@@ -106,8 +130,8 @@ describe("AR1: importSource pass-through", () => {
   });
 });
 
-describe("AR1: onLossy called exactly once per annotation", () => {
-  it("emits audience-derived exactly once per call even for suggestions", () => {
+describe("AR1: audience-derived fires exactly once per call regardless of type path", () => {
+  it("emits audience-derived exactly once even when suggestion path fires malformed-suggestion-json too", () => {
     const events: SanitizationEvent[] = [];
     // suggestion type goes through its own early path
     sanitizeAnnotation(
