@@ -14,21 +14,33 @@
  */
 
 import { expect, test } from "@playwright/test";
+import path from "path";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
-import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+} from "./helpers";
 
 const API_BASE = `http://localhost:${DEFAULT_MCP_PORT}/api`;
 
 let mcp: McpTestClient;
+let tmpDir: string;
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
+  tmpDir = createFixtureDir("sample.md");
+  await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample.md"),
+  });
 });
 
 test.afterEach(async () => {
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
+  cleanupFixtureDir(tmpDir);
 });
 
 // ---------------------------------------------------------------------------
