@@ -405,7 +405,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         testId="toolbar-authorship-toggle"
         ariaLabel={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
         active={showAuthorship}
-        onClick={() => onAuthorshipChange!(!showAuthorship)}
+        onClick={() => { const fn = onAuthorshipChange; if (fn) fn(!showAuthorship); }}
       />
     {/if}
     {#if tandemMode && onModeChange}

@@ -23,8 +23,10 @@ import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SlashCommandExtension } from "./extensions/slash-command";
 import "./editor.css";
 
-/** Extensions that resolve to filesystem files opened as new Tandem tabs. */
-const INTERNAL_LINK_EXTS = new Set([".md", ".txt", ".html", ".htm"]);
+import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
+
+/** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
+const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
 
 /** Return true if the href looks like an external URL (not a relative file path). */
 function isExternalHref(href: string): boolean {

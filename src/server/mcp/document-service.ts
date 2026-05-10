@@ -386,7 +386,9 @@ export function broadcastStoreReadOnly(readOnly: boolean): void {
   try {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-    ctrlDoc.transact(() => meta.set(Y_MAP_STORE_READ_ONLY, readOnly), MCP_ORIGIN);
+    if (meta.get(Y_MAP_STORE_READ_ONLY) !== readOnly) {
+      ctrlDoc.transact(() => meta.set(Y_MAP_STORE_READ_ONLY, readOnly), MCP_ORIGIN);
+    }
   } catch (err) {
     console.error("[Tandem] broadcastStoreReadOnly: failed to write to CTRL_ROOM:", err);
   }

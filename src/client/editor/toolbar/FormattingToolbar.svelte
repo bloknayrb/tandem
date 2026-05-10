@@ -35,7 +35,6 @@ $effect(() => {
 
 $effect(() => {
   if (showLinkInput) {
-    // Focus the input after it's rendered
     linkInputEl?.focus();
     linkInputEl?.select();
   }

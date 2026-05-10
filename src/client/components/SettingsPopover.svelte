@@ -173,72 +173,60 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
-async function handleViewDocumentation(): Promise<void> {
-  const workflowsPath = appInfo.info?.workflowsPath;
-  if (!workflowsPath) {
-    docsError = "Documentation file not found.";
+async function openReadOnlyFile(
+  filePath: string | undefined,
+  setLoading: (v: boolean) => void,
+  setError: (v: string | null) => void,
+  labels: { notFound: string; failed: string },
+): Promise<void> {
+  if (!filePath) {
+    setError(labels.notFound);
     return;
   }
-  docsLoading = true;
-  docsError = null;
+  setLoading(true);
+  setError(null);
   try {
     const res = await fetch(`${API_BASE}/open`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: workflowsPath, readOnly: true }),
+      body: JSON.stringify({ filePath, readOnly: true }),
     });
     if (!res.ok) {
-      let msg = "Failed to open documentation.";
+      let msg = labels.failed;
       try {
         const data = (await res.json()) as { message?: string };
         if (data.message) msg = data.message;
       } catch {
         // ignore JSON parse failure
       }
-      if (res.status === 404) msg = "Documentation file not found.";
-      docsError = msg;
+      if (res.status === 404) msg = labels.notFound;
+      setError(msg);
       return;
     }
     onClose();
   } catch {
-    docsError = "Server unavailable.";
+    setError("Server unavailable.");
   } finally {
-    docsLoading = false;
+    setLoading(false);
   }
 }
 
-async function handleViewChangelog(): Promise<void> {
-  const changelogPath = appInfo.info?.changelogPath;
-  if (!changelogPath) {
-    changelogError = "Changelog file not found.";
-    return;
-  }
-  changelogLoading = true;
-  changelogError = null;
-  try {
-    const res = await fetch(`${API_BASE}/open`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: changelogPath, readOnly: true }),
-    });
-    if (!res.ok) {
-      let msg = "Failed to open changelog.";
-      try {
-        const data = (await res.json()) as { message?: string };
-        if (data.message) msg = data.message;
-      } catch {
-        // ignore JSON parse failure
-      }
-      if (res.status === 404) msg = "Changelog file not found.";
-      changelogError = msg;
-      return;
-    }
-    onClose();
-  } catch {
-    changelogError = "Server unavailable.";
-  } finally {
-    changelogLoading = false;
-  }
+function handleViewDocumentation(): Promise<void> {
+  return openReadOnlyFile(
+    appInfo.info?.workflowsPath,
+    (v) => (docsLoading = v),
+    (v) => (docsError = v),
+    { notFound: "Documentation file not found.", failed: "Failed to open documentation." },
+  );
+}
+
+function handleViewChangelog(): Promise<void> {
+  return openReadOnlyFile(
+    appInfo.info?.changelogPath,
+    (v) => (changelogLoading = v),
+    (v) => (changelogError = v),
+    { notFound: "Changelog file not found.", failed: "Failed to open changelog." },
+  );
 }
 
 const sectionLabelStyle =
