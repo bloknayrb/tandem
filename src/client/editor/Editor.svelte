@@ -213,9 +213,9 @@ async function handleEditorClick(e: MouseEvent) {
     const href = anchor.getAttribute("href") ?? "";
     if (!isExternalHref(href) && currentFilePath) {
       // Relative link — resolve and open as a new Tandem tab
-      e.preventDefault();
       const resolvedPath = resolveRelativeLink(href, currentFilePath);
       if (resolvedPath) {
+        e.preventDefault();
         try {
           const res = await fetch(`${API_BASE}/open`, {
             method: "POST",
