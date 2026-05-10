@@ -10,6 +10,7 @@
  */
 
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { API_BASE } from "../utils/fileUpload.js";
 import { type Action, registerAction } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,18 @@ const BUILTINS: Action[] = [
     group: "document",
     run() {
       guardedRun("toggle-mode", (d) => d.toggleSoloMode());
+    },
+  },
+  {
+    id: "new-scratchpad",
+    label: "New Scratchpad",
+    group: "document",
+    async run() {
+      try {
+        await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+      } catch (err) {
+        console.warn("[Tandem] New Scratchpad request failed:", err);
+      }
     },
   },
 ];

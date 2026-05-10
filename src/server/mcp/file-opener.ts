@@ -16,7 +16,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { UPLOAD_PREFIX } from "../../shared/paths.js";
+import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
@@ -215,6 +215,54 @@ export async function openFileFromContent(
     source: "upload",
     restoredFromSession: false,
   });
+}
+
+/**
+ * Open a new ephemeral scratchpad document.
+ *
+ * A scratchpad has no file on disk. It uses a synthetic `upload://scratchpad/<uuid>/Scratchpad.md`
+ * path, which ensures:
+ * - Session manager skips it (isUploadPath filter in listSessionFilePaths)
+ * - Auto-save skips it (source === "upload" guard in saveDocumentToDisk / autoSaveAllToDisk)
+ * - Recent-files list excludes it (isUploadPath guard in App.svelte)
+ *
+ * Each call mints a new UUID so closing a scratchpad tab and opening another
+ * always yields a fresh empty document. Content is gone when the tab is closed.
+ */
+export async function openScratchpad(): Promise<OpenFileResult> {
+  const uuid = randomUUID();
+  const syntheticPath = `${SCRATCHPAD_PREFIX}${uuid}/Scratchpad.md`;
+  const fileName = "Scratchpad.md";
+  const format = "md";
+  const readOnly = false;
+  const id = docIdFromPath(syntheticPath);
+
+  const doc = getOrCreateDocument(id);
+  // Load with empty content — the markdown adapter clears the fragment and
+  // leaves it empty; Tiptap creates a default paragraph on first mount.
+  const adapter = getAdapter(format);
+  await adapter.load(doc, "");
+
+  addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
+  setActiveDocId(id);
+  writeDocMeta(doc, id, fileName, format, readOnly);
+  await initSavedBaseline(doc);
+  await wireAnnotationStore(id, doc, syntheticPath);
+  broadcastOpenDocs();
+  ensureAutoSave();
+
+  return {
+    ...buildResult(doc, {
+      documentId: id,
+      filePath: syntheticPath,
+      fileName,
+      format,
+      readOnly,
+      source: "upload",
+      restoredFromSession: false,
+    }),
+    forceReloaded: false,
+  };
 }
 
 // --- Extracted helpers for openFileByPath ---
