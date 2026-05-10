@@ -144,7 +144,7 @@ function handleKeyDown(e: KeyboardEvent) {
           : annotation.type === 'note'
             ? 'var(--tandem-warning-bg)'
             : 'var(--tandem-surface-sunk)'}; color: {hasSuggestedText
-          ? 'var(--tandem-suggestion)'
+          ? 'var(--tandem-suggestion-fg-strong)'
           : annotation.type === 'note'
             ? 'var(--tandem-warning-fg-strong)'
             : 'var(--tandem-fg-muted)'};"

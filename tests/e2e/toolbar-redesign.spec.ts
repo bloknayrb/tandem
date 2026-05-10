@@ -186,18 +186,12 @@ test("Comment flow creates a comment annotation", async ({ page }) => {
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
-  const commentBtn = page.locator("[data-testid='toolbar-comment-btn']");
-  await expect(commentBtn).toBeEnabled({ timeout: 3_000 });
-  await commentBtn.click();
-
-  const input = page.locator("[data-testid='toolbar-comment-input']");
-  await expect(input).toBeVisible({ timeout: 2_000 });
+  // Unified popup appears automatically on selection — popup visible = selection confirmed
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("test comment");
-  await input.press("Enter");
+  await page.locator("[data-testid='popup-comment-submit']").click();
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
@@ -217,20 +211,12 @@ test("Note flow creates a note annotation", async ({ page }) => {
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
-  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
-  await expect(toolbar).toBeVisible({ timeout: 10_000 });
-  const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
-  await expect(noteBtn).toBeEnabled({ timeout: 5_000 });
-  await noteBtn.click();
-
-  const input = page.locator("[data-testid='toolbar-note-input']");
-  await expect(input).toBeVisible({ timeout: 2_000 });
+  // Unified popup appears automatically on selection — popup visible = selection confirmed
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("test note");
-  await input.press("Enter");
+  await page.locator("[data-testid='popup-note-submit']").click();
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
@@ -240,18 +226,88 @@ test("Note flow creates a note annotation", async ({ page }) => {
   );
 });
 
-test("#480 regression — clicking Note opens input instead of creating an empty annotation", async ({
+test("#480 regression — popup appears on selection without creating an annotation", async ({
   page,
 }) => {
-  // The original #480 bug was: clicking Note immediately created a
-  // `(no note)` annotation with no chance to type. The fix (df6c2b2) made
-  // Note mirror Comment by opening an inline input first. This test pins
-  // that contract: after clicking Note, an input must appear AND no
-  // annotation must exist yet. Dual-assert: server snapshot is the
-  // authoritative truth (Hocuspocus latency can mask a slow card render
-  // and produce false-pass DOM checks); `toHaveCount(0)` is a UI sanity
-  // layer. Empty notes ARE allowed on submit per #480 fix; we don't
-  // exercise that branch here.
+  // AR3 redesign: the unified popup appears immediately on text selection.
+  // No annotation should be created just by selecting text — the user must
+  // explicitly submit via "Comment" or "Note to self". This replaces the old
+  // invariant (click Note → input appears, no annotation yet) with the new one
+  // (select text → popup appears, no annotation yet).
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  // Popup appears — but no annotation is created just by selecting text
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await expect(input).toBeVisible({ timeout: 3_000 });
+
+  // No annotation yet — under AR3's unified popup, selecting text shows the
+  // popup but never auto-creates an annotation (the original #480 contract still holds)
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+});
+
+test("Comment submit is disabled when textarea is empty (no annotation created)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  // Popup appears — Comment button should be disabled when textarea is empty
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
+    timeout: 3_000,
+  });
+  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeDisabled({
+    timeout: 2_000,
+  });
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+});
+
+test("Enter key in popup textarea submits as Comment", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await expect(input).toBeVisible({ timeout: 3_000 });
+  await input.fill("enter key comment");
+  await input.press("Enter");
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  await expect(page.locator("[data-testid^='annotation-card-']").first()).toContainText(
+    "enter key comment",
+  );
+});
+
+test("popup textarea and submit buttons are visible on selection", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await switchToAnnotationsTab(page);
@@ -263,49 +319,12 @@ test("#480 regression — clicking Note opens input instead of creating an empty
   await editor.locator("p").first().selectText();
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
-  await expect(toolbar).toBeVisible({ timeout: 10_000 });
-  const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
-  await expect(noteBtn).toBeEnabled({ timeout: 5_000 });
-  await noteBtn.click();
-
-  // Input mounts → confirms the inline-flow path, not the regressed
-  // immediate-create path.
-  const input = page.locator("[data-testid='toolbar-note-input']");
-  await expect(input).toBeVisible({ timeout: 2_000 });
-
-  // No annotation yet — this is the actual #480 invariant.
-  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
-    timeout: 2_000,
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
+    timeout: 3_000,
   });
-  expect(await getAnnotationCount()).toBe(0);
-});
-
-test("Comment empty submit cancels (no annotation created)", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await switchToAnnotationsTab(page);
-  const editor = page.locator(".tiptap");
-  await expect(editor.locator("p").first()).toContainText("first paragraph", {
-    timeout: 10_000,
-  });
-  await editor.click();
-  await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
-
-  const commentBtn = page.locator("[data-testid='toolbar-comment-btn']");
-  await expect(commentBtn).toBeEnabled({ timeout: 3_000 });
-  await commentBtn.click();
-
-  const input = page.locator("[data-testid='toolbar-comment-input']");
-  await expect(input).toBeVisible({ timeout: 2_000 });
-  await input.press("Enter");
-
-  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
-    timeout: 2_000,
-  });
-  expect(await getAnnotationCount()).toBe(0);
+  await expect(page.locator("[data-testid='popup-note-submit']")).toBeVisible();
+  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeVisible();
 });
 
 test("Highlight quick-action creates a highlight annotation", async ({ page }) => {
@@ -333,7 +352,7 @@ test("Highlight quick-action creates a highlight annotation", async ({ page }) =
   });
 });
 
-test("Escape cancels Note input without creating annotation", async ({ page }) => {
+test("Escape dismisses the popup without creating an annotation", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await switchToAnnotationsTab(page);
@@ -346,20 +365,89 @@ test("Escape cancels Note input without creating annotation", async ({ page }) =
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 10_000 });
-  const noteBtn = page.locator("[data-testid='toolbar-note-btn']");
-  await expect(noteBtn).toBeEnabled({ timeout: 5_000 });
-  await noteBtn.click();
 
-  const input = page.locator("[data-testid='toolbar-note-input']");
+  // Type in the popup textarea, then Escape
+  const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 2_000 });
   await input.fill("draft");
   await input.press("Escape");
-  await expect(input).toBeHidden({ timeout: 5_000 });
+
+  // Popup should dismiss
+  await expect(toolbar).toBeHidden({ timeout: 5_000 });
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
     timeout: 2_000,
   });
   expect(await getAnnotationCount()).toBe(0);
+});
+
+test("Shift+Enter inserts a newline in the textarea without submitting", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await expect(input).toBeVisible({ timeout: 3_000 });
+  await input.fill("line one");
+  await input.press("Shift+Enter");
+
+  // Shift+Enter inserts a newline — no annotation should be created
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+
+  // And the textarea value should contain a newline
+  const value = await input.inputValue();
+  expect(value).toContain("\n");
+});
+
+test("suppressSelectionToolbar hides the popup when the find bar is open", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const popup = page.locator("[data-testid='popup-annotation-input']");
+  await expect(popup).toBeVisible({ timeout: 3_000 });
+
+  // Open the find bar — App.svelte sets suppressSelectionToolbar when findBarOpen
+  await page.keyboard.press("Control+f");
+  await expect(page.locator("[data-testid='find-replace-bar']")).toBeVisible({ timeout: 3_000 });
+  await expect(popup).toBeHidden({ timeout: 2_000 });
+});
+
+test("popup highlight button creates a highlight annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const popup = page.locator("[data-testid='popup-annotation-input']");
+  await expect(popup).toBeVisible({ timeout: 3_000 });
+
+  // Click the yellow highlight swatch inside the popup (distinct from FormattingBar path)
+  await page.locator("[data-testid='popup-highlight-yellow']").click();
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  expect(await getAnnotationCount()).toBe(1);
 });
 
 test("highlight same range twice removes highlight (toggle off)", async ({ page }) => {
@@ -372,9 +460,6 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
@@ -389,9 +474,6 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   // Re-select the same text and click highlight again — should toggle off.
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
@@ -424,9 +506,6 @@ test("highlights on different ranges produce two separate annotations", async ({
   // Highlight first paragraph.
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
@@ -438,7 +517,6 @@ test("highlights on different ranges produce two separate annotations", async ({
   const secondPara = editor.locator("p").nth(1);
   await secondPara.click();
   await secondPara.selectText();
-  await page.waitForFunction(() => (window.getSelection()?.toString() ?? "").length > 0);
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
