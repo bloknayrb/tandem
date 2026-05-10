@@ -18,7 +18,8 @@ export type SanitizationEvent =
   | { kind: "question-to-comment"; id: string }
   | { kind: "malformed-suggestion-json"; id: string }
   | { kind: "unknown-type"; id: string; rawType: string }
-  | { kind: "import-note-to-comment"; id: string };
+  | { kind: "import-note-to-comment"; id: string }
+  | { kind: "audience-conflict-resolved"; id: string };
 
 /**
  * Required callback invoked once per lossy rewrite. Sync only — Promise
@@ -95,6 +96,21 @@ export function sanitizeAnnotation(
     ...(ann.promotedFrom !== undefined ? { promotedFrom: ann.promotedFrom } : {}),
     ...(ann.importSource !== undefined ? { importSource: ann.importSource } : {}),
   };
+
+  // Guard: user-authored notes and highlights must never be outbound. An explicit
+  // audience:"outbound" on these types is semantically contradictory — notes are private
+  // by ADR-027 and highlights are user-only. Force base.audience to private and surface
+  // the rewrite. Placed before all type-specific early returns so highlights are also covered.
+  // Only author:"user" is guarded; import-promoted comments (author:"import") remain
+  // outbound-eligible after their own type rewrite below.
+  if (
+    base.audience === "outbound" &&
+    ann.author === "user" &&
+    (ann.type === "note" || ann.type === "highlight")
+  ) {
+    base.audience = "private";
+    emit({ kind: "audience-conflict-resolved", id: ann.id });
+  }
 
   if (ann.type === "suggestion") {
     let suggestedText: string | undefined;

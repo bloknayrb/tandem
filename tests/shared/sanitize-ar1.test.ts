@@ -150,6 +150,48 @@ describe("AR1: importSource pass-through", () => {
   });
 });
 
+describe("AR1: audience-conflict-resolved — user note/highlight with explicit audience:outbound", () => {
+  it("user note with audience:outbound is forced to private and emits audience-conflict-resolved", () => {
+    const { result, events } = collect({ ...baseAnn, type: "note", audience: "outbound" });
+    expect(result.audience).toBe("private");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
+  });
+
+  it("user highlight with audience:outbound is forced to private and emits audience-conflict-resolved", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      type: "highlight",
+      audience: "outbound",
+      color: "yellow",
+    });
+    expect(result.audience).toBe("private");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
+  });
+
+  it("import-promoted comment with audience:outbound is NOT changed — no audience-conflict-resolved", () => {
+    // author:"import" annotations promoted to comment remain outbound-eligible
+    const { result, events } = collect({
+      ...baseAnn,
+      author: "import",
+      type: "comment",
+      audience: "outbound",
+    });
+    expect(result.audience).toBe("outbound");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(false);
+  });
+
+  it("claude comment with audience:outbound is NOT changed — guard only covers author:user", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      author: "claude",
+      type: "comment",
+      audience: "outbound",
+    });
+    expect(result.audience).toBe("outbound");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(false);
+  });
+});
+
 describe("AR1: suggestion path emits no audience-derived event", () => {
   it("suggestion with valid JSON emits no events", () => {
     const events: SanitizationEvent[] = [];
