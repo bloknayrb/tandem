@@ -40,7 +40,7 @@ const FORMAT_LABELS: Record<string, string> = {
 };
 
 const FORMAT_COLORS: Record<string, string> = {
-  md: "var(--tandem-accent)",
+  md: "var(--tandem-accent-fg-strong)",
   txt: "var(--tandem-fg-faint)",
   html: "var(--tandem-info-fg)",
   docx: "var(--tandem-suggestion-fg-strong)",
