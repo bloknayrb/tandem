@@ -640,6 +640,7 @@ const tutorial = createTutorial(
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
         readOnly={yjsSync.readOnly}
+        currentFilePath={activeTab!.filePath}
         {activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
