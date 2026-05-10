@@ -732,19 +732,22 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `components/AccessibilitySettings.svelte` -- Accessibility preference controls (extracted from SettingsPopover)
 - `AnnotationExtension` -- Renders highlights, comments, and notes as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
-- `editor/toolbar/HighlightColorPicker.svelte` -- Color swatch picker for highlight annotations (extracted from Toolbar)
+- `editor/toolbar/Toolbar.svelte` -- Main toolbar (branding, Comment/Note buttons, Settings, ModeToggle) + unified selection popup (AR3): appears on text selection, textarea + "Note to self" / "Comment" submit buttons + B/I formatting + highlight swatches; no mode switching
+- `editor/toolbar/HighlightColorPicker.svelte` -- Color swatch picker for highlight annotations in FormattingBar (extracted from Toolbar)
 - `editor/toolbar/ModeToggle.svelte` -- Solo/Tandem mode toggle button (extracted from Toolbar)
+- `editor/toolbar/ToolbarButton.svelte` -- Shared button primitive used in main toolbar
+- `editor/toolbar/selection-toolbar.ts` -- Positioning logic for the floating selection popup (`computeSelectionToolbarPosition`, `attachSelectionToolbarListener`)
+- `editor/toolbar/highlight-toggle.ts` -- Toggle-highlight logic: creates a new highlight or removes an existing one if the range already has that color
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
 - `panels/FilterBar.svelte` -- Filter controls row: type/author/status FilterSelect dropdowns + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
 - `panels/useAnnotationReview.ts` -- Review-mode state: reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
-- `panels/AnnotationCardActions.svelte` -- Action buttons for an annotation card: accept, dismiss, edit, flag (extracted from AnnotationCard)
+- `panels/AnnotationCardActions.svelte` -- Action buttons for an annotation card: accept, dismiss, edit (extracted from AnnotationCard)
 - `panels/AnnotationEditForm.svelte` -- Inline edit form for pending annotations (extracted from AnnotationCard)
 - `panels/ReplyThread.svelte` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - `ChatPanel` -- Shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
 - `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the Toolbar (not StatusBar); client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
-- `ReviewSummary` -- Overlay shown when all pending annotations are resolved
 
 ### Tauri Desktop (`src-tauri/`)
 
