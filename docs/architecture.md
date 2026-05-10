@@ -770,3 +770,10 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 
 - `scripts/ci/stdio-smoke.mjs` -- CI smoke test: spawns real HTTP server + stdio proxy, sends MCP initialize → tools/list, asserts ≥20 tools registered. Self-contained ESM with cleanup watchdogs.
 - `tsup.config.ts` -- Four-entry tsup build (server, channel, monitor, CLI). Server entry injects `__MCP_SDK_VERSION__` at build time. `selfContained` config for Tauri bundles (no node_modules).
+
+### Claude Code Automation (`.claude/`)
+
+- `.claude/settings.json` -- Hook wiring: PreToolUse (block) and PostToolUse (warn) matchers
+- `.claude/hooks/` -- 11 shell scripts enforcing Critical Rules, type-checking, formatting, and test running
+- `.claude/agents/` -- 4 specialized reviewer agents (annotation-model, svelte-migration, crdt, security)
+- `.claude/skills/` -- Project-local skills (dev-server, e2e, e2e-debug, changelog, screenshots, issue-pipeline) + symlinked generic skills

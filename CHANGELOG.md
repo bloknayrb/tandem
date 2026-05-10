@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Relative markdown link navigation (closes #479)** — Clicking relative `.md`, `.txt`, and `.html` links in the editor opens them as new Tandem tabs. External and non-supported links open in the default browser.
 - **Documentation button in Settings (closes #457)** — A "View Documentation" button in the Settings popover About section opens `docs/workflows.md` as a read-only tab.
 - **Store read-only warning banner (closes #506)** — When the annotation store is locked (read-only), a dismissible warning banner appears in the side panel. Dismiss state persists across sessions.
+- **Claude Code automation hooks, agents, and skills (PR #591)** — 6 new hooks (stdout guard, svelte-check, token scanner, related-test runner, --no-verify blocker, E2E port-kill blocker), 2 specialized review agents (annotation-model, svelte-migration), 2 skills (`/changelog`, `/e2e-debug`), and `settings.json` wiring. Block hooks fail-closed on parse error; warn hooks include env-var opt-outs.
 - **Theme-color meta tag sync** — `<meta name="theme-color">` updates reactively when the app theme changes, improving desktop PWA and mobile browser chrome appearance.
 
 ### Changed
