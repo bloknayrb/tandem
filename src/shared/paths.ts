@@ -19,7 +19,3 @@ export const SCRATCHPAD_PREFIX = "upload://scratchpad/";
 export function isUploadPath(filePath: string): boolean {
   return filePath.startsWith(UPLOAD_PREFIX);
 }
-
-export function isScratchpadPath(filePath: string): boolean {
-  return filePath.startsWith(SCRATCHPAD_PREFIX);
-}
