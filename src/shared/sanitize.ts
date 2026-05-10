@@ -18,7 +18,8 @@ export type SanitizationEvent =
   | { kind: "question-to-comment"; id: string }
   | { kind: "malformed-suggestion-json"; id: string }
   | { kind: "unknown-type"; id: string; rawType: string }
-  | { kind: "import-note-to-comment"; id: string };
+  | { kind: "import-note-to-comment"; id: string }
+  | { kind: "audience-derived"; id: string };
 
 /**
  * Required callback invoked once per lossy rewrite. Sync only — Promise
@@ -54,6 +55,34 @@ export function sanitizeAnnotation(
 ): Annotation {
   const ann = input as RawAnnotation;
 
+  const emit = (event: SanitizationEvent): void => {
+    try {
+      onLossy(event);
+    } catch (err) {
+      // Never abort sanitize because of a faulty relay. The whole point of
+      // the callback is observability — if it throws, log to stderr (which
+      // the server redirects from console.warn) and move on.
+      console.warn(`[sanitizeAnnotation] onLossy threw for ${event.kind}:`, err);
+    }
+  };
+
+  // AR1: derive audience for annotations that predate the audience model.
+  // Must run before `base` is built so the derived value flows through all
+  // early-return paths via the base spread.
+  // "flag" is explicit: it hasn't been mutated to "note" at this point.
+  // Import annotations are always private initially — users triage Word
+  // comments before Claude sees them (design brief §Import behavior).
+  const derivedAudience: "private" | "outbound" =
+    ann.audience !== undefined
+      ? ann.audience
+      : ann.author === "import" ||
+          ann.type === "highlight" ||
+          ann.type === "note" ||
+          ann.type === "flag"
+        ? "private"
+        : "outbound";
+  if (ann.audience === undefined) emit({ kind: "audience-derived", id: ann.id });
+
   // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
   const base = {
     id: ann.id,
@@ -66,17 +95,9 @@ export function sanitizeAnnotation(
     ...(ann.textSnapshot !== undefined ? { textSnapshot: ann.textSnapshot } : {}),
     ...(ann.editedAt !== undefined ? { editedAt: ann.editedAt } : {}),
     ...(typeof ann.rev === "number" ? { rev: ann.rev } : {}),
-  };
-
-  const emit = (event: SanitizationEvent): void => {
-    try {
-      onLossy(event);
-    } catch (err) {
-      // Never abort sanitize because of a faulty relay. The whole point of
-      // the callback is observability — if it throws, log to stderr (which
-      // the server redirects from console.warn) and move on.
-      console.warn(`[sanitizeAnnotation] onLossy threw for ${event.kind}:`, err);
-    }
+    audience: derivedAudience,
+    ...(ann.promotedFrom !== undefined ? { promotedFrom: ann.promotedFrom } : {}),
+    ...(ann.importSource !== undefined ? { importSource: ann.importSource } : {}),
   };
 
   if (ann.type === "suggestion") {
