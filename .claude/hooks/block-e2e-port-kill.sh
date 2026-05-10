@@ -18,9 +18,8 @@ COMMAND=$(printf '%s' "$INPUT" | node -e "
   });
 " 2>/dev/null) || exit 0
 
-# Only match commands that actually execute playwright or E2E tests
-# Require the keyword at a word boundary after a command prefix (npx, npm, node, etc.)
-if [[ -n "$COMMAND" && "$COMMAND" =~ (npx[[:space:]]+playwright|npm[[:space:]]+run[[:space:]]+test:e2e|node.*playwright) ]]; then
+# Match commands that execute Playwright tests via known entrypoints
+if [[ -n "$COMMAND" && "$COMMAND" =~ (npx[[:space:]]+playwright[[:space:]]+test|npm[[:space:]]+run[[:space:]]+test:e2e|npm[[:space:]]+exec[[:space:]]+playwright[[:space:]]+test|pnpm[[:space:]]+playwright[[:space:]]+test|yarn[[:space:]]+playwright[[:space:]]+test) ]]; then
   echo "⛔ E2E tests kill running dev server on :3478/:3479 via freePort()."
   echo "Before running, confirm with the user that no dev server is in use."
   echo "Check: curl -sf http://127.0.0.1:3479/health || echo 'no server running'"
