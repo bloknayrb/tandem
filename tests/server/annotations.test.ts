@@ -314,6 +314,9 @@ describe("sanitizeAnnotation", () => {
     content: "test",
     status: "pending" as const,
     timestamp: 1000,
+    // Pre-set audience so AR1 derivation doesn't fire in these pre-existing tests.
+    // Tests focused on audience-derived live in tests/shared/sanitize-ar1.test.ts.
+    audience: "outbound" as const,
   };
 
   it("converts legacy suggestion with valid JSON to comment + suggestedText", () => {
