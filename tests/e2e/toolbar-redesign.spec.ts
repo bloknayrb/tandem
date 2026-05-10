@@ -186,11 +186,8 @@ test("Comment flow creates a comment annotation", async ({ page }) => {
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
-  // Unified popup appears automatically on selection
+  // Unified popup appears automatically on selection — popup visible = selection confirmed
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("test comment");
@@ -214,11 +211,8 @@ test("Note flow creates a note annotation", async ({ page }) => {
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
-  // Unified popup appears automatically on selection
+  // Unified popup appears automatically on selection — popup visible = selection confirmed
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("test note");

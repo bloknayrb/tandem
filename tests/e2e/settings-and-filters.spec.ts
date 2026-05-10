@@ -989,23 +989,13 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   const firstParagraph = editor.locator("p").first();
   await firstParagraph.selectText();
 
-  // Wait for the toolbar to detect the selection and enable the Note button.
-  // ToolbarButton sets aria-label from its label prop when it's a string, so
-  // `getByRole` is reliable here. (TODO: add data-testid="note-btn" to Toolbar.tsx)
-  const noteBtn = page.getByRole("button", { name: "Note", exact: true });
-  await expect(noteBtn).toBeEnabled({ timeout: 3_000 });
+  // AR3: the unified popup appears automatically on selection — no button click needed.
+  const noteInput = page.locator("[data-testid='popup-annotation-input']");
+  await expect(noteInput).toBeVisible({ timeout: 3_000 });
 
-  // Open note mode (mousedown handler captures selection before focus shifts).
-  await noteBtn.click();
-
-  // The InputGroup renders with placeholder "Add a note to yourself..." — find
-  // the text input that just appeared.
-  const noteInput = page.locator('input[placeholder="Add a note to yourself..."]');
-  await expect(noteInput).toBeVisible({ timeout: 2_000 });
-
-  // Type note content and submit with Enter.
+  // Type note content and submit via "Note to self".
   await noteInput.fill("my private note");
-  await noteInput.press("Enter");
+  await page.locator("[data-testid='popup-note-submit']").click();
 
   // Both annotations must sync over Hocuspocus before we filter.
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
