@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
+import { clickOutside } from "../../actions/clickOutside.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
 
 interface Props {
@@ -17,7 +18,9 @@ const HEADING_FONT_WEIGHTS: Record<HeadingLevel, number> = { 1: 700, 2: 600, 3: 
 // Force-reactive tick — Tiptap's isActive() is imperative; bump on transaction.
 let tick = $state(0);
 let showHeadingMenu = $state(false);
-let headingMenuEl = $state<HTMLDivElement | null>(null);
+let showLinkInput = $state(false);
+let linkInputValue = $state("");
+let linkInputEl = $state<HTMLInputElement | null>(null);
 
 $effect(() => {
   if (!editor) return;
@@ -31,14 +34,11 @@ $effect(() => {
 });
 
 $effect(() => {
-  if (!showHeadingMenu) return;
-  function handleClickOutside(e: MouseEvent) {
-    if (headingMenuEl && !headingMenuEl.contains(e.target as Node)) {
-      showHeadingMenu = false;
-    }
+  if (showLinkInput) {
+    // Focus the input after it's rendered
+    linkInputEl?.focus();
+    linkInputEl?.select();
   }
-  document.addEventListener("mousedown", handleClickOutside);
-  return () => document.removeEventListener("mousedown", handleClickOutside);
 });
 
 function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
@@ -131,11 +131,34 @@ function handleHeadingToggle(level: HeadingLevel) {
 function handleLinkMouseDown(e: MouseEvent) {
   e.preventDefault();
   if (!editor) return;
-  if (editor.isActive("link")) {
+  // Pre-populate with the existing href when editing a link
+  linkInputValue = editor.getAttributes("link").href ?? "";
+  showLinkInput = true;
+}
+
+function submitLinkInput() {
+  if (!editor) return;
+  const url = linkInputValue.trim();
+  if (url) {
+    editor.chain().focus().setLink({ href: url }).run();
+  } else if (editor.isActive("link")) {
     editor.chain().focus().unsetLink().run();
-  } else {
-    const url = window.prompt("Enter URL:");
-    if (url) editor.chain().focus().setLink({ href: url }).run();
+  }
+  dismissLinkInput();
+}
+
+function dismissLinkInput() {
+  showLinkInput = false;
+  linkInputValue = "";
+}
+
+function handleLinkInputKeyDown(e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    submitLinkInput();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    dismissLinkInput();
   }
 }
 </script>
@@ -207,7 +230,7 @@ function handleLinkMouseDown(e: MouseEvent) {
 
     <!-- Heading dropdown -->
     <div
-      bind:this={headingMenuEl}
+      use:clickOutside={() => (showHeadingMenu = false)}
       style="position: relative;"
       onkeydown={(e) => {
         if (e.key === "Escape") showHeadingMenu = false;
@@ -312,21 +335,71 @@ function handleLinkMouseDown(e: MouseEvent) {
 
     <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
 
-    <ToolbarButton
-      ariaLabel="Link"
-      shortcut="Ctrl+K"
-      disabled={linkDisabled}
-      active={isActiveLink}
-      onMouseDown={handleLinkMouseDown}
-      style="min-width: 30px; padding: 4px 6px;"
+    <div
+      use:clickOutside={dismissLinkInput}
+      style="position: relative;"
+      onkeydown={(e) => {
+        if (e.key === "Escape") dismissLinkInput();
+      }}
+      role="presentation"
     >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M6.5 8.5a3.5 3.5 0 0 0 5 0l2-2a3.5 3.5 0 0 0-5-5l-1 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M9.5 7.5a3.5 3.5 0 0 0-5 0l-2 2a3.5 3.5 0 0 0 5 5l1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
+      <ToolbarButton
+        ariaLabel="Link"
+        shortcut="Ctrl+K"
+        disabled={linkDisabled}
+        active={isActiveLink || showLinkInput}
+        onMouseDown={handleLinkMouseDown}
+        style="min-width: 30px; padding: 4px 6px;"
+      >
+        {#snippet children()}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M6.5 8.5a3.5 3.5 0 0 0 5 0l2-2a3.5 3.5 0 0 0-5-5l-1 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M9.5 7.5a3.5 3.5 0 0 0-5 0l-2 2a3.5 3.5 0 0 0 5 5l1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        {/snippet}
+      </ToolbarButton>
+      {#if showLinkInput}
+        <div
+          role="dialog"
+          aria-label="Insert link"
+          style="position: absolute; top: 100%; left: 0; margin-top: 4px;
+            background: var(--tandem-surface); border: 1px solid var(--tandem-border);
+            border-radius: var(--tandem-r-3); padding: 6px;
+            display: flex; align-items: center; gap: 4px;
+            z-index: 10; box-shadow: var(--tandem-shadow-1); min-width: 240px;"
+        >
+          <input
+            bind:this={linkInputEl}
+            bind:value={linkInputValue}
+            data-testid="toolbar-link-input"
+            type="url"
+            placeholder="https://"
+            onkeydown={handleLinkInputKeyDown}
+            style="flex: 1; height: 26px; padding: 2px 6px; font-size: 12px;
+              border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
+              background: var(--tandem-surface); color: var(--tandem-fg);
+              outline: none; font-family: inherit;"
+          />
+          <button
+            type="button"
+            data-testid="toolbar-link-submit"
+            onmousedown={(e) => { e.preventDefault(); submitLinkInput(); }}
+            style="height: 26px; padding: 0 8px; font-size: 12px; font-weight: 500;
+              border: 1px solid var(--tandem-accent-border); background: transparent;
+              color: var(--tandem-accent); border-radius: var(--tandem-r-2); cursor: pointer;
+              white-space: nowrap;"
+          >Apply</button>
+          <button
+            type="button"
+            data-testid="toolbar-link-cancel"
+            onmousedown={(e) => { e.preventDefault(); dismissLinkInput(); }}
+            style="height: 26px; padding: 0 8px; font-size: 12px; font-weight: 500;
+              border: 1px solid var(--tandem-border); background: transparent;
+              color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); cursor: pointer;"
+          >Cancel</button>
+        </div>
+      {/if}
+    </div>
     <ToolbarButton
       label="—"
       ariaLabel="Horizontal rule"
