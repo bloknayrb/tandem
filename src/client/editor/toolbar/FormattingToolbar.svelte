@@ -254,7 +254,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
             style="position: absolute; top: 100%; left: 0; margin-top: 4px;
             background: var(--tandem-surface); border: 1px solid var(--tandem-border);
             border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;
-            gap: 2px; z-index: 10; box-shadow: var(--tandem-shadow-1);"
+            gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1);"
         >
           {#each HEADING_LEVELS as level (level)}
             <button
