@@ -52,28 +52,28 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist/server/ → dist/client/ (tsup bundles server into dist/server/index.js)
 const CLIENT_DIST = join(__dirname, "../client");
 
-// Resolve CHANGELOG.md. Checks direct __dirname-relative paths first so the
-// function works reliably in the packaged Tauri sidecar layout, where package.json
-// does NOT exist alongside the bundle (breaking the walk-based anchor).
+// Resolve a file relative to the repo/package root. Checks direct __dirname-relative
+// paths first so the function works reliably in the packaged Tauri sidecar layout,
+// where package.json does NOT exist alongside the bundle (breaking the walk-based anchor).
 //
 // Layout reference:
-//   dev:        src/server/mcp/  →  ../../CHANGELOG.md  (repo root)
-//   bundled:    dist/server/     →  ../../CHANGELOG.md  (repo root)
-//   Tauri pkg:  resource_dir/dist/server/  →  ../../CHANGELOG.md  (resource_dir root)
-//               CHANGELOG.md IS present in resource_dir via tauri.conf.json resources.
+//   dev:        src/server/mcp/  →  ../../<file>  (repo root)
+//   bundled:    dist/server/     →  ../../<file>  (repo root)
+//   Tauri pkg:  resource_dir/dist/server/  →  ../../<file>  (resource_dir root)
+//               Files must be present in resource_dir via tauri.conf.json resources.
 //
 // Falls back to a package.json-anchored walk for unusual layouts.
-export function findChangelogPath(startDir: string): string | undefined {
+export function findRepoFile(startDir: string, relPath: string): string | undefined {
   // Fast direct probes (covers all three layouts above)
-  for (const rel of ["../../CHANGELOG.md", "../CHANGELOG.md"]) {
-    const candidate = join(startDir, rel);
+  for (const prefix of ["../..", ".."]) {
+    const candidate = join(startDir, prefix, relPath);
     if (existsSync(candidate)) return candidate;
   }
-  // Fallback: walk up looking for package.json + CHANGELOG.md co-located
+  // Fallback: walk up looking for package.json + file co-located at relPath
   // (covers unusual / monorepo layouts). Capped at 5 levels.
   let dir = startDir;
   for (let i = 0; i < 5; i++) {
-    const candidate = join(dir, "CHANGELOG.md");
+    const candidate = join(dir, relPath);
     if (existsSync(candidate) && existsSync(join(dir, "package.json"))) {
       return candidate;
     }
@@ -83,7 +83,13 @@ export function findChangelogPath(startDir: string): string | undefined {
   }
   return undefined;
 }
-const CHANGELOG_PATH: string | undefined = findChangelogPath(__dirname);
+
+/** @deprecated Use findRepoFile(startDir, "CHANGELOG.md") instead. Kept for test compatibility. */
+export function findChangelogPath(startDir: string): string | undefined {
+  return findRepoFile(startDir, "CHANGELOG.md");
+}
+const CHANGELOG_PATH: string | undefined = findRepoFile(__dirname, "CHANGELOG.md");
+const WORKFLOWS_PATH: string | undefined = findRepoFile(__dirname, "docs/workflows.md");
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -365,6 +371,7 @@ export async function startMcpServerHttp(
       storagePath: SESSION_DIR,
       getTokenFilePath,
       changelogPath: CHANGELOG_PATH,
+      workflowsPath: WORKFLOWS_PATH,
       transport: "http",
       bindHost: host,
       bindPort: port,

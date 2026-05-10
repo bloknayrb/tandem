@@ -48,7 +48,8 @@
       "../dist/client/": "dist/client/",
       "../sample/": "sample/",
       "../skills/": "skills/",
-      "../CHANGELOG.md": "CHANGELOG.md"
+      "../CHANGELOG.md": "CHANGELOG.md",
+      "../docs/workflows.md": "docs/workflows.md"
     },
     "windows": {
       "nsis": {

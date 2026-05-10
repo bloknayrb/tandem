@@ -99,6 +99,8 @@ let nameInput = $state(userNameState.userName);
 const appInfo = createAppInfo(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
+let docsLoading = $state(false);
+let docsError = $state<string | null>(null);
 let activeSection = $state<SettingsSection>("appearance");
 
 // Idle-sync: sync only when NOT focused and value differs
@@ -170,6 +172,40 @@ $effect(() => {
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
 });
+
+async function handleViewDocumentation(): Promise<void> {
+  const workflowsPath = appInfo.info?.workflowsPath;
+  if (!workflowsPath) {
+    docsError = "Documentation file not found.";
+    return;
+  }
+  docsLoading = true;
+  docsError = null;
+  try {
+    const res = await fetch(`${API_BASE}/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: workflowsPath, readOnly: true }),
+    });
+    if (!res.ok) {
+      let msg = "Failed to open documentation.";
+      try {
+        const data = (await res.json()) as { message?: string };
+        if (data.message) msg = data.message;
+      } catch {
+        // ignore JSON parse failure
+      }
+      if (res.status === 404) msg = "Documentation file not found.";
+      docsError = msg;
+      return;
+    }
+    onClose();
+  } catch {
+    docsError = "Server unavailable.";
+  } finally {
+    docsLoading = false;
+  }
+}
 
 async function handleViewChangelog(): Promise<void> {
   const changelogPath = appInfo.info?.changelogPath;
@@ -490,6 +526,22 @@ function aboutRows() {
               </section>
             </div>
           {:else}
+            <div>
+              <button
+                data-testid="view-documentation-btn"
+                onclick={() => void handleViewDocumentation()}
+                disabled={docsLoading || appInfo.loading}
+                style="width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: {docsLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {docsLoading || appInfo.loading ? 0.6 : 1};"
+              >
+                {docsLoading ? "Opening…" : "View Documentation"}
+              </button>
+              {#if docsError}
+                <div style="margin-top: 6px; font-size: 11px; color: var(--tandem-error-fg);">
+                  {docsError}
+                </div>
+              {/if}
+            </div>
+
             <div>
               <button
                 data-testid="view-changelog-btn"

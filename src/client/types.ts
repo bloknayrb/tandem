@@ -88,4 +88,6 @@ export interface AppInfoData {
   tokenRotatedAt?: number | null;
   /** Absolute path to CHANGELOG.md on the server host. Undefined if not found at startup. */
   changelogPath?: string;
+  /** Absolute path to docs/workflows.md on the server host. Undefined if not found at startup. */
+  workflowsPath?: string;
 }
