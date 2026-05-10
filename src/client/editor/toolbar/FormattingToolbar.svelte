@@ -366,7 +366,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
             background: var(--tandem-surface); border: 1px solid var(--tandem-border);
             border-radius: var(--tandem-r-3); padding: 6px;
             display: flex; align-items: center; gap: 4px;
-            z-index: 10; box-shadow: var(--tandem-shadow-1); min-width: 240px;"
+            z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1); min-width: 240px;"
         >
           <input
             bind:this={linkInputEl}
