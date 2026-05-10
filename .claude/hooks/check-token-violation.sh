@@ -27,4 +27,8 @@ if [[ -z "$FILE_PATH" ]] || [[ ! "$FILE_PATH" =~ /src/client/ ]] || [[ ! "$FILE_
   exit 0
 fi
 
-npx tsx scripts/check-semantic-tokens.ts "$FILE_PATH" 2>&1 || true
+RC=0
+npx tsx scripts/check-semantic-tokens.ts "$FILE_PATH" 2>&1 || RC=$?
+if [[ $RC -ge 2 ]]; then
+  echo "⚠ Token scanner failed (exit $RC) — check skipped for this edit."
+fi

@@ -13,9 +13,15 @@ COMMAND=$(printf '%s' "$INPUT" | node -e "
       const e = JSON.parse(d);
       const c = e.tool_input?.command || '';
       process.stdout.write(c);
-    } catch { process.exit(0); }
+    } catch {
+      process.stderr.write('Hook: failed to parse tool input\n');
+      process.exit(1);
+    }
   });
-" 2>/dev/null) || exit 0
+" 2>/dev/null) || {
+  echo "⚠ Could not parse tool input — blocking as a precaution."
+  exit 2
+}
 
 if [[ -n "$COMMAND" && "$COMMAND" =~ --no-verify ]]; then
   echo "Blocked: --no-verify skips Husky hooks. If a hook fails, fix the underlying issue instead of bypassing it."

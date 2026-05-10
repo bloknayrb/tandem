@@ -4,6 +4,12 @@
 # Non-blocking: always exits 0, surfaces errors as output
 
 set -euo pipefail
+trap 'exit 0' ERR
+
+# Opt-out via environment variable
+if [[ -n "${TANDEM_SKIP_SVELTE_CHECK:-}" ]]; then
+  exit 0
+fi
 
 INPUT=$(cat)
 FILE_PATH=$(printf '%s' "$INPUT" | node -e "

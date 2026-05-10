@@ -17,8 +17,7 @@ You are a specialized reviewer for Svelte 5 reactive patterns in the Tandem code
 
 - `src/client/editor/` — Tiptap integration, extensions, decorations
 - `src/client/components/` — UI components (panels, toolbar, settings)
-- `src/client/stores/` — Svelte 5 rune-based stores (`.svelte.ts` files)
-- `src/client/hooks/` — Reactive hooks (`.svelte.ts` files)
+- `src/client/hooks/` — Svelte 5 rune-based hooks and stores (`.svelte.ts` files, e.g. `useTandemSettings.svelte.ts`, `yjsSync.svelte.ts`)
 
 ## Focus Areas
 
