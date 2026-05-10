@@ -393,6 +393,75 @@ test("Escape dismisses the popup without creating an annotation", async ({ page 
   expect(await getAnnotationCount()).toBe(0);
 });
 
+test("Shift+Enter inserts a newline in the textarea without submitting", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await expect(input).toBeVisible({ timeout: 3_000 });
+  await input.fill("line one");
+  await input.press("Shift+Enter");
+
+  // Shift+Enter inserts a newline — no annotation should be created
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
+    timeout: 2_000,
+  });
+  expect(await getAnnotationCount()).toBe(0);
+
+  // And the textarea value should contain a newline
+  const value = await input.inputValue();
+  expect(value).toContain("\n");
+});
+
+test("suppressSelectionToolbar hides the popup when the find bar is open", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const popup = page.locator("[data-testid='popup-annotation-input']");
+  await expect(popup).toBeVisible({ timeout: 3_000 });
+
+  // Open the find bar — App.svelte sets suppressSelectionToolbar when findBarOpen
+  await page.keyboard.press("Control+f");
+  await expect(page.locator("[data-testid='find-replace-bar']")).toBeVisible({ timeout: 3_000 });
+  await expect(popup).toBeHidden({ timeout: 2_000 });
+});
+
+test("popup highlight button creates a highlight annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await editor.locator("p").first().selectText();
+
+  const popup = page.locator("[data-testid='popup-annotation-input']");
+  await expect(popup).toBeVisible({ timeout: 3_000 });
+
+  // Click the yellow highlight swatch inside the popup (distinct from FormattingBar path)
+  await page.locator("[data-testid='popup-highlight-yellow']").click();
+
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  expect(await getAnnotationCount()).toBe(1);
+});
+
 test("highlight same range twice removes highlight (toggle off)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
