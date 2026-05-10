@@ -63,8 +63,8 @@ if [[ ! -d "$TEST_DIR" ]]; then
   exit 0
 fi
 
-MATCHES=$(find "$TEST_DIR" -name "${BASENAME}.test.ts" 2>/dev/null || true)
-MATCH_COUNT=$(echo "$MATCHES" | grep -c . 2>/dev/null || echo 0)
+mapfile -t MATCH_ARR < <(find "$TEST_DIR" -name "${BASENAME}.test.ts" 2>/dev/null)
+MATCH_COUNT=${#MATCH_ARR[@]}
 
 if [[ "$MATCH_COUNT" -eq 0 ]]; then
   exit 0
@@ -73,6 +73,6 @@ elif [[ "$MATCH_COUNT" -gt 1 ]]; then
   exit 0
 fi
 
-TEST_FILE=$(echo "$MATCHES" | head -1)
+TEST_FILE="${MATCH_ARR[0]}"
 echo "Running related test: $TEST_FILE"
 npx vitest run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || true

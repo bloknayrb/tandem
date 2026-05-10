@@ -14,11 +14,19 @@ COMMAND=$(printf '%s' "$INPUT" | node -e "
       const e = JSON.parse(d);
       const c = e.tool_input?.command || '';
       process.stdout.write(c);
-    } catch { process.exit(0); }
+    } catch {
+      process.stderr.write('Hook: failed to parse tool input\n');
+      process.exit(1);
+    }
   });
-" 2>/dev/null) || exit 0
+" 2>/dev/null) || {
+  echo "⚠ Could not parse tool input — blocking as a precaution."
+  exit 2
+}
 
 # Match commands that execute Playwright tests via known entrypoints
+# Known uncovered: bunx, ./node_modules/.bin/playwright, npm test alias
+# Best-effort detection — update regex if new invocation patterns emerge
 if [[ -n "$COMMAND" && "$COMMAND" =~ (npx[[:space:]]+playwright[[:space:]]+test|npm[[:space:]]+run[[:space:]]+test:e2e|npm[[:space:]]+exec[[:space:]]+playwright[[:space:]]+test|pnpm[[:space:]]+playwright[[:space:]]+test|yarn[[:space:]]+playwright[[:space:]]+test) ]]; then
   echo "⛔ E2E tests kill running dev server on :3478/:3479 via freePort()."
   echo "Before running, confirm with the user that no dev server is in use."
