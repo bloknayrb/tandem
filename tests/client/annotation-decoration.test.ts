@@ -253,3 +253,94 @@ describe("annotation plugin apply() recovery branch", () => {
     expect(result).not.toBe(EMPTY_SENTINEL);
   });
 });
+
+// --- AR2: five visual languages ---
+
+describe("AR2: annotation decoration attrs — five visual languages", () => {
+  function addAnnotationEntry(
+    ydoc: Y.Doc,
+    fields: {
+      id?: string;
+      type: string;
+      author: string;
+      suggestedText?: string;
+      color?: string;
+    },
+  ) {
+    const id = fields.id ?? "ann-1";
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    map.set(id, {
+      id,
+      type: fields.type,
+      status: "pending",
+      content: "test",
+      author: fields.author,
+      audience: fields.author === "claude" ? "outbound" : "private",
+      range: { from: 1, to: 5 },
+      ...(fields.suggestedText !== undefined ? { suggestedText: fields.suggestedText } : {}),
+      ...(fields.color !== undefined ? { color: fields.color } : {}),
+    });
+  }
+
+  function getDecorations(
+    ydoc: Y.Doc,
+  ): Array<{ from: number; to: number; attrs: Record<string, string> }> {
+    buildDecorationsResult = "non-empty";
+    const plugin = getPlugin(ydoc);
+    const result = plugin.spec.state.init(undefined, fakeState) as any;
+    if (result === EMPTY_SENTINEL) return [];
+    return result.decorations;
+  }
+
+  it("user comment → tandem-comment, dashed underline, data-annotation-author=user", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "comment", author: "user" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.class).toBe("tandem-comment");
+    expect(dec.attrs.style).toContain("dashed");
+    expect(dec.attrs["data-annotation-author"]).toBe("user");
+  });
+
+  it("claude comment → tandem-comment--claude, solid underline, data-annotation-author=claude", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "comment", author: "claude" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.class).toBe("tandem-comment tandem-comment--claude");
+    expect(dec.attrs.style).toContain("solid");
+    expect(dec.attrs["data-annotation-author"]).toBe("claude");
+  });
+
+  it("import comment → tandem-comment (not --claude), data-annotation-author=import", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "comment", author: "import" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.class).toBe("tandem-comment");
+    expect(dec.attrs.style).toContain("dashed");
+    expect(dec.attrs["data-annotation-author"]).toBe("import");
+  });
+
+  it("suggestion (comment with suggestedText) → tandem-suggestion, data-annotation-author set", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "comment", author: "claude", suggestedText: "replacement" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.class).toBe("tandem-suggestion");
+    expect(dec.attrs["data-annotation-author"]).toBe("claude");
+  });
+
+  it("note → tandem-note, dotted underline, data-annotation-author set", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "note", author: "user" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.class).toBe("tandem-note");
+    expect(dec.attrs.style).toContain("dotted");
+    expect(dec.attrs["data-annotation-author"]).toBe("user");
+  });
+
+  it("highlight → tandem-highlight, data-annotation-author set", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "highlight", author: "user", color: "yellow" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.class).toContain("tandem-highlight");
+    expect(dec.attrs["data-annotation-author"]).toBe("user");
+  });
+});
