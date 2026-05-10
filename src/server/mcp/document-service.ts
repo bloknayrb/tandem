@@ -9,6 +9,7 @@ import {
   Y_MAP_GENERATION_ID,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_SAVED_AT_VERSION,
+  Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { closeStore } from "../annotations/store.js";
@@ -374,6 +375,21 @@ export function writeGenerationId(): void {
   const generationId = randomUUID();
   ctrlDoc.transact(() => meta.set(Y_MAP_GENERATION_ID, generationId), MCP_ORIGIN);
   console.error(`[Tandem] Server generationId: ${generationId}`);
+}
+
+/**
+ * Broadcast the annotation store read-only state to connected browser clients
+ * via CTRL_ROOM's Y_MAP_DOCUMENT_META. Clients observe Y_MAP_STORE_READ_ONLY
+ * on the bootstrap Y.Doc to surface a persistent warning banner.
+ */
+export function broadcastStoreReadOnly(readOnly: boolean): void {
+  try {
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
+    ctrlDoc.transact(() => meta.set(Y_MAP_STORE_READ_ONLY, readOnly), MCP_ORIGIN);
+  } catch (err) {
+    console.error("[Tandem] broadcastStoreReadOnly: failed to write to CTRL_ROOM:", err);
+  }
 }
 
 /**

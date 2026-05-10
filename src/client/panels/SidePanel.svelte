@@ -28,6 +28,8 @@ interface Props {
   onActiveAnnotationChange: (id: string | null) => void;
   reduceMotion?: boolean;
   onFilterChange?: (type: FilterType, author: FilterAuthor, status: FilterStatus) => void;
+  /** True when the annotation store is locked by another Tandem instance. */
+  storeReadOnly?: boolean;
 }
 
 let {
@@ -43,9 +45,31 @@ let {
   onActiveAnnotationChange,
   reduceMotion,
   onFilterChange,
+  storeReadOnly = false,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+
+const STORE_READ_ONLY_DISMISS_KEY = "tandem:storeReadOnlyBannerDismissed";
+
+function readStoreReadOnlyDismissed(): boolean {
+  try {
+    return localStorage.getItem(STORE_READ_ONLY_DISMISS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+let storeReadOnlyDismissed = $state(readStoreReadOnlyDismissed());
+
+function handleStoreReadOnlyDismiss() {
+  try {
+    localStorage.setItem(STORE_READ_ONLY_DISMISS_KEY, "true");
+  } catch {
+    // storage unavailable
+  }
+  storeReadOnlyDismissed = true;
+}
 
 // Filter state
 let filterType = $state<FilterType>("all");
@@ -285,6 +309,26 @@ function handleBulk(status: "accepted" | "dismissed") {
   data-testid="annotation-list-scroll-container"
   style="width: 100%; background: var(--tandem-surface-muted); display: flex; flex-direction: column; overflow-y: auto;"
 >
+  <!-- Store read-only banner: shown when the annotation store is locked by another Tandem instance -->
+  {#if storeReadOnly && !storeReadOnlyDismissed}
+    <div
+      data-testid="store-readonly-banner"
+      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: var(--tandem-r-4); font-size: var(--tandem-text-xs); color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;"
+    >
+      <span>
+        Annotation store is read-only — another Tandem instance holds the lock. Annotations
+        won't be saved. Close the other instance and restart.
+      </span>
+      <button
+        data-testid="store-readonly-dismiss"
+        onclick={handleStoreReadOnlyDismiss}
+        style="flex-shrink: 0; font-size: var(--tandem-text-xs); padding: 2px 8px; border: none; border-radius: var(--tandem-r-2); background: none; color: {warningStateColors.color}; cursor: pointer; font-weight: 500;"
+      >
+        Dismiss
+      </button>
+    </div>
+  {/if}
+
   <!-- Held-annotation banner -->
   {#if heldCount > 0}
     <div

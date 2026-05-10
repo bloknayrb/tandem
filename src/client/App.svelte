@@ -503,6 +503,7 @@ const tutorial = createTutorial(
               {activeAnnotationId}
               onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
               reduceMotion={settingsState.settings.reduceMotion}
+              storeReadOnly={yjsSync.storeReadOnly}
               visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
             />
             <PanelSlot
@@ -758,6 +759,7 @@ const tutorial = createTutorial(
       {activeAnnotationId}
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}
+      storeReadOnly={yjsSync.storeReadOnly}
       onFilterChange={(type, author, status) => {
         activeAnnotationFilter = { type, author, status };
       }}
