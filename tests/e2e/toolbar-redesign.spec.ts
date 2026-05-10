@@ -243,9 +243,6 @@ test("#480 regression — popup appears on selection without creating an annotat
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
   // Popup appears — but no annotation is created just by selecting text
   const input = page.locator("[data-testid='popup-annotation-input']");
@@ -271,9 +268,6 @@ test("Comment submit is disabled when textarea is empty (no annotation created)"
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
   // Popup appears — Comment button should be disabled when textarea is empty
   await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
@@ -466,9 +460,6 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   });
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
 
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
@@ -483,9 +474,6 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   // Re-select the same text and click highlight again — should toggle off.
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
@@ -518,9 +506,6 @@ test("highlights on different ranges produce two separate annotations", async ({
   // Highlight first paragraph.
   await editor.click();
   await editor.locator("p").first().selectText();
-  await page.waitForFunction(() =>
-    (window.getSelection()?.toString() ?? "").includes("first paragraph"),
-  );
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
@@ -532,7 +517,6 @@ test("highlights on different ranges produce two separate annotations", async ({
   const secondPara = editor.locator("p").nth(1);
   await secondPara.click();
   await secondPara.selectText();
-  await page.waitForFunction(() => (window.getSelection()?.toString() ?? "").length > 0);
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
