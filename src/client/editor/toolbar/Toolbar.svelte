@@ -60,6 +60,7 @@ const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 const showPopup = $derived(
   selectionToolbar && !suppressSelectionToolbar && canAnnotate && selectionPosition !== null,
 );
+const annotationTextTrimmed = $derived(annotationText.trim());
 
 function updateSelectionAffordance(ed: TiptapEditor) {
   const { from, to } = ed.state.selection;
@@ -150,7 +151,6 @@ $effect(() => {
   return () => observer.disconnect();
 });
 
-// Capture selection when popup appears, clear on dismiss
 $effect(() => {
   if (showPopup && !capturedRange) captureSelectionRange();
   if (!showPopup) {
@@ -160,7 +160,6 @@ $effect(() => {
   }
 });
 
-// Auto-focus textarea when popup appears (untrack to avoid bind:this reactive loop)
 $effect(() => {
   if (showPopup) {
     untrack(() => textareaEl?.focus());
@@ -251,14 +250,14 @@ function dismissPopup() {
 }
 
 function submitAsComment() {
-  if (!annotationText.trim()) return;
-  createAnnotation("comment", annotationText.trim());
-  annotationText = "";
+  if (!annotationTextTrimmed) return;
+  createAnnotation("comment", annotationTextTrimmed);
+  dismissPopup();
 }
 
 function submitAsNote() {
-  createAnnotation("note", annotationText.trim());
-  annotationText = "";
+  createAnnotation("note", annotationTextTrimmed);
+  dismissPopup();
 }
 
 function handleTextareaKeyDown(e: KeyboardEvent) {
@@ -279,7 +278,6 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     aria-label="Selection tools"
     style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
   >
-    <!-- Row 1: Quick actions (formatting + highlights) -->
     <div style="display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--tandem-border);">
       <button
         type="button"
@@ -326,7 +324,6 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       </div>
     </div>
 
-    <!-- Row 2: Annotation textarea -->
     <div style="padding: 6px 8px;">
       <textarea
         bind:this={textareaEl}
@@ -339,7 +336,6 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       ></textarea>
     </div>
 
-    <!-- Row 3: Submit buttons -->
     <div style="display: flex; justify-content: space-between; gap: 6px; padding: 4px 8px 6px;">
       <button
         type="button"
@@ -352,9 +348,9 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         type="button"
         data-testid="popup-comment-submit"
         aria-label="Comment on selection"
-        disabled={!annotationText.trim()}
+        disabled={!annotationTextTrimmed}
         onclick={submitAsComment}
-        style={`flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; opacity: ${annotationText.trim() ? "1" : "0.4"};`}
+        style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer;"
       >Comment</button>
     </div>
   </div>
