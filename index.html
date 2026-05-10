@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="theme-color" content="#fafaf9" />
     <title>Tandem - Collaborative Editor</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -307,6 +308,12 @@
           }
           document.documentElement.dataset.theme = theme;
           window.__TANDEM_INITIAL_THEME__ = theme;
+          // Sync theme-color meta tag so the browser chrome (mobile address bar,
+          // PWA title bar) matches the app surface color from the first paint.
+          var metaTheme = document.querySelector('meta[name="theme-color"]');
+          if (metaTheme) {
+            metaTheme.setAttribute("content", theme === "dark" ? "#1c1c24" : "#fafaf9");
+          }
         } catch (e) { /* incognito / storage disabled — no-op, Svelte resolves on mount */ }
       })();
     </script>
