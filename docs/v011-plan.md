@@ -146,23 +146,16 @@ All four PRs are independent and can be worked by parallel agents.
 - **E2E (per testing review):** Fixture infra is adequate (`createFixtureDir` supports multi-file). Need fixture with a relative link and assertion that clicking opens a new tab.
 - **Files:** `src/client/editor/Editor.svelte` or Tiptap extension, `tests/e2e/` new spec
 
-### PR D4 — #475: Temporary scratchpad (L, SPIKE FIRST)
+### PR D4 — #475: Temporary scratchpad (L, SPIKE FIRST) ✅ SHIPPED
 
-**Risk: HIGH** — confirmed by all three reviewers.
+**Shipped in PR #592.** Spike questions resolved:
 
-**Spike deliverables (per architecture review, must answer before implementation):**
+1. **OpenDoc model:** Uses `source: "upload"` with synthetic path `upload://{uuid}/Scratchpad.md` — reuses existing `saveDocumentToDisk` skip for non-disk docs.
+2. **Session restore:** `isUploadPath()` filter in session restore loop excludes scratchpads.
+3. **Document ID:** `docIdFromPath(syntheticPath)` produces a hash — no magic sentinels needed.
+4. **Open-doc broadcast:** Scratchpads appear in tab bar via `broadcastOpenDocs`. Channel events filtered by `isUploadPath()` in `ctrl-meta.ts`.
 
-1. **OpenDoc model:** `document-service.ts:32` requires `filePath: string`. Scratchpad needs either a synthetic path (like `upload://` prefix) or a new `source: "scratchpad"` discriminant. Recommendation: model as ephemeral `source: "upload"` with synthetic path `scratchpad://untitled` — reuses existing `saveDocumentToDisk` skip for non-disk docs.
-
-2. **Session restore:** `restoreOpenDocuments` at `document-service.ts:383` iterates session files. Scratchpad must be excluded or startup tries to re-open a non-existent path. Need explicit filter in restore loop.
-
-3. **Document ID:** `docIdFromPath` produces a hash, not a literal string. Use `docIdFromPath("scratchpad://untitled")` to get a stable hash, not a magic `__scratchpad__` string — avoids special-casing `getShouldKeepDocument` sentinel (currently only `CTRL_ROOM`).
-
-4. **Open-doc broadcast:** Will scratchpad appear in the tab bar and document-switch UI via `broadcastOpenDocs`? Probably yes — it's a normal tab. But channel events should not surface it to Claude.
-
-**No descope — this is mandatory for v0.11.0.** Spike identifies the approach; implementation follows regardless of effort.
-
-**Files:** `src/server/mcp/document-service.ts`, `src/server/mcp/document-model.ts`, `src/server/mcp/file-opener.ts`, `src/client/editor/DocumentTabs.svelte`
+Also added: `Ctrl+N` shortcut, `tandem_scratchpad` MCP tool, `createScratchpad()` shared client utility with in-flight guard, editor autofocus on editable documents.
 
 ---
 

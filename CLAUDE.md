@@ -145,7 +145,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 25 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app. v0.8.0 shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. v0.9.0 complete: MCP consolidation (#259, PR #449), redesign data model (#440–#445/#450, PRs #451/#458/#461/#462), UX polish (#435/#437, PRs #460/#463), CI stdio smoke test (#341, PR #459). Distribution items (#316, #317, #322) deferred to v0.13.0. v0.10.0 complete: React→Svelte 5 migration (#472/#508); all 39 .tsx files replaced; react/react-dom/@tiptap/react removed. Next: v0.11.0. See [docs/roadmap.md](docs/roadmap.md) for full plan.
+Core complete: 26 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app. v0.8.0 shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. v0.9.0 complete: MCP consolidation (#259, PR #449), redesign data model (#440–#445/#450, PRs #451/#458/#461/#462), UX polish (#435/#437, PRs #460/#463), CI stdio smoke test (#341, PR #459). Distribution items (#316, #317, #322) deferred to v0.13.0. v0.10.0 complete: React→Svelte 5 migration (#472/#508); all 39 .tsx files replaced; react/react-dom/@tiptap/react removed. Next: v0.11.0. See [docs/roadmap.md](docs/roadmap.md) for full plan.
 
 <!-- autoskills:start -->
 

@@ -872,6 +872,17 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 
 **Errors:** `404 FILE_NOT_FOUND`, `400 UNSUPPORTED_FORMAT`, `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`
 
+### POST /api/scratchpad
+
+Create and open a new empty Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option).
+
+**Request:** No body required.
+
+**Response (200):**
+```json
+{ "data": { "documentId": "abc123", "fileName": "Scratchpad.md", "format": "md", "readOnly": false, "source": "upload", ... } }
+```
+
 ### POST /api/close
 
 Close an open document by its document ID. Equivalent to `tandem_close` but callable from the editor UI. Used by the client's tab close button.
