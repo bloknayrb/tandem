@@ -25,7 +25,6 @@ function toggle(tab: RailTab) {
   const next = enabledTabs.includes(tab)
     ? enabledTabs.filter((t) => t !== tab)
     : [...enabledTabs, tab];
-  // Always keep at least one tab enabled
   if (next.length > 0) onTabsChange(next);
 }
 
@@ -36,12 +35,21 @@ function handleClickOutside(e: MouseEvent) {
   }
 }
 
+function toggleOpen(e: MouseEvent) {
+  e.stopPropagation();
+  if (open) {
+    open = false;
+    return;
+  }
+  if (btnEl) {
+    const rect = btnEl.getBoundingClientRect();
+    dropdownPos = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+  }
+  open = true;
+}
+
 $effect(() => {
   if (open) {
-    if (btnEl) {
-      const rect = btnEl.getBoundingClientRect();
-      dropdownPos = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
-    }
     document.addEventListener("click", handleClickOutside, true);
     return () => document.removeEventListener("click", handleClickOutside, true);
   } else {
@@ -56,7 +64,7 @@ $effect(() => {
     data-testid={`${testIdPrefix}rail-tab-picker-btn`}
     aria-label="Configure tabs"
     aria-expanded={open}
-    onclick={(e) => { e.stopPropagation(); open = !open; }}
+    onclick={toggleOpen}
     style="
       width: 22px; height: 22px; border: none; background: transparent;
       cursor: pointer; border-radius: var(--tandem-r-2);

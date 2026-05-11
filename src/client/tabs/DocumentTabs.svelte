@@ -4,7 +4,7 @@ import FileOpenDialog from "../components/FileOpenDialog.svelte";
 import type { OpenTab } from "../types.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
-import RecentFilesMenu from "./RecentFilesMenu.svelte";
+import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
 
 interface Props {
@@ -271,7 +271,7 @@ $effect(() => {
 
   {#if showRecent}
     <div bind:this={recentMenuEl}>
-      <RecentFilesMenu
+      <NewTabMenu
         {recentFiles}
         onOpen={async (filePath) => {
           showRecent = false;
