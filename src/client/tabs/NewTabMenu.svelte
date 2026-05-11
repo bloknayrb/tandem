@@ -1,15 +1,17 @@
 <script lang="ts">
+import { clickOutside } from "../actions/clickOutside.svelte.js";
 import { portal } from "../utils/portal.js";
 
 interface Props {
   recentFiles: string[];
+  anchorEl: HTMLElement | null;
   onOpen: (path: string) => void;
   onBrowse: () => void;
   onNewScratchpad: () => void;
   onClose: () => void;
 }
 
-let { recentFiles, onOpen, onBrowse, onNewScratchpad, onClose }: Props = $props();
+let { recentFiles, anchorEl, onOpen, onBrowse, onNewScratchpad, onClose }: Props = $props();
 
 function basename(p: string): string {
   return p.replace(/[/\\]+$/, "").replace(/.*[/\\]/, "");
@@ -47,8 +49,44 @@ function getFocusableItems(): HTMLElement[] {
 
 let menuEl: HTMLDivElement | null = $state(null);
 
+function handleOutsideClick(e: MouseEvent) {
+  // The clickOutside action already filtered out clicks inside the menu.
+  // Also ignore:
+  //  - clicks on the anchor button (its own onclick would re-open the menu).
+  //  - clicks on a Tauri drag region (title-bar drag should not dismiss the menu).
+  const target = e.target as (Node & Element) | null;
+  if (!target) return;
+  if (anchorEl?.contains(target)) return;
+  if (target.closest?.("[data-tauri-drag-region]")) return;
+  onClose();
+}
+
+function positionMenu() {
+  if (!menuEl) return;
+  if (!anchorEl) {
+    menuEl.style.top = "8px";
+    menuEl.style.left = "8px";
+    menuEl.style.right = "auto";
+    return;
+  }
+  const rect = anchorEl.getBoundingClientRect();
+  const menuWidth = menuEl.offsetWidth;
+  const viewportWidth = window.innerWidth;
+  const top = rect.bottom + 4;
+  const left = rect.left;
+  if (left + menuWidth > viewportWidth - 8) {
+    menuEl.style.right = "8px";
+    menuEl.style.left = "auto";
+  } else {
+    menuEl.style.left = `${left}px`;
+    menuEl.style.right = "auto";
+  }
+  menuEl.style.top = `${top}px`;
+}
+
 $effect(() => {
   if (!menuEl) return;
+  positionMenu();
   getFocusableItems()[0]?.focus();
 });
 </script>
@@ -56,6 +94,7 @@ $effect(() => {
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   use:portal
+  use:clickOutside={handleOutsideClick}
   bind:this={menuEl}
   role="dialog"
   aria-label="New tab"
@@ -111,9 +150,8 @@ $effect(() => {
 <style>
   .new-tab-menu {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    top: 0;
+    left: 0;
     min-width: 260px;
     max-width: 400px;
     background: var(--tandem-surface);

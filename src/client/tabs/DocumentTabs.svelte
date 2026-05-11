@@ -31,7 +31,6 @@ let showDialog = $state(false);
 let showRecent = $state(false);
 let recentFiles = $state<string[]>([]);
 let openBtnEl: HTMLButtonElement | null = $state(null);
-let recentMenuEl: HTMLDivElement | null = $state(null);
 
 // Plain let — not reactive UI; just internal close-dedup guard
 let closingIds = new Set<string>();
@@ -174,22 +173,6 @@ function scrollRight() {
 }
 
 const singleTab = $derived(tabs.length <= 1);
-
-$effect(() => {
-  if (!showRecent) return;
-
-  function handlePointerDown(e: PointerEvent) {
-    const target = e.target as Node | null;
-    if (!target) return;
-    if (openBtnEl?.contains(target)) return;
-    if (recentMenuEl?.contains(target)) return;
-    if ((target as Element).closest?.("[data-tauri-drag-region]")) return;
-    showRecent = false;
-  }
-
-  window.addEventListener("pointerdown", handlePointerDown, true);
-  return () => window.removeEventListener("pointerdown", handlePointerDown, true);
-});
 </script>
 
 <div
@@ -270,38 +253,37 @@ $effect(() => {
   {/if}
 
   {#if showRecent}
-    <div bind:this={recentMenuEl}>
-      <NewTabMenu
-        {recentFiles}
-        onOpen={async (filePath) => {
-          showRecent = false;
-          try {
-            const res = await fetch(`${API_BASE}/open`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ filePath }),
-            });
-            if (res.ok) {
-              saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
-            } else {
-              const err = await res.text();
-              console.warn("[tandem] failed to open recent file:", err);
-            }
-          } catch (err) {
+    <NewTabMenu
+      {recentFiles}
+      anchorEl={openBtnEl}
+      onOpen={async (filePath) => {
+        showRecent = false;
+        try {
+          const res = await fetch(`${API_BASE}/open`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filePath }),
+          });
+          if (res.ok) {
+            saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
+          } else {
+            const err = await res.text();
             console.warn("[tandem] failed to open recent file:", err);
           }
-        }}
-        onNewScratchpad={() => {
-          showRecent = false;
-          void createScratchpad();
-        }}
-        onBrowse={() => {
-          showRecent = false;
-          showDialog = true;
-        }}
-        onClose={() => (showRecent = false)}
-      />
-    </div>
+        } catch (err) {
+          console.warn("[tandem] failed to open recent file:", err);
+        }
+      }}
+      onNewScratchpad={() => {
+        showRecent = false;
+        void createScratchpad();
+      }}
+      onBrowse={() => {
+        showRecent = false;
+        showDialog = true;
+      }}
+      onClose={() => (showRecent = false)}
+    />
   {/if}
 
   {#if showDialog}

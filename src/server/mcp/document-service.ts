@@ -381,6 +381,14 @@ export function writeGenerationId(): void {
  * Broadcast the annotation store read-only state to connected browser clients
  * via CTRL_ROOM's Y_MAP_DOCUMENT_META. Clients observe Y_MAP_STORE_READ_ONLY
  * on the bootstrap Y.Doc to surface a persistent warning banner.
+ *
+ * The transaction is tagged with MCP_ORIGIN even though this is a server-initiated
+ * status broadcast (not a user-intent MCP tool write). This is intentional: the
+ * channel event queue and ctrl-meta observer both skip MCP_ORIGIN transactions,
+ * which is the desired behaviour for this key (it surfaces only to browser clients
+ * via the bootstrap observer, never to Claude via channel events). If a dedicated
+ * SYSTEM_ORIGIN is added in the future, prefer it here and update the observer
+ * filters to skip it explicitly. See Critical Rule #2 in CLAUDE.md.
  */
 export function broadcastStoreReadOnly(readOnly: boolean): void {
   try {
