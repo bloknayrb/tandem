@@ -1,4 +1,5 @@
 <script lang="ts">
+import { createScratchpad } from "../actions/builtin.svelte.js";
 import FileOpenDialog from "../components/FileOpenDialog.svelte";
 import type { OpenTab } from "../types.js";
 import { API_BASE } from "../utils/fileUpload.js";
@@ -290,13 +291,9 @@ $effect(() => {
             console.warn("[tandem] failed to open recent file:", err);
           }
         }}
-        onNewScratchpad={async () => {
+        onNewScratchpad={() => {
           showRecent = false;
-          try {
-            await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
-          } catch (err) {
-            console.warn("[tandem] failed to create scratchpad:", err);
-          }
+          void createScratchpad();
         }}
         onBrowse={() => {
           showRecent = false;

@@ -50,6 +50,20 @@ export const saveStore = {
 };
 let inflight = false;
 
+let scratchpadInflight = false;
+
+export async function createScratchpad(): Promise<void> {
+  if (scratchpadInflight) return;
+  scratchpadInflight = true;
+  try {
+    await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+  } catch (err) {
+    console.warn("[Tandem] New Scratchpad request failed:", err);
+  } finally {
+    scratchpadInflight = false;
+  }
+}
+
 export async function triggerSave(activeDocId: string | null): Promise<void> {
   if (!activeDocId || inflight) return;
   inflight = true;
@@ -111,12 +125,8 @@ const BUILTINS: Action[] = [
     label: "New Scratchpad",
     group: "document",
     shortcut: "Ctrl+N",
-    async run() {
-      try {
-        await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
-      } catch (err) {
-        console.warn("[Tandem] New Scratchpad request failed:", err);
-      }
+    run() {
+      void createScratchpad();
     },
   },
 ];
