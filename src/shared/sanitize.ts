@@ -97,16 +97,16 @@ export function sanitizeAnnotation(
     ...(ann.importSource !== undefined ? { importSource: ann.importSource } : {}),
   };
 
-  // Guard: user-authored notes and highlights must never be outbound. An explicit
-  // audience:"outbound" on these types is semantically contradictory — notes are private
-  // by ADR-027 and highlights are user-only. Force base.audience to private and surface
-  // the rewrite. Placed before all type-specific early returns so highlights are also covered.
+  // Guard: user-authored notes, highlights, and flags must never be outbound.
+  // Flags are included because the flag-to-note migration below preserves audience;
+  // without this guard a flag with explicit audience:"outbound" would become a
+  // note with audience:"outbound", violating ADR-027.
   // Only author:"user" is guarded; import-promoted comments (author:"import") remain
   // outbound-eligible after their own type rewrite below.
   if (
     base.audience === "outbound" &&
     ann.author === "user" &&
-    (ann.type === "note" || ann.type === "highlight")
+    (ann.type === "note" || ann.type === "highlight" || ann.type === "flag")
   ) {
     base.audience = "private";
     emit({ kind: "audience-conflict-resolved", id: ann.id });

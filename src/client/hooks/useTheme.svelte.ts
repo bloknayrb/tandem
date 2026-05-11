@@ -25,7 +25,8 @@ export function systemTheme(): ResolvedTheme {
       if (seed === "dark" || seed === "light") return seed;
     }
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  } catch {
+  } catch (err) {
+    console.warn("[Tandem] Theme detection failed, defaulting to light:", err);
     return "light";
   }
 }
@@ -52,7 +53,7 @@ function syncThemeColorMeta(resolved: "light" | "dark"): void {
       meta.content = resolved === "dark" ? "#1c1c24" : "#fafaf9";
     }
   } catch {
-    // Non-fatal — meta tag may not exist in test environments.
+    // Guard against SSR or DOM-less test environments where document may throw.
   }
 }
 

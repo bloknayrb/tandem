@@ -168,6 +168,18 @@ describe("AR1: audience-conflict-resolved — user note/highlight with explicit 
     expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
   });
 
+  it("user flag with audience:outbound is forced to private before flag-to-note migration", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      type: "flag" as "note",
+      audience: "outbound",
+    });
+    expect(result.type).toBe("note");
+    expect(result.audience).toBe("private");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
+    expect(events.some((e) => e.kind === "flag-to-note")).toBe(true);
+  });
+
   it("import-promoted comment with audience:outbound is NOT changed — no audience-conflict-resolved", () => {
     // author:"import" annotations promoted to comment remain outbound-eligible
     const { result, events } = collect({

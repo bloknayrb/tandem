@@ -204,7 +204,8 @@ async function openReadOnlyFile(
       return;
     }
     onClose();
-  } catch {
+  } catch (err) {
+    console.warn("[Tandem] Failed to open read-only file:", err);
     setError("Server unavailable.");
   } finally {
     setLoading(false);

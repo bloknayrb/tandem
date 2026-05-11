@@ -56,7 +56,14 @@ export async function createScratchpad(): Promise<void> {
   if (scratchpadInflight) return;
   scratchpadInflight = true;
   try {
-    await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn(
+        "[Tandem] New Scratchpad failed:",
+        (body as Record<string, string>).message ?? res.statusText,
+      );
+    }
   } catch (err) {
     console.warn("[Tandem] New Scratchpad request failed:", err);
   } finally {
