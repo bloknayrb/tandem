@@ -9,6 +9,7 @@ import {
   DEFAULT_WS_PORT,
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
+import { isUploadPath } from "../shared/paths.js";
 import { acquireStoreLock, isStoreReadOnly, releaseStoreLock } from "./annotations/store.js";
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback } from "./bind-check.js";
@@ -27,7 +28,7 @@ import {
   writeGenerationId,
 } from "./mcp/document.js";
 import { docIdFromPath } from "./mcp/document-model.js";
-import { broadcastStoreReadOnly, docCount } from "./mcp/document-service.js";
+import { broadcastStoreReadOnly, docCount, getOpenDocs } from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 import {
   APP_VERSION,
@@ -268,7 +269,9 @@ async function main() {
       if (docName === CTRL_ROOM) {
         reattachCtrlObservers();
       } else {
-        reattachObservers(docName, newDoc);
+        const openDoc = getOpenDocs().get(docName);
+        const uploadDoc = openDoc ? isUploadPath(openDoc.filePath) : false;
+        reattachObservers(docName, newDoc, { uploadDoc });
       }
     },
     (docName) => {

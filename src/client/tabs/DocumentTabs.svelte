@@ -173,6 +173,22 @@ function scrollRight() {
 }
 
 const singleTab = $derived(tabs.length <= 1);
+
+$effect(() => {
+  if (!showRecent) return;
+
+  function handlePointerDown(e: PointerEvent) {
+    const target = e.target as Node | null;
+    if (!target) return;
+    if (openBtnEl?.contains(target)) return;
+    if ((target as Element).closest?.(".new-tab-menu")) return;
+    if ((target as Element).closest?.("[data-tauri-drag-region]")) return;
+    showRecent = false;
+  }
+
+  window.addEventListener("pointerdown", handlePointerDown, true);
+  return () => window.removeEventListener("pointerdown", handlePointerDown, true);
+});
 </script>
 
 <div

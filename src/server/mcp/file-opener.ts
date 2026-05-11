@@ -247,7 +247,8 @@ export async function openScratchpad(): Promise<OpenFileResult> {
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
   await initSavedBaseline(doc);
-  await wireAnnotationStore(id, doc, syntheticPath);
+  // Skip wireAnnotationStore — scratchpads are ephemeral; durable store
+  // would leave orphaned JSON files in the annotations directory on close.
   broadcastOpenDocs();
   ensureAutoSave();
 

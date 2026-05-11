@@ -130,17 +130,27 @@ export function getBufferedSelection(docName: string): BufferedSelection | undef
 
 // --- Y.Map observer attachment ---
 
-/** Attach observers to a document's Y.Maps. Call after doc swap in onLoadDocument. */
-export function attachObservers(docName: string, doc: Y.Doc): void {
+/**
+ * Attach observers to a document's Y.Maps. Call after doc swap in onLoadDocument.
+ * Upload/scratchpad documents (opts.uploadDoc) get only the awareness observer
+ * (selection buffering) — annotation and reply events are suppressed so
+ * ephemeral scratch notes don't flood Claude's channel.
+ */
+export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?: boolean }): void {
   detachObservers(docName);
+
+  const cleanups: Array<() => void> = [];
+
+  if (!opts?.uploadDoc) {
+    cleanups.push(
+      makeAnnotationsObserver({ docName, doc, pushEvent }),
+      makeRepliesObserver({ docName, doc, pushEvent }),
+    );
+  }
 
   // Selections are buffered per-document and attached to the next chat:message,
   // rather than firing as standalone events (#188).
-  const cleanups: Array<() => void> = [
-    makeAnnotationsObserver({ docName, doc, pushEvent }),
-    makeRepliesObserver({ docName, doc, pushEvent }),
-    makeAwarenessObserver({ docName, doc, selectionBuffer }),
-  ];
+  cleanups.push(makeAwarenessObserver({ docName, doc, selectionBuffer }));
 
   docObservers.set(docName, cleanups);
   console.error(`[EventQueue] Attached observers for document: ${docName}`);
@@ -157,8 +167,12 @@ export function detachObservers(docName: string): void {
 }
 
 /** Reattach observers after Hocuspocus replaces a Y.Doc instance. */
-export function reattachObservers(docName: string, newDoc: Y.Doc): void {
-  attachObservers(docName, newDoc);
+export function reattachObservers(
+  docName: string,
+  newDoc: Y.Doc,
+  opts?: { uploadDoc?: boolean },
+): void {
+  attachObservers(docName, newDoc, opts);
   reattachFileSyncObserver(docName, newDoc);
 }
 
