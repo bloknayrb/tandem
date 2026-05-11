@@ -1,7 +1,7 @@
 {
   "name": "tandem-editor",
   "version": "0.9.1",
-  "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
+  "description": "Edit and iterate on documents with Claude \u2014 no copy-paste, real-time push via plugin monitor",
   "repository": {
     "type": "git",
     "url": "https://github.com/bloknayrb/tandem"
@@ -14,7 +14,7 @@
     "ai",
     "collaborative"
   ],
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "type": "module",
   "main": "./dist/cli/index.js",
   "bin": {
