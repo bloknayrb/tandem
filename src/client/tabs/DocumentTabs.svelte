@@ -213,33 +213,36 @@ const singleTab = $derived(tabs.length <= 1);
         onkeydown={handleKeyDown}
       />
     {/each}
-
-    <button
-      bind:this={openBtnEl}
-      onclick={() => {
-        const files = loadRecentFilesCached();
-        if (files.length === 0) {
-          showDialog = true;
-        } else {
-          recentFiles = files;
-          showRecent = !showRecent;
-        }
-      }}
-      data-testid="open-file-btn"
-      title="Open file"
-      style="background: none; border: none; border-radius: var(--tandem-r-2); cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
-      onmouseenter={(e) => {
-        (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-accent)";
-        (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-accent)";
-      }}
-      onmouseleave={(e) => {
-        (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-fg-muted)";
-        (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-border-strong)";
-      }}
-    >
-      +
-    </button>
   </div>
+
+  <!-- The "+" button lives OUTSIDE role="tablist" — a tablist is only allowed to contain
+       role="tab" children (axe `aria-required-children`). Keeping it adjacent to the
+       scroll container preserves the visual placement at the end of the tab strip. -->
+  <button
+    bind:this={openBtnEl}
+    onclick={() => {
+      const files = loadRecentFilesCached();
+      if (files.length === 0) {
+        showDialog = true;
+      } else {
+        recentFiles = files;
+        showRecent = !showRecent;
+      }
+    }}
+    data-testid="open-file-btn"
+    title="Open file"
+    style="background: none; border: none; border-radius: var(--tandem-r-2); cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
+    onmouseenter={(e) => {
+      (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-accent)";
+      (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-accent)";
+    }}
+    onmouseleave={(e) => {
+      (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-fg-muted)";
+      (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-border-strong)";
+    }}
+  >
+    +
+  </button>
 
   {#if canScrollRight}
     <button
