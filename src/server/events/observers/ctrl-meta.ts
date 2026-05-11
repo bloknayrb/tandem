@@ -33,19 +33,21 @@ export function makeCtrlMetaObserver(deps: {
       if (activeId && activeId !== lastActiveDocId) {
         const openDoc = getOpenDocs().get(activeId);
         // Scratchpad/upload docs are not surfaced to Claude via channel events.
-        if (openDoc?.filePath && isUploadPath(openDoc.filePath)) {
-          lastActiveDocId = activeId;
-          return;
+        // Update lastActiveDocId regardless so the next non-upload switch still fires,
+        // but don't `return` — the openDocuments branch below must still run in case
+        // the same transaction mutated both keys (e.g. open-and-activate atomically).
+        const isUploadSwitch = openDoc?.filePath ? isUploadPath(openDoc.filePath) : false;
+        if (!isUploadSwitch) {
+          pushEvent({
+            id: generateEventId(),
+            type: "document:switched",
+            timestamp: Date.now(),
+            documentId: activeId,
+            payload: {
+              fileName: openDoc?.filePath?.split(/[/\\]/).pop() ?? activeId,
+            },
+          });
         }
-        pushEvent({
-          id: generateEventId(),
-          type: "document:switched",
-          timestamp: Date.now(),
-          documentId: activeId,
-          payload: {
-            fileName: openDoc?.filePath?.split(/[/\\]/).pop() ?? activeId,
-          },
-        });
         lastActiveDocId = activeId;
       }
     }

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { clickOutside } from "../actions/clickOutside.svelte";
 import type { RailTab } from "../hooks/useTandemSettings";
 
 interface Props {
@@ -28,13 +29,6 @@ function toggle(tab: RailTab) {
   if (next.length > 0) onTabsChange(next);
 }
 
-function handleClickOutside(e: MouseEvent) {
-  const target = e.target as Element;
-  if (!target.closest(".rail-tab-picker")) {
-    open = false;
-  }
-}
-
 function toggleOpen(e: MouseEvent) {
   e.stopPropagation();
   if (open) {
@@ -49,16 +43,17 @@ function toggleOpen(e: MouseEvent) {
 }
 
 $effect(() => {
-  if (open) {
-    document.addEventListener("click", handleClickOutside, true);
-    return () => document.removeEventListener("click", handleClickOutside, true);
-  } else {
+  if (!open) {
     dropdownPos = null;
   }
 });
 </script>
 
-<div class="rail-tab-picker" style="display: flex; align-items: center;">
+<div
+  class="rail-tab-picker"
+  use:clickOutside={() => (open = false)}
+  style="display: flex; align-items: center;"
+>
   <button
     bind:this={btnEl}
     data-testid={`${testIdPrefix}rail-tab-picker-btn`}

@@ -28,16 +28,17 @@ import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 /** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
 const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
 
-/** Return true if the href looks like an external URL (not a relative file path). */
-function isExternalHref(href: string): boolean {
-  return (
-    href.startsWith("http://") ||
-    href.startsWith("https://") ||
-    href.startsWith("mailto:") ||
-    href.startsWith("ftp://") ||
-    href.startsWith("//") ||
-    href.startsWith("#")
-  );
+/**
+ * Whitelist of safe external href prefixes that we'll hand off to the default
+ * browser via window.open. Anything not in this list and not a relative path
+ * (e.g. `javascript:`, `data:`, `vbscript:`) is treated as unsafe and ignored —
+ * preventDefault has already been called by the time we check this, so the
+ * browser won't navigate.
+ */
+const SAFE_EXTERNAL_PREFIXES = ["http://", "https://", "mailto:", "ftp://", "//"] as const;
+
+function isSafeExternalHref(href: string): boolean {
+  return SAFE_EXTERNAL_PREFIXES.some((p) => href.startsWith(p));
 }
 
 /**
@@ -208,17 +209,33 @@ $effect(() => {
 });
 
 async function handleEditorClick(e: MouseEvent) {
-  // --- Relative link intercept (closes #479) --------------------------------
-  // Check for an anchor click before the annotation path so we can
-  // preventDefault before the browser navigates away.
+  // --- Anchor intercept (closes #479) --------------------------------------
+  // We want to own every anchor click except in-page fragments: relative links
+  // open as new Tandem tabs, safe-protocol external links open in the default
+  // browser, and unrecognised schemes (javascript:, data:, …) are silently
+  // dropped so they can't navigate the editor frame.
   const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
   if (anchor) {
     const href = anchor.getAttribute("href") ?? "";
-    if (!isExternalHref(href) && currentFilePath) {
-      // Relative link — resolve and open as a new Tandem tab
+
+    // Empty href or pure fragment → let the browser handle (in-page scroll).
+    if (!href || href.startsWith("#")) {
+      return;
+    }
+
+    // Take ownership of this click — even if no branch below handles it,
+    // we don't want the browser navigating to a javascript:/data:/etc URL.
+    e.preventDefault();
+
+    if (isSafeExternalHref(href)) {
+      window.open(href, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    // Treat anything else with a recognised file extension as a relative path.
+    if (currentFilePath) {
       const resolvedPath = resolveRelativeLink(href, currentFilePath);
       if (resolvedPath) {
-        e.preventDefault();
         try {
           const res = await fetch(`${API_BASE}/open`, {
             method: "POST",
@@ -235,15 +252,8 @@ async function handleEditorClick(e: MouseEvent) {
           console.warn("[tandem] Failed to open relative link:", err);
         }
       }
-      return;
     }
-
-    if (isExternalHref(href) && href && !href.startsWith("#")) {
-      // External URL — open in default browser, do not navigate the editor
-      e.preventDefault();
-      window.open(href, "_blank", "noopener,noreferrer");
-      return;
-    }
+    return;
   }
 
   // --- Annotation click ----------------------------------------------------

@@ -33,11 +33,12 @@ describe("runSetupHandler — HTTP status reflects outcome", () => {
     expect(result.status).toBe(200);
   });
 
-  // chmod 0o500 is a no-op on Windows, so the read-only precondition required
-  // to force applyConfig/installSkill failures cannot be established. Skip on
-  // win32 rather than assert conditionally — a guard would let the test pass
-  // without exercising the 500/207 branches at all.
-  it.skipIf(process.platform === "win32")(
+  // chmod 0o500 is a no-op on Windows and is bypassed when running as root
+  // (e.g. Docker / CI sandboxes), so the read-only precondition required to
+  // force applyConfig/installSkill failures cannot be established in those
+  // environments. Skip rather than assert conditionally — a guard would let
+  // the test pass without exercising the 500/207 branches at all.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "returns 500 when every target fails AND skill install fails",
     async () => {
       // Block both target-config writes AND skill install by making ~/.claude a
@@ -63,7 +64,7 @@ describe("runSetupHandler — HTTP status reflects outcome", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "returns 207 when at least one attempt succeeds but another failed",
     async () => {
       // Make ~/.claude readonly to block skill install while leaving target
