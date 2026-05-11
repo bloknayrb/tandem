@@ -110,6 +110,7 @@ const BUILTINS: Action[] = [
     id: "new-scratchpad",
     label: "New Scratchpad",
     group: "document",
+    shortcut: "Ctrl+N",
     async run() {
       try {
         await fetch(`${API_BASE}/scratchpad`, { method: "POST" });

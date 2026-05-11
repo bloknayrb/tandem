@@ -50,6 +50,7 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { API_BASE } from "./utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 const yjsSync = createYjsSync();
@@ -331,6 +332,9 @@ $effect(() => {
       } else if (e.shiftKey && e.key === "P") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
+      } else if (e.key === "n") {
+        e.preventDefault();
+        void fetch(`${API_BASE}/scratchpad`, { method: "POST" }).catch(() => {});
       } else if (e.key === "/") {
         const el = e.target as HTMLElement;
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;

@@ -11,6 +11,8 @@ interface Props {
 let { enabledTabs, disabledTabs = [], testIdPrefix = "", onTabsChange }: Props = $props();
 
 let open = $state(false);
+let btnEl: HTMLButtonElement | null = $state(null);
+let dropdownPos = $state<{ top: number; right: number } | null>(null);
 
 const ALL_TABS: { id: RailTab; label: string }[] = [
   { id: "annotations", label: "Annotations" },
@@ -36,14 +38,21 @@ function handleClickOutside(e: MouseEvent) {
 
 $effect(() => {
   if (open) {
+    if (btnEl) {
+      const rect = btnEl.getBoundingClientRect();
+      dropdownPos = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+    }
     document.addEventListener("click", handleClickOutside, true);
     return () => document.removeEventListener("click", handleClickOutside, true);
+  } else {
+    dropdownPos = null;
   }
 });
 </script>
 
-<div class="rail-tab-picker" style="position: relative; display: flex; align-items: center;">
+<div class="rail-tab-picker" style="display: flex; align-items: center;">
   <button
+    bind:this={btnEl}
     data-testid={`${testIdPrefix}rail-tab-picker-btn`}
     aria-label="Configure tabs"
     aria-expanded={open}
@@ -57,11 +66,12 @@ $effect(() => {
     "
   >+</button>
 
-  {#if open}
+  {#if open && dropdownPos}
     <div
       data-testid={`${testIdPrefix}rail-tab-picker-dropdown`}
       style="
-        position: absolute; top: 100%; right: 0; z-index: var(--tandem-z-dropdown, 200);
+        position: fixed; top: {dropdownPos.top}px; right: {dropdownPos.right}px;
+        z-index: var(--tandem-z-dropdown, 200);
         background: var(--tandem-surface); border: 1px solid var(--tandem-border);
         border-radius: var(--tandem-r-3); box-shadow: var(--tandem-shadow-2);
         padding: var(--tandem-space-2); min-width: 140px;

@@ -132,7 +132,7 @@ $effect(() => {
         HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       }),
       Placeholder.configure({
-        placeholder: "Open a document with Claude to get started...",
+        placeholder: "Start typing…",
       }),
       Table.configure({ resizable: true }),
       TableRow,
@@ -161,6 +161,7 @@ $effect(() => {
       },
     },
     editable: untrack(() => !readOnly),
+    autofocus: untrack(() => !readOnly),
   });
 
   editor = next;

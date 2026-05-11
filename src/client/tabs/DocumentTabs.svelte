@@ -229,6 +229,32 @@ $effect(() => {
         onkeydown={handleKeyDown}
       />
     {/each}
+
+    <button
+      bind:this={openBtnEl}
+      onclick={() => {
+        const files = loadRecentFilesCached();
+        if (files.length === 0) {
+          showDialog = true;
+        } else {
+          recentFiles = files;
+          showRecent = !showRecent;
+        }
+      }}
+      data-testid="open-file-btn"
+      title="Open file"
+      style="background: none; border: none; border-radius: var(--tandem-r-2); cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
+      onmouseenter={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-accent)";
+        (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-accent)";
+      }}
+      onmouseleave={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-fg-muted)";
+        (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-border-strong)";
+      }}
+    >
+      +
+    </button>
   </div>
 
   {#if canScrollRight}
@@ -242,34 +268,8 @@ $effect(() => {
     </button>
   {/if}
 
-  <button
-    bind:this={openBtnEl}
-    onclick={() => {
-      const files = loadRecentFilesCached();
-      if (files.length === 0) {
-        showDialog = true;
-      } else {
-        recentFiles = files;
-        showRecent = !showRecent;
-      }
-    }}
-    data-testid="open-file-btn"
-    title="Open file"
-    style="background: none; border: none; border-radius: var(--tandem-r-2); cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
-    onmouseenter={(e) => {
-      (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-accent)";
-      (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-accent)";
-    }}
-    onmouseleave={(e) => {
-      (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-fg-muted)";
-      (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-border-strong)";
-    }}
-  >
-    +
-  </button>
-
   {#if showRecent}
-    <div bind:this={recentMenuEl} style="position: relative;">
+    <div bind:this={recentMenuEl}>
       <RecentFilesMenu
         {recentFiles}
         onOpen={async (filePath) => {
@@ -288,6 +288,14 @@ $effect(() => {
             }
           } catch (err) {
             console.warn("[tandem] failed to open recent file:", err);
+          }
+        }}
+        onNewScratchpad={async () => {
+          showRecent = false;
+          try {
+            await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+          } catch (err) {
+            console.warn("[tandem] failed to create scratchpad:", err);
           }
         }}
         onBrowse={() => {

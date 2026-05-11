@@ -3,13 +3,13 @@ interface Props {
   recentFiles: string[];
   onOpen: (path: string) => void;
   onBrowse: () => void;
+  onNewScratchpad: () => void;
   onClose: () => void;
 }
 
-let { recentFiles, onOpen, onBrowse, onClose }: Props = $props();
+let { recentFiles, onOpen, onBrowse, onNewScratchpad, onClose }: Props = $props();
 
 function basename(p: string): string {
-  // Works on both / and \ separators
   return p.replace(/[/\\]+$/, "").replace(/.*[/\\]/, "");
 }
 
@@ -52,22 +52,36 @@ function hoverOff(e: MouseEvent) {
 
 let menuEl: HTMLDivElement | null = $state(null);
 
+function portal(node: HTMLElement) {
+  document.body.appendChild(node);
+  return {
+    destroy() {
+      node.remove();
+    },
+  };
+}
+
 $effect(() => {
   if (!menuEl) return;
-  // Focus first item on open
-  const items = getFocusableItems();
-  items[0]?.focus();
+  getFocusableItems()[0]?.focus();
 });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+  use:portal
   bind:this={menuEl}
   role="menu"
   aria-label="Recent files"
   onkeydown={handleKeyDown}
   tabindex="-1"
-  style="position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 260px; max-width: 400px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-2); z-index: var(--tandem-z-dropdown); overflow: hidden;"
+  style="
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    min-width: 260px; max-width: 400px;
+    background: var(--tandem-surface); border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-4);
+    z-index: var(--tandem-z-dropdown); overflow: hidden;
+  "
 >
   <div style="padding: 6px 12px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--tandem-fg-subtle);">
     Recent files
@@ -96,6 +110,17 @@ $effect(() => {
     <div style="height: 1px; background: var(--tandem-border); margin: 4px 0;"></div>
   {/if}
 
+  <button
+    role="menuitem"
+    type="button"
+    data-testid="palette-item-new-scratchpad"
+    onclick={onNewScratchpad}
+    style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 12px; border: none; background: transparent; cursor: pointer; text-align: left; color: var(--tandem-fg-muted); font-size: 13px;"
+    onmouseenter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--tandem-surface-hover, var(--tandem-surface-muted))"; }}
+    onmouseleave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+  >
+    New Scratchpad
+  </button>
   <button
     role="menuitem"
     type="button"

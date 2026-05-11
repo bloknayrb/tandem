@@ -17,7 +17,7 @@
 - **Start the server before connecting Claude Code.** `npm run dev:standalone` runs both. Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 28 MCP tools (25 active, 3 deprecated stubs) + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 29 MCP tools (26 active, 3 deprecated stubs) + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems, file map
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Agent Workflow](.claude/skills/issue-pipeline/SKILL.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
