@@ -19,7 +19,7 @@ export type SanitizationEvent =
   | { kind: "malformed-suggestion-json"; id: string }
   | { kind: "unknown-type"; id: string; rawType: string }
   | { kind: "import-note-to-comment"; id: string }
-  | { kind: "audience-derived"; id: string };
+  | { kind: "audience-conflict-resolved"; id: string };
 
 /**
  * Required callback invoked once per lossy rewrite. Sync only — Promise
@@ -69,19 +69,16 @@ export function sanitizeAnnotation(
   // AR1: derive audience before `base` is built so it flows through all early-return paths.
   // "flag" is explicit — it hasn't been mutated to "note" at this point.
   // Import annotations are always private initially; users triage Word comments before Claude sees them.
-  let derivedAudience: "private" | "outbound";
-  if (ann.audience === "private" || ann.audience === "outbound") {
-    derivedAudience = ann.audience;
-  } else {
-    derivedAudience =
-      ann.author === "import" ||
-      ann.type === "highlight" ||
-      ann.type === "note" ||
-      ann.type === "flag"
+  // Computing a default is normative behavior, not a lossy migration — no event emitted.
+  const derivedAudience: "private" | "outbound" =
+    ann.audience === "private" || ann.audience === "outbound"
+      ? ann.audience
+      : ann.author === "import" ||
+          ann.type === "highlight" ||
+          ann.type === "note" ||
+          ann.type === "flag"
         ? "private"
         : "outbound";
-    emit({ kind: "audience-derived", id: ann.id });
-  }
 
   // Build a base with only AnnotationBase fields (strip legacy type-specific fields)
   const base = {
@@ -99,6 +96,21 @@ export function sanitizeAnnotation(
     ...(ann.promotedFrom !== undefined ? { promotedFrom: ann.promotedFrom } : {}),
     ...(ann.importSource !== undefined ? { importSource: ann.importSource } : {}),
   };
+
+  // Guard: user-authored notes, highlights, and flags must never be outbound.
+  // Flags are included because the flag-to-note migration below preserves audience;
+  // without this guard a flag with explicit audience:"outbound" would become a
+  // note with audience:"outbound", violating ADR-027.
+  // Only author:"user" is guarded; import-promoted comments (author:"import") remain
+  // outbound-eligible after their own type rewrite below.
+  if (
+    base.audience === "outbound" &&
+    ann.author === "user" &&
+    (ann.type === "note" || ann.type === "highlight" || ann.type === "flag")
+  ) {
+    base.audience = "private";
+    emit({ kind: "audience-conflict-resolved", id: ann.id });
+  }
 
   if (ann.type === "suggestion") {
     let suggestedText: string | undefined;

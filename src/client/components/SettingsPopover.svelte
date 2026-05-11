@@ -99,6 +99,8 @@ let nameInput = $state(userNameState.userName);
 const appInfo = createAppInfo(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
+let docsLoading = $state(false);
+let docsError = $state<string | null>(null);
 let activeSection = $state<SettingsSection>("appearance");
 
 // Idle-sync: sync only when NOT focused and value differs
@@ -171,38 +173,61 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
-async function handleViewChangelog(): Promise<void> {
-  const changelogPath = appInfo.info?.changelogPath;
-  if (!changelogPath) {
-    changelogError = "Changelog file not found.";
+async function openReadOnlyFile(
+  filePath: string | undefined,
+  setLoading: (v: boolean) => void,
+  setError: (v: string | null) => void,
+  labels: { notFound: string; failed: string },
+): Promise<void> {
+  if (!filePath) {
+    setError(labels.notFound);
     return;
   }
-  changelogLoading = true;
-  changelogError = null;
+  setLoading(true);
+  setError(null);
   try {
     const res = await fetch(`${API_BASE}/open`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: changelogPath, readOnly: true }),
+      body: JSON.stringify({ filePath, readOnly: true }),
     });
     if (!res.ok) {
-      let msg = "Failed to open changelog.";
+      let msg = labels.failed;
       try {
         const data = (await res.json()) as { message?: string };
         if (data.message) msg = data.message;
       } catch {
         // ignore JSON parse failure
       }
-      if (res.status === 404) msg = "Changelog file not found.";
-      changelogError = msg;
+      if (res.status === 404) msg = labels.notFound;
+      setError(msg);
       return;
     }
     onClose();
-  } catch {
-    changelogError = "Server unavailable.";
+  } catch (err) {
+    console.warn("[Tandem] Failed to open read-only file:", err);
+    setError("Server unavailable.");
   } finally {
-    changelogLoading = false;
+    setLoading(false);
   }
+}
+
+function handleViewDocumentation(): Promise<void> {
+  return openReadOnlyFile(
+    appInfo.info?.workflowsPath,
+    (v) => (docsLoading = v),
+    (v) => (docsError = v),
+    { notFound: "Documentation file not found.", failed: "Failed to open documentation." },
+  );
+}
+
+function handleViewChangelog(): Promise<void> {
+  return openReadOnlyFile(
+    appInfo.info?.changelogPath,
+    (v) => (changelogLoading = v),
+    (v) => (changelogError = v),
+    { notFound: "Changelog file not found.", failed: "Failed to open changelog." },
+  );
 }
 
 const sectionLabelStyle =
@@ -490,6 +515,22 @@ function aboutRows() {
               </section>
             </div>
           {:else}
+            <div>
+              <button
+                data-testid="view-documentation-btn"
+                onclick={() => void handleViewDocumentation()}
+                disabled={docsLoading || appInfo.loading}
+                style="width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: {docsLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {docsLoading || appInfo.loading ? 0.6 : 1};"
+              >
+                {docsLoading ? "Opening…" : "View Documentation"}
+              </button>
+              {#if docsError}
+                <div style="margin-top: 6px; font-size: 11px; color: var(--tandem-error-fg);">
+                  {docsError}
+                </div>
+              {/if}
+            </div>
+
             <div>
               <button
                 data-testid="view-changelog-btn"

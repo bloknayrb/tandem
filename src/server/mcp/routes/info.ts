@@ -19,6 +19,11 @@ export interface InfoHandlerDeps {
    * Undefined if the file does not exist (e.g. stripped production builds).
    */
   changelogPath?: string;
+  /**
+   * Absolute path to docs/workflows.md on disk, resolved at server startup.
+   * Undefined if the file does not exist (e.g. stripped production builds).
+   */
+  workflowsPath?: string;
   /** Active MCP transport mode. */
   transport?: "http" | "stdio";
   /** Bind host for HTTP transport (e.g. "127.0.0.1"). Undefined for stdio. */
@@ -72,6 +77,11 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
     // changelogPath is not sensitive — include whenever the file exists on disk.
     if (deps.changelogPath !== undefined) {
       body.changelogPath = deps.changelogPath;
+    }
+
+    // workflowsPath is not sensitive — include whenever the file exists on disk.
+    if (deps.workflowsPath !== undefined) {
+      body.workflowsPath = deps.workflowsPath;
     }
 
     if (loopback) {

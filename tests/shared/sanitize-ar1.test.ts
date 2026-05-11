@@ -18,54 +18,55 @@ function collect(ann: object): { result: Annotation; events: SanitizationEvent[]
   return { result, events };
 }
 
-describe("AR1: audience derivation for legacy annotations", () => {
-  it("derives audience:private for legacy highlight", () => {
+describe("AR1: audience derivation for legacy annotations (no audience field)", () => {
+  it("derives audience:private for legacy highlight — no audience-derived event", () => {
     const { result, events } = collect({ ...baseAnn, type: "highlight" });
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    // Computing a default is normative — must not emit any event
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 
-  it("derives audience:private for legacy note", () => {
+  it("derives audience:private for legacy note — no audience-derived event", () => {
     const { result, events } = collect({ ...baseAnn, type: "note" });
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 
-  it("derives audience:private for legacy flag (pre-mutation type)", () => {
+  it("derives audience:private for legacy flag (pre-mutation type) — no audience-derived event", () => {
     const { result, events } = collect({ ...baseAnn, type: "flag" });
     // flag→note rewrite still fires; audience is private because flag was in private set
     expect(result.type).toBe("note");
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === "flag-to-note")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 
-  it("derives audience:outbound for legacy comment (claude author)", () => {
+  it("derives audience:outbound for legacy comment (claude author) — no audience-derived event", () => {
     const { result, events } = collect({ ...baseAnn, author: "claude", type: "comment" });
     expect(result.audience).toBe("outbound");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 
-  it("derives audience:outbound for legacy comment (user author)", () => {
+  it("derives audience:outbound for legacy comment (user author) — no audience-derived event", () => {
     // user-authored comments are Claude-visible per design brief — comment = outbound type
     const { result, events } = collect({ ...baseAnn, author: "user", type: "comment" });
     expect(result.audience).toBe("outbound");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 
-  it("derives audience:outbound for legacy question (comment after migration)", () => {
+  it("derives audience:outbound for legacy question (comment after migration) — no audience-derived event", () => {
     const { result, events } = collect({ ...baseAnn, type: "question" });
     expect(result.type).toBe("comment");
     expect(result.audience).toBe("outbound");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
     expect(events.some((e) => e.kind === "question-to-comment")).toBe(true);
   });
 
-  it("derives audience:outbound for unknown type (coerced to comment)", () => {
+  it("derives audience:outbound for unknown type (coerced to comment) — no audience-derived event", () => {
     const { result, events } = collect({ ...baseAnn, type: "mystery-type" });
     expect(result.type).toBe("comment");
     expect(result.audience).toBe("outbound");
-    // Both audience-derived and unknown-type events must fire
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
     expect(events.some((e) => e.kind === "unknown-type")).toBe(true);
   });
 
@@ -75,8 +76,8 @@ describe("AR1: audience derivation for legacy annotations", () => {
     const { result, events } = collect({ ...baseAnn, author: "import", type: "note" });
     expect(result.type).toBe("comment");
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
     expect(events.some((e) => e.kind === "import-note-to-comment")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 
   it("import comment annotation gets audience:private (not yet promoted by user)", () => {
@@ -84,19 +85,38 @@ describe("AR1: audience derivation for legacy annotations", () => {
     // should still be private until the user explicitly promotes it.
     const { result, events } = collect({ ...baseAnn, author: "import", type: "comment" });
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
+});
 
-  it("does not emit audience-derived for already-migrated annotation", () => {
+describe("AR1: explicit audience — no events for already-migrated annotations", () => {
+  it("does not emit any event for annotation with explicit audience:outbound", () => {
     const { result, events } = collect({ ...baseAnn, type: "comment", audience: "outbound" });
     expect(result.audience).toBe("outbound");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(false);
+    expect(events).toHaveLength(0);
   });
 
-  it("preserves explicit audience:private without re-deriving", () => {
+  it("preserves explicit audience:private without emitting any event", () => {
     const { result, events } = collect({ ...baseAnn, type: "comment", audience: "private" });
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "audience-derived")).toBe(false);
+    expect(events).toHaveLength(0);
+  });
+
+  it("newly created highlight with explicit audience:private emits no events", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      type: "highlight",
+      audience: "private",
+      color: "yellow",
+    });
+    expect(result.audience).toBe("private");
+    expect(events).toHaveLength(0);
+  });
+
+  it("newly created note with explicit audience:private emits no events", () => {
+    const { result, events } = collect({ ...baseAnn, type: "note", audience: "private" });
+    expect(result.audience).toBe("private");
+    expect(events).toHaveLength(0);
   });
 });
 
@@ -130,10 +150,63 @@ describe("AR1: importSource pass-through", () => {
   });
 });
 
-describe("AR1: audience-derived fires exactly once per call regardless of type path", () => {
-  it("emits audience-derived exactly once even when suggestion path fires malformed-suggestion-json too", () => {
+describe("AR1: audience-conflict-resolved — user note/highlight with explicit audience:outbound", () => {
+  it("user note with audience:outbound is forced to private and emits audience-conflict-resolved", () => {
+    const { result, events } = collect({ ...baseAnn, type: "note", audience: "outbound" });
+    expect(result.audience).toBe("private");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
+  });
+
+  it("user highlight with audience:outbound is forced to private and emits audience-conflict-resolved", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      type: "highlight",
+      audience: "outbound",
+      color: "yellow",
+    });
+    expect(result.audience).toBe("private");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
+  });
+
+  it("user flag with audience:outbound is forced to private before flag-to-note migration", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      type: "flag" as "note",
+      audience: "outbound",
+    });
+    expect(result.type).toBe("note");
+    expect(result.audience).toBe("private");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(true);
+    expect(events.some((e) => e.kind === "flag-to-note")).toBe(true);
+  });
+
+  it("import-promoted comment with audience:outbound is NOT changed — no audience-conflict-resolved", () => {
+    // author:"import" annotations promoted to comment remain outbound-eligible
+    const { result, events } = collect({
+      ...baseAnn,
+      author: "import",
+      type: "comment",
+      audience: "outbound",
+    });
+    expect(result.audience).toBe("outbound");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(false);
+  });
+
+  it("claude comment with audience:outbound is NOT changed — guard only covers author:user", () => {
+    const { result, events } = collect({
+      ...baseAnn,
+      author: "claude",
+      type: "comment",
+      audience: "outbound",
+    });
+    expect(result.audience).toBe("outbound");
+    expect(events.some((e) => e.kind === "audience-conflict-resolved")).toBe(false);
+  });
+});
+
+describe("AR1: suggestion path emits no audience-derived event", () => {
+  it("suggestion with valid JSON emits no events", () => {
     const events: SanitizationEvent[] = [];
-    // suggestion type goes through its own early path
     sanitizeAnnotation(
       {
         ...baseAnn,
@@ -142,8 +215,21 @@ describe("AR1: audience-derived fires exactly once per call regardless of type p
       } as Annotation,
       (e) => events.push(e),
     );
-    const derived = events.filter((e) => e.kind === "audience-derived");
-    expect(derived).toHaveLength(1);
-    expect(derived[0].id).toBe("test-id");
+    // No audience-derived event, no other events for valid suggestion
+    expect(events).toHaveLength(0);
+  });
+
+  it("malformed suggestion emits only malformed-suggestion-json, not audience-derived", () => {
+    const events: SanitizationEvent[] = [];
+    sanitizeAnnotation(
+      {
+        ...baseAnn,
+        type: "suggestion",
+        content: "not-json",
+      } as Annotation,
+      (e) => events.push(e),
+    );
+    expect(events.some((e) => e.kind === "malformed-suggestion-json")).toBe(true);
+    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
   });
 });

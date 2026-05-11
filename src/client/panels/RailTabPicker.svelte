@@ -1,4 +1,5 @@
 <script lang="ts">
+import { clickOutside } from "../actions/clickOutside.svelte";
 import type { RailTab } from "../hooks/useTandemSettings";
 
 interface Props {
@@ -11,6 +12,8 @@ interface Props {
 let { enabledTabs, disabledTabs = [], testIdPrefix = "", onTabsChange }: Props = $props();
 
 let open = $state(false);
+let btnEl: HTMLButtonElement | null = $state(null);
+let dropdownPos = $state<{ top: number; right: number } | null>(null);
 
 const ALL_TABS: { id: RailTab; label: string }[] = [
   { id: "annotations", label: "Annotations" },
@@ -23,31 +26,40 @@ function toggle(tab: RailTab) {
   const next = enabledTabs.includes(tab)
     ? enabledTabs.filter((t) => t !== tab)
     : [...enabledTabs, tab];
-  // Always keep at least one tab enabled
   if (next.length > 0) onTabsChange(next);
 }
 
-function handleClickOutside(e: MouseEvent) {
-  const target = e.target as Element;
-  if (!target.closest(".rail-tab-picker")) {
+function toggleOpen(e: MouseEvent) {
+  e.stopPropagation();
+  if (open) {
     open = false;
+    return;
   }
+  if (btnEl) {
+    const rect = btnEl.getBoundingClientRect();
+    dropdownPos = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+  }
+  open = true;
 }
 
 $effect(() => {
-  if (open) {
-    document.addEventListener("click", handleClickOutside, true);
-    return () => document.removeEventListener("click", handleClickOutside, true);
+  if (!open) {
+    dropdownPos = null;
   }
 });
 </script>
 
-<div class="rail-tab-picker" style="position: relative; display: flex; align-items: center;">
+<div
+  class="rail-tab-picker"
+  use:clickOutside={() => (open = false)}
+  style="display: flex; align-items: center;"
+>
   <button
+    bind:this={btnEl}
     data-testid={`${testIdPrefix}rail-tab-picker-btn`}
     aria-label="Configure tabs"
     aria-expanded={open}
-    onclick={(e) => { e.stopPropagation(); open = !open; }}
+    onclick={toggleOpen}
     style="
       width: 22px; height: 22px; border: none; background: transparent;
       cursor: pointer; border-radius: var(--tandem-r-2);
@@ -57,11 +69,12 @@ $effect(() => {
     "
   >+</button>
 
-  {#if open}
+  {#if open && dropdownPos}
     <div
       data-testid={`${testIdPrefix}rail-tab-picker-dropdown`}
       style="
-        position: absolute; top: 100%; right: 0; z-index: var(--tandem-z-dropdown, 200);
+        position: fixed; top: {dropdownPos.top}px; right: {dropdownPos.right}px;
+        z-index: var(--tandem-z-dropdown, 200);
         background: var(--tandem-surface); border: 1px solid var(--tandem-border);
         border-radius: var(--tandem-r-3); box-shadow: var(--tandem-shadow-2);
         padding: var(--tandem-space-2); min-width: 140px;

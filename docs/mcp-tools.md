@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Tandem exposes 28 tools via MCP HTTP (25 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 29 tools via MCP HTTP (26 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts; Claude Code discovers both transports automatically. All tools use flat text character offsets for positions -- use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -96,6 +96,30 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 - Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
+
+---
+
+### tandem_scratchpad
+
+Create and open a new empty Scratchpad tab. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| *(none)* | — | — | — |
+
+**Returns:**
+```json
+{
+  "documentId": "scratchpad-a1b2c3",
+  "fileName": "Scratchpad.md",
+  "format": "md"
+}
+```
+
+**Notes:**
+- Each call creates a new scratchpad with a unique ID.
+- Scratchpads use `upload://` synthetic paths — they are not saved to disk.
+- Also available via `Ctrl+N` in the editor or the `+` button in the tab bar.
 
 ---
 
@@ -847,6 +871,17 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 ```
 
 **Errors:** `404 FILE_NOT_FOUND`, `400 UNSUPPORTED_FORMAT`, `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`
+
+### POST /api/scratchpad
+
+Create and open a new empty Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option).
+
+**Request:** No body required.
+
+**Response (200):**
+```json
+{ "data": { "documentId": "abc123", "fileName": "Scratchpad.md", "format": "md", "readOnly": false, "source": "upload", ... } }
+```
 
 ### POST /api/close
 

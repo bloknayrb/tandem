@@ -685,7 +685,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
 - `open-browser.ts` -- Cross-platform browser launcher (`execFile`-based, no shell injection risk). Best-effort — errors logged, never thrown.
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API; `openScratchpad()` for ephemeral in-memory docs via `source:"upload"`), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-watcher.ts` -- File change detection: `fs.watch` wrapper with 500ms debounce, self-write suppression (`suppressNextChange`), per-path watcher lifecycle (`watchFile`/`unwatchFile`/`unwatchAll`)
@@ -714,7 +714,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `App.svelte` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
 - `panel-layout.ts` -- Panel width constants (`PANEL_DEFAULT_WIDTH`, `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`) and `loadPanelWidth()`. `PanelLayout` type and `getRightWidth` were removed with the layout-mode refactor
 - `DocListEntry`, `OpenTab`, and `AppInfoData` types live in `src/client/types.ts`
-- `DocumentTabs` -- Tab bar + "+" button (FileOpenDialog); tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
+- `DocumentTabs` -- Tab bar + "+" button (opens `NewTabMenu` with recent files, New Scratchpad, and Browse; falls back to `FileOpenDialog` when no recent files exist). Tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
 - `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by SettingsPopover's ABOUT footer and View Changelog button
 - `hooks/useDragResize.svelte.ts` -- Drag-resize handler for the panel divider: pointer event listeners, layout state updates, cleanup. Explicit arm-per-kind handling for all three layout variants
 - `hooks/useTandemModeBroadcast.svelte.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
@@ -738,6 +738,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `editor/toolbar/ToolbarButton.svelte` -- Shared button primitive used in main toolbar
 - `editor/toolbar/selection-toolbar.ts` -- Positioning logic for the floating selection popup (`computeSelectionToolbarPosition`, `attachSelectionToolbarListener`)
 - `editor/toolbar/highlight-toggle.ts` -- Toggle-highlight logic: creates a new highlight or removes an existing one if the range already has that color
+- `actions/clickOutside.svelte.ts` -- Svelte action: fires a handler when a mousedown occurs outside the attached element; used by FormattingToolbar heading dropdown and link input popover
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
 - `panels/FilterBar.svelte` -- Filter controls row: type/author/status FilterSelect dropdowns + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
@@ -769,3 +770,10 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 
 - `scripts/ci/stdio-smoke.mjs` -- CI smoke test: spawns real HTTP server + stdio proxy, sends MCP initialize → tools/list, asserts ≥20 tools registered. Self-contained ESM with cleanup watchdogs.
 - `tsup.config.ts` -- Four-entry tsup build (server, channel, monitor, CLI). Server entry injects `__MCP_SDK_VERSION__` at build time. `selfContained` config for Tauri bundles (no node_modules).
+
+### Claude Code Automation (`.claude/`)
+
+- `.claude/settings.json` -- Hook wiring: PreToolUse (block) and PostToolUse (warn) matchers
+- `.claude/hooks/` -- 11 shell scripts enforcing Critical Rules, type-checking, formatting, and test running
+- `.claude/agents/` -- 4 specialized reviewer agents (annotation-model, svelte-migration, crdt, security)
+- `.claude/skills/` -- Project-local skills (dev-server, e2e, e2e-debug, changelog, screenshots, issue-pipeline) + symlinked generic skills

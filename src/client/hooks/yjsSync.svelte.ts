@@ -12,6 +12,7 @@ import {
   Y_MAP_GENERATION_ID,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_READ_ONLY,
+  Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
@@ -33,6 +34,8 @@ export interface YjsSyncState {
   readonly claudeStatus: string | null;
   readonly claudeActive: boolean;
   readonly readOnly: boolean;
+  /** True when the annotation store is locked by another Tandem instance. Annotations won't be saved. */
+  readonly storeReadOnly: boolean;
   /** @internal Internal CTRL_ROOM connection mechanism — not intended for consumer use. */
   readonly bootstrapYdoc: Y.Doc | null;
   readonly ready: boolean;
@@ -73,6 +76,7 @@ export function createYjsSync(): YjsSyncState {
   let claudeStatus = $state<string | null>(null);
   let claudeActive = $state(false);
   let readOnly = $state(false);
+  let storeReadOnly = $state(false);
   let ready = $state(false);
   let serverRestarted = $state(false);
   // Surface bootstrap Y.Doc reactively so `bootstrapYdoc` flips from null to populated
@@ -310,6 +314,11 @@ export function createYjsSync(): YjsSyncState {
         const active = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
         if (docs) handleDocumentList(docs, active ?? null);
       }
+
+      // keysChanged guard #6: annotation store read-only state
+      if (event.keysChanged.has(Y_MAP_STORE_READ_ONLY)) {
+        storeReadOnly = (meta.get(Y_MAP_STORE_READ_ONLY) as boolean | undefined) === true;
+      }
     };
     meta.observe(bootstrapObserver);
 
@@ -319,6 +328,7 @@ export function createYjsSync(): YjsSyncState {
     const initDocs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
     const initActive = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
     if (initDocs) handleDocumentList(initDocs, initActive ?? null);
+    storeReadOnly = (meta.get(Y_MAP_STORE_READ_ONLY) as boolean | undefined) === true;
 
     // Stash bootstrap cleanup for destroy()
     bootstrapCleanup = () => {
@@ -470,6 +480,9 @@ export function createYjsSync(): YjsSyncState {
     },
     get readOnly() {
       return readOnly;
+    },
+    get storeReadOnly() {
+      return storeReadOnly;
     },
     get bootstrapYdoc() {
       return bootstrapYdocState;

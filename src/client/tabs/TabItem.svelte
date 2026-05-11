@@ -40,7 +40,7 @@ const FORMAT_LABELS: Record<string, string> = {
 };
 
 const FORMAT_COLORS: Record<string, string> = {
-  md: "var(--tandem-accent)",
+  md: "var(--tandem-accent-fg-strong)",
   txt: "var(--tandem-fg-faint)",
   html: "var(--tandem-info-fg)",
   docx: "var(--tandem-suggestion-fg-strong)",
@@ -165,11 +165,14 @@ function handleMouseLeaveClose() {
     ●
   </span>
 
-  <!-- Format badge: decorative pill; file name is the accessible label via aria-label on the tab -->
+  <!-- Format badge: decorative pill; file name is the accessible label via aria-label on the tab.
+       No inactive-tab opacity dimming — the badge color must stay at full strength so axe-core
+       WCAG AA contrast passes; visual active/inactive distinction comes from the tab background
+       and bottom-border instead. -->
   <span
     data-testid={`tab-format-badge-${tab.id}`}
     aria-label={`Format: ${tab.format}`}
-    style={`font-family: var(--tandem-font-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.03em; color: ${badgeColor}; background: transparent; padding: 1px 4px; border: 1px solid ${badgeColor}; border-radius: var(--tandem-r-pill); opacity: ${isActive ? 1 : 0.6}; white-space: nowrap;`}
+    style={`font-family: var(--tandem-font-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.03em; color: ${badgeColor}; background: transparent; padding: 1px 4px; border: 1px solid ${badgeColor}; border-radius: var(--tandem-r-pill); white-space: nowrap;`}
   >
     {FORMAT_LABELS[tab.format] ?? tab.format.toUpperCase()}
   </span>

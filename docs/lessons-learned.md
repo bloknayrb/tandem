@@ -603,3 +603,21 @@ Mirror the identical step already present in `tauri-release.yml`.
 **Problem:** `gh pr merge --squash --auto` returns `GraphQL: Auto merge is not allowed for this repository`. Auto-merge requires a branch protection setting that isn't enabled.
 
 **Solution:** Use `gh pr merge --squash` (no `--auto`). If the branch has unresolved conflicts first update it: checkout → fetch origin master → merge → resolve → push — then merge.
+
+## 65. Normative Default-Filling Should Not Emit SanitizationEvents
+
+**Problem:** `sanitizeAnnotation` emitted `{ kind: "audience-derived" }` whenever it computed the `audience` field from annotation type. This fired on every annotation read, causing a console flood — the server-side dedup set helped, but client callsites had bare `console.warn` with no dedup.
+
+**Solution:** Deriving a default from existing data is normative fill-in, not a lossy migration. Remove it from `SanitizationEvent` and `LegacyMigrationKind` entirely, and write the field explicitly at annotation creation time. Reserve `SanitizationEvent` only for actual lossy rewrites (type coercions, malformed data, field removal).
+
+## 66. In-Memory Docs Need Explicit Channel Event Filter
+
+**Problem:** Scratchpad documents (ephemeral, no file on disk) appeared as `document:opened` / `document:switched` channel events to Claude. The spec required they not be surfaced, but the channel event observer in `ctrl-meta.ts` had no upload-path filter.
+
+**Solution:** Track upload/scratchpad doc IDs in a local `Set<string>` in `ctrl-meta.ts` and skip channel event emission for them. The Set needs to be maintained across open/close cycles because `getOpenDocs()` won't have the entry by the time the close event fires. See: `src/server/events/observers/ctrl-meta.ts`.
+
+## 67. Triage Milestoned Issues Before Executing — Half May Already Be Done
+
+**Problem:** In v0.11.0 planning, ~half of the scoped issues were already closed (#507, #492, #513–#522, #541) before implementation started. Dispatching agents to implement already-done work wastes significant time.
+
+**Solution:** Always spend 5 minutes running `gh issue view <N>` on every milestoned issue before writing any code. For QA-closeout batches especially, do the triage pass first — it may eliminate the entire batch.

@@ -5,7 +5,12 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
-import { saveStore, triggerSave, wireActionDeps } from "./actions/builtin.svelte.js";
+import {
+  createScratchpad,
+  saveStore,
+  triggerSave,
+  wireActionDeps,
+} from "./actions/builtin.svelte.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -331,6 +336,11 @@ $effect(() => {
       } else if (e.shiftKey && e.key === "P") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
+      } else if (e.key === "n") {
+        const el = e.target as HTMLElement;
+        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
+        e.preventDefault();
+        void createScratchpad();
       } else if (e.key === "/") {
         const el = e.target as HTMLElement;
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
@@ -401,6 +411,8 @@ const tutorial = createTutorial(
       bind:settingsBtn={settingsBtnEl}
       tandemMode={modeState.tandemMode}
       onModeChange={modeState.setTandemMode}
+      showAuthorship={settingsState.settings.showAuthorship}
+      onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
     />
@@ -501,6 +513,7 @@ const tutorial = createTutorial(
               {activeAnnotationId}
               onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
               reduceMotion={settingsState.settings.reduceMotion}
+              storeReadOnly={yjsSync.storeReadOnly}
               visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
             />
             <PanelSlot
@@ -637,6 +650,7 @@ const tutorial = createTutorial(
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
         readOnly={yjsSync.readOnly}
+        currentFilePath={activeTab!.filePath}
         {activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
@@ -756,6 +770,7 @@ const tutorial = createTutorial(
       {activeAnnotationId}
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}
+      storeReadOnly={yjsSync.storeReadOnly}
       onFilterChange={(type, author, status) => {
         activeAnnotationFilter = { type, author, status };
       }}

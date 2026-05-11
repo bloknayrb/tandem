@@ -25,13 +25,36 @@ export function systemTheme(): ResolvedTheme {
       if (seed === "dark" || seed === "light") return seed;
     }
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  } catch {
+  } catch (err) {
+    console.warn("[Tandem] Theme detection failed, defaulting to light:", err);
     return "light";
   }
 }
 
 export function resolveTheme(pref: ThemePreference): ResolvedTheme {
   return pref === "system" ? systemTheme() : pref;
+}
+
+/**
+ * Update <meta name="theme-color"> to match the resolved theme. Called by
+ * applyTheme() so the browser chrome (mobile address bar, PWA title bar)
+ * stays in sync with the app surface color whenever the theme changes.
+ *
+ * Colors are hardcoded hex approximations of --tandem-bg so the meta tag
+ * is set synchronously before the next paint without a getComputedStyle
+ * round-trip. Must match the light/dark --tandem-bg values in index.html:
+ *   light: oklch(0.985 0.004 80)  ≈ #fafaf9
+ *   dark:  oklch(0.18 0.012 270)  ≈ #1c1c24
+ */
+function syncThemeColorMeta(resolved: "light" | "dark"): void {
+  try {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (meta) {
+      meta.content = resolved === "dark" ? "#1c1c24" : "#fafaf9";
+    }
+  } catch {
+    // Guard against SSR or DOM-less test environments where document may throw.
+  }
 }
 
 /**
@@ -46,7 +69,9 @@ export function resolveTheme(pref: ThemePreference): ResolvedTheme {
  */
 export function applyTheme(pref: ThemePreference): () => void {
   const root = document.documentElement;
-  root.setAttribute("data-theme", resolveTheme(pref));
+  const resolved = resolveTheme(pref);
+  root.setAttribute("data-theme", resolved);
+  syncThemeColorMeta(resolved);
 
   if (pref !== "system") {
     return () => root.removeAttribute("data-theme");
@@ -57,7 +82,11 @@ export function applyTheme(pref: ThemePreference): () => void {
   }
 
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
-  const onChange = () => root.setAttribute("data-theme", systemTheme());
+  const onChange = () => {
+    const next = systemTheme();
+    root.setAttribute("data-theme", next);
+    syncThemeColorMeta(next);
+  };
   mq.addEventListener("change", onChange);
   return () => {
     mq.removeEventListener("change", onChange);

@@ -153,7 +153,8 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   await expect(toolbar.getByRole("button", { name: "Italic" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: /Highlight / })).toHaveCount(4);
   await expect(toolbar.getByRole("button", { name: "Comment on selection" })).toBeVisible();
-  // Strike, Code, and Link were removed from the selection popup (see toolbar-ux-research.md)
+  // Strike and Code were removed from the selection popup (see toolbar-ux-research.md).
+  // Link lives in the top FormattingToolbar (with inline input), not the floating popup.
   await expect(toolbar.getByRole("button", { name: "Strike" })).not.toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Code" })).not.toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Link" })).not.toBeVisible();

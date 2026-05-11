@@ -97,6 +97,7 @@ export const Y_MAP_OPEN_DOCUMENTS = "openDocuments";
 export const Y_MAP_ACTIVE_DOCUMENT_ID = "activeDocumentId";
 export const Y_MAP_GENERATION_ID = "generationId";
 export const Y_MAP_READ_ONLY = "readOnly";
+export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 

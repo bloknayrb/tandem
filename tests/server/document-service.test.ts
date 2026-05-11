@@ -5,6 +5,7 @@ import {
   addDoc,
   autoSaveAllToDisk,
   broadcastOpenDocs,
+  broadcastStoreReadOnly,
   closeDocumentById,
   docCount,
   getActiveDocId,
@@ -22,6 +23,7 @@ import {
   CTRL_ROOM,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
+  Y_MAP_STORE_READ_ONLY,
 } from "../../src/shared/constants.js";
 
 // Mock session manager to avoid filesystem side effects
@@ -514,6 +516,24 @@ describe("saveDocumentToDisk", () => {
 
     const after = meta.get(Y_MAP_SAVED_AT_VERSION) as number;
     expect(after).toBeGreaterThan(before);
+  });
+});
+
+describe("broadcastStoreReadOnly", () => {
+  it("writes storeReadOnly=true to CTRL_ROOM Y_MAP_DOCUMENT_META", () => {
+    broadcastStoreReadOnly(true);
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
+    expect(meta.get(Y_MAP_STORE_READ_ONLY)).toBe(true);
+  });
+
+  it("writes storeReadOnly=false to CTRL_ROOM Y_MAP_DOCUMENT_META", () => {
+    // Set to true first, then clear it.
+    broadcastStoreReadOnly(true);
+    broadcastStoreReadOnly(false);
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
+    expect(meta.get(Y_MAP_STORE_READ_ONLY)).toBe(false);
   });
 });
 

@@ -1,0 +1,2178 @@
+diff --git a/index.html b/index.html
+index 30f15e4..561b816 100644
+--- a/index.html
++++ b/index.html
+@@ -98,6 +98,7 @@
+         --tandem-highlight-green: rgba(76, 175, 80, 0.3);
+         --tandem-highlight-blue: rgba(33, 150, 243, 0.3);
+         --tandem-highlight-pink: rgba(236, 72, 153, 0.3);
++        --tandem-h-fmtbar: 36px;
+         /* density spacing scale — cozy defaults */
+         --tandem-space-1: 4px;
+         --tandem-space-2: 8px;
+diff --git a/src/client/App.svelte b/src/client/App.svelte
+index a6feef0..55a260a 100644
+--- a/src/client/App.svelte
++++ b/src/client/App.svelte
+@@ -1,7 +1,7 @@
+ <script lang="ts">
+ import type { Editor as TiptapEditor } from "@tiptap/core";
+ import { onDestroy, untrack } from "svelte";
+-import { PANEL_WIDTH_KEYS } from "../shared/constants";
++import { PANEL_WIDTH_KEYS, Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../shared/constants";
+ import { isUploadPath } from "../shared/paths";
+ import { toPmPos } from "../shared/positions/types";
+ import type { CapturedAnchor } from "../shared/types";
+@@ -49,7 +49,9 @@ import {
+   PANEL_MIN_WIDTH,
+   type PanelLayout,
+ } from "./panel-layout";
++import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
+ import { pmSelectionToFlat } from "./positions";
++import FormattingBar from "./shell/FormattingBar.svelte";
+ import TitleBar from "./shell/TitleBar.svelte";
+ import StatusBar from "./status/StatusBar.svelte";
+ import DocumentTabs from "./tabs/DocumentTabs.svelte";
+@@ -175,6 +177,16 @@ let capturedAnchor = $state<CapturedAnchor | null>(null);
+ let editor = $state<TiptapEditor | null>(null);
+ let slashCommandMenuOpen = $state(false);
+ let findBarOpen = $state(false);
++let outlineFocusTrigger = $state(0);
++let activeAnnotationFilter = $state<{
++  type: FilterType;
++  author: FilterAuthor;
++  status: FilterStatus;
++}>({
++  type: "all",
++  author: "all",
++  status: "all",
++});
+ 
+ let panelLayout = $state<PanelLayout>(
+   (() => {
+@@ -197,6 +209,8 @@ $effect(() => {
+     const right = "right" in prev ? prev.right : loadPanelWidth("right");
+     const left = "left" in prev ? prev.left : loadPanelWidth("left");
+     panelLayout = { kind: "three-panel", left, right };
++    // On first switch to three-panel, set the canonical default: Outline left.
++    settingsState.updateSettings({ leftSlot: { kind: "outline" } });
+   } else if (layout === "tabbed-left") {
+     if (prev.kind === "tabbed-left") return;
+     const left = "left" in prev ? prev.left : loadPanelWidth("left");
+@@ -209,9 +223,27 @@ $effect(() => {
+ });
+ 
+ const effectivePanelHidden = $derived(
+-  modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden,
++  settingsState.settings.panelHidden ||
++    (modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
+ );
+ 
++function togglePanel() {
++  settingsState.updateSettings({ panelHidden: !settingsState.settings.panelHidden });
++}
++
++// Remembers the last non-three-panel layout so toggling off three-panel restores it.
++let prevNonThreePanelLayout: "tabbed" | "tabbed-left" = "tabbed";
++
++function toggleLayout() {
++  const current = settingsState.settings.layout;
++  if (current === "three-panel") {
++    settingsState.updateSettings({ layout: prevNonThreePanelLayout });
++  } else {
++    prevNonThreePanelLayout = current;
++    settingsState.updateSettings({ layout: "three-panel" });
++  }
++}
++
+ const editorMaxWidth = $derived(
+   settingsState.settings.editorWidthPercent < 100
+     ? `${settingsState.settings.editorWidthPercent}%`
+@@ -265,12 +297,25 @@ $effect(() => {
+       } else if (e.shiftKey && e.key === "P") {
+         e.preventDefault();
+         paletteOpen = !untrack(() => paletteOpen);
++      } else if (e.key === "/") {
++        const el = e.target as HTMLElement;
++        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
++        e.preventDefault();
++        showHelp = untrack(() => !showHelp);
+       }
+     }
+-    // Ctrl/Cmd+F — open find bar (suppress browser native find)
++    // Ctrl/Cmd+F — focus outline search if the outline panel is visible; fall back to find bar.
+     if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+       e.preventDefault();
+-      findBarOpen = true;
++      const isOutlineVisible =
++        panelLayout.kind === "three-panel" &&
++        !effectivePanelHidden &&
++        settingsState.settings.leftSlot.kind === "outline";
++      if (isOutlineVisible) {
++        outlineFocusTrigger += 1;
++      } else {
++        findBarOpen = true;
++      }
+     }
+   }
+   window.addEventListener("keydown", handler);
+@@ -279,6 +324,44 @@ $effect(() => {
+ 
+ const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
+ 
++// Track dirty state for the active tab so TitleBar can show the unsaved dot.
++let activeTabDirty = $state(false);
++$effect(() => {
++  const tab = activeTab;
++  if (!tab || tab.readOnly) {
++    activeTabDirty = false;
++    return;
++  }
++  const fragment = tab.ydoc.getXmlFragment("default");
++  const meta = tab.ydoc.getMap(Y_MAP_DOCUMENT_META);
++  let armed = false;
++  let baseline: number | null = null;
++  activeTabDirty = false;
++  const armTimer = setTimeout(() => {
++    armed = true;
++    baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
++  }, 500);
++  const onFragmentChange = () => {
++    if (armed) activeTabDirty = true;
++  };
++  fragment.observeDeep(onFragmentChange);
++  const onMetaChange = (event: import("yjs").YMapEvent<unknown>) => {
++    if (!event.keysChanged.has(Y_MAP_SAVED_AT_VERSION)) return;
++    if (!armed) return;
++    const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
++    if (saved !== undefined && saved !== baseline) {
++      baseline = saved;
++      activeTabDirty = false;
++    }
++  };
++  meta.observe(onMetaChange);
++  return () => {
++    clearTimeout(armTimer);
++    fragment.unobserveDeep(onFragmentChange);
++    meta.unobserve(onMetaChange);
++  };
++});
++
+ const tutorial = createTutorial(
+   () => modeGate.visibleAnnotations,
+   () => editor,
+@@ -287,7 +370,14 @@ const tutorial = createTutorial(
+ </script>
+ 
+ <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
+-  <TitleBar title={activeTab?.fileName} />
++  <TitleBar
++    title={activeTab?.fileName}
++    dirty={activeTabDirty}
++    panelVisible={!settingsState.settings.panelHidden}
++    onTogglePanel={togglePanel}
++    isThreePanel={panelLayout.kind === "three-panel"}
++    onToggleLayout={toggleLayout}
++  />
+   {#if !yjsSync.ready}
+     <div
+       style="display: flex; flex: 1; align-items: center; justify-content: center; color: var(--tandem-fg-subtle);"
+@@ -304,7 +394,10 @@ const tutorial = createTutorial(
+     {/if}
+ 
+     {#if connectionBanner.showBanner}
+-      <ConnectionBanner onDismiss={connectionBanner.dismiss} />
++      <ConnectionBanner
++        onDismiss={connectionBanner.dismiss}
++        onRetry={() => { connectionBanner.dismiss(); yjsSync.reconnect(); }}
++      />
+     {/if}
+ 
+     <Toolbar
+@@ -315,7 +408,7 @@ const tutorial = createTutorial(
+       tandemMode={modeState.tandemMode}
+       onModeChange={modeState.setTandemMode}
+       selectionToolbar={settingsState.settings.selectionToolbar}
+-      suppressSelectionToolbar={slashCommandMenuOpen}
++      suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
+     />
+ 
+     <DocumentTabs
+@@ -327,6 +420,15 @@ const tutorial = createTutorial(
+       reduceMotion={settingsState.settings.reduceMotion}
+     />
+ 
++    <FormattingBar
++      {editor}
++      ydoc={activeTab?.ydoc ?? null}
++      panelVisible={!settingsState.settings.panelHidden}
++      onTogglePanel={togglePanel}
++      rightPanelVisible={!effectivePanelHidden}
++      onTogglePanelRight={togglePanel}
++    />
++
+     <!-- Single persistent container — editor column is always rendered in the same
+          DOM position so the Editor component never remounts on layout changes.
+          Panels are conditionally shown/hidden around the stable editor column. -->
+@@ -360,6 +462,11 @@ const tutorial = createTutorial(
+                 <PanelSlot
+                   kind={settingsState.settings.leftSlot.kind}
+                   annotations={modeGate.visibleAnnotations}
++                  focusTrigger={outlineFocusTrigger}
++                  activeFilterType={activeAnnotationFilter.type}
++                  onFilterChange={(type, author, status) => {
++                    activeAnnotationFilter = { type, author, status };
++                  }}
+                   {editor}
+                   ydoc={activeTab?.ydoc ?? null}
+                   heldCount={modeGate.heldCount}
+@@ -401,6 +508,11 @@ const tutorial = createTutorial(
+                 <PanelSlot
+                   kind={settingsState.settings.leftSlot.kind}
+                   annotations={modeGate.visibleAnnotations}
++                  focusTrigger={outlineFocusTrigger}
++                  activeFilterType={activeAnnotationFilter.type}
++                  onFilterChange={(type, author, status) => {
++                    activeAnnotationFilter = { type, author, status };
++                  }}
+                   {editor}
+                   ydoc={activeTab?.ydoc ?? null}
+                   heldCount={modeGate.heldCount}
+@@ -464,7 +576,13 @@ const tutorial = createTutorial(
+ 
+     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+ 
+-    <CommandPalette open={paletteOpen} onClose={() => (paletteOpen = false)} />
++    <CommandPalette
++      open={paletteOpen}
++      onClose={() => (paletteOpen = false)}
++      {editor}
++      annotations={modeGate.visibleAnnotations}
++      onFocusAnnotation={(id) => { activeAnnotationId = id; }}
++    />
+ 
+     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+ 
+@@ -536,6 +654,7 @@ const tutorial = createTutorial(
+ 
+ {#snippet editorColumn()}
+   <div
++    class="editor-scroll"
+     role="region"
+     aria-label="Document editor"
+     style={`position: relative; flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+@@ -572,6 +691,7 @@ const tutorial = createTutorial(
+       {editor}
+       open={findBarOpen}
+       onClose={() => (findBarOpen = false)}
++      tabs={yjsSync.tabs}
+     />
+   </div>
+ {/snippet}
+@@ -632,6 +752,9 @@ const tutorial = createTutorial(
+       {activeAnnotationId}
+       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+       reduceMotion={settingsState.settings.reduceMotion}
++      onFilterChange={(type, author, status) => {
++        activeAnnotationFilter = { type, author, status };
++      }}
+       visible={!showChat}
+     />
+   </div>
+diff --git a/src/client/components/CommandPalette.svelte b/src/client/components/CommandPalette.svelte
+index 9e5bd97..0f72667 100644
+--- a/src/client/components/CommandPalette.svelte
++++ b/src/client/components/CommandPalette.svelte
+@@ -1,32 +1,198 @@
+ <script lang="ts">
+-import { type Action, getActions } from "../actions/registry.svelte.js";
++import type { Editor as TiptapEditor } from "@tiptap/core";
++import { TextSelection } from "prosemirror-state";
++import type { Annotation } from "../../shared/types.js";
++import { type Action, getActionsMap } from "../actions/registry.svelte.js";
++
++// ---------------------------------------------------------------------------
++// Prop types
++// ---------------------------------------------------------------------------
+ 
+ interface Props {
+   open: boolean;
+   onClose: () => void;
++  editor?: TiptapEditor | null;
++  annotations?: Annotation[];
++  onFocusAnnotation?: (id: string) => void;
+ }
+ 
+-let { open, onClose }: Props = $props();
++let { open, onClose, editor = null, annotations = [], onFocusAnnotation }: Props = $props();
++
++// ---------------------------------------------------------------------------
++// Query state
++// ---------------------------------------------------------------------------
+ 
+ let query = $state("");
+ let selectedIndex = $state(0);
+ let inputEl = $state<HTMLInputElement | null>(null);
+ 
+-const allActions = $derived(getActions());
+-
+-const filteredActions = $derived.by(() => {
+-  const q = query.trim().toLowerCase();
+-  if (!q) return allActions;
+-  return allActions.filter(
+-    (a) =>
+-      a.label.toLowerCase().includes(q) ||
+-      a.group.toLowerCase().includes(q) ||
+-      (a.shortcut?.toLowerCase().includes(q) ?? false),
+-  );
++// Detect routing prefix
++const activePrefix = $derived(
++  query.startsWith("#")
++    ? "#"
++    : query.startsWith("@")
++      ? "@"
++      : query.startsWith("?")
++        ? "?"
++        : query.startsWith(">")
++          ? ">"
++          : null,
++);
++const searchText = $derived((activePrefix ? query.slice(1) : query).trim().toLowerCase());
++
++// ---------------------------------------------------------------------------
++// Static shortcut rows (mirrors HelpModal)
++// ---------------------------------------------------------------------------
++
++const STATIC_SHORTCUT_ROWS = [
++  { keys: "Ctrl+B", description: "Bold" },
++  { keys: "Ctrl+I", description: "Italic" },
++  { keys: "Ctrl+Z", description: "Undo" },
++  { keys: "Ctrl+Y", description: "Redo" },
++  { keys: "Ctrl+F", description: "Find / Replace" },
++  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
++  { keys: "Ctrl+Tab", description: "Next document tab" },
++  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
++];
++
++// ---------------------------------------------------------------------------
++// Result types
++// ---------------------------------------------------------------------------
++
++type ActionResult = { kind: "action"; id: string; action: Action };
++type HeadingResult = { kind: "heading"; id: string; text: string; level: number; pos: number };
++type AnnotationResult = {
++  kind: "annotation";
++  id: string;
++  label: string;
++  snippet: string;
++  annotationType: string;
++};
++type ShortcutResult = {
++  kind: "shortcut";
++  id: string;
++  keys: string;
++  description: string;
++  group: string;
++};
++
++type PaletteResult = ActionResult | HeadingResult | AnnotationResult | ShortcutResult;
++
++// ---------------------------------------------------------------------------
++// Result derivations
++// ---------------------------------------------------------------------------
++
++// Commands: `>` prefix or no prefix
++const commandResults = $derived.by((): ActionResult[] => {
++  if (activePrefix !== null && activePrefix !== ">") return [];
++  const actionsMap = getActionsMap();
++  const q = searchText;
++  const results: ActionResult[] = [];
++  for (const action of actionsMap.values()) {
++    if (
++      !q ||
++      action.label.toLowerCase().includes(q) ||
++      action.group.toLowerCase().includes(q) ||
++      (action.shortcut?.toLowerCase().includes(q) ?? false)
++    ) {
++      results.push({ kind: "action", id: action.id, action });
++    }
++  }
++  return results;
++});
++
++// Headings: `#` prefix
++const headingResults = $derived.by((): HeadingResult[] => {
++  if (activePrefix !== "#") return [];
++  const ed = editor;
++  if (!ed || ed.isDestroyed) return [];
++  const q = searchText;
++  const results: HeadingResult[] = [];
++  let idx = 0;
++  ed.state.doc.descendants((node, pos) => {
++    if (node.type.name === "heading" && node.attrs.level <= 3) {
++      const text = node.textContent;
++      if (!q || text.toLowerCase().includes(q)) {
++        results.push({
++          kind: "heading",
++          id: `heading-${idx++}`,
++          text,
++          level: node.attrs.level as number,
++          pos,
++        });
++      }
++    }
++  });
++  return results;
+ });
+ 
++// Annotations: `@` prefix — lazy, reactive on `annotations` prop change
++const annotationResults = $derived.by((): AnnotationResult[] => {
++  if (activePrefix !== "@") return [];
++  const q = searchText;
++  return annotations
++    .filter((a) => {
++      if (!q) return true;
++      return a.content.toLowerCase().includes(q) || a.textSnapshot?.toLowerCase().includes(q);
++    })
++    .slice(0, 50)
++    .map((a) => ({
++      kind: "annotation" as const,
++      id: `annotation-${a.id}`,
++      label: a.content ? a.content.slice(0, 60) : "(no content)",
++      snippet: a.textSnapshot ?? "",
++      annotationType: a.type,
++    }));
++});
++
++// Shortcuts: `?` prefix
++const shortcutResults = $derived.by((): ShortcutResult[] => {
++  if (activePrefix !== "?") return [];
++  const q = searchText;
++  const actionsMap = getActionsMap();
++  const results: ShortcutResult[] = [];
++
++  // Registry-derived shortcuts
++  for (const action of actionsMap.values()) {
++    if (!action.shortcut) continue;
++    if (!q || action.label.toLowerCase().includes(q) || action.shortcut.toLowerCase().includes(q)) {
++      results.push({
++        kind: "shortcut",
++        id: `shortcut-registry-${action.id}`,
++        keys: action.shortcut,
++        description: action.label,
++        group: action.group,
++      });
++    }
++  }
++
++  // Static shortcuts
++  for (let i = 0; i < STATIC_SHORTCUT_ROWS.length; i++) {
++    const row = STATIC_SHORTCUT_ROWS[i];
++    if (!q || row.description.toLowerCase().includes(q) || row.keys.toLowerCase().includes(q)) {
++      results.push({
++        kind: "shortcut",
++        id: `shortcut-static-${i}`,
++        keys: row.keys,
++        description: row.description,
++        group: "other",
++      });
++    }
++  }
++
++  return results;
++});
++
++// Flat list for keyboard navigation
++const allResults = $derived<PaletteResult[]>([
++  ...commandResults,
++  ...headingResults,
++  ...annotationResults,
++  ...shortcutResults,
++]);
++
+ $effect(() => {
+-  filteredActions;
++  allResults;
+   selectedIndex = 0;
+ });
+ 
+@@ -34,33 +200,68 @@ $effect(() => {
+   if (open) {
+     query = "";
+     selectedIndex = 0;
+-    // Focus input on next microtask so the DOM has rendered
+     Promise.resolve().then(() => inputEl?.focus());
+   }
+ });
+ 
++// ---------------------------------------------------------------------------
++// Input placeholder by mode
++// ---------------------------------------------------------------------------
++
++const placeholder = $derived(
++  activePrefix === "#"
++    ? "Search headings…"
++    : activePrefix === "@"
++      ? "Search annotations…"
++      : activePrefix === "?"
++        ? "Search shortcuts…"
++        : activePrefix === ">"
++          ? "Search commands…"
++          : "Type a command, # headings, @ annotations, ? shortcuts…",
++);
++
++// ---------------------------------------------------------------------------
++// Actions
++// ---------------------------------------------------------------------------
++
+ function close() {
+   onClose();
+ }
+ 
+-function run(action: Action) {
+-  close();
+-  void action.run();
++function runResult(result: PaletteResult, _openInNewTab = false) {
++  if (result.kind === "action") {
++    close();
++    void result.action.run();
++  } else if (result.kind === "heading") {
++    // Jump to heading in editor. _openInNewTab reserved for cross-doc heading navigation (future).
++    close();
++    const ed = editor;
++    if (!ed || ed.isDestroyed) return;
++    const pos = result.pos;
++    const resolvedPos = ed.state.doc.resolve(pos + 1);
++    const selection = TextSelection.near(resolvedPos);
++    ed.view.dispatch(ed.state.tr.setSelection(selection).scrollIntoView());
++    ed.view.focus();
++  } else if (result.kind === "annotation") {
++    close();
++    onFocusAnnotation?.(result.id.replace("annotation-", ""));
++  }
++  // shortcut items: display-only, no action on Enter
+ }
+ 
+ function handleKeydown(e: KeyboardEvent) {
++  const total = allResults.length;
+   if (e.key === "ArrowDown") {
+     e.preventDefault();
+-    selectedIndex = (selectedIndex + 1) % Math.max(1, filteredActions.length);
++    selectedIndex = (selectedIndex + 1) % Math.max(1, total);
+   } else if (e.key === "ArrowUp") {
+     e.preventDefault();
+-    selectedIndex =
+-      (selectedIndex - 1 + Math.max(1, filteredActions.length)) %
+-      Math.max(1, filteredActions.length);
++    selectedIndex = (selectedIndex - 1 + Math.max(1, total)) % Math.max(1, total);
+   } else if (e.key === "Enter") {
+     e.preventDefault();
+-    const action = filteredActions[selectedIndex];
+-    if (action) run(action);
++    const result = allResults[selectedIndex];
++    const openInNewTab = e.ctrlKey || e.metaKey;
++    if (result) runResult(result, openInNewTab);
+   } else if (e.key === "Escape") {
+     e.preventDefault();
+     close();
+@@ -70,9 +271,20 @@ function handleKeydown(e: KeyboardEvent) {
+ function handleBackdropClick(e: MouseEvent) {
+   if (e.target === e.currentTarget) close();
+ }
++
++// Heading level label
++function headingLabel(level: number): string {
++  return `H${level}`;
++}
++
++// Annotation type label
++function annotationTypeLabel(type: string): string {
++  return type.charAt(0).toUpperCase() + type.slice(1);
++}
+ </script>
+ 
+ {#if open}
++  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+   <div
+     role="presentation"
+     style="
+@@ -108,10 +320,10 @@ function handleBackdropClick(e: MouseEvent) {
+           bind:this={inputEl}
+           data-testid="palette-input"
+           type="text"
+-          placeholder="Type a command…"
++          {placeholder}
+           aria-label="Search commands"
+           aria-controls="palette-results"
+-          aria-activedescendant={filteredActions[selectedIndex] ? `palette-item-${filteredActions[selectedIndex].id}` : undefined}
++          aria-activedescendant={allResults[selectedIndex] ? `palette-item-${allResults[selectedIndex].id}` : undefined}
+           bind:value={query}
+           style="
+             width: 100%; padding: 6px 0;
+@@ -119,50 +331,99 @@ function handleBackdropClick(e: MouseEvent) {
+             background: transparent; border: none; outline: none;
+           "
+         />
++        {#if activePrefix}
++          <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
++            {#if activePrefix === "#"}Searching document headings{/if}
++            {#if activePrefix === "@"}Searching annotations{/if}
++            {#if activePrefix === "?"}Showing keyboard shortcuts{/if}
++            {#if activePrefix === ">"}Filtering commands{/if}
++          </div>
++        {/if}
+       </div>
+ 
+       <!-- Results -->
+       <ul
+         id="palette-results"
+         role="listbox"
+-        aria-label="Commands"
++        aria-label="Results"
+         style="max-height: 400px; overflow-y: auto; padding: var(--tandem-space-1) 0; list-style: none; margin: 0;"
+       >
+-        {#if filteredActions.length === 0}
++        {#if allResults.length === 0}
+           <li
+             data-testid="palette-empty"
+             style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-sm); color: var(--tandem-fg-faint); font-style: italic;"
+           >
+-            No commands match
++            {activePrefix === "#" ? "No headings found" : activePrefix === "@" ? "No annotations found" : activePrefix === "?" ? "No shortcuts found" : "No commands match"}
+           </li>
+         {:else}
+-          {#each filteredActions as action, i (action.id)}
++          {#each allResults as result, i (result.id)}
++            {@const isSelected = i === selectedIndex}
+             <!-- svelte-ignore a11y_click_events_have_key_events -->
+             <li
+-              id={`palette-item-${action.id}`}
+-              data-testid={`palette-item-${action.id}`}
++              id={`palette-item-${result.id}`}
++              data-testid={`palette-item-${result.id}`}
+               role="option"
+-              aria-selected={i === selectedIndex}
+-              onclick={() => run(action)}
++              aria-selected={isSelected}
++              onclick={() => runResult(result)}
+               onmouseenter={() => (selectedIndex = i)}
+               style="
+                 display: flex; align-items: center; justify-content: space-between;
+                 padding: 8px var(--tandem-space-4);
+-                cursor: pointer;
+-                background: ${i === selectedIndex ? "var(--tandem-accent-bg)" : "transparent"};
+-                color: ${i === selectedIndex ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg)"};
++                cursor: {result.kind === 'shortcut' ? 'default' : 'pointer'};
++                background: {isSelected ? 'var(--tandem-accent-bg)' : 'transparent'};
++                color: {isSelected ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg)'};
+               "
+             >
+-              <span style="font-size: var(--tandem-text-sm);">{action.label}</span>
+-              {#if action.shortcut}
++              {#if result.kind === "action"}
++                <span style="font-size: var(--tandem-text-sm);">{result.action.label}</span>
++                {#if result.action.shortcut}
++                  <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-family: var(--tandem-font-mono);">
++                    {result.action.shortcut}
++                  </span>
++                {/if}
++              {:else if result.kind === "heading"}
++                <span style="display: flex; align-items: center; gap: var(--tandem-space-2);">
++                  <span style="
++                    font-size: var(--tandem-text-xs);
++                    color: var(--tandem-fg-subtle);
++                    font-family: var(--tandem-font-mono);
++                    min-width: 20px;
++                  ">{headingLabel(result.level)}</span>
++                  <span style="font-size: var(--tandem-text-sm); padding-left: calc({result.level - 1} * var(--tandem-space-2));">{result.text}</span>
++                </span>
++              {:else if result.kind === "annotation"}
++                <span style="display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0;">
++                  <span style="font-size: var(--tandem-text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{result.label}</span>
++                  {#if result.snippet}
++                    <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">"{result.snippet}"</span>
++                  {/if}
++                </span>
++                <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); flex-shrink: 0; margin-left: var(--tandem-space-2);">
++                  {annotationTypeLabel(result.annotationType)}
++                </span>
++              {:else if result.kind === "shortcut"}
++                <span style="font-size: var(--tandem-text-sm);">{result.description}</span>
+                 <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-family: var(--tandem-font-mono);">
+-                  {action.shortcut}
++                  {result.keys}
+                 </span>
+               {/if}
+             </li>
+           {/each}
+         {/if}
+       </ul>
++
++      <!-- Mode hints footer -->
++      <div style="
++        padding: var(--tandem-space-2) var(--tandem-space-4);
++        border-top: 1px solid var(--tandem-border);
++        display: flex; gap: var(--tandem-space-3);
++        font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);
++      ">
++        <span><kbd style="font-family: var(--tandem-font-mono);">#</kbd> headings</span>
++        <span><kbd style="font-family: var(--tandem-font-mono);">@</kbd> annotations</span>
++        <span><kbd style="font-family: var(--tandem-font-mono);">?</kbd> shortcuts</span>
++        <span><kbd style="font-family: var(--tandem-font-mono);">&gt;</kbd> commands</span>
++      </div>
+     </div>
+   </div>
+ {/if}
+diff --git a/src/client/components/ConnectionBanner.svelte b/src/client/components/ConnectionBanner.svelte
+index d3ae705..738184e 100644
+--- a/src/client/components/ConnectionBanner.svelte
++++ b/src/client/components/ConnectionBanner.svelte
+@@ -1,9 +1,10 @@
+ <script lang="ts">
+ interface Props {
+   onDismiss: () => void;
++  onRetry: () => void;
+ }
+ 
+-let { onDismiss }: Props = $props();
++let { onDismiss, onRetry }: Props = $props();
+ </script>
+ 
+ <div
+@@ -11,6 +12,13 @@ let { onDismiss }: Props = $props();
+   style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-error-bg); border-bottom: 1px solid var(--tandem-error-border); font-size: var(--tandem-text-base); color: var(--tandem-error-fg-strong); text-align: center; display: flex; justify-content: center; align-items: center; gap: var(--tandem-space-3);"
+ >
+   <span>Connection to the Tandem server has been lost. Ensure the server is running.</span>
++  <button
++    data-testid="connection-banner-retry"
++    onclick={onRetry}
++    style="background: none; border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); cursor: pointer; color: var(--tandem-error-fg-strong); font-size: var(--tandem-text-sm); padding: 2px var(--tandem-space-2);"
++  >
++    Retry now
++  </button>
+   <button
+     onclick={onDismiss}
+     style="background: none; border: none; cursor: pointer; color: var(--tandem-error-fg-strong); font-size: 16px; line-height: 1; padding: 0 4px;"
+diff --git a/src/client/components/HelpModal.svelte b/src/client/components/HelpModal.svelte
+index d189345..6365b0e 100644
+--- a/src/client/components/HelpModal.svelte
++++ b/src/client/components/HelpModal.svelte
+@@ -1,46 +1,35 @@
+ <script lang="ts">
+ import { untrack } from "svelte";
++import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
+ 
+-interface ShortcutRow {
+-  keys: string[];
+-  description: string;
+-}
+-
+-interface ShortcutSection {
+-  title: string;
+-  rows: ShortcutRow[];
+-}
+-
+-const SECTIONS: ShortcutSection[] = [
+-  {
+-    title: "Editor",
+-    rows: [
+-      { keys: ["Ctrl", "B"], description: "Bold" },
+-      { keys: ["Ctrl", "I"], description: "Italic" },
+-      { keys: ["Ctrl", "Z"], description: "Undo" },
+-      { keys: ["Ctrl", "Y"], description: "Redo" },
+-      { keys: ["Ctrl", "S"], description: "Save document" },
+-    ],
+-  },
+-  {
+-    title: "Chat",
+-    rows: [{ keys: ["Enter"], description: "Send message" }],
+-  },
+-  {
+-    title: "Tabs",
+-    rows: [
+-      { keys: ["Ctrl", "Tab"], description: "Next tab" },
+-      { keys: ["Ctrl", "Shift", "Tab"], description: "Previous tab" },
+-      { keys: ["Alt", "←"], description: "Move tab left" },
+-      { keys: ["Alt", "→"], description: "Move tab right" },
+-    ],
+-  },
+-  {
+-    title: "General",
+-    rows: [{ keys: ["?"], description: "Show / hide this help" }],
+-  },
++// Static shortcuts not in the action registry (formatting, navigation, help)
++const STATIC_SHORTCUT_ROWS = [
++  { keys: "Ctrl+B", description: "Bold" },
++  { keys: "Ctrl+I", description: "Italic" },
++  { keys: "Ctrl+Z", description: "Undo" },
++  { keys: "Ctrl+Y", description: "Redo" },
++  { keys: "Ctrl+F", description: "Find / Replace" },
++  { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
++  { keys: "Ctrl+Tab", description: "Next document tab" },
++  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
+ ];
+ 
++// Registry-derived sections — same source as Settings → Shortcuts tab
++const registryShortcutSections = $derived.by(() => {
++  const actionsMap = getActionsMap();
++  const byGroup = new Map<string, Array<{ keys: string; description: string }>>();
++  for (const action of actionsMap.values()) {
++    if (!action.shortcut) continue;
++    const rows = byGroup.get(action.group) ?? [];
++    rows.push({ keys: action.shortcut, description: action.label });
++    byGroup.set(action.group, rows);
++  }
++  return ACTION_GROUPS.map((g) => ({
++    title: g.charAt(0).toUpperCase() + g.slice(1),
++    rows: byGroup.get(g) ?? [],
++  })).filter((s) => s.rows.length > 0);
++});
++
+ interface Props {
+   open: boolean;
+   onClose: () => void;
+@@ -131,56 +120,49 @@ $effect(() => {
+         </button>
+       </div>
+ 
+-      {#each SECTIONS as section (section.title)}
++      {#each registryShortcutSections as section (section.title)}
+         <div style="margin-bottom: 18px;">
+           <div
+             style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tandem-fg-subtle); margin-bottom: 6px;"
+           >
+             {section.title}
+           </div>
+-          <table style="width: 100%; border-collapse: collapse;">
+-            <tbody>
+-              {#each section.rows as row (row.description)}
+-                <tr>
+-                  <td style="padding-bottom: 5px; padding-right: 16px; white-space: nowrap; vertical-align: middle; width: 1%;">
+-                    <span style="display: flex; gap: 4px; align-items: center;">
+-                      {#each row.keys as key, i (key)}
+-                        <span>
+-                          <kbd
+-                            style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;"
+-                          >
+-                            {key}
+-                          </kbd>
+-                          {#if i < row.keys.length - 1}
+-                            <span style="color: var(--tandem-fg-subtle); font-size: 11px; margin: 0 2px;">
+-                              +
+-                            </span>
+-                          {/if}
+-                        </span>
+-                      {/each}
+-                    </span>
+-                  </td>
+-                  <td style="padding-bottom: 5px; font-size: 13px; color: var(--tandem-fg-muted); vertical-align: middle;">
+-                    {row.description}
+-                  </td>
+-                </tr>
+-              {/each}
+-            </tbody>
+-          </table>
++          <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
++            {#each section.rows as row (row.description)}
++              <span style="font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;">
++                <kbd style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: inherit; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;">{row.keys}</kbd>
++              </span>
++              <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
++            {/each}
++          </div>
+         </div>
+       {/each}
+ 
++      <!-- Static shortcuts not yet in the action registry -->
++      <div style="margin-bottom: 18px;">
++        <div
++          style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tandem-fg-subtle); margin-bottom: 6px;"
++        >
++          Other
++        </div>
++        <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
++          {#each STATIC_SHORTCUT_ROWS as row (row.description)}
++            <span style="font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;">
++              <kbd style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: inherit; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;">{row.keys}</kbd>
++            </span>
++            <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
++          {/each}
++        </div>
++      </div>
++
+       <div
+         style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--tandem-border); font-size: 11px; color: var(--tandem-fg-subtle); text-align: center;"
+       >
+         Press
+-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">
+-          ?
+-        </kbd>
++        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">?</kbd>,
++        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">Ctrl+/</kbd>,
+         or
+-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">
+-          Esc
+-        </kbd>
++        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">Esc</kbd>
+         to close
+       </div>
+     </div>
+diff --git a/src/client/components/OutlinePanel.svelte b/src/client/components/OutlinePanel.svelte
+index fd1e696..40dab7c 100644
+--- a/src/client/components/OutlinePanel.svelte
++++ b/src/client/components/OutlinePanel.svelte
+@@ -1,18 +1,26 @@
+ <script lang="ts">
+ import type { Editor } from "@tiptap/core";
+ import { TextSelection } from "prosemirror-state";
++import type { Annotation } from "../../shared/types";
++import { flatOffsetToPmPos } from "../positions";
+ 
+ interface Props {
+   editor: Editor | null;
++  annotations?: Annotation[];
++  focusTrigger?: number;
++  activeFilterType?: string;
+ }
+ 
+ type HeadingEntry = { text: string; level: number; pos: number };
+ 
+-let { editor }: Props = $props();
++let { editor, annotations = [], focusTrigger = 0, activeFilterType = "all" }: Props = $props();
+ 
+ let headings = $state<HeadingEntry[]>([]);
+ let focusedIndex = $state<number>(-1);
+ let itemEls = $state<(HTMLButtonElement | null)[]>([]);
++let searchQuery = $state("");
++let searchInput = $state<HTMLInputElement | null>(null);
++let scrollSpyIndex = $state<number>(-1);
+ 
+ // Walk the doc and return heading entries. Mirrors doc.descendants pattern
+ // from authorship.ts:78.
+@@ -33,8 +41,6 @@ $effect(() => {
+     return;
+   }
+ 
+-  // Seed immediately — don't wait for the first update event (CRDT may have
+-  // already synced before this component mounted).
+   headings = walkHeadings(ed);
+   itemEls = itemEls.slice(0, headings.length);
+   if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
+@@ -52,6 +58,110 @@ $effect(() => {
+   };
+ });
+ 
++// Focus search input when focusTrigger changes (triggered by Ctrl+F from App.svelte).
++$effect(() => {
++  if (focusTrigger > 0) {
++    searchInput?.focus();
++    searchInput?.select();
++  }
++});
++
++// Scroll-spy: track which heading is currently visible.
++$effect(() => {
++  const ed = editor;
++  if (!ed || ed.isDestroyed) return;
++
++  function updateScrollSpy() {
++    if (!ed || ed.isDestroyed || headings.length === 0) {
++      scrollSpyIndex = -1;
++      return;
++    }
++    const editorRect = ed.view.dom.getBoundingClientRect();
++    const threshold = editorRect.top + 48;
++    let activeIdx = -1;
++    for (let i = 0; i < headings.length; i++) {
++      try {
++        const coords = ed.view.coordsAtPos(headings[i].pos + 1);
++        if (coords.top <= threshold) activeIdx = i;
++      } catch {
++        // pos may be stale after a concurrent edit
++      }
++    }
++    scrollSpyIndex = activeIdx;
++  }
++
++  updateScrollSpy();
++
++  const scrollEl = ed.view.dom.closest(".editor-scroll") ?? ed.view.dom.parentElement;
++  scrollEl?.addEventListener("scroll", updateScrollSpy);
++  return () => scrollEl?.removeEventListener("scroll", updateScrollSpy);
++});
++
++// Drive find-replace from search input.
++function handleSearchInput() {
++  const ed = editor;
++  if (!ed || ed.isDestroyed) return;
++  if (searchQuery) {
++    ed.commands.find({
++      query: searchQuery,
++      caseSensitive: false,
++      wholeWord: false,
++      regexMode: false,
++    });
++  } else {
++    ed.commands.findClose();
++  }
++}
++
++function handleSearchKeydown(e: KeyboardEvent) {
++  if (e.key === "Enter") {
++    e.preventDefault();
++    if (e.shiftKey) {
++      editor?.commands.findPrev();
++    } else {
++      editor?.commands.findNext();
++    }
++  } else if (e.key === "Escape") {
++    e.preventDefault();
++    searchQuery = "";
++    editor?.commands.findClose();
++    searchInput?.blur();
++  }
++}
++
++// Per-heading annotation counts (filter-aware when activeFilterType is set).
++function countAnnotationsInSection(sectionStart: number, sectionEnd: number): number {
++  const ed = editor;
++  if (!ed || annotations.length === 0) return 0;
++  let count = 0;
++  for (const ann of annotations) {
++    // Apply type filter to match side panel's active filter
++    if (activeFilterType && activeFilterType !== "all") {
++      if (activeFilterType === "with-replacement") {
++        if (!ann.suggestedText) continue;
++      } else if (ann.type !== activeFilterType) continue;
++    }
++    try {
++      const annPmFrom = flatOffsetToPmPos(ed.state.doc, ann.range.from);
++      if (annPmFrom >= sectionStart && annPmFrom < sectionEnd) count++;
++    } catch {
++      // skip annotations with invalid ranges
++    }
++  }
++  return count;
++}
++
++const headingAnnotationCounts = $derived.by(() => {
++  const ed = editor;
++  if (!ed || ed.isDestroyed || headings.length === 0) return [] as number[];
++  const docEnd = ed.state.doc.content.size;
++  return headings.map((h, i) => {
++    const sectionStart = h.pos;
++    const sectionEnd = i + 1 < headings.length ? headings[i + 1].pos : docEnd;
++    return countAnnotationsInSection(sectionStart, sectionEnd);
++  });
++});
++
+ function jumpTo(entry: HeadingEntry, index: number) {
+   const ed = editor;
+   if (!ed || ed.isDestroyed) return;
+@@ -101,48 +211,102 @@ function handleKeyDown(e: KeyboardEvent) {
+   data-testid="outline-panel"
+   aria-label="Document outline"
+   onkeydown={handleKeyDown}
+-  style="display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;"
++  style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;"
+ >
+-  {#if headings.length === 0}
+-    <div
+-      style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-style: italic;"
+-    >
+-      No headings
+-    </div>
+-  {:else}
+-    <!-- ul + li + button: correct semantics for a roving-tabindex list of actions -->
+-    <ul style="list-style: none; margin: 0; padding: 0;">
+-      {#each headings as entry, i (i)}
+-        <li>
+-          <button
+-            bind:this={itemEls[i]}
+-            data-testid={`outline-heading-${entry.level}-${i}`}
+-            tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
+-            onclick={() => jumpTo(entry, i)}
+-            onfocus={() => (focusedIndex = i)}
+-            style={`
+-              display: block; width: 100%; text-align: left; padding: var(--tandem-space-1) var(--tandem-space-3);
+-              padding-left: calc(var(--tandem-space-1) + ${(entry.level - 1) * 12}px);
+-              font-size: ${entry.level === 1 ? "var(--tandem-text-sm)" : "var(--tandem-text-xs)"};
+-              font-weight: ${entry.level === 1 ? 600 : entry.level === 2 ? 500 : 400};
+-              color: ${entry.level === 1 ? "var(--tandem-fg)" : entry.level === 2 ? "var(--tandem-fg-subtle)" : "var(--tandem-fg-muted)"};
+-              background: none; border: none; cursor: pointer; line-height: 1.5;
+-              white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+-              transition: color 0.1s, background 0.1s;
+-            `}
+-            title={entry.text}
+-            onmouseenter={(e) => {
+-              (e.currentTarget as HTMLButtonElement).style.background =
+-                "var(--tandem-surface-hover, var(--tandem-surface-muted))";
+-            }}
+-            onmouseleave={(e) => {
+-              (e.currentTarget as HTMLButtonElement).style.background = "none";
+-            }}
+-          >
+-            {entry.text || "(untitled)"}
+-          </button>
+-        </li>
+-      {/each}
+-    </ul>
+-  {/if}
++  <!-- Search field -->
++  <div style="padding: var(--tandem-space-2) var(--tandem-space-3); border-bottom: 1px solid var(--tandem-border);">
++    <input
++      bind:this={searchInput}
++      bind:value={searchQuery}
++      oninput={handleSearchInput}
++      onkeydown={handleSearchKeydown}
++      type="search"
++      placeholder="Search in document…"
++      data-testid="outline-search-input"
++      aria-label="Search document"
++      style="
++        width: 100%; box-sizing: border-box;
++        padding: var(--tandem-space-1) var(--tandem-space-2);
++        font-size: var(--tandem-text-xs);
++        border: 1px solid var(--tandem-border);
++        border-radius: var(--tandem-r-2);
++        background: var(--tandem-surface);
++        color: var(--tandem-fg);
++        outline: none;
++      "
++    />
++  </div>
++
++  <!-- Headings list -->
++  <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;">
++    {#if headings.length === 0}
++      <div
++        style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-style: italic;"
++      >
++        No headings
++      </div>
++    {:else}
++      <!-- ul + li + button: correct semantics for a roving-tabindex list of actions -->
++      <ul style="list-style: none; margin: 0; padding: 0;">
++        {#each headings as entry, i (i)}
++          {@const isActive = scrollSpyIndex === i}
++          {@const count = headingAnnotationCounts[i] ?? 0}
++          <li>
++            <button
++              bind:this={itemEls[i]}
++              data-testid={`outline-heading-${entry.level}-${i}`}
++              tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
++              onclick={() => jumpTo(entry, i)}
++              onfocus={() => (focusedIndex = i)}
++              style={`
++                display: flex; align-items: center; width: 100%; text-align: left;
++                padding: var(--tandem-space-1) var(--tandem-space-3);
++                padding-left: calc(var(--tandem-space-1) + ${(entry.level - 1) * 12}px);
++                font-size: ${entry.level === 1 ? "var(--tandem-text-sm)" : "var(--tandem-text-xs)"};
++                font-weight: ${entry.level === 1 ? 600 : entry.level === 2 ? 500 : 400};
++                color: ${isActive ? "var(--tandem-accent)" : entry.level === 1 ? "var(--tandem-fg)" : entry.level === 2 ? "var(--tandem-fg-subtle)" : "var(--tandem-fg-muted)"};
++                background: ${isActive ? "var(--tandem-accent-bg)" : "none"};
++                border: none; cursor: pointer; line-height: 1.5;
++                transition: color 0.1s, background 0.1s;
++                gap: var(--tandem-space-2);
++              `}
++              title={entry.text}
++              onmouseenter={(e) => {
++                if (!isActive)
++                  (e.currentTarget as HTMLButtonElement).style.background =
++                    "var(--tandem-surface-hover, var(--tandem-surface-muted))";
++              }}
++              onmouseleave={(e) => {
++                if (!isActive)
++                  (e.currentTarget as HTMLButtonElement).style.background = isActive ? "var(--tandem-accent-bg)" : "none";
++              }}
++            >
++              <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
++                {entry.text || "(untitled)"}
++              </span>
++              {#if count > 0}
++                <span
++                  style="
++                    flex-shrink: 0;
++                    font-size: var(--tandem-text-2xs, 10px);
++                    font-weight: 500;
++                    color: var(--tandem-fg-subtle);
++                    background: var(--tandem-surface-muted);
++                    border-radius: var(--tandem-r-pill);
++                    padding: 0 var(--tandem-space-1);
++                    min-width: 16px;
++                    text-align: center;
++                    line-height: 16px;
++                  "
++                  title="{count} annotation{count !== 1 ? 's' : ''}"
++                >
++                  {count}
++                </span>
++              {/if}
++            </button>
++          </li>
++        {/each}
++      </ul>
++    {/if}
++  </div>
+ </nav>
+diff --git a/src/client/components/PanelSlot.svelte b/src/client/components/PanelSlot.svelte
+index 1d78c9c..69b8761 100644
+--- a/src/client/components/PanelSlot.svelte
++++ b/src/client/components/PanelSlot.svelte
+@@ -14,13 +14,21 @@
+  */
+ import type { Editor } from "@tiptap/core";
+ import type { ComponentProps } from "svelte";
++import type { Annotation } from "../../shared/types";
+ import ChatPanel from "../panels/ChatPanel.svelte";
+ import SidePanel from "../panels/SidePanel.svelte";
+ import OutlinePanel from "./OutlinePanel.svelte";
+ 
+ type ChatSlotProps = { kind: "chat"; visible?: boolean } & ComponentProps<typeof ChatPanel>;
+ type SideSlotProps = { kind: "side"; visible?: boolean } & ComponentProps<typeof SidePanel>;
+-type OutlineSlotProps = { kind: "outline"; visible?: boolean; editor: Editor | null };
++type OutlineSlotProps = {
++  kind: "outline";
++  visible?: boolean;
++  editor: Editor | null;
++  annotations?: Annotation[];
++  focusTrigger?: number;
++  activeFilterType?: string;
++};
+ 
+ // biome-ignore lint/suspicious/noExplicitAny: discriminated union prop spread
+ type Props =
+@@ -43,7 +51,12 @@ const wrapStyle = $derived(
+     {#if kind === "chat"}
+       <ChatPanel {...(rest as ComponentProps<typeof ChatPanel>)} {visible} />
+     {:else if kind === "outline"}
+-      <OutlinePanel editor={(rest as OutlineSlotProps).editor} />
++      <OutlinePanel
++        editor={(rest as OutlineSlotProps).editor}
++        annotations={(rest as OutlineSlotProps).annotations}
++        focusTrigger={(rest as OutlineSlotProps).focusTrigger}
++        activeFilterType={(rest as OutlineSlotProps).activeFilterType}
++      />
+     {:else}
+       <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
+     {/if}
+@@ -51,7 +64,12 @@ const wrapStyle = $derived(
+ {:else if kind === "chat"}
+   <ChatPanel {...(rest as ComponentProps<typeof ChatPanel>)} />
+ {:else if kind === "outline"}
+-  <OutlinePanel editor={(rest as OutlineSlotProps).editor} />
++  <OutlinePanel
++    editor={(rest as OutlineSlotProps).editor}
++    annotations={(rest as OutlineSlotProps).annotations}
++    focusTrigger={(rest as OutlineSlotProps).focusTrigger}
++    activeFilterType={(rest as OutlineSlotProps).activeFilterType}
++  />
+ {:else}
+   <SidePanel {...(rest as ComponentProps<typeof SidePanel>)} />
+ {/if}
+diff --git a/src/client/editor/find-replace/FindReplaceBar.svelte b/src/client/editor/find-replace/FindReplaceBar.svelte
+index 5e55e44..003b2b3 100644
+--- a/src/client/editor/find-replace/FindReplaceBar.svelte
++++ b/src/client/editor/find-replace/FindReplaceBar.svelte
+@@ -1,5 +1,7 @@
+ <script lang="ts">
+ import type { Editor } from "@tiptap/core";
++import * as Y from "yjs";
++import type { OpenTab } from "../../types.js";
+ import {
+   type FindReplaceOptions,
+   getFindState,
+@@ -7,13 +9,96 @@ import {
+   replaceAll,
+ } from "../extensions/find-replace.js";
+ 
++interface CrossDocMatch {
++  tabId: string;
++  fileName: string;
++  count: number;
++  snippets: string[];
++}
++
+ interface Props {
+   editor: Editor | null;
+   open: boolean;
+   onClose: () => void;
++  tabs?: OpenTab[];
+ }
+ 
+-let { editor, open, onClose }: Props = $props();
++let { editor, open, onClose, tabs = [] }: Props = $props();
++
++type Scope = "doc" | "tabs";
++let scope = $state<Scope>("doc");
++let crossDocResults = $state<CrossDocMatch[]>([]);
++let crossDocSearching = $state(false);
++
++function extractYdocText(ydoc: Y.Doc): string {
++  const fragment = ydoc.getXmlFragment("default");
++  const parts: string[] = [];
++  function walk(node: Y.XmlElement | Y.XmlFragment | Y.XmlText) {
++    if (node instanceof Y.XmlText) {
++      parts.push(node.toString());
++    } else {
++      for (let i = 0; i < node.length; i++) {
++        const child = node.get(i);
++        if (child instanceof Y.XmlText || child instanceof Y.XmlElement) {
++          walk(child);
++        }
++      }
++      if (node instanceof Y.XmlElement && node.nodeName !== "text") {
++        parts.push(" ");
++      }
++    }
++  }
++  walk(fragment);
++  return parts.join("");
++}
++
++function searchYdoc(
++  ydoc: Y.Doc,
++  q: string,
++  caseSensitive: boolean,
++): { count: number; snippets: string[] } {
++  const text = extractYdocText(ydoc);
++  const needle = caseSensitive ? q : q.toLowerCase();
++  const haystack = caseSensitive ? text : text.toLowerCase();
++  const snippets: string[] = [];
++  let count = 0;
++  let idx = 0;
++  while ((idx = haystack.indexOf(needle, idx)) !== -1) {
++    count++;
++    if (snippets.length < 3) {
++      const start = Math.max(0, idx - 30);
++      const end = Math.min(text.length, idx + needle.length + 30);
++      const raw = text.slice(start, end).replace(/\s+/g, " ").trim();
++      snippets.push((start > 0 ? "…" : "") + raw + (end < text.length ? "…" : ""));
++    }
++    idx += needle.length;
++  }
++  return { count, snippets };
++}
++
++let crossDocTimer: ReturnType<typeof setTimeout> | undefined;
++
++function scheduleCrossDocSearch(q: string, cs: boolean) {
++  clearTimeout(crossDocTimer);
++  if (!q) {
++    crossDocResults = [];
++    crossDocSearching = false;
++    return;
++  }
++  crossDocSearching = true;
++  crossDocTimer = setTimeout(() => {
++    const results: CrossDocMatch[] = [];
++    for (const tab of tabs) {
++      if (!tab.ydoc) continue;
++      const { count, snippets } = searchYdoc(tab.ydoc, q, cs);
++      if (count > 0) {
++        results.push({ tabId: tab.id, fileName: tab.fileName, count, snippets });
++      }
++    }
++    crossDocResults = results;
++    crossDocSearching = false;
++  }, 300);
++}
+ 
+ let query = $state("");
+ let replaceText = $state("");
+@@ -60,6 +145,11 @@ $effect(() => {
+ });
+ 
+ function dispatchFind() {
++  if (scope === "tabs") {
++    scheduleCrossDocSearch(query, caseSensitive);
++    return;
++  }
++
+   const ed = editor;
+   if (!ed || !query) {
+     regexError = null;
+@@ -83,6 +173,18 @@ function dispatchFind() {
+   ed.commands.find(opts);
+ }
+ 
++function handleScopeChange(newScope: Scope) {
++  scope = newScope;
++  if (newScope === "tabs") {
++    editor?.commands.findClose();
++    scheduleCrossDocSearch(query, caseSensitive);
++  } else {
++    crossDocResults = [];
++    clearTimeout(crossDocTimer);
++    dispatchFind();
++  }
++}
++
+ function handleKeydown(e: KeyboardEvent) {
+   if (e.key === "Enter") {
+     e.preventDefault();
+@@ -151,6 +253,41 @@ async function handleReplaceAll() {
+     "
+     onkeydown={handleKeydown}
+   >
++    <!-- Scope pills -->
++    {#if tabs.length > 1}
++      <div
++        data-testid="find-scope-pills"
++        style="display: flex; gap: var(--tandem-space-1); align-items: center;"
++      >
++        <button
++          data-testid="find-scope-doc"
++          onclick={() => handleScopeChange("doc")}
++          aria-pressed={scope === "doc"}
++          style="
++            padding: 2px var(--tandem-space-2); font-size: var(--tandem-text-xs);
++            border: 1px solid {scope === 'doc' ? 'var(--tandem-accent-border)' : 'var(--tandem-border)'};
++            border-radius: var(--tandem-r-pill);
++            background: {scope === 'doc' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'};
++            color: {scope === 'doc' ? 'var(--tandem-accent)' : 'var(--tandem-fg-muted)'};
++            cursor: pointer;
++          "
++        >This document</button>
++        <button
++          data-testid="find-scope-tabs"
++          onclick={() => handleScopeChange("tabs")}
++          aria-pressed={scope === "tabs"}
++          style="
++            padding: 2px var(--tandem-space-2); font-size: var(--tandem-text-xs);
++            border: 1px solid {scope === 'tabs' ? 'var(--tandem-accent-border)' : 'var(--tandem-border)'};
++            border-radius: var(--tandem-r-pill);
++            background: {scope === 'tabs' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'};
++            color: {scope === 'tabs' ? 'var(--tandem-accent)' : 'var(--tandem-fg-muted)'};
++            cursor: pointer;
++          "
++        >Open tabs</button>
++      </div>
++    {/if}
++
+     <!-- Query row -->
+     <div style="display: flex; gap: var(--tandem-space-2); align-items: center;">
+       <input
+@@ -301,5 +438,33 @@ async function handleReplaceAll() {
+         {partialWarning}
+       </div>
+     {/if}
++
++    <!-- Cross-doc results -->
++    {#if scope === "tabs"}
++      <div
++        data-testid="find-cross-doc-results"
++        style="border-top: 1px solid var(--tandem-border); padding-top: var(--tandem-space-2); display: flex; flex-direction: column; gap: var(--tandem-space-1);"
++      >
++        {#if crossDocSearching}
++          <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);">Searching…</div>
++        {:else if query && crossDocResults.length === 0}
++          <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);">No matches in open tabs</div>
++        {:else}
++          {#each crossDocResults as result}
++            <div style="display: flex; flex-direction: column; gap: 2px;">
++              <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg); font-weight: 500;">
++                {result.fileName}
++                <span style="color: var(--tandem-fg-subtle); font-weight: normal;">({result.count} {result.count === 1 ? 'match' : 'matches'})</span>
++              </div>
++              {#each result.snippets as snippet}
++                <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); padding-left: var(--tandem-space-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
++                  {snippet}
++                </div>
++              {/each}
++            </div>
++          {/each}
++        {/if}
++      </div>
++    {/if}
+   </div>
+ {/if}
+diff --git a/src/client/editor/toolbar/Toolbar.svelte b/src/client/editor/toolbar/Toolbar.svelte
+index 0f24f2b..1ad5f97 100644
+--- a/src/client/editor/toolbar/Toolbar.svelte
++++ b/src/client/editor/toolbar/Toolbar.svelte
+@@ -10,8 +10,6 @@ import { toPmPos } from "../../../shared/positions/types";
+ import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
+ import { generateAnnotationId } from "../../../shared/utils";
+ import { pmPosToFlatOffset } from "../../positions";
+-import FormattingToolbar from "./FormattingToolbar.svelte";
+-import HighlightColorPicker from "./HighlightColorPicker.svelte";
+ import { toggleHighlight } from "./highlight-toggle";
+ import InputGroup from "./InputGroup.svelte";
+ import ModeToggle from "./ModeToggle.svelte";
+@@ -302,19 +300,6 @@ $effect(() => {
+   window.addEventListener("keydown", handleKeyDown);
+   return () => window.removeEventListener("keydown", handleKeyDown);
+ });
+-
+-function handleLinkMouseDown(e: MouseEvent) {
+-  e.preventDefault();
+-  if (!editor) return;
+-
+-  if (editor.isActive("link")) {
+-    editor.chain().focus().unsetLink().run();
+-    return;
+-  }
+-
+-  const url = window.prompt("Enter URL:");
+-  if (url) editor.chain().focus().setLink({ href: url }).run();
+-}
+ </script>
+ 
+ {#if (showMiniToolbar && selectionPosition) || (inInputMode && inputPosition)}
+@@ -366,42 +351,6 @@ function handleLinkMouseDown(e: MouseEvent) {
+       >
+         I
+       </button>
+-      <button
+-        type="button"
+-        aria-label="Strike"
+-        title="Strike"
+-        onmousedown={(e) => {
+-          e.preventDefault();
+-          editor?.chain().focus().toggleStrike().run();
+-        }}
+-        onclick={onKeyActivate(() => editor?.chain().focus().toggleStrike().run())}
+-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; text-decoration: line-through; cursor: pointer;"
+-      >
+-        S
+-      </button>
+-      <button
+-        type="button"
+-        aria-label="Code"
+-        title="Code"
+-        onmousedown={(e) => {
+-          e.preventDefault();
+-          editor?.chain().focus().toggleCode().run();
+-        }}
+-        onclick={onKeyActivate(() => editor?.chain().focus().toggleCode().run())}
+-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-family: var(--tandem-font-mono); font-size: 11px; cursor: pointer;"
+-      >
+-        &lt;/&gt;
+-      </button>
+-      <button
+-        type="button"
+-        aria-label="Link"
+-        title="Link"
+-        onmousedown={handleLinkMouseDown}
+-        onclick={onKeyActivate(handleLinkMouseDown)}
+-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; cursor: pointer;"
+-      >
+-        Link
+-      </button>
+       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+         {#each MINI_HIGHLIGHT_COLORS as color}
+@@ -464,17 +413,6 @@ function handleLinkMouseDown(e: MouseEvent) {
+     Tandem
+   </span>
+ 
+-  <FormattingToolbar {editor} disabled={inInputMode} />
+-
+-  <div
+-    style="width: 1px; height: 18px; background: var(--tandem-border);"
+-  ></div>
+-
+-  <HighlightColorPicker
+-    disabled={!canAnnotate || inInputMode}
+-    onHighlight={handleHighlight}
+-  />
+-
+   <ToolbarButton
+     label="Comment"
+     testId="toolbar-comment-btn"
+diff --git a/src/client/hooks/useTandemSettings.ts b/src/client/hooks/useTandemSettings.ts
+index 61a2f56..3df25d6 100644
+--- a/src/client/hooks/useTandemSettings.ts
++++ b/src/client/hooks/useTandemSettings.ts
+@@ -33,6 +33,7 @@ export interface TandemSettings {
+   annotationPatterns: boolean;
+   selectionToolbar: boolean;
+   soloRailHidden: boolean;
++  panelHidden: boolean;
+   leftSlot: { kind: LeftSlotKind };
+ }
+ 
+@@ -67,6 +68,7 @@ const DEFAULTS: TandemSettings = {
+   annotationPatterns: false,
+   selectionToolbar: true,
+   soloRailHidden: true,
++  panelHidden: false,
+   leftSlot: { kind: "side" },
+ };
+ 
+@@ -148,6 +150,7 @@ export function loadSettings(): TandemSettings {
+         annotationPatterns: parsed.annotationPatterns === true,
+         selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+         soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
++        panelHidden: parsed.panelHidden === true,
+         leftSlot: {
+           kind:
+             parsed.leftSlot?.kind === "side" || parsed.leftSlot?.kind === "outline"
+diff --git a/src/client/hooks/yjsSync.svelte.ts b/src/client/hooks/yjsSync.svelte.ts
+index 62b522c..f32c819 100644
+--- a/src/client/hooks/yjsSync.svelte.ts
++++ b/src/client/hooks/yjsSync.svelte.ts
+@@ -40,6 +40,8 @@ export interface YjsSyncState {
+   readonly serverRestarted: boolean;
+   /** Caller invokes this in component teardown (`onDestroy`). */
+   destroy: () => void;
++  /** Force an immediate reconnect attempt on all providers. */
++  reconnect: () => void;
+ }
+ 
+ /**
+@@ -247,6 +249,7 @@ export function createYjsSync(): YjsSyncState {
+ 
+   // Forward-declared so the bootstrap block (below) can assign and destroy() can call.
+   let bootstrapCleanup: (() => void) | null = null;
++  let bootstrapProviderRef: HocuspocusProvider | null = null;
+ 
+   // ---------- Bootstrap (collapsed Effect 1+2: connect bootstrap provider AND wire its observer) ----------
+   // Done inline (eager) so the bootstrap provider + observer are guaranteed
+@@ -260,6 +263,7 @@ export function createYjsSync(): YjsSyncState {
+       document: ydoc,
+     });
+     bootstrapYdocState = ydoc;
++    bootstrapProviderRef = provider;
+ 
+     provider.on("status", ({ status }: { status: string }) => {
+       connected = status === "connected";
+@@ -326,6 +330,7 @@ export function createYjsSync(): YjsSyncState {
+       provider.destroy();
+       ydoc.destroy();
+       bootstrapYdocState = null;
++      bootstrapProviderRef = null;
+     };
+ 
+     ready = true;
+@@ -476,5 +481,11 @@ export function createYjsSync(): YjsSyncState {
+       return serverRestarted;
+     },
+     destroy,
++    reconnect() {
++      bootstrapProviderRef?.connect();
++      for (const t of tabsState) {
++        t.provider.connect();
++      }
++    },
+   };
+ }
+diff --git a/src/client/panels/FilterBar.svelte b/src/client/panels/FilterBar.svelte
+index da79c8e..e05b37a 100644
+--- a/src/client/panels/FilterBar.svelte
++++ b/src/client/panels/FilterBar.svelte
+@@ -10,6 +10,9 @@ interface Props {
+   filterAuthor: FilterAuthor;
+   filterStatus: FilterStatus;
+   hasFilters: boolean;
++  open: boolean;
++  totalCount: number;
++  onToggleOpen: () => void;
+   onSetFilterType: (v: FilterType) => void;
+   onSetFilterAuthor: (v: FilterAuthor) => void;
+   onSetFilterStatus: (v: FilterStatus) => void;
+@@ -21,60 +24,120 @@ let {
+   filterAuthor,
+   filterStatus,
+   hasFilters,
++  open,
++  totalCount,
++  onToggleOpen,
+   onSetFilterType,
+   onSetFilterAuthor,
+   onSetFilterStatus,
+   onClearFilters,
+ }: Props = $props();
++
++const filterLabel = $derived.by(() => {
++  if (!hasFilters) return "All";
++  const parts: string[] = [];
++  if (filterType !== "all") {
++    const labels: Record<FilterType, string> = {
++      all: "All",
++      highlight: "Highlights",
++      comment: "Comments",
++      note: "Notes",
++      "with-replacement": "With replacement",
++    };
++    parts.push(labels[filterType]);
++  }
++  if (filterAuthor !== "all") {
++    const labels: Record<FilterAuthor, string> = {
++      all: "Anyone",
++      claude: "Claude",
++      user: "You",
++      import: "Imported",
++    };
++    parts.push(labels[filterAuthor]);
++  }
++  if (filterStatus !== "all") {
++    const labels: Record<FilterStatus, string> = {
++      all: "Any status",
++      pending: "Pending",
++      accepted: "Accepted",
++      dismissed: "Dismissed",
++    };
++    parts.push(labels[filterStatus]);
++  }
++  return parts.join(" · ") || "All";
++});
+ </script>
+ 
+-<div
+-  style="padding: 8px 16px; border-bottom: 1px solid var(--tandem-border); display: flex; gap: 4px; flex-wrap: wrap; align-items: center;"
+->
+-  <FilterSelect
+-    testId="filter-type"
+-    ariaLabel="Filter by type"
+-    value={filterType}
+-    onChange={(v) => onSetFilterType(v as FilterType)}
+-    options={[
+-      { value: "all", label: "All types" },
+-      { value: "highlight", label: "Highlights" },
+-      { value: "comment", label: "Comments" },
+-      { value: "note", label: "Notes" },
+-      { value: "with-replacement", label: "With replacement" },
+-    ]}
+-  />
+-  <FilterSelect
+-    testId="filter-author"
+-    ariaLabel="Filter by author"
+-    value={filterAuthor}
+-    onChange={(v) => onSetFilterAuthor(v as FilterAuthor)}
+-    options={[
+-      { value: "all", label: "Anyone" },
+-      { value: "claude", label: "Claude" },
+-      { value: "user", label: "You" },
+-      { value: "import", label: "Imported" },
+-    ]}
+-  />
+-  <FilterSelect
+-    testId="filter-status"
+-    ariaLabel="Filter by status"
+-    value={filterStatus}
+-    onChange={(v) => onSetFilterStatus(v as FilterStatus)}
+-    options={[
+-      { value: "all", label: "Any status" },
+-      { value: "pending", label: "Pending" },
+-      { value: "accepted", label: "Accepted" },
+-      { value: "dismissed", label: "Dismissed" },
+-    ]}
+-  />
+-  {#if hasFilters}
++{#if !open}
++  <!-- Collapsed summary chip -->
++  <div style="padding: 6px 16px; border-bottom: 1px solid var(--tandem-border);">
++    <button
++      data-testid="filter-bar-toggle"
++      onclick={onToggleOpen}
++      style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
++    >
++      <span>{filterLabel} {totalCount}</span>
++      <span style="font-size: 9px; opacity: 0.7;">▾</span>
++      <span>Filter</span>
++    </button>
++  </div>
++{:else}
++  <!-- Expanded full filter row -->
++  <div
++    style="padding: 8px 16px; border-bottom: 1px solid var(--tandem-border); display: flex; gap: 4px; flex-wrap: wrap; align-items: center;"
++  >
++    <FilterSelect
++      testId="filter-type"
++      ariaLabel="Filter by type"
++      value={filterType}
++      onChange={(v) => onSetFilterType(v as FilterType)}
++      options={[
++        { value: "all", label: "All types" },
++        { value: "highlight", label: "Highlights" },
++        { value: "comment", label: "Comments" },
++        { value: "note", label: "Notes" },
++        { value: "with-replacement", label: "With replacement" },
++      ]}
++    />
++    <FilterSelect
++      testId="filter-author"
++      ariaLabel="Filter by author"
++      value={filterAuthor}
++      onChange={(v) => onSetFilterAuthor(v as FilterAuthor)}
++      options={[
++        { value: "all", label: "Anyone" },
++        { value: "claude", label: "Claude" },
++        { value: "user", label: "You" },
++        { value: "import", label: "Imported" },
++      ]}
++    />
++    <FilterSelect
++      testId="filter-status"
++      ariaLabel="Filter by status"
++      value={filterStatus}
++      onChange={(v) => onSetFilterStatus(v as FilterStatus)}
++      options={[
++        { value: "all", label: "Any status" },
++        { value: "pending", label: "Pending" },
++        { value: "accepted", label: "Accepted" },
++        { value: "dismissed", label: "Dismissed" },
++      ]}
++    />
++    {#if hasFilters}
++      <button
++        data-testid="clear-filters-btn"
++        onclick={onClearFilters}
++        style="background: none; border: none; color: var(--tandem-accent); font-size: 11px; cursor: pointer; padding: 2px 4px;"
++      >
++        Clear
++      </button>
++    {/if}
+     <button
+-      data-testid="clear-filters-btn"
+-      onclick={onClearFilters}
+-      style="background: none; border: none; color: var(--tandem-accent); font-size: 11px; cursor: pointer; padding: 2px 4px;"
++      onclick={onToggleOpen}
++      style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 10px; cursor: pointer; padding: 2px 4px; margin-left: auto;"
++      aria-label="Collapse filters"
+     >
+-      Clear
++      ▲
+     </button>
+-  {/if}
+-</div>
++  </div>
++{/if}
+diff --git a/src/client/panels/SidePanel.svelte b/src/client/panels/SidePanel.svelte
+index 054ddcd..e6e523b 100644
+--- a/src/client/panels/SidePanel.svelte
++++ b/src/client/panels/SidePanel.svelte
+@@ -27,6 +27,7 @@ interface Props {
+   activeAnnotationId: string | null;
+   onActiveAnnotationChange: (id: string | null) => void;
+   reduceMotion?: boolean;
++  onFilterChange?: (type: FilterType, author: FilterAuthor, status: FilterStatus) => void;
+ }
+ 
+ let {
+@@ -41,6 +42,7 @@ let {
+   activeAnnotationId,
+   onActiveAnnotationChange,
+   reduceMotion,
++  onFilterChange,
+ }: Props = $props();
+ 
+ const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
+@@ -49,6 +51,7 @@ const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth"
+ let filterType = $state<FilterType>("all");
+ let filterAuthor = $state<FilterAuthor>("all");
+ let filterStatus = $state<FilterStatus>("all");
++let filterBarOpen = $state(false);
+ let bulkConfirm = $state<"accept" | "dismiss" | null>(null);
+ 
+ // Scroll container ref
+@@ -71,6 +74,11 @@ $effect(() => {
+   bulkConfirm = null;
+ });
+ 
++// Notify parent of filter changes (enables filter-aware annotation counts in OutlinePanel)
++$effect(() => {
++  onFilterChange?.(filterType, filterAuthor, filterStatus);
++});
++
+ // Replies: observe Y.Map(annotationReplies)
+ let repliesMap = $state(new Map<string, AnnotationReply[]>());
+ 
+@@ -324,9 +332,12 @@ function handleBulk(status: "accepted" | "dismissed") {
+     {filterAuthor}
+     {filterStatus}
+     {hasFilters}
+-    onSetFilterType={(v) => (filterType = v)}
+-    onSetFilterAuthor={(v) => (filterAuthor = v)}
+-    onSetFilterStatus={(v) => (filterStatus = v)}
++    open={filterBarOpen}
++    totalCount={filteredData.filtered.length}
++    onToggleOpen={() => (filterBarOpen = !filterBarOpen)}
++    onSetFilterType={(v) => { filterType = v; filterBarOpen = false; }}
++    onSetFilterAuthor={(v) => { filterAuthor = v; filterBarOpen = false; }}
++    onSetFilterStatus={(v) => { filterStatus = v; filterBarOpen = false; }}
+     onClearFilters={() => {
+       filterType = "all";
+       filterAuthor = "all";
+diff --git a/src/client/shell/FormattingBar.svelte b/src/client/shell/FormattingBar.svelte
+new file mode 100644
+index 0000000..269277f
+--- /dev/null
++++ b/src/client/shell/FormattingBar.svelte
+@@ -0,0 +1,103 @@
++<script lang="ts">
++import type { Editor as TiptapEditor } from "@tiptap/core";
++import * as Y from "yjs";
++import { toPmPos } from "../../shared/positions/types";
++import type { HighlightColor } from "../../shared/types";
++import FormattingToolbar from "../editor/toolbar/FormattingToolbar.svelte";
++import HighlightColorPicker from "../editor/toolbar/HighlightColorPicker.svelte";
++import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
++import { pmPosToFlatOffset } from "../positions";
++
++interface Props {
++  editor: TiptapEditor | null;
++  ydoc: Y.Doc | null;
++  panelVisible?: boolean;
++  onTogglePanel?: () => void;
++  rightPanelVisible?: boolean;
++  onTogglePanelRight?: () => void;
++}
++
++const {
++  editor,
++  ydoc,
++  panelVisible = true,
++  onTogglePanel,
++  rightPanelVisible = true,
++  onTogglePanelRight,
++}: Props = $props();
++
++const canHighlight = $derived(!!editor && !editor.isDestroyed);
++
++function handleHighlight(color: HighlightColor) {
++  if (!editor || !ydoc || editor.isDestroyed) return;
++  const { state } = editor;
++  const { from, to } = state.selection;
++  if (from === to) return;
++  const flatFrom = pmPosToFlatOffset(state.doc, toPmPos(from));
++  const flatTo = pmPosToFlatOffset(state.doc, toPmPos(to));
++  if (flatFrom === null || flatTo === null) return;
++  toggleHighlight(ydoc, { from: flatFrom, to: flatTo }, color);
++}
++</script>
++
++<div
++  data-testid="formatting-bar"
++  style="display: flex; align-items: center; height: var(--tandem-h-fmtbar, 36px);
++    padding: 0 var(--tandem-space-2);
++    border-bottom: 1px solid var(--tandem-border);
++    background: var(--tandem-surface-muted);
++    user-select: none; position: relative; z-index: 4;"
++>
++  <!-- Left rail toggle -->
++  <button
++    type="button"
++    aria-label={panelVisible ? "Hide panel" : "Show panel"}
++    aria-pressed={panelVisible}
++    title={panelVisible ? "Hide panel" : "Show panel"}
++    onclick={onTogglePanel}
++    style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
++      background: {panelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
++      color: {panelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
++      cursor: pointer; display: flex; align-items: center; justify-content: center;
++      margin-right: var(--tandem-space-2); flex-shrink: 0;"
++  >
++    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
++      <rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
++      <rect x="1" y="2" width="5" height="12" fill="currentColor" opacity="0.6"/>
++    </svg>
++  </button>
++
++  <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 var(--tandem-space-2); flex-shrink: 0;"></div>
++
++  <!-- Formatting controls (flex: 1 to fill remaining width) -->
++  <div style="flex: 1; display: flex; align-items: center; gap: 2px; overflow: hidden; min-width: 0;">
++    <FormattingToolbar {editor} />
++    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px; flex-shrink: 0;"></div>
++    <HighlightColorPicker
++      disabled={!canHighlight}
++      onHighlight={handleHighlight}
++    />
++  </div>
++
++  <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 var(--tandem-space-2); flex-shrink: 0;"></div>
++
++  <!-- Right rail toggle -->
++  <button
++    type="button"
++    aria-label={rightPanelVisible ? "Hide right panel" : "Show right panel"}
++    aria-pressed={rightPanelVisible}
++    title={rightPanelVisible ? "Hide right panel" : "Show right panel"}
++    data-testid="formatting-bar-toggle-right"
++    onclick={onTogglePanelRight}
++    style="width: 28px; height: 24px; padding: 0 4px; border: none; border-radius: var(--tandem-r-2);
++      background: {rightPanelVisible ? 'var(--tandem-accent-bg)' : 'transparent'};
++      color: {rightPanelVisible ? 'var(--tandem-accent)' : 'var(--tandem-fg-subtle)'};
++      cursor: pointer; display: flex; align-items: center; justify-content: center;
++      margin-left: var(--tandem-space-2); flex-shrink: 0;"
++  >
++    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
++      <rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
++      <rect x="10" y="2" width="5" height="12" fill="currentColor" opacity="0.6"/>
++    </svg>
++  </button>
++</div>
+diff --git a/src/client/shell/TitleBar.svelte b/src/client/shell/TitleBar.svelte
+index ef9fa6e..d4a8315 100644
+--- a/src/client/shell/TitleBar.svelte
++++ b/src/client/shell/TitleBar.svelte
+@@ -5,8 +5,20 @@ import { onDestroy, onMount } from "svelte";
+ 
+ interface Props {
+   title?: string;
++  dirty?: boolean;
++  panelVisible?: boolean;
++  onTogglePanel?: () => void;
++  isThreePanel?: boolean;
++  onToggleLayout?: () => void;
+ }
+-const { title = "Tandem" }: Props = $props();
++const {
++  title = "Tandem",
++  dirty = false,
++  panelVisible = true,
++  onTogglePanel,
++  isThreePanel = false,
++  onToggleLayout,
++}: Props = $props();
+ 
+ let win: TauriWindow | null = null;
+ let isMaximized = $state(false);
+@@ -83,7 +95,42 @@ async function close() {
+ {#if isTauriRuntime()}
+ 	<div class="title-bar">
+ 		<div class="title-bar-left" data-tauri-drag-region>
+-			<span class="title-bar-title">{title}</span>
++			<span class="title-bar-title">{title ?? "Tandem"}{#if dirty}<span class="title-bar-dirty" aria-label="unsaved changes"></span>{/if}</span>
++		</div>
++		<div class="title-bar-chrome">
++			{#if onTogglePanel}
++				<button
++					type="button"
++					class="title-bar-chrome-btn"
++					class:active={panelVisible}
++					data-testid="title-bar-toggle-panel"
++					aria-label={panelVisible ? "Hide panel" : "Show panel"}
++					aria-pressed={panelVisible}
++					onclick={onTogglePanel}
++				>
++					<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
++						<rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
++						<line x1="9" y1="1" x2="9" y2="13" stroke="currentColor" stroke-width="1.2"/>
++					</svg>
++				</button>
++			{/if}
++			{#if onToggleLayout}
++				<button
++					type="button"
++					class="title-bar-chrome-btn"
++					class:active={isThreePanel}
++					data-testid="title-bar-toggle-layout"
++					aria-label={isThreePanel ? "Single panel layout" : "Three-panel layout"}
++					aria-pressed={isThreePanel}
++					onclick={onToggleLayout}
++				>
++					<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
++						<rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
++						<line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" stroke-width="1.2"/>
++						<line x1="9" y1="1" x2="9" y2="13" stroke="currentColor" stroke-width="1.2"/>
++					</svg>
++				</button>
++			{/if}
+ 		</div>
+ 		<div class="title-bar-controls">
+ 			<button type="button" class="title-bar-btn" aria-label="Minimize" onclick={minimize}>
+@@ -182,6 +229,51 @@ async function close() {
+ 		white-space: nowrap;
+ 	}
+ 
++	.title-bar-dirty {
++		display: inline-block;
++		width: 6px;
++		height: 6px;
++		border-radius: var(--tandem-r-circle);
++		background: var(--tandem-warning);
++		vertical-align: middle;
++		margin-left: 4px;
++	}
++
++	.title-bar-chrome {
++		display: flex;
++		align-items: center;
++		gap: var(--tandem-space-1);
++		padding: 0 var(--tandem-space-2);
++	}
++
++	.title-bar-chrome-btn {
++		display: flex;
++		align-items: center;
++		justify-content: center;
++		width: 28px;
++		height: 22px;
++		border: none;
++		background: transparent;
++		color: var(--tandem-fg-subtle);
++		cursor: pointer;
++		border-radius: var(--tandem-r-2);
++		transition: background 0.1s, color 0.1s;
++	}
++
++	.title-bar-chrome-btn:hover {
++		background: var(--tandem-surface-muted);
++		color: var(--tandem-fg);
++	}
++
++	.title-bar-chrome-btn.active {
++		color: var(--tandem-accent);
++	}
++
++	.title-bar-chrome-btn:focus-visible {
++		outline: 2px solid var(--tandem-accent);
++		outline-offset: -2px;
++	}
++
+ 	.title-bar-controls {
+ 		display: flex;
+ 		height: 100%;
+@@ -237,5 +329,17 @@ async function close() {
+ 			background: Highlight;
+ 			color: HighlightText;
+ 		}
++
++		.title-bar-chrome-btn {
++			background: ButtonFace;
++			color: ButtonText;
++			border: 1px solid ButtonText;
++		}
++
++		.title-bar-chrome-btn:hover,
++		.title-bar-chrome-btn.active {
++			background: Highlight;
++			color: HighlightText;
++		}
+ 	}
+ </style>
+diff --git a/src/client/svelte-harness/ConnectionBannerHarness.svelte b/src/client/svelte-harness/ConnectionBannerHarness.svelte
+index 0295307..364d208 100644
+--- a/src/client/svelte-harness/ConnectionBannerHarness.svelte
++++ b/src/client/svelte-harness/ConnectionBannerHarness.svelte
+@@ -12,5 +12,5 @@ const banner = createConnectionBanner(() => disconnectedSince);
+ </script>
+ 
+ {#if banner.showBanner}
+-  <ConnectionBanner onDismiss={banner.dismiss} />
++  <ConnectionBanner onDismiss={banner.dismiss} onRetry={banner.dismiss} />
+ {/if}
+diff --git a/tests/e2e/toolbar-redesign.spec.ts b/tests/e2e/toolbar-redesign.spec.ts
+index 7d392d2..c9a4ff4 100644
+--- a/tests/e2e/toolbar-redesign.spec.ts
++++ b/tests/e2e/toolbar-redesign.spec.ts
+@@ -151,11 +151,12 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
+   });
+   await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible();
+   await expect(toolbar.getByRole("button", { name: "Italic" })).toBeVisible();
+-  await expect(toolbar.getByRole("button", { name: "Strike" })).toBeVisible();
+-  await expect(toolbar.getByRole("button", { name: "Code" })).toBeVisible();
+-  await expect(toolbar.getByRole("button", { name: "Link" })).toBeVisible();
+   await expect(toolbar.getByRole("button", { name: /Highlight / })).toHaveCount(4);
+   await expect(toolbar.getByRole("button", { name: "Comment on selection" })).toBeVisible();
++  // Strike, Code, and Link were removed from the selection popup (see toolbar-ux-research.md)
++  await expect(toolbar.getByRole("button", { name: "Strike" })).not.toBeVisible();
++  await expect(toolbar.getByRole("button", { name: "Code" })).not.toBeVisible();
++  await expect(toolbar.getByRole("button", { name: "Link" })).not.toBeVisible();
+ });
+ 
+ test("floating selection toolbar dismisses with Escape", async ({ page }) => {

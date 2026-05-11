@@ -17,10 +17,10 @@
 - **Start the server before connecting Claude Code.** `npm run dev:standalone` runs both. Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
 
 ## Documentation
-- [MCP Tool Reference](docs/mcp-tools.md) -- All 28 MCP tools (25 active, 3 deprecated stubs) + channel API endpoints
+- [MCP Tool Reference](docs/mcp-tools.md) -- All 29 MCP tools (26 active, 3 deprecated stubs) + channel API endpoints
 - [Architecture](docs/architecture.md) -- Diagrams, data flows, coordinate systems, file map
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
-- [Agent Workflow](docs/agent-workflow.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
+- [Agent Workflow](.claude/skills/issue-pipeline/SKILL.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-027)
 - [Lessons Learned](docs/lessons-learned.md) -- 64 lessons including E2E testing gotchas
@@ -35,7 +35,7 @@ These WILL break things if violated:
 4. **Ranges use `validateRange()` + `anchoredRange()`**, not raw offsets. `anchoredRange()` creates both flat + Yjs RelativePosition in one call.
 5. **`tandem_getTextContent` uses `extractText()`, never `extractMarkdown()`.** Even for .md files. `extractMarkdown()` shifts character offsets relative to the annotation coordinate system. If you need actual markdown, use `tandem_save` and read the file.
 6. **`tandem_edit` rejects heading markup ranges.** Ranges that overlap heading prefixes (e.g., `## `) return INVALID_RANGE -- target text content only.
-7. **E2E tests use `data-testid` attributes** (kebab-case). Key selectors: `accept-btn`, `dismiss-btn`, `edit-btn`, `review-mode-btn`, `annotation-card-{id}`, `annotation-private-pill`, `tab-{id}`, `tab-format-badge-{id}`, `unsaved-indicator-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`, `toast-container`, `settings-popover`, `settings-display-name`, `dwell-time-slider`, `view-changelog-btn`, `app-info-footer`, `left-panel-resize-handle`, `right-panel-resize-handle`, `panel-resize-handle`, `cowork-settings-suspense-fallback`, `toolbar-highlight-btn`, `toolbar-highlight-color-toggle`, `toolbar-highlight-color-{yellow|green|blue|pink}`, `toolbar-comment-btn`, `toolbar-note-btn`, `popup-annotation-input`, `popup-note-submit`, `popup-comment-submit`, `popup-highlight-{yellow|green|blue|pink}`, `settings-content`, `error-boundary-recover-btn`, `error-boundary-reload-btn`, `outline-panel`, `outline-heading-{level}-{index}`, `find-replace-bar`, `find-input`, `replace-input`, `find-next-btn`, `find-prev-btn`, `replace-btn`, `replace-all-btn`, `find-close-btn`, `find-match-count`, `find-regex-toggle`, `find-case-toggle`, `find-word-toggle`, `command-palette`, `palette-input`, `palette-item-{id}`, `palette-empty`, `connection-banner-retry`, `filter-bar-toggle`, `outline-search-input`, `find-scope-pills`, `find-scope-doc`, `find-scope-tabs`, `find-cross-doc-results`, `formatting-bar`, `formatting-bar-toggle-left`, `formatting-bar-toggle-right`, `network-restart-sidecar`, `network-degraded-delay-slider`, `network-retry-strategy`, `network-hold-annotations-toggle`, `rail-tab-picker-btn`, `rail-tab-picker-dropdown`, `rail-tab-picker-{annotations|chat|outline}`, `left-rail-tab-picker-btn`, `left-rail-tab-picker-dropdown`, `left-rail-tab-picker-{annotations|chat|outline}`, `left-annotations-tab`, `left-chat-tab`, `left-outline-tab`.
+7. **E2E tests use `data-testid` attributes** (kebab-case). Key selectors: `accept-btn`, `dismiss-btn`, `edit-btn`, `review-mode-btn`, `annotation-card-{id}`, `annotation-private-pill`, `tab-{id}`, `tab-format-badge-{id}`, `unsaved-indicator-{id}`, `file-open-dialog`, `file-path-input`, `open-file-btn`, `toast-container`, `settings-popover`, `settings-display-name`, `dwell-time-slider`, `view-documentation-btn`, `view-changelog-btn`, `app-info-footer`, `left-panel-resize-handle`, `right-panel-resize-handle`, `panel-resize-handle`, `cowork-settings-suspense-fallback`, `toolbar-highlight-btn`, `toolbar-highlight-color-toggle`, `toolbar-highlight-color-{yellow|green|blue|pink}`, `toolbar-comment-btn`, `toolbar-note-btn`, `popup-annotation-input`, `popup-note-submit`, `popup-comment-submit`, `popup-highlight-{yellow|green|blue|pink}`, `settings-content`, `error-boundary-recover-btn`, `error-boundary-reload-btn`, `outline-panel`, `outline-heading-{level}-{index}`, `find-replace-bar`, `find-input`, `replace-input`, `find-next-btn`, `find-prev-btn`, `replace-btn`, `replace-all-btn`, `find-close-btn`, `find-match-count`, `find-regex-toggle`, `find-case-toggle`, `find-word-toggle`, `command-palette`, `palette-input`, `palette-item-{id}`, `palette-empty`, `connection-banner-retry`, `filter-bar-toggle`, `outline-search-input`, `find-scope-pills`, `find-scope-doc`, `find-scope-tabs`, `find-cross-doc-results`, `formatting-bar`, `formatting-bar-toggle-left`, `formatting-bar-toggle-right`, `network-restart-sidecar`, `network-degraded-delay-slider`, `network-retry-strategy`, `network-hold-annotations-toggle`, `rail-tab-picker-btn`, `rail-tab-picker-dropdown`, `rail-tab-picker-{annotations|chat|outline}`, `left-rail-tab-picker-btn`, `left-rail-tab-picker-dropdown`, `left-rail-tab-picker-{annotations|chat|outline}`, `left-annotations-tab`, `left-chat-tab`, `left-outline-tab`, `toolbar-authorship-toggle`, `toolbar-link-input`, `toolbar-link-submit`, `toolbar-link-cancel`, `store-readonly-banner`, `store-readonly-dismiss`, `palette-item-new-scratchpad`.
 
 ## Architecture
 
@@ -145,7 +145,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Status
 
-Core complete: 25 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app. v0.8.0 shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. v0.9.0 complete: MCP consolidation (#259, PR #449), redesign data model (#440–#445/#450, PRs #451/#458/#461/#462), UX polish (#435/#437, PRs #460/#463), CI stdio smoke test (#341, PR #459). Distribution items (#316, #317, #322) deferred to v0.13.0. v0.10.0 complete: React→Svelte 5 migration (#472/#508); all 39 .tsx files replaced; react/react-dom/@tiptap/react removed. Next: v0.11.0. See [docs/roadmap.md](docs/roadmap.md) for full plan.
+Core complete: 26 MCP tools, multi-doc tabs, CRDT-anchored annotations, chat sidebar, channel push, .md/.docx/.txt/.html support, npm global install (`tandem-editor`), Tauri desktop app. v0.8.0 shipped: coordinate system bugs fixed, semantic token lint enforcement, annotation UX simplified, NSIS installer sidecar kill. v0.9.0 complete: MCP consolidation (#259, PR #449), redesign data model (#440–#445/#450, PRs #451/#458/#461/#462), UX polish (#435/#437, PRs #460/#463), CI stdio smoke test (#341, PR #459). Distribution items (#316, #317, #322) deferred to v0.13.0. v0.10.0 complete: React→Svelte 5 migration (#472/#508); all 39 .tsx files replaced; react/react-dom/@tiptap/react removed. Next: v0.11.0. See [docs/roadmap.md](docs/roadmap.md) for full plan.
 
 <!-- autoskills:start -->
 
@@ -153,10 +153,43 @@ Summary generated by `autoskills`. Check the full files inside `.claude/skills`.
 
 ## Tandem-Specific Skills
 
+- `.claude/skills/changelog/SKILL.md` -- Generate a Keep a Changelog entry from git log since last tag
 - `.claude/skills/dev-server/SKILL.md` -- Start dev environment (server + client) and verify MCP connection
 - `.claude/skills/e2e/SKILL.md` -- Run Playwright E2E tests safely (warns about dev server conflicts)
+- `.claude/skills/e2e-debug/SKILL.md` -- Debug Playwright E2E test failures (port conflicts, server startup, post-mortem)
+- `.claude/skills/issue-pipeline/SKILL.md` -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - `.claude/skills/screenshots/SKILL.md` -- Capture README screenshots via Playwright + MCP
 
 Generic skills (accessibility, frontend-design, nodejs-backend-patterns, playwright-best-practices, tauri-v2, typescript-advanced-types, vercel-composition-patterns, vercel-react-best-practices, vite, vitest) live in `.claude/skills/` and auto-trigger via the skill system.
 
 <!-- autoskills:end -->
+
+## Claude Code Automation
+
+### Hooks (`.claude/hooks/`)
+
+Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse hooks exit 0 (warn only).
+
+**PreToolUse — `Edit|Write` matcher:**
+- `block-sensitive.sh` -- Blocks edits to `.env`, `package-lock.json`, and other sensitive files
+
+**PreToolUse — `Bash` matcher:**
+- `block-no-verify.sh` -- Blocks `--no-verify` flag (Husky bypass); fail-closed on parse error
+- `block-e2e-port-kill.sh` -- Blocks E2E test commands that kill dev server ports (:3478/:3479)
+
+**PostToolUse — `Edit|Write` matcher:**
+- `typecheck-on-edit.sh` -- Runs `tsc --noEmit` after `.ts`/`.tsx` edits
+- `svelte-check-on-edit.sh` -- Runs `svelte-check` after `.svelte` edits (opt-out: `TANDEM_SKIP_SVELTE_CHECK=1`)
+- `check-console-log.sh` -- Warns on `console.log()` in `src/server/` (Critical Rule #3)
+- `check-extract-markdown.sh` -- Warns on `extractMarkdown()` usage (Critical Rule #5)
+- `check-ymap-keys.sh` -- Warns on raw Y.Map key strings (Critical Rule #1)
+- `check-token-violation.sh` -- Runs `scripts/check-semantic-tokens.ts` for raw hex/rgba in `src/client/`
+- `format-on-edit.sh` -- Runs Biome format on edited files
+- `related-test.sh` -- Runs matching vitest after source edits (opt-out: `TANDEM_SKIP_RELATED_TEST=1`)
+
+### Agents (`.claude/agents/`)
+
+- `annotation-model-reviewer.md` -- Reviews annotation lifecycle, MCP_ORIGIN tagging, ADR-027 privacy
+- `svelte-migration-reviewer.md` -- Reviews `.svelte`/`.svelte.ts` for 6 known Svelte 5 reactive gotchas
+- `crdt-reviewer.md` -- Reviews CRDT coordinate system bugs and range invariant violations
+- `security-reviewer.md` -- Reviews security vulnerabilities specific to Tandem's threat model

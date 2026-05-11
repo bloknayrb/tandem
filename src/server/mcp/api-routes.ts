@@ -13,6 +13,7 @@ import { handleOpen } from "./routes/open.js";
 import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
 import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
+import { handleScratchpad } from "./routes/scratchpad.js";
 import { makeSetupHandler } from "./routes/setup.js";
 import { handleUpload } from "./routes/upload.js";
 
@@ -120,6 +121,9 @@ export function registerApiRoutes(
 
   app.options("/api/upload", mw);
   app.post("/api/upload", mw, largeBody, handleUpload);
+
+  app.options("/api/scratchpad", mw);
+  app.post("/api/scratchpad", mw, handleScratchpad);
 
   app.options("/api/convert", mw);
   app.post("/api/convert", mw, largeBody, handleConvert);

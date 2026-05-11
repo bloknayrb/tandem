@@ -42,7 +42,7 @@ import {
   setActiveDocId,
   toDocListEntry,
 } from "./document-service.js";
-import { openFileByPath } from "./file-opener.js";
+import { openFileByPath, openScratchpad } from "./file-opener.js";
 import {
   getErrorMessage,
   mcpError,
@@ -220,6 +220,20 @@ export function registerDocumentTools(server: McpServer): void {
         }
         return mcpError("FORMAT_ERROR", getErrorMessage(err));
       }
+    }),
+  );
+
+  server.tool(
+    "tandem_scratchpad",
+    "Create and open a new empty Scratchpad tab. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.",
+    {},
+    withErrorBoundary("tandem_scratchpad", async () => {
+      const result = await openScratchpad();
+      return mcpSuccess({
+        documentId: result.documentId,
+        fileName: result.fileName,
+        format: result.format,
+      });
     }),
   );
 

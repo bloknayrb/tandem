@@ -430,6 +430,31 @@ Users can open files without Claude Code using the editor UI:
 
 **Note:** Uploaded files have no disk path — they use synthetic `upload://` paths and are always read-only. `tandem_save` on an uploaded file saves only the session (annotations), not the file content.
 
+## Using Scratchpads for Drafting
+
+Scratchpads are ephemeral documents with no file on disk — useful for brainstorming, drafting outlines, or working on throwaway content without touching the filesystem.
+
+**Opening a scratchpad:**
+- Press `Ctrl+N` from anywhere in the editor
+- Click the `+` button in the tab bar and select "New Scratchpad"
+- Use the command palette (`Ctrl+Shift+P`) → "New Scratchpad"
+- Claude can create one via `tandem_scratchpad`
+
+```
+tandem_scratchpad()
+→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md" }
+
+tandem_edit({ from: 0, to: 0, newText: "# Draft Outline\n\n1. Introduction\n2. Analysis\n3. Conclusion" })
+→ Content appears in the scratchpad tab
+```
+
+The user can edit alongside Claude in real-time. When done, close the tab — content is discarded. To keep the work, copy it to a real file first (`tandem_open` + `tandem_edit`).
+
+**Notes:**
+- Each `Ctrl+N` / `tandem_scratchpad` call creates a new scratchpad with a unique ID
+- Scratchpads are excluded from session restore and channel events (Claude is not notified of scratchpad opens/closes)
+- Multiple scratchpads can be open simultaneously
+
 ## Running E2E Tests
 
 Playwright E2E tests verify the annotation lifecycle end-to-end (browser + server).

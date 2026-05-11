@@ -10,6 +10,7 @@
  */
 
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { API_BASE } from "../utils/fileUpload.js";
 import { type Action, registerAction } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,27 @@ export const saveStore = {
   },
 };
 let inflight = false;
+
+let scratchpadInflight = false;
+
+export async function createScratchpad(): Promise<void> {
+  if (scratchpadInflight) return;
+  scratchpadInflight = true;
+  try {
+    const res = await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn(
+        "[Tandem] New Scratchpad failed:",
+        (body as Record<string, string>).message ?? res.statusText,
+      );
+    }
+  } catch (err) {
+    console.warn("[Tandem] New Scratchpad request failed:", err);
+  } finally {
+    scratchpadInflight = false;
+  }
+}
 
 export async function triggerSave(activeDocId: string | null): Promise<void> {
   if (!activeDocId || inflight) return;
@@ -103,6 +125,15 @@ const BUILTINS: Action[] = [
     group: "document",
     run() {
       guardedRun("toggle-mode", (d) => d.toggleSoloMode());
+    },
+  },
+  {
+    id: "new-scratchpad",
+    label: "New Scratchpad",
+    group: "document",
+    shortcut: "Ctrl+N",
+    run() {
+      void createScratchpad();
     },
   },
 ];

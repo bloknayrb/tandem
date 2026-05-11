@@ -27,6 +27,8 @@ interface Props {
   settingsBtn?: HTMLButtonElement | null;
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
+  showAuthorship?: boolean;
+  onAuthorshipChange?: (visible: boolean) => void;
   selectionToolbar?: boolean;
   suppressSelectionToolbar?: boolean;
 }
@@ -38,6 +40,8 @@ let {
   settingsBtn = $bindable(null),
   tandemMode,
   onModeChange,
+  showAuthorship = false,
+  onAuthorshipChange,
   selectionToolbar = true,
   suppressSelectionToolbar = false,
 }: Props = $props();
@@ -194,10 +198,13 @@ function createAnnotation(
   const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
 
   const id = generateAnnotationId();
+  // highlights and notes are user-private; comments are Claude-visible
+  const audience = type === "highlight" || type === "note" ? "private" : "outbound";
   const annotation = {
     id,
     author: "user" as const,
     type,
+    audience,
     range: { from: flatFrom, to: flatTo },
     content,
     status: "pending" as const,
@@ -281,28 +288,20 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
   >
     <div style="display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--tandem-border);">
-      <button
-        type="button"
-        aria-label="Bold"
-        title="Bold"
-        onmousedown={(e) => {
-          e.preventDefault();
-          editor?.chain().focus().toggleBold().run();
-        }}
-        onclick={onKeyActivate(() => editor?.chain().focus().toggleBold().run())}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 700; cursor: pointer;"
-      >B</button>
-      <button
-        type="button"
-        aria-label="Italic"
-        title="Italic"
-        onmousedown={(e) => {
-          e.preventDefault();
-          editor?.chain().focus().toggleItalic().run();
-        }}
-        onclick={onKeyActivate(() => editor?.chain().focus().toggleItalic().run())}
-        style="height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12px; font-style: italic; cursor: pointer;"
-      >I</button>
+      <ToolbarButton
+        label="B"
+        ariaLabel="Bold"
+        style="font-weight: 700; min-width: 28px;"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => editor?.chain().focus().toggleBold().run()}
+      />
+      <ToolbarButton
+        label="I"
+        ariaLabel="Italic"
+        style="font-style: italic; min-width: 28px;"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => editor?.chain().focus().toggleItalic().run()}
+      />
       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
         {#each MINI_HIGHLIGHT_COLORS as color}
@@ -400,6 +399,15 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 
   <div style="flex: 1;"></div>
   <div style="display: flex; align-items: center; gap: var(--tandem-space-3);">
+    {#if onAuthorshipChange}
+      <ToolbarButton
+        label="Authorship"
+        testId="toolbar-authorship-toggle"
+        ariaLabel={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
+        active={showAuthorship}
+        onClick={() => { const fn = onAuthorshipChange; if (fn) fn(!showAuthorship); }}
+      />
+    {/if}
     {#if tandemMode && onModeChange}
       <ModeToggle {tandemMode} {onModeChange} />
     {/if}
