@@ -337,6 +337,8 @@ $effect(() => {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
       } else if (e.key === "n") {
+        const el = e.target as HTMLElement;
+        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
         e.preventDefault();
         void createScratchpad();
       } else if (e.key === "/") {

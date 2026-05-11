@@ -60,6 +60,30 @@ describe("SidePanel store-read-only banner", () => {
 
     expect(container.querySelector("[data-testid='store-readonly-banner']")).toBeNull();
   });
+
+  it("resets dismissal when storeReadOnly transitions back to false", async () => {
+    const { container, rerender } = render(StoreReadOnlyBannerHarness, {
+      props: { storeReadOnly: true },
+    });
+    await tick();
+
+    // Dismiss the banner
+    const dismissBtn = container.querySelector(
+      "[data-testid='store-readonly-dismiss']",
+    ) as HTMLButtonElement;
+    dismissBtn.click();
+    await tick();
+    expect(container.querySelector("[data-testid='store-readonly-banner']")).toBeNull();
+    expect(localStorage.getItem(DISMISS_KEY)).toBe("true");
+
+    // storeReadOnly goes false — clears dismissal
+    await rerender({ storeReadOnly: false });
+    expect(localStorage.getItem(DISMISS_KEY)).toBeNull();
+
+    // storeReadOnly goes true again — banner reappears
+    await rerender({ storeReadOnly: true });
+    expect(container.querySelector("[data-testid='store-readonly-banner']")).toBeTruthy();
+  });
 });
 
 describe("Y.Map → storeReadOnly bootstrap-observer contract", () => {

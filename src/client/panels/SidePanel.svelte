@@ -62,6 +62,17 @@ function readStoreReadOnlyDismissed(): boolean {
 
 let storeReadOnlyDismissed = $state(readStoreReadOnlyDismissed());
 
+$effect(() => {
+  if (!storeReadOnly) {
+    storeReadOnlyDismissed = false;
+    try {
+      localStorage.removeItem(STORE_READ_ONLY_DISMISS_KEY);
+    } catch {
+      // storage unavailable
+    }
+  }
+});
+
 function handleStoreReadOnlyDismiss() {
   try {
     localStorage.setItem(STORE_READ_ONLY_DISMISS_KEY, "true");

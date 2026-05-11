@@ -237,13 +237,8 @@ $effect(() => {
   <button
     bind:this={openBtnEl}
     onclick={() => {
-      const files = loadRecentFilesCached();
-      if (files.length === 0) {
-        showDialog = true;
-      } else {
-        recentFiles = files;
-        showRecent = !showRecent;
-      }
+      recentFiles = loadRecentFilesCached();
+      showRecent = !showRecent;
     }}
     data-testid="open-file-btn"
     title="Open file"
