@@ -277,6 +277,8 @@ All MCP-initiated Y.Map writes use `doc.transact(() => { ... }, 'mcp')`. The eve
 | `document:opened` | New document opened in browser | `fileName`, `format` |
 | `document:closed` | Document closed | `fileName` |
 | `document:switched` | User switches tabs | `fileName` |
+| `annotation:reply` | Reply added to an annotation thread | `annotationId`, `replyId`, `text` |
+| `annotation:edited` | Annotation body text edited | `annotationId`, `content` |
 
 ### Channel Shim Architecture
 
@@ -661,7 +663,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-024), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-029), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket

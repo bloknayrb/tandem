@@ -98,7 +98,7 @@ Implemented in Phase 1:
 
 - **docIdFromPath**: Stable, readable document IDs from file paths (used as Map key + Hocuspocus room name)
 - **openDocs Map**: Server tracks all open documents; `activeDocId` determines tool defaults
-- **documentId parameter**: All 22 existing MCP tools accept optional `documentId` (backward compatible)
+- **documentId parameter**: All 26 existing MCP tools accept optional `documentId` (backward compatible)
 - **New tools**: `tandem_listDocuments`, `tandem_switchDocument` (24 tools total)
 - **DocumentTabs**: Tab bar UI with format icons, active indicator, close buttons
 - **Per-tab Y.Doc**: Editor manages separate Y.Doc + HocuspocusProvider per open document
@@ -135,7 +135,7 @@ First-run experience, error handling, and UX refinements.
 
 ### 8b: Onboarding — DONE
 
-**Files:** `src/server/file-io/tutorial.ts`, `src/client/hooks/useTutorial.ts`, `src/client/components/OnboardingTutorial.tsx`
+**Files:** `src/server/file-io/tutorial.ts`, `src/client/hooks/useTutorial.ts`, `src/client/components/OnboardingTutorial.svelte`
 
 Implemented in PR #147:
 
@@ -251,14 +251,14 @@ On server startup, `listSessionFilePaths()` scans the session directory for prev
 
 ## Tab Close Fix (Issue #149) — DONE
 
-**Files:** `src/server/mcp/document-service.ts`, `src/server/mcp/api-routes.ts`, `src/server/mcp/document.ts`, `src/client/components/DocumentTabs.tsx`
+**Files:** `src/server/mcp/document-service.ts`, `src/server/mcp/api-routes.ts`, `src/server/mcp/document.ts`, `src/client/components/DocumentTabs.svelte`
 
 Closing a tab in the editor now actually closes the document on the server. Previously, tab close only affected the client UI without cleaning up the server-side document state.
 
 - **`closeDocumentById()`** shared helper in `document-service.ts` — single source of truth for document close logic (session save, doc removal, broadcast), used by both `tandem_close` MCP tool and `POST /api/close` HTTP endpoint
 - **`POST /api/close`** HTTP endpoint in `api-routes.ts` — browser-callable close, parallel to `/api/open`
 - **Client `handleTabClose`** calls `POST /api/close` with optimistic adjacent-tab selection
-- **Close button debounced** via `closingIdsRef` in `DocumentTabs.tsx` to prevent double-close from rapid clicks
+- **Close button debounced** via `closingIdsRef` in `DocumentTabs.svelte` to prevent double-close from rapid clicks
 - **`saveSession` wrapped in try-catch** so save failure doesn't block close
 - 7 new unit tests for `closeDocumentById`
 
@@ -420,7 +420,7 @@ PR 2 is the fastest win and has zero dependencies — it can ship independently 
 
 ## v1.0 Release Plan
 
-Core features are complete (25 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Redesign data model (#443, #445) and UX polish (#435, #437) shipped in v0.9.0. Remaining work: distribution (#316, #317, #322), dark theme, desktop UI polish, and first-run UX.
+Core features are complete (26 MCP tools, multi-doc tabs, CRDT annotations, chat, channel push, npm global install, Tauri desktop, Cowork integration). Redesign data model (#443, #445) and UX polish (#435, #437) shipped in v0.9.0. Remaining work: distribution (#316, #317, #322), dark theme, desktop UI polish, and first-run UX.
 
 Guiding principle: "Code is cheap, so the only thing that matters is doing things RIGHT."
 
@@ -554,7 +554,7 @@ After PR #474 merges, #473 closes automatically via `closingIssuesReferences`.
 | `tandem_getContext` | Keep | — |
 | `tandem_removeAnnotation` | Keep | — |
 
-Net result: 25 tools (down from 31; `tandem_highlight`, `tandem_flag`, `tandem_suggest` deprecated to stubs in v0.9.0; hard-remove targeted for v0.10.0).
+Net result: 26 tools (down from 31; `tandem_highlight`, `tandem_flag`, `tandem_suggest` deprecated to stubs in v0.9.0; hard-remove targeted for v0.10.0).
 
 ### v1.0.0 Exit Criteria
 
