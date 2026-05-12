@@ -136,6 +136,15 @@ let docsLoading = $state(false);
 let docsError = $state<string | null>(null);
 let activeSection = $state<SettingsSection>("appearance");
 
+// Clear stale fetch errors when the user navigates away from the section that
+// produced them. Without this, an error from Appearance's Changelog button
+// stays visible after switching to Editor and back.
+$effect(() => {
+  activeSection;
+  changelogError = null;
+  docsError = null;
+});
+
 // Idle-sync: sync only when NOT focused and value differs
 $effect(() => {
   const currentUserName = userNameState.userName;
@@ -364,6 +373,15 @@ function aboutRows() {
         >
           {changelogLoading ? "Opening…" : "Changelog"}
         </button>
+        {#if changelogError}
+          <div
+            role="alert"
+            data-testid="changelog-error"
+            style="font-size: 11px; color: var(--tandem-error-fg); padding: 0 var(--tandem-space-2);"
+          >
+            {changelogError}
+          </div>
+        {/if}
         <a
           href={TANDEM_ISSUES_NEW_URL}
           target="_blank"
@@ -603,12 +621,6 @@ function aboutRows() {
                 </div>
               {/if}
             </div>
-
-            {#if changelogError}
-              <div style="font-size: 11px; color: var(--tandem-error-fg);">
-                {changelogError}
-              </div>
-            {/if}
 
             <div
               data-testid="app-info-footer"
