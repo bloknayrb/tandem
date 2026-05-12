@@ -587,7 +587,7 @@ graph TB
 On launch, the Rust core:
 
 1. Copies `sample/` files to the writable app-data dir (first run only — skips if destination exists)
-2. Checks whether the server is already healthy (`GET /health`) — skips spawn in dev mode if `npm run dev:standalone` is already running
+2. In **debug builds only** (`cfg!(debug_assertions)`), checks whether a server is already healthy (`GET /health`) and skips spawn if so — supports the `cargo tauri dev` + `npm run dev:standalone` workflow. Release builds always spawn their own sidecar (the early-return was gated after a stale `tsx watch` dev session was found answering `/health` for the installed app, producing a silent "Disconnected" state with mismatched auth/session). `freePort()` in the sidecar handles any port conflict on bind.
 3. Spawns `node-sidecar` (bundled Node.js binary named with target triple) with `dist/server/index.js` as the entry point and `TANDEM_DATA_DIR` set to the platform app-data dir
 4. Polls `GET http://localhost:3479/health` every 200ms with a 15s timeout
 5. On crash, retries up to `MAX_RESTARTS = 3` times with exponential backoff (1s, 2s, 4s)
