@@ -621,3 +621,11 @@ Mirror the identical step already present in `tauri-release.yml`.
 **Problem:** In v0.11.0 planning, ~half of the scoped issues were already closed (#507, #492, #513–#522, #541) before implementation started. Dispatching agents to implement already-done work wastes significant time.
 
 **Solution:** Always spend 5 minutes running `gh issue view <N>` on every milestoned issue before writing any code. For QA-closeout batches especially, do the triage pass first — it may eliminate the entire batch.
+
+## 68. "Frozen Desktop UI" with Working Hover/Right-Click = Server Disconnected, Not JS-Hung
+
+**Problem:** A user reported the v0.11.0 desktop app appeared frozen — buttons unresponsive — but the mouse cursor still changed on hover, native tooltips showed, and right-click worked. This pattern is easy to misdiagnose as a Svelte reactive loop / JS infinite loop (and the codebase has prior incidents of both). The actual cause was a stale `tsx watch src/server/index.ts` from an old `npm run dev:server` session squatting on ports 3478/3479 — the installed app's `start_sidecar` (`src-tauri/src/lib.rs:377`) did `if check_health() { skip spawn }`, trusted the dev server, but the WS handshake failed silently because of mismatched auth/session state. The status bar in fact reported "Disconnected", but the symptom description focused on "frozen UI."
+
+**Solution (diagnostic):** When a desktop "frozen UI" is reported, **before** reading any Svelte/Tiptap code: (1) `Get-NetTCPConnection -LocalPort 3478,3479 -State Listen` and confirm the owning PID is a `node-sidecar.exe` (not a generic `node.exe` from a dev session); (2) `curl http://127.0.0.1:3479/health` to confirm version and `hasSession`; (3) look at the actual status-bar text — CSS hover, native tooltips, and right-click are all browser features that work without app JS, so "those still work" is consistent with disconnected just as much as with frozen JS.
+
+**Solution (code):** Gate the `check_health` reuse early-return in `start_sidecar` on `cfg!(debug_assertions)`. Release builds always spawn their own sidecar; `freePort()` resolves port conflicts cleanly. Also drop `stdio: "ignore"` from `taskkill` in `freePortWindows` so any future kill failure is logged and diagnosable instead of silent.

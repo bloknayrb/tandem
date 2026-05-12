@@ -373,9 +373,14 @@ fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
 async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> Result<(), String> {
-    // Dev mode: skip spawn if server is already running (e.g. npm run dev:standalone)
-    if check_health(&client).await {
-        log::info!("Server already healthy — skipping sidecar spawn");
+    // Debug-only: skip spawn if a server is already running (e.g. `npm run dev:standalone`
+    // alongside `cargo tauri dev`). In release builds the installed app must own its
+    // sidecar exclusively — a stale `tsx watch` dev session, an older release process,
+    // or any other listener on the MCP/WS ports can answer /health but be incompatible
+    // with this app's auth token / session state, leaving the UI stuck on "Disconnected".
+    // The sidecar's own `freePort()` step on start handles port conflicts cleanly.
+    if cfg!(debug_assertions) && check_health(&client).await {
+        log::info!("Server already healthy — skipping sidecar spawn (debug build)");
         return Ok(());
     }
 

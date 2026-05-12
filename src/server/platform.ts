@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import envPaths from "env-paths";
 import net from "net";
 import path from "path";
@@ -92,8 +92,32 @@ function freePortWindows(port: number): void {
   });
   const pid = out.trim().split(/\s+/).at(-1);
   if (pid && /^\d+$/.test(pid)) {
-    execSync(`taskkill /PID ${pid} /F`, { stdio: "ignore" });
-    console.error(`[Tandem] Killed stale PID ${pid} holding port ${port}`);
+    try {
+      const killOut = execFileSync("taskkill", ["/PID", pid, "/F"], {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      // Some taskkill paths exit 0 with empty stdout — avoid a dangling
+      // ": " in the log when there's no message to append.
+      const trimmed = killOut.trim();
+      console.error(
+        `[Tandem] Killed stale PID ${pid} holding port ${port}${trimmed ? `: ${trimmed}` : ""}`,
+      );
+    } catch (err) {
+      // Surface taskkill failure (permission denied, cross-session, race) so a
+      // subsequent port-bind EADDRINUSE is diagnosable. The prior `stdio: "ignore"`
+      // masked these and left the user with a silent "Disconnected" state.
+      const stderr =
+        err && typeof err === "object" && "stderr" in err
+          ? String((err as { stderr: unknown }).stderr ?? "")
+          : "";
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[Tandem] taskkill failed for PID ${pid} on port ${port}: ${message}${
+          stderr ? ` — stderr: ${stderr.trim()}` : ""
+        }`,
+      );
+    }
   }
 }
 

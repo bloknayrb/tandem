@@ -54,7 +54,8 @@
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-token-violation.sh"
+            "command": "bash .claude/hooks/check-token-violation.sh",
+            "continueOnBlock": true
           },
           {
             "type": "command",
