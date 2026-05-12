@@ -1,6 +1,9 @@
 export const DEFAULT_WS_PORT = 3478;
 export const DEFAULT_MCP_PORT = 3479;
 
+export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
+export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
+
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
