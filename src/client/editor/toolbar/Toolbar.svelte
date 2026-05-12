@@ -8,11 +8,10 @@ import {
   Y_MAP_ANNOTATIONS,
 } from "../../../shared/constants";
 import { toPmPos } from "../../../shared/positions/types";
-import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
+import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import { toggleHighlight } from "./highlight-toggle";
-import ModeToggle from "./ModeToggle.svelte";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
@@ -22,29 +21,11 @@ import ToolbarButton from "./ToolbarButton.svelte";
 interface Props {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
-  onSettingsOpen?: () => void;
-  /** Bindable settings button reference for keyboard-shortcut anchoring. */
-  settingsBtn?: HTMLButtonElement | null;
-  tandemMode?: TandemMode;
-  onModeChange?: (mode: TandemMode) => void;
-  showAuthorship?: boolean;
-  onAuthorshipChange?: (visible: boolean) => void;
   selectionToolbar?: boolean;
   suppressSelectionToolbar?: boolean;
 }
 
-let {
-  editor,
-  ydoc,
-  onSettingsOpen,
-  settingsBtn = $bindable(null),
-  tandemMode,
-  onModeChange,
-  showAuthorship = false,
-  onAuthorshipChange,
-  selectionToolbar = true,
-  suppressSelectionToolbar = false,
-}: Props = $props();
+let { editor, ydoc, selectionToolbar = true, suppressSelectionToolbar = false }: Props = $props();
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{ left: number; top: number } | null>(null);
@@ -357,74 +338,3 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     </div>
   </div>
 {/if}
-
-<div
-  style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-3);
-    min-height: 44px; padding: 0 var(--tandem-space-4);
-    border-bottom: 1px solid var(--tandem-border);
-    background: var(--tandem-surface-muted); user-select: none; position: relative; z-index: 5;"
->
-  <span
-    style="font-weight: 700; font-size: 14px;
-      color: var(--tandem-fg); letter-spacing: 0; display: inline-flex; align-items: center; gap: 8px; padding-right: var(--tandem-space-3); border-right: 1px solid var(--tandem-border); height: 22px;"
-  >
-    <span
-      aria-hidden="true"
-      style="width: 18px; height: 18px; border-radius: var(--tandem-r-circle); background: conic-gradient(from 210deg, var(--tandem-author-user), var(--tandem-author-user) 44%, transparent 44% 56%, var(--tandem-author-claude) 56%, var(--tandem-author-claude)); display: inline-block;"
-    ></span>
-    Tandem
-  </span>
-
-  <ToolbarButton
-    label="Comment"
-    testId="toolbar-comment-btn"
-    disabled={!canAnnotate}
-    disabledTitle="Select text first"
-    onMouseDown={(e) => {
-      e.preventDefault();
-      textareaEl?.focus();
-    }}
-  />
-
-  <ToolbarButton
-    label="Note"
-    testId="toolbar-note-btn"
-    disabled={!canAnnotate}
-    disabledTitle="Select text first"
-    onMouseDown={(e) => {
-      e.preventDefault();
-      textareaEl?.focus();
-    }}
-  />
-
-  <div style="flex: 1;"></div>
-  <div style="display: flex; align-items: center; gap: var(--tandem-space-3);">
-    {#if onAuthorshipChange}
-      <ToolbarButton
-        label="Authorship"
-        testId="toolbar-authorship-toggle"
-        ariaLabel={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
-        active={showAuthorship}
-        onClick={() => { const fn = onAuthorshipChange; if (fn) fn(!showAuthorship); }}
-      />
-    {/if}
-    {#if tandemMode && onModeChange}
-      <ModeToggle {tandemMode} {onModeChange} />
-    {/if}
-    {#if onSettingsOpen}
-      <button
-        bind:this={settingsBtn}
-        data-testid="settings-btn"
-        onclick={onSettingsOpen}
-        title="Settings (Ctrl+,)"
-        aria-label="Settings"
-        aria-keyshortcuts="Control+Comma"
-        style="background: transparent; border: 1px solid transparent;
-          border-radius: var(--tandem-r-2); cursor: pointer; color: var(--tandem-fg-muted);
-          font-size: 12px; padding: 0 var(--tandem-space-3); min-height: 28px;"
-      >
-        Settings
-      </button>
-    {/if}
-  </div>
-</div>

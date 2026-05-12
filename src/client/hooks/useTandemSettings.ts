@@ -12,6 +12,18 @@ export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
 export type ThemePreference = "light" | "dark" | "system";
+
+export const THEME_NEXT: Record<ThemePreference, ThemePreference> = {
+  system: "dark",
+  dark: "light",
+  light: "system",
+};
+
+export const THEME_LABEL: Record<ThemePreference, string> = {
+  light: "Theme: light",
+  dark: "Theme: dark",
+  system: "Theme: system",
+};
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 export type RailTab = "annotations" | "chat" | "outline";
 

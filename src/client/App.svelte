@@ -39,10 +39,9 @@ import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
-import { createTabDirty } from "./hooks/useTabDirty.svelte.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
-import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
@@ -121,6 +120,10 @@ let paletteOpen = $state(false);
 
 function toggleSettings() {
   settingsOpen = !settingsOpen;
+}
+
+function cycleTheme() {
+  settingsState.updateSettings({ theme: THEME_NEXT[settingsState.settings.theme] });
 }
 
 // Wire action dependencies for builtin actions (save, settings, find, mode)
@@ -367,9 +370,6 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
-const tabDirtyState = createTabDirty(() => activeTab);
-const activeTabDirty = $derived(tabDirtyState.dirty);
-
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
   () => editor,
@@ -379,8 +379,20 @@ const tutorial = createTutorial(
 
 <div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
   <TitleBar
-    title={activeTab?.fileName}
-    dirty={activeTabDirty}
+    tandemMode={modeState.tandemMode}
+    onModeChange={modeState.setTandemMode}
+    claudeActive={yjsSync.claudeActive}
+    leftPanelVisible={effectiveLeftVisible}
+    onToggleLeftPanel={toggleLeftPanel}
+    rightPanelVisible={effectiveRightVisible}
+    onToggleRightPanel={toggleRightPanel}
+    theme={settingsState.settings.theme}
+    onCycleTheme={cycleTheme}
+    showAuthorship={settingsState.settings.showAuthorship}
+    onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
+    onOpenHelp={() => (showHelp = true)}
+    onOpenSettings={toggleSettings}
+    bind:settingsBtn={settingsBtnEl}
   />
   {#if !yjsSync.ready}
     <div
@@ -407,12 +419,6 @@ const tutorial = createTutorial(
     <Toolbar
       {editor}
       ydoc={activeTab?.ydoc ?? null}
-      onSettingsOpen={toggleSettings}
-      bind:settingsBtn={settingsBtnEl}
-      tandemMode={modeState.tandemMode}
-      onModeChange={modeState.setTandemMode}
-      showAuthorship={settingsState.settings.showAuthorship}
-      onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
     />
@@ -429,10 +435,6 @@ const tutorial = createTutorial(
     <FormattingBar
       {editor}
       ydoc={activeTab?.ydoc ?? null}
-      leftPanelVisible={effectiveLeftVisible}
-      onToggleLeftPanel={toggleLeftPanel}
-      rightPanelVisible={effectiveRightVisible}
-      onToggleRightPanel={toggleRightPanel}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same

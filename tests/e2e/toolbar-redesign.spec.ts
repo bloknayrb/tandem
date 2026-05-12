@@ -60,46 +60,37 @@ test("toolbar renders all expected controls", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeVisible();
-  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeVisible();
-  await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeVisible();
   await expect(page.locator("[data-testid='settings-btn']")).toBeVisible();
+  await expect(page.locator("[data-testid='toolbar-authorship-toggle']")).toBeVisible();
 });
 
-test("annotation buttons are disabled with no selection", async ({ page }) => {
+test("highlight quick-action is disabled with no selection", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  // No selection → all annotation buttons disabled.
-  // toolbar-highlight-btn is in FormattingBar but is selection-gated via canHighlight.
+  // No selection → highlight button (the only selection-gated static control) is disabled.
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeDisabled();
-  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeDisabled();
-  await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeDisabled();
 });
 
-test("annotation buttons enable after text selection", async ({ page }) => {
+test("selection lights up annotation entry-points", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   const editor = page.locator(".tiptap");
   await expect(editor).toBeVisible({ timeout: 10_000 });
-  // Wait for the doc to actually load — `.tiptap` mounts before content does.
   await expect(editor.locator("p").first()).toContainText("first paragraph", {
     timeout: 10_000,
   });
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  // `hasSelection` is wired to Tiptap's synchronous `selectionUpdate` event
-  // (no dwell gating involved), so auto-wait on `:not([disabled])` is safe.
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
     timeout: 3_000,
   });
-  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 3_000,
   });
-  await expect(page.locator("[data-testid='toolbar-note-btn']")).toBeEnabled({
-    timeout: 3_000,
-  });
+  await expect(page.locator("[data-testid='popup-note-submit']")).toBeVisible();
 });
 
 test("floating selection toolbar stays within a short viewport", async ({ page }) => {
@@ -121,7 +112,7 @@ test("floating selection toolbar stays within a short viewport", async ({ page }
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
   // Confirm interactive state before reading boundingBox().
-  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 5_000,
   });
 
@@ -146,7 +137,7 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 5_000,
   });
   await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible();
