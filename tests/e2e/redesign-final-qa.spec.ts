@@ -190,7 +190,7 @@ test.describe("forced colors / high contrast", () => {
     await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
       timeout: 3_000,
     });
-    await expect(page.locator("[data-testid='toolbar-comment-btn']")).toBeEnabled({
+    await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
       timeout: 3_000,
     });
   });
@@ -349,13 +349,14 @@ test.describe("tab order traversal", () => {
 
     const toolbarLabels = [
       "Highlight",
-      "Comment",
-      "Note",
       "Settings",
       "toolbar-highlight-btn",
-      "toolbar-comment-btn",
-      "toolbar-note-btn",
       "settings-btn",
+      "Solo",
+      "Tandem",
+      "Help",
+      "Theme",
+      "authorship",
     ];
     const hasToolbarStop = focusedLabels.some((l) =>
       toolbarLabels.some((t) => l.toLowerCase().includes(t.toLowerCase())),
