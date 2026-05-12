@@ -2,6 +2,7 @@
 import {
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
+  TANDEM_ISSUES_NEW_URL,
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
 import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
@@ -28,15 +29,47 @@ type SettingsSection =
   | "shortcuts"
   | "about";
 
-const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
-  { id: "appearance", label: "Appearance" },
-  { id: "editor", label: "Editor" },
-  { id: "network", label: "Network" },
-  { id: "accessibility", label: "Accessibility" },
-  { id: "collaboration", label: "Collaboration" },
-  { id: "claude-code", label: "Claude Code/Cowork" },
-  { id: "shortcuts", label: "Shortcuts" },
-  { id: "about", label: "About" },
+const SECTIONS: Array<{ id: SettingsSection; label: string; icon: string }> = [
+  {
+    id: "appearance",
+    label: "Appearance",
+    icon: "M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z",
+  },
+  {
+    id: "editor",
+    label: "Editor",
+    icon: "M4 4h11M4 9h16M4 14h11M4 19h16",
+  },
+  {
+    id: "network",
+    label: "Network",
+    icon: "M3 12h18M3 12a9 9 0 0 1 18 0M3 12a9 9 0 0 0 18 0M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18",
+  },
+  {
+    id: "accessibility",
+    label: "Accessibility",
+    icon: "M12 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM4 9h16M9 9v5l-2 7M15 9v5l2 7M9 14h6",
+  },
+  {
+    id: "collaboration",
+    label: "Collaboration",
+    icon: "M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM21 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11",
+  },
+  {
+    id: "claude-code",
+    label: "Claude Code/Cowork",
+    icon: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z",
+  },
+  {
+    id: "shortcuts",
+    label: "Shortcuts",
+    icon: "M3 7h2v2H3V7Zm0 4h2v2H3v-2Zm0 4h2v2H3v-2Zm4-8h2v2H7V7Zm0 4h2v2H7v-2Zm0 4h10v2H7v-2Zm4-8h10v2H11V7Zm0 4h6v2h-6v-2Zm8 0h2v2h-2v-2Z",
+  },
+  {
+    id: "about",
+    label: "About",
+    icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v6m0 4h.01",
+  },
 ];
 
 // Static shortcuts not yet in the action registry (nav, help, modifier keys)
@@ -102,6 +135,15 @@ let changelogError = $state<string | null>(null);
 let docsLoading = $state(false);
 let docsError = $state<string | null>(null);
 let activeSection = $state<SettingsSection>("appearance");
+
+// Clear stale fetch errors when the user navigates away from the section that
+// produced them. Without this, an error from Appearance's Changelog button
+// stays visible after switching to Editor and back.
+$effect(() => {
+  activeSection;
+  changelogError = null;
+  docsError = null;
+});
 
 // Idle-sync: sync only when NOT focused and value differs
 $effect(() => {
@@ -233,25 +275,6 @@ function handleViewChangelog(): Promise<void> {
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 
-function navButtonStyle(section: SettingsSection): string {
-  const active = activeSection === section;
-  return [
-    "width: 100%;",
-    "display: flex;",
-    "align-items: center;",
-    "min-height: 34px;",
-    "padding: 0 var(--tandem-space-3);",
-    "border: 1px solid transparent;",
-    "border-radius: var(--tandem-r-3);",
-    "background: " + (active ? "var(--tandem-accent-bg)" : "transparent") + ";",
-    "color: " + (active ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)") + ";",
-    "font-size: 13px;",
-    "font-weight: " + (active ? "600" : "500") + ";",
-    "text-align: left;",
-    "cursor: pointer;",
-  ].join(" ");
-}
-
 function panelHeading(section: SettingsSection): string {
   return SECTIONS.find((s) => s.id === section)?.label ?? "Settings";
 }
@@ -303,27 +326,95 @@ function aboutRows() {
     class="settings-dialog"
   >
     <aside class="settings-sidebar">
-      <div style="padding: 0 var(--tandem-space-2);">
-        <div id={HEADING_ID} style="font-size: 18px; font-weight: 700; color: var(--tandem-fg);">
-          Settings
-        </div>
-        <div style="margin-top: 2px; font-size: 11px; color: var(--tandem-fg-subtle);">
-          Tandem preferences
-        </div>
+      <div class="settings-sidebar-head">
+        <div id={HEADING_ID} class="settings-sidebar-title">Settings</div>
+        {#if appInfo.info}
+          <span class="settings-version-chip" data-testid="settings-sidebar-version">
+            v{appInfo.info.version}
+          </span>
+        {/if}
       </div>
 
-      <nav aria-label="Settings sections" style="display: flex; flex-direction: column; gap: 2px;">
+      <nav aria-label="Settings sections" class="settings-sidebar-nav">
         {#each SECTIONS as section (section.id)}
           <button
             type="button"
             aria-current={activeSection === section.id ? "page" : undefined}
+            data-active={activeSection === section.id ? "true" : "false"}
             onclick={() => (activeSection = section.id)}
-            style={navButtonStyle(section.id)}
+            class="settings-nav-btn"
           >
-            {section.label}
+            <svg
+              aria-hidden="true"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              style="flex-shrink: 0;"
+            >
+              <path d={section.icon} />
+            </svg>
+            <span>{section.label}</span>
           </button>
         {/each}
       </nav>
+
+      <div class="settings-sidebar-foot" data-testid="settings-sidebar-footer">
+        <button
+          type="button"
+          data-testid="view-changelog-btn"
+          onclick={() => void handleViewChangelog()}
+          disabled={changelogLoading || appInfo.loading}
+          class="settings-sidebar-link"
+        >
+          {changelogLoading ? "Opening…" : "Changelog"}
+        </button>
+        {#if changelogError}
+          <div
+            role="alert"
+            data-testid="changelog-error"
+            style="font-size: 11px; color: var(--tandem-error-fg); padding: 0 var(--tandem-space-2);"
+          >
+            {changelogError}
+          </div>
+        {/if}
+        <a
+          href={TANDEM_ISSUES_NEW_URL}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="report-bug-link"
+          class="settings-sidebar-link"
+        >
+          Report a bug
+        </a>
+        <div
+          class="settings-sidebar-status"
+          data-testid="settings-mcp-status"
+          aria-live="polite"
+        >
+          <span
+            class="settings-status-dot"
+            data-state={connected
+              ? "connected"
+              : reconnectAttempts > 0
+                ? "reconnecting"
+                : "disconnected"}
+          ></span>
+          <span class="settings-status-label">
+            {#if connected}
+              MCP connected
+            {:else if reconnectAttempts > 0}
+              Reconnecting…
+            {:else}
+              MCP offline
+            {/if}
+          </span>
+        </div>
+      </div>
     </aside>
 
     <section class="settings-content" data-testid="settings-content">
@@ -531,33 +622,6 @@ function aboutRows() {
               {/if}
             </div>
 
-            <div>
-              <button
-                data-testid="view-changelog-btn"
-                onclick={() => void handleViewChangelog()}
-                disabled={changelogLoading || appInfo.loading}
-                style="width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: {changelogLoading || appInfo.loading ? 'not-allowed' : 'pointer'}; background: var(--tandem-surface-muted); color: var(--tandem-fg); opacity: {changelogLoading || appInfo.loading ? 0.6 : 1};"
-              >
-                {changelogLoading ? "Opening…" : "View Changelog"}
-              </button>
-              {#if changelogError}
-                <div style="margin-top: 6px; font-size: 11px; color: var(--tandem-error-fg);">
-                  {changelogError}
-                </div>
-              {/if}
-            </div>
-
-            <div>
-              <a
-                href="https://github.com/bloknayrb/tandem/issues/new"
-                target="_blank"
-                rel="noreferrer"
-                style="display: block; width: 100%; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface-muted); color: var(--tandem-fg); text-align: center; text-decoration: none; box-sizing: border-box;"
-              >
-                Report a bug
-              </a>
-            </div>
-
             <div
               data-testid="app-info-footer"
               style="border-top: 1px solid var(--tandem-border); padding-top: 10px;"
@@ -611,6 +675,132 @@ function aboutRows() {
     border-right: 1px solid var(--tandem-border);
     background: var(--tandem-surface-muted);
     overflow-y: auto;
+  }
+
+  .settings-sidebar-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--tandem-space-2);
+    padding: 0 var(--tandem-space-2);
+  }
+
+  .settings-sidebar-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--tandem-fg);
+  }
+
+  .settings-version-chip {
+    font-family: var(--tandem-font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--tandem-fg-subtle);
+    padding: 1px 6px;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-surface);
+    line-height: 1.5;
+  }
+
+  .settings-sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+  }
+
+  .settings-nav-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    min-height: 34px;
+    padding: 0 var(--tandem-space-3);
+    border: 1px solid transparent;
+    border-radius: var(--tandem-r-3);
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .settings-nav-btn[data-active="true"] {
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+    font-weight: 600;
+  }
+
+  .settings-sidebar-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--tandem-space-3) var(--tandem-space-2) 0;
+    margin-top: auto;
+    border-top: 1px solid var(--tandem-border);
+  }
+
+  .settings-sidebar-link {
+    appearance: none;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--tandem-r-2);
+    color: var(--tandem-fg-muted);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    text-decoration: none;
+    padding: 6px var(--tandem-space-2);
+    cursor: pointer;
+  }
+
+  .settings-sidebar-link:hover:not(:disabled),
+  .settings-sidebar-link:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface);
+    outline: none;
+  }
+
+  .settings-sidebar-link:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .settings-sidebar-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px var(--tandem-space-2);
+    font-size: 11px;
+    color: var(--tandem-fg-subtle);
+  }
+
+  .settings-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--tandem-fg-subtle);
+    flex-shrink: 0;
+  }
+
+  .settings-status-dot[data-state="connected"] {
+    background: var(--tandem-success);
+  }
+
+  .settings-status-dot[data-state="reconnecting"] {
+    background: var(--tandem-warning);
+  }
+
+  .settings-status-dot[data-state="disconnected"] {
+    background: var(--tandem-error);
+  }
+
+  .settings-status-label {
+    font-family: var(--tandem-font-mono);
+    font-size: 10px;
+    letter-spacing: 0.02em;
   }
 
   .settings-content {

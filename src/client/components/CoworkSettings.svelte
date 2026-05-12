@@ -1,6 +1,6 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
-import { COWORK_RESCAN_DEBOUNCE_MS } from "../../shared/constants";
+import { COWORK_RESCAN_DEBOUNCE_MS, TANDEM_REPO_URL } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
   coworkSettingsVariant,
@@ -141,7 +141,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     <div data-testid="cowork-settings-undetected" style={infoBannerStyle}>
       Cowork not detected on this system.{" "}
       <a
-        href="https://github.com/bloknayrb/tandem#cowork"
+        href={`${TANDEM_REPO_URL}#cowork`}
         target="_blank"
         rel="noreferrer"
         style="color: var(--tandem-accent);"

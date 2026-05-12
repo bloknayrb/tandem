@@ -1,4 +1,5 @@
 <script lang="ts">
+import { TANDEM_REPO_URL } from "../../shared/constants";
 import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
 import type { CoworkStatus } from "../types";
@@ -140,7 +141,7 @@ function handleSkip(): void {
       {:else}
         <a
           data-testid="cowork-onboarding-learn-more-link"
-          href="https://github.com/bloknayrb/tandem#cowork"
+          href={`${TANDEM_REPO_URL}#cowork`}
           target="_blank"
           rel="noreferrer"
           style="font-size: 12px; color: var(--tandem-accent); align-self: center; text-decoration: underline;"
