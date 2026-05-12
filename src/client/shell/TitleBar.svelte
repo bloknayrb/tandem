@@ -49,9 +49,13 @@ let {
   settingsBtn = $bindable(null),
 }: Props = $props();
 
-let win: TauriWindow | null = null;
+let win = $state<TauriWindow | null>(null);
 let isMaximized = $state(false);
 let cleanupListeners: (() => void)[] = [];
+// Tracks whether the component is still mounted so async `onMount` steps that
+// resolve after `onDestroy` skip state writes and self-clean any listeners
+// that were registered post-unmount.
+let mounted = true;
 
 onMount(async () => {
   if (!isTauriRuntime()) return;
@@ -60,38 +64,55 @@ onMount(async () => {
       import("@tauri-apps/api/core"),
       import("@tauri-apps/api/window"),
     ]);
+    if (!mounted) return;
 
     // Re-run decorum overlay setup now that the WebView page is loaded.
     // create_overlay_titlebar() injects JS hit-test logic cleared on navigation;
     // calling post-load keeps it alive so button clicks reach the WebView.
+    // Failure leaves clicks landing on HTCAPTION (the OS treats them as drag);
+    // log at error level so it's visible alongside the disabled-controls signal.
     await invoke("setup_overlay_titlebar").catch((e: unknown) => {
-      console.warn("[TitleBar] setup_overlay_titlebar failed:", e);
+      console.error("[TitleBar] setup_overlay_titlebar failed:", e);
     });
+    if (!mounted) return;
 
-    win = getCurrentWindow();
-    isMaximized = await win.isMaximized();
+    const currentWin = getCurrentWindow();
+    win = currentWin;
+    isMaximized = await currentWin.isMaximized();
+    if (!mounted) return;
 
-    const unlistenResize = await win.onResized(async () => {
+    const unlistenResize = await currentWin.onResized(async () => {
       try {
-        isMaximized = await win!.isMaximized();
+        isMaximized = await currentWin.isMaximized();
       } catch (e) {
         console.warn("[TitleBar] isMaximized check failed on resize:", e);
       }
     });
-    const unlistenMove = await win.onMoved(async () => {
+    if (!mounted) {
+      unlistenResize();
+      return;
+    }
+    cleanupListeners.push(unlistenResize);
+
+    const unlistenMove = await currentWin.onMoved(async () => {
       try {
-        isMaximized = await win!.isMaximized();
+        isMaximized = await currentWin.isMaximized();
       } catch (e) {
         console.warn("[TitleBar] isMaximized check failed on move:", e);
       }
     });
-    cleanupListeners = [unlistenResize, unlistenMove];
+    if (!mounted) {
+      unlistenMove();
+      return;
+    }
+    cleanupListeners.push(unlistenMove);
   } catch (e) {
     console.error("[TitleBar] Window API initialization failed:", e);
   }
 });
 
 onDestroy(() => {
+  mounted = false;
   cleanupListeners.forEach((fn) => fn());
 });
 
@@ -270,6 +291,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
         type="button"
         class="title-bar-btn"
         aria-label="Minimize"
+        disabled={win === null}
         onclick={minimize}
       >
         <svg
@@ -286,6 +308,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
         type="button"
         class="title-bar-btn"
         aria-label={isMaximized ? "Restore" : "Maximize"}
+        disabled={win === null}
         onclick={toggleMaximize}
       >
         {#if isMaximized}
@@ -317,6 +340,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
         type="button"
         class="title-bar-btn title-bar-close"
         aria-label="Close"
+        disabled={win === null}
         onclick={closeWindow}
       >
         <svg
@@ -493,7 +517,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     transition: background 0.1s;
   }
 
-  .title-bar-btn:hover {
+  .title-bar-btn:hover:not(:disabled) {
     background: var(--tandem-surface);
     color: var(--tandem-fg);
   }
@@ -503,7 +527,12 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     outline-offset: -2px;
   }
 
-  .title-bar-close:hover {
+  .title-bar-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .title-bar-close:hover:not(:disabled) {
     background: var(--tandem-error);
     color: var(--tandem-error-fg);
   }
@@ -522,13 +551,13 @@ const themeLabel = $derived(THEME_LABEL[theme]);
       border: 1px solid ButtonText;
     }
 
-    .icon-btn:hover,
-    .title-bar-btn:hover {
+    .icon-btn:hover:not(:disabled),
+    .title-bar-btn:hover:not(:disabled) {
       background: Highlight;
       color: HighlightText;
     }
 
-    .title-bar-close:hover {
+    .title-bar-close:hover:not(:disabled) {
       background: Highlight;
       color: HighlightText;
     }

@@ -19,10 +19,12 @@ export const THEME_NEXT: Record<ThemePreference, ThemePreference> = {
   light: "system",
 };
 
+// Action-oriented labels: matches THEME_NEXT cycle so screen readers and
+// tooltips announce what clicking will do, not what the current theme is.
 export const THEME_LABEL: Record<ThemePreference, string> = {
-  light: "Theme: light",
-  dark: "Theme: dark",
-  system: "Theme: system",
+  light: "Switch to system theme",
+  dark: "Switch to light theme",
+  system: "Switch to dark theme",
 };
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 export type RailTab = "annotations" | "chat" | "outline";
