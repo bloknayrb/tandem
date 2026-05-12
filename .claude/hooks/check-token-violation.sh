@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PostToolUse hook: warn on raw hex/rgba colors in client code
 # Delegates to scripts/check-semantic-tokens.ts for accurate detection
-# Exit 0 = no block, just warns
+# Exit 2 + continueOnBlock = Claude self-corrects the violation; exit 0 = clean
 
 set -euo pipefail
 trap 'exit 0' ERR
@@ -28,7 +28,11 @@ if [[ -z "$FILE_PATH" ]] || [[ ! "$FILE_PATH" =~ /src/client/ ]] || [[ ! "$FILE_
 fi
 
 RC=0
-npx tsx scripts/check-semantic-tokens.ts "$FILE_PATH" 2>&1 || RC=$?
-if [[ $RC -ge 2 ]]; then
+npx tsx scripts/check-semantic-tokens.ts "$FILE_PATH" || RC=$?
+if [[ $RC -eq 1 ]]; then
+  echo "BLOCKED: Raw hex/rgba color tokens in client code — use semantic --tandem-* CSS variables."
+  echo "Fix: Replace raw color values with var(--tandem-*) tokens or import from src/client/utils/colors.ts."
+  exit 2
+elif [[ $RC -ge 2 ]]; then
   echo "⚠ Token scanner failed (exit $RC) — check skipped for this edit."
 fi
