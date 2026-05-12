@@ -97,7 +97,12 @@ function freePortWindows(port: number): void {
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
       });
-      console.error(`[Tandem] Killed stale PID ${pid} holding port ${port}: ${killOut.trim()}`);
+      // Some taskkill paths exit 0 with empty stdout — avoid a dangling
+      // ": " in the log when there's no message to append.
+      const trimmed = killOut.trim();
+      console.error(
+        `[Tandem] Killed stale PID ${pid} holding port ${port}${trimmed ? `: ${trimmed}` : ""}`,
+      );
     } catch (err) {
       // Surface taskkill failure (permission denied, cross-session, race) so a
       // subsequent port-bind EADDRINUSE is diagnosable. The prior `stdio: "ignore"`
