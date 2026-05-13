@@ -26,6 +26,7 @@ import { loadAndMerge } from "../annotations/sync.js";
 import {
   attachObservers,
   clearFileSyncContext,
+  FILE_SYNC_ORIGIN,
   MCP_ORIGIN,
   setFileSyncContext,
 } from "../events/queue.js";
@@ -808,7 +809,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       } else {
         populateYDoc(doc, fileContent);
       }
-    }, MCP_ORIGIN);
+    }, FILE_SYNC_ORIGIN);
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
     const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
@@ -849,7 +850,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
           }
           // RANGE_GONE: annotation text was deleted entirely — leave as-is
         }
-      }, MCP_ORIGIN);
+      }, FILE_SYNC_ORIGIN);
     }
 
     // 5. Reattach event queue observers (idempotent)
