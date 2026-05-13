@@ -195,8 +195,14 @@ export async function openFileFromContent(
   const id = docIdFromPath(syntheticPath);
 
   const doc = getOrCreateDocument(id);
-  const adapter = getAdapter(format);
-  await adapter.load(doc, content);
+  // Route the upload through the shared batched populate so the upload path
+  // also fixes #609 (large markdown drag-drop freeze). Display name is the
+  // uploaded filename, not the synthetic upload path, so notifications don't
+  // leak the internal path shape to the user.
+  await populateDocFromContent(doc, format, content, {
+    displayName: fileName,
+    dedupSource: syntheticPath,
+  });
 
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
@@ -387,14 +393,167 @@ async function maybeRestoreSession(
 }
 
 /**
- * Load file content from disk into the Y.Doc using the appropriate adapter.
- * Reads as Buffer for docx, utf-8 string for all other formats.
+ * Context passed to populateDocFromContent for user-facing diagnostics —
+ * either a file path (displayName=basename, dedupSource=absolute path) or
+ * an upload (displayName=uploaded filename, dedupSource=synthetic upload path).
+ */
+interface PopulateContext {
+  displayName: string;
+  dedupSource: string;
+}
+
+/**
+ * Load file content from disk into the Y.Doc. Thin wrapper around
+ * populateDocFromContent — reads the buffer once (the caller has already
+ * validated `resolved` via resolveAndValidatePath: size limit, extension
+ * allowlist, UNC rejection) and delegates the parse + transact + cleanup logic
+ * to the shared helper used by openFileFromContent.
  */
 async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string): Promise<void> {
-  const adapter = getAdapter(format);
-  const isDocx = format === "docx";
-  const fileContent = isDocx ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-  await adapter.load(doc, fileContent);
+  // Single read site collapses what would otherwise be multiple fs.readFile
+  // call sites into one — fewer "uncontrolled path" sinks for CodeQL.
+  const buffer = await fs.readFile(resolved);
+  await populateDocFromContent(doc, format, buffer, {
+    displayName: path.basename(resolved),
+    dedupSource: resolved,
+  });
+}
+
+/**
+ * Shared populate path for openFileByPath (disk) and openFileFromContent
+ * (upload). Async I/O and parsing happen OUTSIDE the transaction; the Y.Doc
+ * mutation runs INSIDE one doc.transact(..., MCP_ORIGIN). Without batching,
+ * mdastToYDoc fires thousands of tiny CRDT updates that flood y-prosemirror
+ * and freeze the client on large markdown docs (#609). Precedent:
+ * clearAndReload and reloadFromDisk (same file) use the same shape — async
+ * I/O outside, Y.Doc mutation inside a single MCP_ORIGIN transact.
+ *
+ * MCP_ORIGIN is safe here (Critical Rule #2): the durable-annotation sync
+ * observer and the channel event queue are attached later via
+ * wireAnnotationStore (called from finalizeDocOpen, which runs after this
+ * returns). No observer is watching during initial populate, so there is no
+ * echo to suppress.
+ *
+ * On the success path, injectCommentsAsAnnotations' inner MCP_ORIGIN transact
+ * is flattened by Yjs into the outer one — inner is a no-op wrapper. On the
+ * failure path, the cleanup transact in the catch is a fresh top-level
+ * transact: Yjs has already run the failed transact's finally
+ * (afterTransaction + update emit) before the catch fires.
+ */
+async function populateDocFromContent(
+  doc: Y.Doc,
+  format: string,
+  source: string | Buffer,
+  ctx: PopulateContext,
+): Promise<void> {
+  let applyToDoc: () => void;
+
+  if (format === "docx") {
+    if (!Buffer.isBuffer(source)) {
+      throw Object.assign(new Error("populateDocFromContent: docx requires Buffer source"), {
+        code: "INVALID_SOURCE",
+      });
+    }
+    const buffer = source;
+    const [html, comments] = await Promise.all([
+      loadDocx(buffer),
+      extractDocxComments(buffer).catch((err) => {
+        console.error("[docx-comments] Comment extraction failed:", err);
+        pushNotification({
+          id: generateNotificationId(),
+          type: "annotation-error",
+          severity: "warning",
+          message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments.`,
+          dedupKey: `docx-comments:${ctx.dedupSource}`,
+          timestamp: Date.now(),
+        });
+        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
+      }),
+    ]);
+    applyToDoc = () => {
+      htmlToYDoc(doc, html);
+      if (comments.length > 0) {
+        // injectCommentsAsAnnotations opens an inner MCP_ORIGIN transact that
+        // Yjs flattens into ours, so writes land directly on this transaction's
+        // change set. Yjs does NOT roll back inner-transact writes on throw —
+        // without the snapshot/undo dance below, the doc would commit with N-of-M
+        // partial comments and re-open would hit importAnnotationId dedup,
+        // permanently dropping the failing comment with no surfaced error.
+        const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
+        const before = new Set(annotMap.keys());
+        try {
+          injectCommentsAsAnnotations(doc, comments);
+        } catch (err) {
+          for (const k of annotMap.keys()) {
+            if (!before.has(k)) annotMap.delete(k);
+          }
+          console.error(
+            "[docx-comments] inject failed mid-transact; document loads without imported comments:",
+            err,
+          );
+          // Symmetric with the extract-failure notification ~30 lines above:
+          // both modes mean "docx loaded without (some) comments" from the
+          // user's perspective. Distinct dedupKey namespace so a file that
+          // hits both modes shows two toasts, not one collapsed one.
+          pushNotification({
+            id: generateNotificationId(),
+            type: "annotation-error",
+            severity: "warning",
+            message: `Failed to import some Word comments from ${ctx.displayName}. Document opened, but comments may be missing.`,
+            dedupKey: `docx-comments-inject:${ctx.dedupSource}`,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    };
+  } else if (format === "md") {
+    const fileContent = typeof source === "string" ? source : source.toString("utf-8");
+    applyToDoc = () => loadMarkdown(doc, fileContent);
+  } else {
+    const fileContent = typeof source === "string" ? source : source.toString("utf-8");
+    applyToDoc = () => populateYDoc(doc, fileContent);
+  }
+
+  try {
+    doc.transact(applyToDoc, MCP_ORIGIN);
+  } catch (err) {
+    // Clear partial state in a fresh top-level transact so a retry sees a clean
+    // Y.Doc instead of a poisoned cached one. Yjs has unwound the failed
+    // transact's _transaction by the time the catch fires, so this is not
+    // nested. MCP_ORIGIN is correct here for the same reason it's correct
+    // above — Critical Rule #2 and observer attach order.
+    try {
+      doc.transact(() => {
+        const fragment = doc.getXmlFragment("default");
+        fragment.delete(0, fragment.length);
+        // Defensive: htmlToYDoc/loadMarkdown/populateYDoc shouldn't touch
+        // annotations, but injectCommentsAsAnnotations can leave partial entries
+        // even if the inner containment caught the throw (Yjs does not roll
+        // back inner-transact writes). REPLIES is not touched during populate,
+        // so leave it alone.
+        // MAINTENANCE: if a future populate helper writes to Y_MAP_ANNOTATION_REPLIES
+        // (e.g. importing a format with threaded comments), this cleanup must
+        // clear them too — the cleanup is silently incomplete until that happens.
+        const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+        annotations.forEach((_, k) => annotations.delete(k));
+      }, MCP_ORIGIN);
+    } catch (cleanupErr) {
+      console.error(
+        "[Tandem] populateDocFromContent: cleanup after populate failure also failed:",
+        cleanupErr,
+      );
+    }
+    // Keep the first console.error argument a static literal; pass
+    // user-controlled values (format, displayName, err) as trailing args so
+    // util.format never treats them as a format string. Defuses CodeQL's
+    // externally-controlled format string alert.
+    console.error(
+      "[Tandem] populateDocFromContent: populate failed; partial state cleared before rethrow.",
+      { format, displayName: ctx.displayName },
+      err,
+    );
+    throw err;
+  }
 }
 
 /**
