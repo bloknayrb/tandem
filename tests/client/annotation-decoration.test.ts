@@ -259,26 +259,36 @@ describe("annotation plugin apply() recovery branch", () => {
 describe("annotation plugin observer coalescing (#610)", () => {
   let savedRAF: typeof globalThis.requestAnimationFrame;
   let savedCancelRAF: typeof globalThis.cancelAnimationFrame;
-  let rafCallbacks: FrameRequestCallback[];
+  // Map id → callback so `cancelAnimationFrame` only removes the matching
+  // entry (matches real browser semantics; a sloppy "clear-all" cancel mock
+  // would mask a bug where production canceled an unrelated frame).
+  let rafQueue: Map<number, FrameRequestCallback>;
   let rafCount: number;
 
   beforeEach(() => {
-    rafCallbacks = [];
+    rafQueue = new Map();
     rafCount = 0;
     savedRAF = globalThis.requestAnimationFrame;
     savedCancelRAF = globalThis.cancelAnimationFrame;
     globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
-      rafCallbacks.push(cb);
-      return ++rafCount;
+      const id = ++rafCount;
+      rafQueue.set(id, cb);
+      return id;
     }) as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = ((_id: number) => {
-      rafCallbacks = [];
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      rafQueue.delete(id);
     }) as typeof globalThis.cancelAnimationFrame;
   });
 
   function restoreRAF() {
     globalThis.requestAnimationFrame = savedRAF;
     globalThis.cancelAnimationFrame = savedCancelRAF;
+  }
+
+  function flushRAF() {
+    const callbacks = [...rafQueue.values()];
+    rafQueue.clear();
+    for (const cb of callbacks) cb(0);
   }
 
   function makeMockEditorView(): { view: any; dispatchCount: () => number } {
@@ -306,12 +316,10 @@ describe("annotation plugin observer coalescing (#610)", () => {
     for (let i = 0; i < 100; i++) addAnnotation(ydoc, `ann-${i}`);
 
     // One rAF scheduled regardless of N; no dispatches yet (frame hasn't fired).
-    expect(rafCallbacks.length).toBe(1);
+    expect(rafQueue.size).toBe(1);
     expect(dispatchCount()).toBe(0);
 
-    // Flush the frame
-    for (const cb of rafCallbacks) cb(0);
-    rafCallbacks = [];
+    flushRAF();
     expect(dispatchCount()).toBe(1);
 
     viewReturn.destroy();
@@ -325,11 +333,12 @@ describe("annotation plugin observer coalescing (#610)", () => {
     const viewReturn = plugin.spec.view(view);
 
     addAnnotation(ydoc, "ann-pending");
-    expect(rafCallbacks.length).toBe(1);
+    expect(rafQueue.size).toBe(1);
 
     // Destroy before the frame fires; the queued rebuild must not dispatch.
     viewReturn.destroy();
-    for (const cb of rafCallbacks) cb(0);
+    expect(rafQueue.size).toBe(0);
+    flushRAF();
     expect(dispatchCount()).toBe(0);
 
     restoreRAF();
