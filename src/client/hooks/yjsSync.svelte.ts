@@ -1,5 +1,6 @@
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
+import { API_CLOSE } from "../../shared/api-paths.js";
 import {
   CTRL_ROOM,
   DEFAULT_MCP_PORT,
@@ -402,7 +403,7 @@ export function createYjsSync(): YjsSyncState {
     }
 
     // Tell the server to close the document — broadcast reconciles tabs.
-    fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/close`, {
+    fetch(`http://localhost:${DEFAULT_MCP_PORT}${API_CLOSE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId: tabId }),

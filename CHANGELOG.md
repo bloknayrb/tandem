@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+
+- **Centralize Tandem HTTP API paths into shared constants (closes #283)** — every `/api/*` path (registration + every client/CLI/channel/monitor fetch) now flows through `src/shared/api-paths.ts`. `API_BASE` in `src/client/utils/fileUpload.ts` no longer carries the `/api` suffix; clients build URLs as `${API_BASE}${API_FOO}`. Renaming a route now touches one file instead of N. Source-level coverage tests in `tests/channel/run-timeouts.test.ts` and `tests/monitor/runtime-fetches.test.ts` accept either the literal path or the resolved `API_*` constant.
+- **Define `ChannelErrorCodeSchema` enum for `/api/channel-error` payloads (closes #284)** — channel-shim and monitor failure codes (`CHANNEL_CONNECT_FAILED`, `MONITOR_CONNECT_FAILED`) are now z.enum constants in `src/shared/types.ts` instead of free-form strings. The server route handler validates the incoming `error` field and returns 400 on unknown codes (still logs the rejected value so the diagnostic trail survives). Mirrors the existing `ToolErrorCodeSchema` pattern.
+- **Extract shared `onOutsideEvent` dismiss helper (closes #589)** — `Toolbar.svelte` (scroll-based dismiss) and `HighlightColorPicker.svelte` (mousedown-based dismiss) both rolled their own document-listener + `contains(event.target)` guard. Consolidates into `src/client/utils/dismiss-outside.ts`. Capture-phase parity preserved at each call site.
+
 ## [0.11.2] - 2026-05-13
 
 ### Fixed

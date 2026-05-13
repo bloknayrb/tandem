@@ -1,4 +1,5 @@
 <script lang="ts">
+import { API_APPLY_CHANGES } from "../../shared/api-paths";
 import type { Annotation } from "../../shared/types";
 import { API_BASE } from "../utils/fileUpload";
 
@@ -29,7 +30,7 @@ async function handleClick() {
 
   applying = true;
   try {
-    const res = await fetch(`${API_BASE}/apply-changes`, {
+    const res = await fetch(`${API_BASE}${API_APPLY_CHANGES}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId }),

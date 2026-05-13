@@ -1,4 +1,5 @@
 import { onDestroy } from "svelte";
+import { API_NOTIFY_STREAM } from "../../shared/api-paths.js";
 import { DEFAULT_MCP_PORT, MAX_VISIBLE_TOASTS, TOAST_DISMISS_MS } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 
@@ -45,7 +46,7 @@ export function createNotifications(): NotificationsState {
     clearTimer(id);
   };
 
-  const url = `http://localhost:${DEFAULT_MCP_PORT}/api/notify-stream`;
+  const url = `http://localhost:${DEFAULT_MCP_PORT}${API_NOTIFY_STREAM}`;
   const es = new EventSource(url);
 
   es.onmessage = (event) => {

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
+import { API_ROTATE_TOKEN } from "../shared/api-paths.js";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
 import { resolveAuthTokenCandidate, resolveTandemUrl } from "../shared/cli-runtime.js";
 import { applyConfigWithToken } from "./setup.js";
@@ -69,7 +70,7 @@ export async function rotateToken(): Promise<void> {
   let serverRejected = false;
   let serverRejectedStatus = 0;
   try {
-    const resp = await fetch(`${serverUrl}/api/rotate-token`, {
+    const resp = await fetch(`${serverUrl}${API_ROTATE_TOKEN}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

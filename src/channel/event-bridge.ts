@@ -9,6 +9,12 @@
  */
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  API_CHANNEL_AWARENESS,
+  API_CHANNEL_ERROR,
+  API_EVENTS,
+  API_MODE,
+} from "../shared/api-paths.js";
 import { authFetch } from "../shared/cli-runtime.js";
 import {
   CHANNEL_AWARENESS_FETCH_TIMEOUT_MS,
@@ -23,6 +29,7 @@ import {
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent, formatEventMeta, parseTandemEvent } from "../shared/events/types.js";
 import { describeFetchError, fetchWithTimeout } from "../shared/fetch-with-timeout.js";
+import { CHANNEL_CONNECT_FAILED } from "../shared/types.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
 const MODE_CACHE_TTL_MS = 2000;
@@ -52,12 +59,12 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
         console.error("[Channel] SSE connection exhausted, reporting error and exiting");
         try {
           await fetchWithTimeout(
-            `${tandemUrl}/api/channel-error`,
+            `${tandemUrl}${API_CHANNEL_ERROR}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                error: "CHANNEL_CONNECT_FAILED",
+                error: CHANNEL_CONNECT_FAILED,
                 message: `Channel shim lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
               }),
             },
@@ -66,7 +73,7 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
         } catch (reportErr) {
           console.error(
             "[Channel] Could not report failure to server:",
-            describeFetchError(reportErr, "/api/channel-error", CHANNEL_ERROR_REPORT_TIMEOUT_MS),
+            describeFetchError(reportErr, API_CHANNEL_ERROR, CHANNEL_ERROR_REPORT_TIMEOUT_MS),
           );
         }
         process.exit(1);
@@ -98,7 +105,7 @@ async function connectAndStream(
   );
   let res: Response;
   try {
-    res = await authFetch(`${tandemUrl}/api/events`, { headers, signal: connectCtrl.signal });
+    res = await authFetch(`${tandemUrl}${API_EVENTS}`, { headers, signal: connectCtrl.signal });
   } finally {
     clearTimeout(connectTimer);
   }
@@ -130,7 +137,7 @@ async function connectAndStream(
 
   function clearAwareness(documentId?: string) {
     fetchWithTimeout(
-      `${tandemUrl}/api/channel-awareness`,
+      `${tandemUrl}${API_CHANNEL_AWARENESS}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -144,7 +151,11 @@ async function connectAndStream(
     ).catch((err) => {
       console.error(
         "[Channel] clearAwareness failed (non-fatal):",
-        describeFetchError(err, "/api/channel-awareness clear", CHANNEL_AWARENESS_FETCH_TIMEOUT_MS),
+        describeFetchError(
+          err,
+          `${API_CHANNEL_AWARENESS} clear`,
+          CHANNEL_AWARENESS_FETCH_TIMEOUT_MS,
+        ),
       );
     });
   }
@@ -154,7 +165,7 @@ async function connectAndStream(
     const event = pendingAwareness;
     pendingAwareness = null;
     fetchWithTimeout(
-      `${tandemUrl}/api/channel-awareness`,
+      `${tandemUrl}${API_CHANNEL_AWARENESS}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -170,7 +181,7 @@ async function connectAndStream(
         "[Channel] Awareness update failed:",
         describeFetchError(
           err,
-          "/api/channel-awareness update",
+          `${API_CHANNEL_AWARENESS} update`,
           CHANNEL_AWARENESS_FETCH_TIMEOUT_MS,
         ),
       );
@@ -292,7 +303,11 @@ async function getCachedMode(tandemUrl: string): Promise<string> {
   const now = Date.now();
   if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
   try {
-    const res = await fetchWithTimeout(`${tandemUrl}/api/mode`, {}, CHANNEL_MODE_FETCH_TIMEOUT_MS);
+    const res = await fetchWithTimeout(
+      `${tandemUrl}${API_MODE}`,
+      {},
+      CHANNEL_MODE_FETCH_TIMEOUT_MS,
+    );
     if (res.ok) {
       const { mode } = (await res.json()) as { mode: string };
       cachedMode = mode;
@@ -303,7 +318,7 @@ async function getCachedMode(tandemUrl: string): Promise<string> {
   } catch (err) {
     console.error(
       "[Channel] Mode check failed, delivering event (fail-open):",
-      describeFetchError(err, "/api/mode", CHANNEL_MODE_FETCH_TIMEOUT_MS),
+      describeFetchError(err, API_MODE, CHANNEL_MODE_FETCH_TIMEOUT_MS),
     );
     cachedModeAt = now;
   }

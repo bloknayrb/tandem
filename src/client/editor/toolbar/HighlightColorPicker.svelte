@@ -1,6 +1,7 @@
 <script lang="ts">
 import { HIGHLIGHT_COLOR_VARS } from "../../../shared/constants";
 import type { HighlightColor } from "../../../shared/types";
+import { onOutsideEvent } from "../../utils/dismiss-outside";
 import ToolbarButton from "./ToolbarButton.svelte";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
@@ -23,13 +24,14 @@ let colorPickerEl = $state<HTMLDivElement | null>(null);
 
 $effect(() => {
   if (!showColorPicker) return;
-  function handleClickOutside(e: MouseEvent) {
-    if (colorPickerEl && !colorPickerEl.contains(e.target as Node)) {
+  return onOutsideEvent(
+    () => colorPickerEl,
+    ["mousedown"],
+    () => {
       showColorPicker = false;
-    }
-  }
-  document.addEventListener("mousedown", handleClickOutside);
-  return () => document.removeEventListener("mousedown", handleClickOutside);
+    },
+    { capture: false },
+  );
 });
 
 function handleHighlight(e: MouseEvent) {

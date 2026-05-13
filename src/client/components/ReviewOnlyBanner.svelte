@@ -1,4 +1,5 @@
 <script lang="ts">
+import { API_CONVERT } from "../../shared/api-paths";
 import { API_BASE } from "../utils/fileUpload";
 
 const DISMISS_KEY = "tandem:reviewOnlyBannerDismissed";
@@ -27,7 +28,7 @@ async function handleConvert() {
   converting = true;
   error = null;
   try {
-    const res = await fetch(`${API_BASE}/convert`, {
+    const res = await fetch(`${API_BASE}${API_CONVERT}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId }),

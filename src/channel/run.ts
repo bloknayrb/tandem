@@ -15,6 +15,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { API_CHANNEL_PERMISSION, API_CHANNEL_REPLY } from "../shared/api-paths.js";
 import { redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
 import {
   CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
@@ -93,7 +94,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
       const args = req.params.arguments as Record<string, unknown>;
       try {
         const res = await fetchWithTimeout(
-          `${tandemUrl}/api/channel-reply`,
+          `${tandemUrl}${API_CHANNEL_REPLY}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -133,7 +134,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
               type: "text" as const,
               text: `Failed to send reply: ${describeFetchError(
                 err,
-                "/api/channel-reply",
+                API_CHANNEL_REPLY,
                 CHANNEL_REPLY_FETCH_TIMEOUT_MS,
               )}`,
             },
@@ -158,7 +159,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
   mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     try {
       const res = await fetchWithTimeout(
-        `${tandemUrl}/api/channel-permission`,
+        `${tandemUrl}${API_CHANNEL_PERMISSION}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -179,7 +180,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     } catch (err) {
       console.error(
         "[Channel] Failed to forward permission request:",
-        describeFetchError(err, "/api/channel-permission", CHANNEL_PERMISSION_FETCH_TIMEOUT_MS),
+        describeFetchError(err, API_CHANNEL_PERMISSION, CHANNEL_PERMISSION_FETCH_TIMEOUT_MS),
       );
     }
   });
