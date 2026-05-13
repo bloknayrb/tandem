@@ -387,14 +387,55 @@ async function maybeRestoreSession(
 }
 
 /**
- * Load file content from disk into the Y.Doc using the appropriate adapter.
- * Reads as Buffer for docx, utf-8 string for all other formats.
+ * Load file content from disk into the Y.Doc.
+ *
+ * Async I/O and parsing happen OUTSIDE the transaction; the Y.Doc mutation runs
+ * INSIDE one doc.transact(..., MCP_ORIGIN). Without batching, mdastToYDoc fires
+ * thousands of tiny CRDT updates that flood y-prosemirror and freeze the client
+ * on large markdown docs (#609). Precedent: clearAndReload (~line 574) and
+ * reloadFromDisk (~line 715) use the same shape.
+ *
+ * MCP_ORIGIN is safe here (Critical Rule #2) because annotation observers attach
+ * later via wireAnnotationStore — no echo hazard during initial populate.
+ * injectCommentsAsAnnotations opens an inner MCP_ORIGIN transact; Yjs flattens
+ * nested transactions, so the inner is a no-op wrapper.
  */
 async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string): Promise<void> {
-  const adapter = getAdapter(format);
-  const isDocx = format === "docx";
-  const fileContent = isDocx ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-  await adapter.load(doc, fileContent);
+  let applyToDoc: () => void;
+
+  if (format === "docx") {
+    const buffer = await fs.readFile(resolved);
+    const [html, comments] = await Promise.all([
+      loadDocx(buffer),
+      extractDocxComments(buffer).catch((err) => {
+        console.error(
+          "[docx-comments] Comment extraction failed; document will load without imported comments:",
+          err,
+        );
+        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
+      }),
+    ]);
+    applyToDoc = () => {
+      htmlToYDoc(doc, html);
+      if (comments.length > 0) injectCommentsAsAnnotations(doc, comments);
+    };
+  } else if (format === "md") {
+    const fileContent = await fs.readFile(resolved, "utf-8");
+    applyToDoc = () => loadMarkdown(doc, fileContent);
+  } else {
+    const fileContent = await fs.readFile(resolved, "utf-8");
+    applyToDoc = () => populateYDoc(doc, fileContent);
+  }
+
+  try {
+    doc.transact(applyToDoc, MCP_ORIGIN);
+  } catch (err) {
+    console.error(
+      `[Tandem] loadContentIntoDoc: failed for ${resolved} (format=${format}). Y.Doc may be in a partially populated state:`,
+      err,
+    );
+    throw err;
+  }
 }
 
 /**
