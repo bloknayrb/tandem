@@ -129,7 +129,7 @@ First-run experience, error handling, and UX refinements.
 ### 8a: Launch Experience — PARTIALLY DONE
 
 - Server auto-starts when Claude Code calls any Tandem tool (check PID in `.tandem/.server-info`)
-- Server auto-stops after 30 min idle (`IDLE_TIMEOUT` in constants.ts)
+- Server auto-stop on idle was planned but not wired up
 - Browser auto-open (removed — `open` package wrote to stdout, corrupting the MCP wire; user opens http://localhost:5173 manually)
 - ~~Browser file open~~ — implemented: "+" button in tab bar opens FileOpenDialog (path input or drag-and-drop upload), HTTP API endpoints (`/api/open`, `/api/upload`)
 

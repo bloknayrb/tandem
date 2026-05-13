@@ -55,7 +55,6 @@ export const MONITOR_CONNECT_FAILED: ChannelErrorCode = "MONITOR_CONNECT_FAILED"
 export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
 export type TandemMode = z.infer<typeof TandemModeSchema>;
-export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 export type ReplyAuthor = z.infer<typeof ReplyAuthorSchema>;
@@ -218,13 +217,6 @@ export interface DocumentInfo {
   tokenEstimate: number;
   pageEstimate: number;
   readOnly: boolean;
-}
-
-export interface ServerInfo {
-  port: number;
-  url: string;
-  pid: number;
-  startedAt: number;
 }
 
 export interface ToolSuccess<T = unknown> {

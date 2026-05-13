@@ -7,14 +7,10 @@ export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-export const MAX_WS_PAYLOAD = 10 * 1024 * 1024; // 10MB
-export const MAX_WS_CONNECTIONS = 4;
-export const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const TYPING_DEBOUNCE = 3000; // 3 seconds
 export const DISCONNECT_DEBOUNCE_MS = 3000; // 3 seconds before showing "server not reachable"
 export const PROLONGED_DISCONNECT_MS = 30_000; // 30 seconds before showing App-level disconnect banner
-export const OVERLAY_STALE_DEBOUNCE = 200; // 200ms
 
 import type { HighlightColor } from "./types.js";
 
@@ -104,9 +100,6 @@ export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 
-export const SERVER_INFO_DIR = ".tandem";
-export const SERVER_INFO_FILE = ".tandem/.server-info";
-
 export const RECENT_FILES_KEY = "tandem:recentFiles";
 export const RECENT_FILES_CAP = 20;
 
@@ -129,9 +122,6 @@ export const COWORK_ONBOARDING_SKIPPED_KEY = "tandem:coworkOnboardingSkipped";
 export const COWORK_STATUS_POLL_MS = 30_000;
 /** Debounce interval for the "Re-scan workspaces" button. */
 export const COWORK_RESCAN_DEBOUNCE_MS = 2_000;
-
-// Editor layout
-export const EDITOR_WIDTH_MODE_KEY = "tandem:editorWidthMode";
 
 // Channel / event queue
 export const CHANNEL_EVENT_BUFFER_SIZE = 200;
