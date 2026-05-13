@@ -1,4 +1,14 @@
 import type { Express, Request, Response } from "express";
+import {
+  API_CHANNEL_AWARENESS,
+  API_CHANNEL_ERROR,
+  API_CHANNEL_PERMISSION,
+  API_CHANNEL_PERMISSION_VERDICT,
+  API_CHANNEL_REPLY,
+  API_CHAT,
+  API_EVENTS,
+  API_LAUNCH_CLAUDE,
+} from "../../shared/api-paths.js";
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
@@ -22,11 +32,11 @@ const PERMISSION_TTL_MS = 30_000; // Stale after 30s (terminal answer already wo
 /** Register channel-related routes (/api/events, /api/channel-*, /api/launch-claude) on the Express app. */
 export function registerChannelRoutes(app: Express, apiMiddleware: Handler): void {
   // SSE event stream for channel shim
-  app.get("/api/events", apiMiddleware, sseHandler);
+  app.get(API_EVENTS, apiMiddleware, sseHandler);
 
   // Channel awareness: shim posts Claude's status for browser StatusBar
-  app.options("/api/channel-awareness", apiMiddleware);
-  app.post("/api/channel-awareness", apiMiddleware, (req: Request, res: Response) => {
+  app.options(API_CHANNEL_AWARENESS, apiMiddleware);
+  app.post(API_CHANNEL_AWARENESS, apiMiddleware, (req: Request, res: Response) => {
     const { documentId, status, active, focusParagraph, focusOffset } = (req.body ?? {}) as Record<
       string,
       unknown
@@ -53,8 +63,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Channel error: shim reports errors for browser display
-  app.options("/api/channel-error", apiMiddleware);
-  app.post("/api/channel-error", apiMiddleware, (req: Request, res: Response) => {
+  app.options(API_CHANNEL_ERROR, apiMiddleware);
+  app.post(API_CHANNEL_ERROR, apiMiddleware, (req: Request, res: Response) => {
     const { error, message } = (req.body ?? {}) as Record<string, unknown>;
     console.error(`[Channel] Error: ${error} — ${message}`);
     // Could broadcast to browser via Y.Map in the future
@@ -62,8 +72,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Channel reply: shim forwards Claude's chat replies
-  app.options("/api/channel-reply", apiMiddleware);
-  app.post("/api/channel-reply", apiMiddleware, (req: Request, res: Response) => {
+  app.options(API_CHANNEL_REPLY, apiMiddleware);
+  app.post(API_CHANNEL_REPLY, apiMiddleware, (req: Request, res: Response) => {
     const { text, documentId, replyTo } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof text !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
@@ -87,8 +97,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
 
   // Channel permission relay: shim forwards Claude Code's tool approval prompts
   // Pending requests stored for browser polling (SSE push to browser is a follow-up)
-  app.options("/api/channel-permission", apiMiddleware);
-  app.post("/api/channel-permission", apiMiddleware, (req: Request, res: Response) => {
+  app.options(API_CHANNEL_PERMISSION, apiMiddleware);
+  app.post(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
     const { requestId, toolName, description, inputPreview } = (req.body ?? {}) as Record<
       string,
       unknown
@@ -109,7 +119,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Browser polls for pending permission requests
-  app.get("/api/channel-permission", apiMiddleware, (_req: Request, res: Response) => {
+  app.get(API_CHANNEL_PERMISSION, apiMiddleware, (_req: Request, res: Response) => {
     // Evict stale requests before returning
     const now = Date.now();
     for (const [id, perm] of pendingPermissions) {
@@ -119,8 +129,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Browser submits verdict
-  app.options("/api/channel-permission-verdict", apiMiddleware);
-  app.post("/api/channel-permission-verdict", apiMiddleware, (req: Request, res: Response) => {
+  app.options(API_CHANNEL_PERMISSION_VERDICT, apiMiddleware);
+  app.post(API_CHANNEL_PERMISSION_VERDICT, apiMiddleware, (req: Request, res: Response) => {
     const { requestId, approved } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof requestId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "requestId is required" });
@@ -133,8 +143,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Clear chat history
-  app.options("/api/chat", apiMiddleware);
-  app.delete("/api/chat", apiMiddleware, (_req: Request, res: Response) => {
+  app.options(API_CHAT, apiMiddleware);
+  app.delete(API_CHAT, apiMiddleware, (_req: Request, res: Response) => {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
     const count = chatMap.size;
@@ -147,8 +157,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Claude Code launcher
-  app.options("/api/launch-claude", apiMiddleware);
-  app.post("/api/launch-claude", apiMiddleware, async (_req: Request, res: Response) => {
+  app.options(API_LAUNCH_CLAUDE, apiMiddleware);
+  app.post(API_LAUNCH_CLAUDE, apiMiddleware, async (_req: Request, res: Response) => {
     try {
       const { launchClaude } = await import("./launcher.js");
       const result = launchClaude();

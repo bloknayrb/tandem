@@ -1,4 +1,5 @@
 <script lang="ts">
+import { API_OPEN } from "../../shared/api-paths.js";
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import FileOpenDialog from "../components/FileOpenDialog.svelte";
 import type { OpenTab } from "../types.js";
@@ -273,7 +274,7 @@ $effect(() => {
       onOpen={async (filePath) => {
         showRecent = false;
         try {
-          const res = await fetch(`${API_BASE}/open`, {
+          const res = await fetch(`${API_BASE}${API_OPEN}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ filePath }),

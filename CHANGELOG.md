@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+
+- **Centralize Tandem HTTP API paths into shared constants (closes #283)** — every `/api/*` path (registration + every client/CLI/channel/monitor fetch) now flows through `src/shared/api-paths.ts`. `API_BASE` in `src/client/utils/fileUpload.ts` no longer carries the `/api` suffix; clients build URLs as `${API_BASE}${API_FOO}`. Renaming a route now touches one file instead of N. Source-level coverage tests in `tests/channel/run-timeouts.test.ts` and `tests/monitor/runtime-fetches.test.ts` accept either the literal path or the resolved `API_*` constant.
+
 ## [0.11.2] - 2026-05-13
 
 ### Fixed

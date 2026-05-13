@@ -2,6 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import * as Y from "yjs";
+import { API_ANNOTATION_REPLY, API_REMOVE_ANNOTATION } from "../../shared/api-paths";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
@@ -276,7 +277,7 @@ function handleSendToClaude(annotationId: string): void {
 
 async function handleRemove(annotationId: string): Promise<void> {
   try {
-    const resp = await fetch(`${API_BASE}/remove-annotation`, {
+    const resp = await fetch(`${API_BASE}${API_REMOVE_ANNOTATION}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ annotationId, documentId }),
@@ -292,7 +293,7 @@ async function handleRemove(annotationId: string): Promise<void> {
 
 async function handleReply(annotationId: string, text: string): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/annotation-reply`, {
+    const res = await fetch(`${API_BASE}${API_ANNOTATION_REPLY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ annotationId, text, documentId }),

@@ -17,8 +17,15 @@ function countMatches(src: string, re: RegExp): number {
 function expectFetchWithTimeoutEndpoint(src: string, endpoint: string, timeoutConstant: string) {
   const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedTimeout = timeoutConstant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Accept either the literal path or the `API_*` constant that resolves to it
+  // (post-#283 the monitor uses the constants from src/shared/api-paths.ts).
+  const constantName = `API_${endpoint
+    .replace(/^\/api\//, "")
+    .replace(/-/g, "_")
+    .toUpperCase()}`;
+  const endpointAlternation = `(?:${escapedEndpoint}|${constantName})`;
   expect(src).toMatch(
-    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${escapedEndpoint}[\\s\\S]*?${escapedTimeout}`),
+    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${endpointAlternation}[\\s\\S]*?${escapedTimeout}`),
   );
 }
 
@@ -58,9 +65,14 @@ describe("monitor authenticated fetch surface", () => {
     expect(src).not.toMatch(/async function fetchWithTimeout\(/);
     expectFetchWithTimeoutEndpoint(src, "/api/channel-error", "ERROR_REPORT_TIMEOUT_MS");
     expectFetchWithTimeoutEndpoint(src, "/api/mode", "MODE_FETCH_TIMEOUT_MS");
-    expect(countMatches(src, /fetchWithTimeout\([\s\S]*?\/api\/channel-awareness/g)).toBe(3);
+    expect(
+      countMatches(
+        src,
+        /fetchWithTimeout\([\s\S]*?(?:\/api\/channel-awareness|API_CHANNEL_AWARENESS)/g,
+      ),
+    ).toBe(3);
     expect(src.match(/\bauthFetch\s*\(/g)?.length ?? 0).toBe(1);
-    expect(src).toMatch(/authFetch\(`\$\{TANDEM_URL\}\/api\/events`/);
+    expect(src).toMatch(/authFetch\(`\$\{TANDEM_URL\}(?:\/api\/events|\$\{API_EVENTS\})`/);
   });
 
   it("authenticates the SSE handshake with plugin URL and token", async () => {

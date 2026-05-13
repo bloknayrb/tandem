@@ -1,5 +1,21 @@
 import type { Express, NextFunction, Request, Response } from "express";
 
+import {
+  API_ANNOTATION_REPLY,
+  API_APPLY_CHANGES,
+  API_CLOSE,
+  API_CONVERT,
+  API_INFO,
+  API_MODE,
+  API_NOTIFY_STREAM,
+  API_OPEN,
+  API_REMOVE_ANNOTATION,
+  API_ROTATE_TOKEN,
+  API_SAVE,
+  API_SCRATCHPAD,
+  API_SETUP,
+  API_UPLOAD,
+} from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
@@ -102,53 +118,53 @@ export function registerApiRoutes(
   infoHandlerDeps: Parameters<typeof makeInfoHandler>[0],
 ): void {
   // App metadata endpoint — consumed by the client's About panel
-  app.get("/api/info", mw, makeInfoHandler(infoHandlerDeps));
+  app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
 
   // SSE notification stream for browser toasts
-  app.get("/api/notify-stream", mw, handleNotifyStream);
+  app.get(API_NOTIFY_STREAM, mw, handleNotifyStream);
 
   // NOTE: /api/mode is GET-only — no OPTIONS registration
-  app.get("/api/mode", mw, handleMode);
+  app.get(API_MODE, mw, handleMode);
 
-  app.options("/api/open", mw);
-  app.post("/api/open", mw, largeBody, handleOpen);
+  app.options(API_OPEN, mw);
+  app.post(API_OPEN, mw, largeBody, handleOpen);
 
-  app.options("/api/close", mw);
-  app.post("/api/close", mw, largeBody, handleClose);
+  app.options(API_CLOSE, mw);
+  app.post(API_CLOSE, mw, largeBody, handleClose);
 
-  app.options("/api/save", mw);
-  app.post("/api/save", mw, largeBody, handleSave);
+  app.options(API_SAVE, mw);
+  app.post(API_SAVE, mw, largeBody, handleSave);
 
-  app.options("/api/upload", mw);
-  app.post("/api/upload", mw, largeBody, handleUpload);
+  app.options(API_UPLOAD, mw);
+  app.post(API_UPLOAD, mw, largeBody, handleUpload);
 
-  app.options("/api/scratchpad", mw);
-  app.post("/api/scratchpad", mw, handleScratchpad);
+  app.options(API_SCRATCHPAD, mw);
+  app.post(API_SCRATCHPAD, mw, handleScratchpad);
 
-  app.options("/api/convert", mw);
-  app.post("/api/convert", mw, largeBody, handleConvert);
+  app.options(API_CONVERT, mw);
+  app.post(API_CONVERT, mw, largeBody, handleConvert);
 
-  app.options("/api/apply-changes", mw);
-  app.post("/api/apply-changes", mw, largeBody, handleApplyChanges);
+  app.options(API_APPLY_CHANGES, mw);
+  app.post(API_APPLY_CHANGES, mw, largeBody, handleApplyChanges);
 
-  app.options("/api/setup", mw);
-  app.post("/api/setup", mw, largeBody, makeSetupHandler({ token }));
+  app.options(API_SETUP, mw);
+  app.post(API_SETUP, mw, largeBody, makeSetupHandler({ token }));
 
   // Annotation reply: browser user posts a reply to an annotation thread
-  app.options("/api/annotation-reply", mw);
-  app.post("/api/annotation-reply", mw, largeBody, handleAnnotationReply);
+  app.options(API_ANNOTATION_REPLY, mw);
+  app.post(API_ANNOTATION_REPLY, mw, largeBody, handleAnnotationReply);
 
-  app.options("/api/remove-annotation", mw);
-  app.post("/api/remove-annotation", mw, largeBody, handleRemoveAnnotation);
+  app.options(API_REMOVE_ANNOTATION, mw);
+  app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
 
   // Token rotation: CLI calls this to activate the 60-second grace window and swap the
   // in-memory current token to the NEW token that was already written to disk.
   // Auth is handled by app.use("/api", authMiddleware) — request must carry Bearer <OLD token>.
   // previousToken is NOT accepted from the request body — the handler captures it from
   // getCurrentToken() to prevent callers from injecting arbitrary strings into the grace slot.
-  app.options("/api/rotate-token", mw);
+  app.options(API_ROTATE_TOKEN, mw);
   app.post(
-    "/api/rotate-token",
+    API_ROTATE_TOKEN,
     mw,
     largeBody,
     makeRotateTokenHandler({ setCurrentToken, getCurrentToken }),
