@@ -113,9 +113,15 @@ export async function openFileByPath(
   if (existing) {
     const forceReload = options?.force === true;
     if (forceReload) {
-      // Force-reload stays inline — distinct lifecycle from normal open
+      // Force-reload stays inline — distinct lifecycle from normal open.
+      // Read the buffer here so the fs.readFile sink sits at the call site
+      // where `resolved` was just produced by resolveAndValidatePath —
+      // CodeQL traces the sanitizer cross-line within a function but not
+      // across function boundaries.
       const doc = getDocument(id) ?? getOrCreateDocument(id);
-      await clearAndReload(id, doc, resolved, format, existing);
+      const reloadBuffer =
+        format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
+      await clearAndReload(id, doc, resolved, format, existing, reloadBuffer);
       addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
       setActiveDocId(id);
       await wireAnnotationStore(id, doc, resolved);
@@ -403,8 +409,114 @@ interface PopulateContext {
 }
 
 /**
- * Load file content from disk into the Y.Doc. Reads the buffer once and
- * delegates the parse + transact + cleanup to populateDocFromContent.
+ * Pre-parsed source content, ready to apply into a Y.Doc inside a transact.
+ * docx splits into html + comments (async pre-parse is non-trivial);
+ * md/other keep raw text. Discriminator is `format`.
+ */
+type PreparedContent =
+  | { format: "docx"; html: string; comments: Awaited<ReturnType<typeof extractDocxComments>> }
+  | { format: "md"; content: string }
+  | { format: "other"; content: string };
+
+/**
+ * Async pre-parse step: runs OUTSIDE any Y.Doc transact and owns all async
+ * work (loadDocx, extractDocxComments). Surfaces docx comment-extract failures
+ * as a deduped user-facing notification — empty comments + warn toast rather
+ * than aborting the whole open.
+ */
+async function prepareContent(
+  format: string,
+  source: string | Buffer,
+  ctx: PopulateContext,
+): Promise<PreparedContent> {
+  if (format === "docx") {
+    if (!Buffer.isBuffer(source)) {
+      throw Object.assign(new Error("prepareContent: docx requires Buffer source"), {
+        code: "INVALID_SOURCE",
+      });
+    }
+    const buffer = source;
+    const [html, comments] = await Promise.all([
+      loadDocx(buffer),
+      extractDocxComments(buffer).catch((err) => {
+        console.error("[docx-comments] Comment extraction failed:", err);
+        pushNotification({
+          id: generateNotificationId(),
+          type: "annotation-error",
+          severity: "warning",
+          message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments.`,
+          dedupKey: `docx-comments:${ctx.dedupSource}`,
+          timestamp: Date.now(),
+        });
+        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
+      }),
+    ]);
+    return { format: "docx", html, comments };
+  }
+  const content = typeof source === "string" ? source : source.toString("utf-8");
+  if (format === "md") return { format: "md", content };
+  return { format: "other", content };
+}
+
+/**
+ * Sync apply step: must run INSIDE the caller's `doc.transact(..., MCP_ORIGIN)`.
+ *
+ * For docx, snapshots annotation keys before `injectCommentsAsAnnotations` and
+ * rolls back any keys it added if the inject throws. injectCommentsAsAnnotations
+ * opens an inner MCP_ORIGIN transact that Yjs flattens into ours, so writes land
+ * directly on this transaction's change set. Yjs does NOT roll back inner-transact
+ * writes when a callback throws — without the snapshot/undo dance, the doc would
+ * commit with N-of-M partial comments and re-open would hit importAnnotationId
+ * dedup, permanently dropping the failing comment with no surfaced error.
+ *
+ * Symmetric notification with the extract-failure path: both modes mean "docx
+ * loaded without (some) comments" from the user's perspective. Distinct dedupKey
+ * namespace so a file that hits both modes shows two toasts, not one collapsed.
+ */
+function applyPreparedContent(doc: Y.Doc, prepared: PreparedContent, ctx: PopulateContext): void {
+  switch (prepared.format) {
+    case "docx": {
+      htmlToYDoc(doc, prepared.html);
+      if (prepared.comments.length > 0) {
+        const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
+        const before = new Set(annotMap.keys());
+        try {
+          injectCommentsAsAnnotations(doc, prepared.comments);
+        } catch (err) {
+          for (const k of annotMap.keys()) {
+            if (!before.has(k)) annotMap.delete(k);
+          }
+          console.error(
+            "[docx-comments] inject failed mid-transact; document loads without imported comments:",
+            err,
+          );
+          pushNotification({
+            id: generateNotificationId(),
+            type: "annotation-error",
+            severity: "warning",
+            message: `Failed to import some Word comments from ${ctx.displayName}. Document opened, but comments may be missing.`,
+            dedupKey: `docx-comments-inject:${ctx.dedupSource}`,
+            timestamp: Date.now(),
+          });
+        }
+      }
+      return;
+    }
+    case "md":
+      loadMarkdown(doc, prepared.content);
+      return;
+    case "other":
+      populateYDoc(doc, prepared.content);
+      return;
+  }
+}
+
+/**
+ * Load file content from disk into the Y.Doc. Thin wrapper around
+ * populateDocFromContent — reads the buffer once (the caller has already
+ * validated `resolved` via resolveAndValidatePath: size limit, extension
+ * allowlist, UNC rejection) and delegates the parse + transact + cleanup logic
+ * to the shared helper used by openFileFromContent.
  */
 async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string): Promise<void> {
   const buffer = await fs.readFile(resolved);
@@ -430,70 +542,10 @@ async function populateDocFromContent(
   source: string | Buffer,
   ctx: PopulateContext,
 ): Promise<void> {
-  let applyToDoc: () => void;
-
-  if (format === "docx") {
-    if (!Buffer.isBuffer(source)) {
-      throw Object.assign(new Error("populateDocFromContent: docx requires Buffer source"), {
-        code: "INVALID_SOURCE",
-      });
-    }
-    const buffer = source;
-    const [html, comments] = await Promise.all([
-      loadDocx(buffer),
-      extractDocxComments(buffer).catch((err) => {
-        console.error("[docx-comments] Comment extraction failed:", err);
-        pushNotification({
-          id: generateNotificationId(),
-          type: "annotation-error",
-          severity: "warning",
-          message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments.`,
-          dedupKey: `docx-comments:${ctx.dedupSource}`,
-          timestamp: Date.now(),
-        });
-        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
-      }),
-    ]);
-    applyToDoc = () => {
-      htmlToYDoc(doc, html);
-      if (comments.length > 0) {
-        // Yjs does not roll back inner-transact writes on throw, so snapshot
-        // pre-inject annotation keys and undo any new ones if inject fails —
-        // otherwise an N-of-M commit collides with importAnnotationId dedup
-        // on next open and silently drops the failing comment.
-        const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
-        const before = new Set(annotMap.keys());
-        try {
-          injectCommentsAsAnnotations(doc, comments);
-        } catch (err) {
-          for (const k of [...annotMap.keys()]) {
-            if (!before.has(k)) annotMap.delete(k);
-          }
-          console.error(
-            "[docx-comments] inject failed mid-transact; document loads without imported comments:",
-            err,
-          );
-          pushNotification({
-            id: generateNotificationId(),
-            type: "annotation-error",
-            severity: "warning",
-            message: `Failed to import some Word comments from ${ctx.displayName}. Document opened, but comments may be missing.`,
-            dedupKey: `docx-comments-inject:${ctx.dedupSource}`,
-            timestamp: Date.now(),
-          });
-        }
-      }
-    };
-  } else if (format === "md") {
-    const fileContent = typeof source === "string" ? source : source.toString("utf-8");
-    applyToDoc = () => loadMarkdown(doc, fileContent);
-  } else {
-    const fileContent = typeof source === "string" ? source : source.toString("utf-8");
-    applyToDoc = () => populateYDoc(doc, fileContent);
-  }
+  const prepared = await prepareContent(format, source, ctx);
 
   try {
-    doc.transact(applyToDoc, MCP_ORIGIN);
+    doc.transact(() => applyPreparedContent(doc, prepared, ctx), MCP_ORIGIN);
   } catch (err) {
     // Clear partial state in a fresh top-level transact so a retry sees a clean
     // Y.Doc instead of a poisoned cached one. Yjs has unwound the failed
@@ -600,17 +652,28 @@ async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Pr
 }
 
 /**
- * Clear all document state in-place and repopulate from disk.
+ * Clear all document state in-place and repopulate from a pre-read buffer.
  * Unlike the old forceCloseDocument, this preserves the Y.Doc instance, Hocuspocus
  * room, and client WebSocket connections. All state (content, annotations, awareness)
  * is cleared and repopulated in a single Y.js transaction so clients see one atomic update.
+ *
+ * The caller owns the disk read (passes `source`) so the `fs.readFile` sink
+ * sits at the call site where the path has already flowed through
+ * resolveAndValidatePath — keeps CodeQL path-injection tracking local.
+ *
+ * Shares parse + apply helpers with `populateDocFromContent` (closes #611).
+ * That means force-reload now inherits the rollback containment + docx
+ * comment-extract/inject notification UX that #612 added to the normal-open
+ * path: a malformed Word comment no longer silently drops on reload, and an
+ * inject mid-transact failure rolls back partial annotation writes.
  */
 async function clearAndReload(
   id: string,
   doc: Y.Doc,
-  filePath: string,
+  resolved: string,
   format: string,
   existing: OpenDoc,
+  source: string | Buffer,
 ): Promise<void> {
   console.error(`[Tandem] clearAndReload: reloading ${id} from disk`);
 
@@ -629,33 +692,20 @@ async function clearAndReload(
     }
   }
 
-  // 1. Prepare content outside the transaction (async I/O must happen before transact)
+  // 1. Pre-parse OUTSIDE the transaction (async I/O / docx parsing). Reuses
+  //    prepareContent so the docx pre-parse and comment-extract notification
+  //    UX match populateDocFromContent exactly.
+  const ctx: PopulateContext = {
+    displayName: path.basename(resolved),
+    dedupSource: resolved,
+  };
+  const prepared = await prepareContent(format, source, ctx);
   const isDocx = format === "docx";
-  let preparedHtml: string | undefined;
-  let preparedComments: Awaited<ReturnType<typeof extractDocxComments>> | undefined;
-  let preparedContent: string | undefined;
 
-  if (isDocx) {
-    const buffer = await fs.readFile(filePath);
-    [preparedHtml, preparedComments] = await Promise.all([
-      loadDocx(buffer),
-      extractDocxComments(buffer).catch((err) => {
-        console.error(
-          "[docx-comments] Comment extraction failed; document will reload without imported comments:",
-          err,
-        );
-        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
-      }),
-    ]);
-  } else {
-    preparedContent = await fs.readFile(filePath, "utf-8");
-  }
-
-  // 2. Single transaction: clear all state + repopulate from pre-parsed content.
-  //    Clients see one atomic Y.js update — no intermediate states.
-  //    Content loaders are verified robust (remark-parse, htmlparser2 don't throw on
-  //    malformed input; populateYDoc is safe). The try-catch is a diagnostic safety net
-  //    for Y.js internal corruption — it logs context before re-throwing.
+  // 2. Single transaction: clear all state + repopulate + rewrite metadata.
+  //    Clients see one atomic Y.js update — no intermediate states. The
+  //    try-catch is a diagnostic safety net for Y.js internal corruption; on
+  //    throw we re-raise so the caller's force-reload reports the failure.
   try {
     doc.transact(() => {
       // Clear Y.Maps
@@ -671,24 +721,15 @@ async function clearAndReload(
       const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       userAwareness.forEach((_, k) => userAwareness.delete(k));
 
-      // Repopulate content (load functions clear the XmlFragment internally)
-      if (isDocx && preparedHtml !== undefined) {
-        htmlToYDoc(doc, preparedHtml);
-        if (preparedComments && preparedComments.length > 0) {
-          injectCommentsAsAnnotations(doc, preparedComments);
-        }
-      } else if (format === "md" && preparedContent !== undefined) {
-        loadMarkdown(doc, preparedContent);
-      } else if (preparedContent !== undefined) {
-        populateYDoc(doc, preparedContent);
-      }
+      // Repopulate content via shared helper (idem with populateDocFromContent).
+      applyPreparedContent(doc, prepared, ctx);
 
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.set(Y_MAP_READ_ONLY, isDocx);
       meta.set("format", format);
       meta.set("documentId", id);
-      meta.set("fileName", path.basename(filePath));
+      meta.set("fileName", path.basename(resolved));
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
     }, MCP_ORIGIN);
 
