@@ -1,0 +1,38 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/server/index.ts",
+    "src/cli/index.ts",
+    "src/channel/index.ts",
+    "src/monitor/index.ts",
+    "src/client/main.ts",
+    "scripts/*.{ts,mjs,js}",
+    "tests/**/*.{test,spec}.ts",
+    "tests/e2e/**/*.spec.ts"
+  ],
+  "project": ["src/**/*.{ts,svelte,svelte.ts}", "scripts/**/*.{ts,mjs,js}", "tests/**/*.ts"],
+  "ignore": [
+    "src-tauri/**",
+    "dist/**",
+    "node_modules/**",
+    "playwright-report/**",
+    "test-results/**",
+    ".claude/**",
+    "src/client/svelte-harness/**"
+  ],
+  "ignoreDependencies": ["@tauri-apps/api"],
+  "ignoreExportsUsedInFile": true,
+  "ignoreBinaries": ["cargo", "tauri"],
+  "vite": {
+    "config": ["vite.config.ts"]
+  },
+  "vitest": {
+    "config": ["vite.config.ts", "vitest.config.ts"]
+  },
+  "playwright": {
+    "config": ["playwright.config.ts"]
+  },
+  "svelte": {
+    "config": ["svelte.config.js", "svelte.config.ts"]
+  }
+}

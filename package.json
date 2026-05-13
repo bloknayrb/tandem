@@ -55,6 +55,9 @@
     "dev:tauri": "node scripts/download-node-sidecar.mjs && cargo tauri dev",
     "build:tauri": "cargo tauri build",
     "check:tokens": "tsx scripts/check-semantic-tokens.ts",
+    "audit:dead-code": "knip",
+    "audit:origins": "tsx scripts/audit-origins.ts",
+    "audit:ymap-keys": "tsx scripts/audit-ymap-keys.ts",
     "prepare": "husky",
     "prepublishOnly": "npm run build"
   },
@@ -131,6 +134,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "happy-dom": "^20.9.0",
     "husky": "^9.1.7",
+    "knip": "^5.66.0",
     "lint-staged": "^16.4.0",
     "svelte": "^5.37.0",
     "svelte-check": "^4.0.0",
