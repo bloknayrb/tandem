@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`.docx` files with malformed Word comments no longer abort the entire document open (PR #612)** — `injectCommentsAsAnnotations` runs inside the same flatten-into-outer transact as `htmlToYDoc`, so a single bad comment range used to throw out of the whole populate. The inject call is now contained per-comment with partial-write rollback (Yjs does not roll back inner-transact writes on throw, so we snapshot annotation keys before the inject and undo any that landed before the failure). Comment-extraction failures additionally surface as a warning notification instead of disappearing into the server log. Comment-injection failures (rare unhandled exceptions during annotation write) now surface as a warning notification too — symmetric with the extract-failure path, so the user always sees feedback when imported comments go missing.
 - **Populate failures no longer poison the Y.Doc cache (PR #612)** — `populateDocFromContent` clears partial fragment + annotation state in a fresh top-level `MCP_ORIGIN` transact before rethrowing. Previously, a populate throw would leave the Hocuspocus-cached Y.Doc with half-applied content, and a retry would silently inherit the corrupted state.
 
+## [0.11.2] - 2026-05-13
+
+### Fixed
+
+- **`effect_update_depth_exceeded` on Tauri launch (PR #614, closes #613)** — installed v0.11.1 desktop builds threw Svelte's effect-depth error immediately on launch; the dev build (`npm run dev:tauri`) did not reproduce, narrowing the trigger to production-mode effect-flush scheduling. Three defense-in-depth fixes: (1) the authorship-toggle effect in `App.svelte` no longer dispatches a ProseMirror transaction on its first run — the plugin already reads `localStorage[AUTHORSHIP_TOGGLE_KEY]` at construction so the editor starts in the correct state; (2) rail-tab reconcile effects now `untrack` their writes to break any read-then-write self-dep; (3) the SettingsPopover error-clear effect skips assignment when values are already null. The existing in-code comment had explicitly warned this dispatch could "exceed the 1000-update depth limit"; under prod's tighter effect scheduling it did.
+
 ## [0.11.1] - 2026-05-13
 
 ### Added

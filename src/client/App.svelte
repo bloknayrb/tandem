@@ -141,16 +141,32 @@ wireActionDeps({
 // call to updateSettings() (which replaces the entire settings object even
 // when showAuthorship is unchanged) would dispatch a transaction, causing
 // FormattingToolbar's tick++ listener to fire inside Svelte's effect flush
-// and eventually exceed the 1000-update depth limit.
+// and eventually exceed the 1000-update depth limit (#613).
+//
+// First-run note: on the editor's initial availability we record the current
+// `visible` value WITHOUT dispatching. The authorship plugin reads
+// `localStorage[AUTHORSHIP_TOGGLE_KEY]` at construction time
+// (`useTandemSettings.svelte.ts` mirrors `showAuthorship` to that key on every
+// write) so the editor already starts in the correct state. Dispatching on
+// the first run was needed in the React era when the plugin had no localStorage
+// hook, and it is exactly the path that produced #613's prod-only effect-depth
+// loop — likely chained through y-prosemirror's transaction queue under prod's
+// tighter scheduling.
 let _lastAuthorshipVisible: boolean | undefined;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
   const visible = settingsState.settings.showAuthorship;
+  if (_lastAuthorshipVisible === undefined) {
+    _lastAuthorshipVisible = visible;
+    return;
+  }
   if (_lastAuthorshipVisible === visible) return;
   _lastAuthorshipVisible = visible;
-  const tr = ed.state.tr.setMeta(authorshipPluginKey, { type: "toggle", visible });
-  ed.view.dispatch(tr);
+  untrack(() => {
+    const tr = ed.state.tr.setMeta(authorshipPluginKey, { type: "toggle", visible });
+    ed.view.dispatch(tr);
+  });
 });
 
 $effect(() => {
@@ -180,14 +196,24 @@ let activeLeftRailTab = $state<"annotations" | "chat" | "outline">(
 
 // Reconcile active-tab pointers whenever the persisted rail arrays change
 // (e.g. after settings load, cross-rail move, or external settings update).
+//
+// `untrack` around the write so the write back to activeLeftRailTab /
+// activeRailTab doesn't form a self-dep with this effect's includes() read.
+// Defensive against the prod-only #613 effect_update_depth shape.
 $effect(() => {
-  if (!settingsState.settings.leftRailTabs.includes(activeLeftRailTab)) {
-    activeLeftRailTab = settingsState.settings.leftRailTabs[0] ?? "annotations";
+  const leftTabs = settingsState.settings.leftRailTabs;
+  if (!leftTabs.includes(activeLeftRailTab)) {
+    untrack(() => {
+      activeLeftRailTab = leftTabs[0] ?? "annotations";
+    });
   }
 });
 $effect(() => {
-  if (!settingsState.settings.rightRailTabs.includes(activeRailTab)) {
-    activeRailTab = settingsState.settings.rightRailTabs[0] ?? "chat";
+  const rightTabs = settingsState.settings.rightRailTabs;
+  if (!rightTabs.includes(activeRailTab)) {
+    untrack(() => {
+      activeRailTab = rightTabs[0] ?? "chat";
+    });
   }
 });
 
