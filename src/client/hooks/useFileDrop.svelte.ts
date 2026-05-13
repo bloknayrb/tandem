@@ -1,3 +1,4 @@
+import { API_UPLOAD } from "../../shared/api-paths.js";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 
 export interface FileDropState {
@@ -39,7 +40,7 @@ export function createFileDrop(): FileDropState {
     const file = e.dataTransfer.files[0];
     const content = await readFileForUpload(file);
     try {
-      const response = await fetch(`${API_BASE}/upload`, {
+      const response = await fetch(`${API_BASE}${API_UPLOAD}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileName: file.name, content }),

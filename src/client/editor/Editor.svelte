@@ -13,6 +13,7 @@ import TableRow from "@tiptap/extension-table-row";
 import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
+import { API_OPEN } from "../../shared/api-paths.js";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { API_BASE } from "../utils/fileUpload.js";
 import { AnnotationExtension } from "./extensions/annotation";
@@ -237,7 +238,7 @@ async function handleEditorClick(e: MouseEvent) {
       const resolvedPath = resolveRelativeLink(href, currentFilePath);
       if (resolvedPath) {
         try {
-          const res = await fetch(`${API_BASE}/open`, {
+          const res = await fetch(`${API_BASE}${API_OPEN}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ filePath: resolvedPath }),

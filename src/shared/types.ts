@@ -36,6 +36,19 @@ export const ToolErrorCodeSchema = z.enum([
   "PERMISSION_DENIED",
 ]);
 
+/**
+ * Identifier strings the channel shim or monitor can POST to
+ * `/api/channel-error` on terminal failure. The server logs them; defining
+ * them as a closed set lets call sites import the constants instead of
+ * free-form strings, and the route handler can validate before logging.
+ *
+ * See #284.
+ */
+export const ChannelErrorCodeSchema = z.enum(["CHANNEL_CONNECT_FAILED", "MONITOR_CONNECT_FAILED"]);
+export type ChannelErrorCode = z.infer<typeof ChannelErrorCodeSchema>;
+export const CHANNEL_CONNECT_FAILED: ChannelErrorCode = "CHANNEL_CONNECT_FAILED";
+export const MONITOR_CONNECT_FAILED: ChannelErrorCode = "MONITOR_CONNECT_FAILED";
+
 // --- Derived TypeScript types ---
 
 export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;

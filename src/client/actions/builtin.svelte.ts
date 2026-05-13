@@ -9,7 +9,7 @@
  * Wire the getters by calling wireActionDeps() from App.svelte after mount.
  */
 
-import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { API_SAVE, API_SCRATCHPAD } from "../../shared/api-paths.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { type Action, registerAction } from "./registry.svelte.js";
 
@@ -56,7 +56,7 @@ export async function createScratchpad(): Promise<void> {
   if (scratchpadInflight) return;
   scratchpadInflight = true;
   try {
-    const res = await fetch(`${API_BASE}/scratchpad`, { method: "POST" });
+    const res = await fetch(`${API_BASE}${API_SCRATCHPAD}`, { method: "POST" });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       console.warn(
@@ -76,7 +76,7 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
   inflight = true;
   saving = true;
   try {
-    const resp = await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/save`, {
+    const resp = await fetch(`${API_BASE}${API_SAVE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId: activeDocId }),

@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import * as Y from "yjs";
+import { API_CHAT } from "../../shared/api-paths";
 import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
@@ -145,7 +146,7 @@ function getDocFileName(docId?: string): string | null {
 
 async function clearChat() {
   try {
-    await fetch(`http://localhost:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
+    await fetch(`http://localhost:${DEFAULT_MCP_PORT}${API_CHAT}`, { method: "DELETE" });
   } catch (err) {
     console.warn("[ChatPanel] Failed to clear chat:", err);
   }

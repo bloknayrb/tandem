@@ -20,6 +20,12 @@
 
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  API_CHANNEL_AWARENESS,
+  API_CHANNEL_ERROR,
+  API_EVENTS,
+  API_MODE,
+} from "../shared/api-paths.js";
 import { authFetch, resolveTandemUrl } from "../shared/cli-runtime.js";
 import {
   CHANNEL_MAX_RETRIES,
@@ -29,7 +35,7 @@ import {
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent, parseTandemEvent } from "../shared/events/types.js";
 import { describeFetchError, fetchWithTimeout } from "../shared/fetch-with-timeout.js";
-import { type TandemMode, TandemModeSchema } from "../shared/types.js";
+import { MONITOR_CONNECT_FAILED, type TandemMode, TandemModeSchema } from "../shared/types.js";
 
 const IS_VITEST = process.env.VITEST === "true";
 
@@ -95,12 +101,12 @@ export async function main(): Promise<void> {
         console.error("[Monitor] SSE connection exhausted, exiting");
         try {
           await fetchWithTimeout(
-            `${TANDEM_URL}/api/channel-error`,
+            `${TANDEM_URL}${API_CHANNEL_ERROR}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                error: "MONITOR_CONNECT_FAILED",
+                error: MONITOR_CONNECT_FAILED,
                 message: `Monitor lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
               }),
             },
@@ -166,7 +172,7 @@ export async function connectAndStream(
   );
   let res: Response;
   try {
-    res = await authFetch(`${TANDEM_URL}/api/events`, { headers, signal: connectCtrl.signal });
+    res = await authFetch(`${TANDEM_URL}${API_EVENTS}`, { headers, signal: connectCtrl.signal });
   } finally {
     clearTimeout(connectTimer);
   }
@@ -201,7 +207,7 @@ export async function connectAndStream(
 
   function clearAwareness(documentId?: string) {
     const p = fetchWithTimeout(
-      `${TANDEM_URL}/api/channel-awareness`,
+      `${TANDEM_URL}${API_CHANNEL_AWARENESS}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -215,7 +221,7 @@ export async function connectAndStream(
     ).catch((err) => {
       console.error(
         "[Monitor] Awareness clear failed:",
-        describeFetchError(err, "/api/channel-awareness clear", AWARENESS_FETCH_TIMEOUT_MS),
+        describeFetchError(err, `${API_CHANNEL_AWARENESS} clear`, AWARENESS_FETCH_TIMEOUT_MS),
       );
     });
     trackAwareness(p);
@@ -230,7 +236,7 @@ export async function connectAndStream(
     // needs a non-null id to send the shutdown clear.
     if (event.documentId) shutdownTimers.lastDocumentId = event.documentId;
     const p = fetchWithTimeout(
-      `${TANDEM_URL}/api/channel-awareness`,
+      `${TANDEM_URL}${API_CHANNEL_AWARENESS}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -244,7 +250,7 @@ export async function connectAndStream(
     ).catch((err) => {
       console.error(
         "[Monitor] Awareness update failed:",
-        describeFetchError(err, "/api/channel-awareness update", AWARENESS_FETCH_TIMEOUT_MS),
+        describeFetchError(err, `${API_CHANNEL_AWARENESS} update`, AWARENESS_FETCH_TIMEOUT_MS),
       );
     });
     trackAwareness(p);
@@ -388,7 +394,7 @@ async function finalClearAwareness(): Promise<boolean> {
   if (shutdownTimers.lastDocumentId === null) return true;
   try {
     const res = await fetchWithTimeout(
-      `${TANDEM_URL}/api/channel-awareness`,
+      `${TANDEM_URL}${API_CHANNEL_AWARENESS}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -408,7 +414,7 @@ async function finalClearAwareness(): Promise<boolean> {
   } catch (err) {
     console.error(
       "[Monitor] Shutdown awareness clear failed:",
-      describeFetchError(err, "/api/channel-awareness shutdown", AWARENESS_FETCH_TIMEOUT_MS),
+      describeFetchError(err, `${API_CHANNEL_AWARENESS} shutdown`, AWARENESS_FETCH_TIMEOUT_MS),
     );
     return false;
   }
@@ -484,14 +490,14 @@ type FetchModeResult = { ok: true; mode: TandemMode } | { ok: false; reason: str
 /** Fetch + validate /api/mode. Callers apply their own failure policy. */
 async function fetchMode(): Promise<FetchModeResult> {
   try {
-    const res = await fetchWithTimeout(`${TANDEM_URL}/api/mode`, {}, MODE_FETCH_TIMEOUT_MS);
+    const res = await fetchWithTimeout(`${TANDEM_URL}${API_MODE}`, {}, MODE_FETCH_TIMEOUT_MS);
     if (!res.ok) return { ok: false, reason: `status ${res.status}` };
     const body = (await res.json()) as { mode?: unknown };
     const parsed = TandemModeSchema.safeParse(body.mode);
     if (!parsed.success) return { ok: false, reason: `invalid mode ${JSON.stringify(body.mode)}` };
     return { ok: true, mode: parsed.data };
   } catch (err) {
-    return { ok: false, reason: describeFetchError(err, "/api/mode", MODE_FETCH_TIMEOUT_MS) };
+    return { ok: false, reason: describeFetchError(err, API_MODE, MODE_FETCH_TIMEOUT_MS) };
   }
 }
 

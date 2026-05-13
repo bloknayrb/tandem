@@ -1,3 +1,4 @@
+import { API_INFO } from "../../shared/api-paths";
 import type { AppInfoData } from "../types";
 import { API_BASE } from "../utils/fileUpload";
 
@@ -25,9 +26,9 @@ export function _resetAppInfoCache(): void {
  */
 export async function fetchAppInfo(signal: AbortSignal): Promise<AppInfoData> {
   if (cachedInfo !== null) return cachedInfo;
-  const resp = await fetch(`${API_BASE}/info`, { signal });
+  const resp = await fetch(`${API_BASE}${API_INFO}`, { signal });
   if (!resp.ok) {
-    throw new Error(`/api/info responded ${resp.status} ${resp.statusText}`);
+    throw new Error(`${API_INFO} responded ${resp.status} ${resp.statusText}`);
   }
   const data = (await resp.json()) as AppInfoData;
   cachedInfo = data;

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { API_OPEN, API_UPLOAD } from "../../shared/api-paths.js";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -42,7 +43,7 @@ async function openByPath(pathToOpen: string) {
   error = null;
   loading = true;
   try {
-    const res = await fetch(`${API_BASE}/open`, {
+    const res = await fetch(`${API_BASE}${API_OPEN}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filePath: pathToOpen }),
@@ -79,7 +80,7 @@ async function uploadFile(file: File) {
   loading = true;
   try {
     const content = await readFileForUpload(file);
-    const res = await fetch(`${API_BASE}/upload`, {
+    const res = await fetch(`${API_BASE}${API_UPLOAD}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fileName: file.name, content }),

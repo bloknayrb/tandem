@@ -31,10 +31,19 @@ function countMatches(src: string, re: RegExp): number {
 }
 
 function expectFetchWithTimeoutEndpoint(src: string, endpoint: string, timeoutConstant: string) {
-  const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedTimeout = timeoutConstant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Accept either the literal path or the `API_*` constant that resolves to it
+  // (post-#283 the channel/server use the constants from src/shared/api-paths.ts).
+  const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const constantName = `API${endpoint
+    .replace(/^\//, "")
+    .replace(/^api\//, "")
+    .replace(/-/g, "_")
+    .toUpperCase()
+    .replace(/^/, "_")}`;
+  const endpointAlternation = `(?:${escapedEndpoint}|${constantName})`;
   expect(src).toMatch(
-    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${escapedEndpoint}[\\s\\S]*?${escapedTimeout}`),
+    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${endpointAlternation}[\\s\\S]*?${escapedTimeout}`),
   );
 }
 
@@ -76,7 +85,7 @@ describe("channel/event-bridge.ts timeout coverage", () => {
     // authFetch call remains, and it is the handshake.
     const bareAuthFetch = src.match(/\bauthFetch\s*\(/g) ?? [];
     expect(bareAuthFetch.length).toBe(1);
-    expect(src).toMatch(/authFetch\(`\$\{tandemUrl\}\/api\/events`/);
+    expect(src).toMatch(/authFetch\(`\$\{tandemUrl\}(?:\/api\/events|\$\{API_EVENTS\})`/);
   });
 
   it("pairs every request-response endpoint with fetchWithTimeout and its timeout budget", async () => {
@@ -84,7 +93,12 @@ describe("channel/event-bridge.ts timeout coverage", () => {
     expectFetchWithTimeoutEndpoint(src, "/api/channel-error", "CHANNEL_ERROR_REPORT_TIMEOUT_MS");
     expectFetchWithTimeoutEndpoint(src, "/api/mode", "CHANNEL_MODE_FETCH_TIMEOUT_MS");
 
-    expect(countMatches(src, /fetchWithTimeout\([\s\S]*?\/api\/channel-awareness/g)).toBe(2);
+    expect(
+      countMatches(
+        src,
+        /fetchWithTimeout\([\s\S]*?(?:\/api\/channel-awareness|API_CHANNEL_AWARENESS)/g,
+      ),
+    ).toBe(2);
     expect(countMatches(src, /CHANNEL_AWARENESS_FETCH_TIMEOUT_MS/g)).toBeGreaterThanOrEqual(2);
   });
 
