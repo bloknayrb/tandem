@@ -9,7 +9,7 @@ import {
   API_EVENTS,
   API_LAUNCH_CLAUDE,
 } from "../../shared/api-paths.js";
-import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
+import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT, Y_MAP_CLAUDE } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema, type ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
@@ -57,7 +57,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
         focusParagraph: typeof focusParagraph === "number" ? focusParagraph : null,
         focusOffset: typeof focusOffset === "number" ? focusOffset : null,
       };
-      doc.transact(() => awarenessMap.set("claude", state), MCP_ORIGIN);
+      doc.transact(() => awarenessMap.set(Y_MAP_CLAUDE, state), MCP_ORIGIN);
     }
     res.json({ ok: true, written: !!docId });
   });

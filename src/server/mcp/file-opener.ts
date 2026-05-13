@@ -13,6 +13,7 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_READ_ONLY,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -344,7 +345,7 @@ function handleAlreadyOpen(
   if (explicitReadOnly && !existing.readOnly) {
     addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    doc.transact(() => meta.set("readOnly", true), MCP_ORIGIN);
+    doc.transact(() => meta.set(Y_MAP_READ_ONLY, true), MCP_ORIGIN);
   }
 
   setActiveDocId(id);
@@ -684,7 +685,7 @@ async function clearAndReload(
 
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-      meta.set("readOnly", isDocx);
+      meta.set(Y_MAP_READ_ONLY, isDocx);
       meta.set("format", format);
       meta.set("documentId", id);
       meta.set("fileName", path.basename(filePath));
@@ -733,7 +734,7 @@ function writeDocMeta(
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   doc.transact(() => {
-    meta.set("readOnly", readOnly);
+    meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
     meta.set("documentId", id);
     meta.set("fileName", fileName);
