@@ -401,10 +401,14 @@ async function maybeRestoreSession(
  * nested transactions, so the inner is a no-op wrapper.
  */
 async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string): Promise<void> {
+  // Single read site: the caller (openFileByPath) already validated `resolved`
+  // upstream (size limit, extension allowlist, UNC rejection). Consolidating
+  // the read also satisfies CodeQL — three branches each calling fs.readFile
+  // produced three "uncontrolled path" sinks.
+  const buffer = await fs.readFile(resolved);
   let applyToDoc: () => void;
 
   if (format === "docx") {
-    const buffer = await fs.readFile(resolved);
     const [html, comments] = await Promise.all([
       loadDocx(buffer),
       extractDocxComments(buffer).catch((err) => {
@@ -420,18 +424,22 @@ async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string):
       if (comments.length > 0) injectCommentsAsAnnotations(doc, comments);
     };
   } else if (format === "md") {
-    const fileContent = await fs.readFile(resolved, "utf-8");
+    const fileContent = buffer.toString("utf-8");
     applyToDoc = () => loadMarkdown(doc, fileContent);
   } else {
-    const fileContent = await fs.readFile(resolved, "utf-8");
+    const fileContent = buffer.toString("utf-8");
     applyToDoc = () => populateYDoc(doc, fileContent);
   }
 
   try {
     doc.transact(applyToDoc, MCP_ORIGIN);
   } catch (err) {
+    // Pass user-controlled values as separate args rather than building a
+    // format string — defuses CodeQL's "externally-controlled format string"
+    // warning and is friendlier for structured log parsers.
     console.error(
-      `[Tandem] loadContentIntoDoc: failed for ${resolved} (format=${format}). Y.Doc may be in a partially populated state:`,
+      "[Tandem] loadContentIntoDoc: populate failed; Y.Doc may be in a partially populated state.",
+      { format, path: resolved },
       err,
     );
     throw err;
