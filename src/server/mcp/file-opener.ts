@@ -114,10 +114,13 @@ export async function openFileByPath(
     const forceReload = options?.force === true;
     if (forceReload) {
       // Force-reload stays inline — distinct lifecycle from normal open.
-      // Read the buffer via the shared helper so the fs.readFile sink lives
-      // in readResolvedFile (matches loadContentIntoDoc's existing pattern).
+      // Read the buffer here so the fs.readFile sink sits at the call site
+      // where `resolved` was just produced by resolveAndValidatePath —
+      // CodeQL traces the sanitizer cross-line within a function but not
+      // across function boundaries.
       const doc = getDocument(id) ?? getOrCreateDocument(id);
-      const reloadBuffer = await readResolvedFile(resolved, format);
+      const reloadBuffer =
+        format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
       await clearAndReload(id, doc, resolved, format, existing, reloadBuffer);
       addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
       setActiveDocId(id);
@@ -393,20 +396,6 @@ async function maybeRestoreSession(
     }
   }
   return false;
-}
-
-/**
- * Read raw file content from an already-resolved-and-validated path.
- *
- * Callers pass the `resolved` field from `resolveAndValidatePath`, which has
- * run `path.resolve` + `fs.realpathSync` + UNC rejection + extension allowlist
- * + 50MB size limit. docx is returned as a Buffer (binary ZIP); other formats
- * as utf-8 string. The single fs.readFile sink lives here so CodeQL's
- * cross-function dataflow tracker treats the parameter as a fresh-typed
- * `string`, matching how loadContentIntoDoc handles disk reads.
- */
-async function readResolvedFile(resolved: string, format: string): Promise<Buffer | string> {
-  return format === "docx" ? fs.readFile(resolved) : fs.readFile(resolved, "utf-8");
 }
 
 /**
