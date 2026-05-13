@@ -177,16 +177,43 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         },
 
         view(editorView) {
+          // Coalesce a burst of Y.Map observer fires into a single rebuild.
+          // On initial sync (force-reload, session restore, docx import), the
+          // Y.Map observer can fire dozens to hundreds of times in one tick.
+          // Without coalescing, each fire dispatches a transaction that calls
+          // `buildDecorations()` — O(n) over every annotation in the map —
+          // making the load O(n²). rAF is enough to merge a single event-loop
+          // burst; per-event dispatches still feel instant. See #610.
+          let rafId: number | null = null;
+          function scheduleRebuild() {
+            if (rafId !== null) return;
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              const tr = editorView.state.tr.setMeta(annotationPluginKey, true);
+              editorView.dispatch(tr);
+            });
+          }
+
           const observer = () => {
             hasAnnotations = annotationsMap.size > 0;
             recoveryAttempted = false;
-            const tr = editorView.state.tr.setMeta(annotationPluginKey, true);
-            editorView.dispatch(tr);
+            scheduleRebuild();
           };
           annotationsMap.observe(observer);
 
+          // Post-sync settle: y-prosemirror can populate the editor doc after
+          // the Y.Map observer has already attached and (silently) fired with
+          // a still-empty PM doc. Mirrors authorship.ts:223 — the same hazard
+          // pattern in a separate decoration plugin. The 500ms delay is the
+          // documented post-sync settling window.
+          const syncRebuild = setTimeout(() => {
+            if (annotationsMap.size > 0) observer();
+          }, 500);
+
           return {
             destroy() {
+              clearTimeout(syncRebuild);
+              if (rafId !== null) cancelAnimationFrame(rafId);
               annotationsMap.unobserve(observer);
             },
           };
