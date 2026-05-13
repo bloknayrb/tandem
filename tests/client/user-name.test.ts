@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistUserName, resolveUserName } from "../../src/client/hooks/useUserName.js";
-import { USER_NAME_DEFAULT, USER_NAME_EVENT, USER_NAME_KEY } from "../../src/shared/constants.js";
+import {
+  USER_NAME_DEFAULT,
+  USER_NAME_EVENT,
+  USER_NAME_KEY,
+  USER_NAME_MAX_LEN,
+} from "../../src/shared/constants.js";
 
 describe("resolveUserName", () => {
   it("returns stored name when valid", () => {
@@ -25,6 +30,16 @@ describe("resolveUserName", () => {
 
   it("trims whitespace from valid name", () => {
     expect(resolveUserName("  Bob  ")).toBe("Bob");
+  });
+
+  it("truncates names longer than USER_NAME_MAX_LEN", () => {
+    const long = "a".repeat(USER_NAME_MAX_LEN + 100);
+    expect(resolveUserName(long)).toHaveLength(USER_NAME_MAX_LEN);
+  });
+
+  it("does not truncate names exactly at USER_NAME_MAX_LEN", () => {
+    const exact = "a".repeat(USER_NAME_MAX_LEN);
+    expect(resolveUserName(exact)).toBe(exact);
   });
 });
 
@@ -79,6 +94,13 @@ describe("persistUserName — write + broadcast contract", () => {
 
   it("returns the trimmed value that was persisted", () => {
     expect(persistUserName("  Carol  ")).toBe("Carol");
+  });
+
+  it("truncates names longer than USER_NAME_MAX_LEN before persisting", () => {
+    const long = "B".repeat(USER_NAME_MAX_LEN + 50);
+    const returned = persistUserName(long);
+    expect(returned).toHaveLength(USER_NAME_MAX_LEN);
+    expect(store.get(USER_NAME_KEY)).toHaveLength(USER_NAME_MAX_LEN);
   });
 
   it("swallows localStorage.setItem errors (incognito/quota) but still dispatches", () => {

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **CHANGELOG.md no longer rewritten on upgrade** — On version upgrade the app auto-opens `CHANGELOG.md` so the user can see what changed. Previously this opened writable, and the 60-second autosave timer would round-trip the file through `remark-stringify` with default escaping, leaving cosmetic backslash-escape noise on disk (`[1.0.0]` → `\[1.0.0]`, escaped underscores and backticks). The upgrade auto-open path now passes `readOnly: true`, matching the existing "View Changelog" button in Settings; autosave skips read-only documents so the file is not re-serialized.
+- **Display name truncated to `USER_NAME_MAX_LEN` (closes #599)** — `resolveUserName` now slices to the 40-char limit, plugging the gap where `persistUserName` and `subscribeToUserName`'s storage handler could persist or broadcast unbounded names from programmatic `setUserName` calls or legacy localStorage values. The `<input maxlength>` cap on the typed-input path remains; this fix covers the non-UI entry points.
 
 ## \[0.11.0] - 2026-05-11
 
