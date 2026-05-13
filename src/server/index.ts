@@ -355,10 +355,12 @@ async function main() {
     const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
     // Open CHANGELOG.md as active tab on first startup after an update.
+    // Opened read-only so the 60s autosave timer does not round-trip the file
+    // through the markdown serializer and rewrite it with escape noise.
     try {
       const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
       if (versionStatus === "upgraded") {
-        await openFileByPath(path.join(projectRoot, "CHANGELOG.md"));
+        await openFileByPath(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
         console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
       }
     } catch (err) {
