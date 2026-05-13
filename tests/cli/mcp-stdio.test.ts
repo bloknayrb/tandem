@@ -623,8 +623,16 @@ describe("mcp-stdio per-request timeout", () => {
   /**
    * Spin up a fake Tandem server whose /mcp endpoint holds every POST
    * without replying. Used by half-open timeout tests.
+   *
+   * Returns `postsReceived` — a counter the caller can poll on to determine
+   * when the CLI's request reached the fake server (i.e. `httpReady` flipped,
+   * `preReadyBuffer` drained, and the per-request timer started ticking).
+   * Polling on this counter instead of `setTimeout(500)` is what makes the
+   * timeout tests robust under concurrent vitest load, where subprocess
+   * startup can easily exceed 500ms.
    */
-  async function makeHalfOpenServer(): Promise<{ port: number }> {
+  async function makeHalfOpenServer(): Promise<{ port: number; postsReceived: { count: number } }> {
+    const postsReceived = { count: 0 };
     timeoutServer = createServer((req, res) => {
       if (req.method === "GET" && req.url === "/health") {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -633,8 +641,14 @@ describe("mcp-stdio per-request timeout", () => {
       }
       if (req.method === "POST" && req.url === "/mcp") {
         // Intentionally never respond — simulates a half-open upstream.
+        // Count POSTs on "end" so the increment fires only after the request
+        // body has fully arrived (matches when forwardToUpstream's await on
+        // fetch is past send).
         const chunks: Buffer[] = [];
         req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          postsReceived.count += 1;
+        });
         return;
       }
       res.writeHead(404);
@@ -643,12 +657,32 @@ describe("mcp-stdio per-request timeout", () => {
     await new Promise<void>((r) => (timeoutServer as Server).listen(0, "127.0.0.1", r));
     const addr = (timeoutServer as Server).address();
     if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
-    return { port: addr.port };
+    return { port: addr.port, postsReceived };
+  }
+
+  /**
+   * Poll until the fake server has received at least `n` POSTs (or fail the
+   * test after `timeoutMs`). Decouples assertions from subprocess startup
+   * latency, which can easily exceed a fixed delay under load.
+   */
+  async function waitForPosts(
+    counter: { count: number },
+    n: number,
+    timeoutMs = 10_000,
+  ): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (counter.count >= n) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(
+      `Only ${counter.count}/${n} POSTs reached the fake server within ${timeoutMs}ms`,
+    );
   }
 
   it("synthesizes -32000 after timeout when upstream accepts but never responds (half-open)", async () => {
     // Fake server: /health → 200, /mcp → holds the POST without replying.
-    const { port } = await makeHalfOpenServer();
+    const { port, postsReceived } = await makeHalfOpenServer();
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     // Use a short timeout (500ms) so the test doesn't take 30s.
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
@@ -660,14 +694,17 @@ describe("mcp-stdio per-request timeout", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Write after a short delay so httpReady is true (request goes through forwardToUpstream).
-    await new Promise((r) => setTimeout(r, 500));
+    // Send the request immediately — it sits in `preReadyBuffer` until
+    // httpReady flips, then forwardToUpstream fires and the 500ms timer
+    // starts. We don't care WHEN that happens; we poll until the POST
+    // arrived at the fake server, which proves the timer is running.
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 10, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
+    await waitForPosts(postsReceived, 1);
 
-    // Expect -32000 after the 500ms timeout fires (plus processing slack).
-    const line = await readOneLine(child, 5_000);
+    // Expect -32000 within 500ms timer + processing slack.
+    const line = await readOneLine(child, 3_000);
     const parsed = JSON.parse(line) as {
       id: number;
       error?: { code: number; message: string; data?: { detail: string } };
@@ -680,7 +717,7 @@ describe("mcp-stdio per-request timeout", () => {
 
   it("synthesizes distinct -32000 for each concurrent pending request on timeout", async () => {
     // Fake server: /health → 200, /mcp → holds all POSTs without replying.
-    const { port } = await makeHalfOpenServer();
+    const { port, postsReceived } = await makeHalfOpenServer();
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
       env: {
@@ -691,8 +728,6 @@ describe("mcp-stdio per-request timeout", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Wait for httpReady, then send 3 concurrent requests.
-    await new Promise((r) => setTimeout(r, 500));
     const makeRequest = (id: number) =>
       JSON.stringify({
         jsonrpc: "2.0",
@@ -707,9 +742,12 @@ describe("mcp-stdio per-request timeout", () => {
     child.stdin.write(`${makeRequest(20)}\n`);
     child.stdin.write(`${makeRequest(21)}\n`);
     child.stdin.write(`${makeRequest(22)}\n`);
+    // Wait until all 3 POSTs reached the fake server — confirms three timers
+    // are running before we start reading stdout.
+    await waitForPosts(postsReceived, 3);
 
-    // Collect 3 -32000 lines (allow 5s slack after 500ms timeout).
-    const lines = await readLines(child, 3, 5_000);
+    // Collect 3 -32000 lines (500ms timer + processing slack).
+    const lines = await readLines(child, 3, 3_000);
     expect(lines).toHaveLength(3);
 
     const receivedIds = new Set<number>();
