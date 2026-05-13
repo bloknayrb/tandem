@@ -11,6 +11,7 @@ import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
+import { onOutsideEvent } from "../../utils/dismiss-outside";
 import { toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
@@ -108,11 +109,19 @@ $effect(() => {
   }
 
   window.addEventListener("resize", scheduleUpdate);
-  document.addEventListener("scroll", handleScrollDismiss, true);
+  const unsubscribeOutsideScroll = onOutsideEvent(
+    () => toolbarEl,
+    ["scroll"],
+    () => {
+      // Don't dismiss while the user is composing in the textarea
+      if (document.activeElement === textareaEl) return;
+      dismissPopup();
+    },
+  );
   return () => {
     cancelAnimationFrame(frame);
     window.removeEventListener("resize", scheduleUpdate);
-    document.removeEventListener("scroll", handleScrollDismiss, true);
+    unsubscribeOutsideScroll();
   };
 });
 
@@ -221,14 +230,6 @@ function onKeyActivate(handler: (e: MouseEvent) => void) {
   return (e: MouseEvent) => {
     if (e.detail === 0) handler(e);
   };
-}
-
-function handleScrollDismiss(event: Event) {
-  // Don't dismiss if scroll originated inside the popup (e.g., textarea scrolling)
-  if (toolbarEl && event.target instanceof Node && toolbarEl.contains(event.target)) return;
-  // Don't dismiss while the user is composing in the textarea
-  if (document.activeElement === textareaEl) return;
-  dismissPopup();
 }
 
 function dismissPopup() {
