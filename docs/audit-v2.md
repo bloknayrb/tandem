@@ -37,6 +37,16 @@ All five recommendations below were executed in PR #621 (this report's home PR).
 | PR-D3 (shared constants + types + doc refs) | `7b7b2a5` |
 | PR-D4 (client unused exports) | `9249540` |
 | PR-D5 (colors.ts + CLAUDE.md) | `e4c5de8` |
+| Review-driven fixes (PR-A1 scope correction + 3 misc) | `8d9c0ce` |
+
+### Post-merge review (full domain reviewer pass on PR diff)
+
+Four domain reviewers (annotation-model, crdt, security, svelte-migration) reviewed the full PR end-to-end after all commits landed. Result: one blocker fixed in `8d9c0ce`, plus three small followups.
+
+- **CRDT BLOCKER (fixed):** Original PR-A1 flipped *both* transactions in `reloadFromDisk` to `FILE_SYNC_ORIGIN`. The second transaction (line 854, the `RANGE_MOVED` textSnapshot-driven relocation pass) writes new range/relRange to the annotation Y.Map — those are real CRDT writes that must persist. With `FILE_SYNC_ORIGIN`, the durable-annotation sync observer skipped them; the relocation lived only in memory and would be lost on server restart. Fix: keep only the first transaction (content repopulate + awareness clear) as `FILE_SYNC_ORIGIN`; second transaction reverts to `MCP_ORIGIN`.
+- **Annotation LOW (fixed):** `errorCodeToHttpStatus` in `src/server/mcp/routes/_shared.ts` didn't map the new codes (`NOT_FOUND` / `ANNOTATION_RESOLVED` / `INVALID_ARGUMENT`). Latent until any HTTP route surfaces them, but added now for forward-safety.
+- **Svelte LOW (fixed):** Stale comment in `registry.svelte.ts:27` referenced removed `getActions()`; dead re-exports in `useEditorFont.svelte.ts` (only consumer was the removed `createEditorFont`).
+- **Security LOW (deferred):** Awareness observer at `src/server/events/observers/awareness.ts:54` skips `MCP_ORIGIN` only. With PR-A1's correct scope (first transaction = `FILE_SYNC_ORIGIN`), the awareness clear during file-watcher reload now fires the observer. Current behavior is benign (no SSE event emitted; just clears the per-doc selection buffer). Adding `FILE_SYNC_ORIGIN` to the filter would be defense-in-depth — tracked as a v0.12 followup.
 
 ## Top 5 Recommendations (ranked)
 
