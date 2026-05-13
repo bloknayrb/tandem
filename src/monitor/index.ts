@@ -35,7 +35,7 @@ import {
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent, parseTandemEvent } from "../shared/events/types.js";
 import { describeFetchError, fetchWithTimeout } from "../shared/fetch-with-timeout.js";
-import { type TandemMode, TandemModeSchema } from "../shared/types.js";
+import { MONITOR_CONNECT_FAILED, type TandemMode, TandemModeSchema } from "../shared/types.js";
 
 const IS_VITEST = process.env.VITEST === "true";
 
@@ -106,7 +106,7 @@ export async function main(): Promise<void> {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                error: "MONITOR_CONNECT_FAILED",
+                error: MONITOR_CONNECT_FAILED,
                 message: `Monitor lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
               }),
             },

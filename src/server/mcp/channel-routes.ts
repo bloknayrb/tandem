@@ -10,7 +10,7 @@ import {
   API_LAUNCH_CLAUDE,
 } from "../../shared/api-paths.js";
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT } from "../../shared/constants.js";
-import type { ClaudeAwareness } from "../../shared/types.js";
+import { ChannelErrorCodeSchema, type ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { MCP_ORIGIN } from "../events/queue.js";
 import { sseHandler } from "../events/sse.js";
@@ -66,7 +66,18 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   app.options(API_CHANNEL_ERROR, apiMiddleware);
   app.post(API_CHANNEL_ERROR, apiMiddleware, (req: Request, res: Response) => {
     const { error, message } = (req.body ?? {}) as Record<string, unknown>;
-    console.error(`[Channel] Error: ${error} — ${message}`);
+    // Validate the code so a future caller can't smuggle a free-form string
+    // through unfiltered logs. Out-of-schema codes are logged as UNKNOWN_CODE
+    // (keeps the diagnostic trail) and reported as 400 so the caller notices.
+    const parsed = ChannelErrorCodeSchema.safeParse(error);
+    if (!parsed.success) {
+      console.error(`[Channel] Error: UNKNOWN_CODE (${String(error)}) — ${message}`);
+      res
+        .status(400)
+        .json({ error: "BAD_REQUEST", message: "error must be a known ChannelErrorCode" });
+      return;
+    }
+    console.error(`[Channel] Error: ${parsed.data} — ${message}`);
     // Could broadcast to browser via Y.Map in the future
     res.json({ ok: true });
   });

@@ -29,6 +29,7 @@ import {
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent, formatEventMeta, parseTandemEvent } from "../shared/events/types.js";
 import { describeFetchError, fetchWithTimeout } from "../shared/fetch-with-timeout.js";
+import { CHANNEL_CONNECT_FAILED } from "../shared/types.js";
 
 const AWARENESS_DEBOUNCE_MS = 500;
 const MODE_CACHE_TTL_MS = 2000;
@@ -63,7 +64,7 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                error: "CHANNEL_CONNECT_FAILED",
+                error: CHANNEL_CONNECT_FAILED,
                 message: `Channel shim lost connection after ${CHANNEL_MAX_RETRIES} retries.`,
               }),
             },
