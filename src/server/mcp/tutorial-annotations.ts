@@ -21,14 +21,14 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}highlight-1`,
     type: "highlight",
-    targetText: "collaborative document editor",
+    targetText: "highlight text and Claude sees it",
     content: "This is a highlight \u2014 it marks text for attention without suggesting changes.",
     color: "yellow",
   },
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}comment-1`,
     type: "comment",
-    targetText: "review your documents",
+    targetText: "edit this document at the same time",
     content: "Comments let you or Claude leave notes on specific text passages.",
   },
   {
