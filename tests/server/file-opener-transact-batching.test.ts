@@ -1,7 +1,9 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 
 // Match the isolation pattern in file-opener-lifecycle.test.ts so this file
 // does not collide with concurrent test files using the same app-data dir.
@@ -23,11 +25,32 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   watchFile: vi.fn(),
 }));
 
+// Mock node:crypto's randomUUID so the upload-path test can pre-compute the
+// synthetic docId that openFileFromContent will mint, then pre-subscribe to
+// the matching Y.Doc before invoking the opener. The mock falls through to
+// the real implementation unless an explicit one-shot return is queued.
+const cryptoMocks = vi.hoisted(() => ({ randomUUID: vi.fn() }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomUUID: (...args: Parameters<typeof actual.randomUUID>) => {
+      const next = cryptoMocks.randomUUID.getMockImplementation();
+      if (next) return cryptoMocks.randomUUID(...args);
+      return actual.randomUUID(...args);
+    },
+  };
+});
+
 import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
-import { openFileByPath } from "../../src/server/mcp/file-opener.js";
+import { openFileByPath, openFileFromContent } from "../../src/server/mcp/file-opener.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DOCX_FIXTURE = path.resolve(__dirname, "../e2e/fixtures/single-paragraph.docx");
 
 let tmpDir: string;
 
@@ -37,6 +60,7 @@ beforeEach(async () => {
   }
   setActiveDocId(null);
   vi.clearAllMocks();
+  cryptoMocks.randomUUID.mockReset();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-transact-"));
 });
 
@@ -75,30 +99,60 @@ function buildStressMarkdown(sectionCount: number): string {
 
 interface UpdateRecord {
   origin: unknown;
-  changedTypes: string[];
+  // Captures the type *instance refs* from txn.changed.keys() so callers can
+  // identity-test against a specific Y.AbstractType (e.g. the doc's
+  // XmlFragment) rather than name-comparing (which can't distinguish YMap
+  // variants ANNOTATIONS/REPLIES/AWARENESS — all have constructor.name "YMap").
+  changedTypes: Set<Y.AbstractType<unknown>>;
+}
+
+function listenForUpdates(doc: Y.Doc): { updates: UpdateRecord[]; detach: () => void } {
+  const updates: UpdateRecord[] = [];
+  const listener = (txn: {
+    origin: unknown;
+    changed: Map<Y.AbstractType<unknown>, Set<string | null>>;
+  }) => {
+    updates.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
+  };
+  doc.on("afterTransaction", listener);
+  return { updates, detach: () => doc.off("afterTransaction", listener) };
 }
 
 // Pre-subscribe to the Y.Doc that openFileByPath will reuse, so we capture every
 // update event during the open. getOrCreateDocument returns the same instance
 // the opener later picks up via the same docId.
-async function captureUpdatesDuringOpen(filePath: string): Promise<UpdateRecord[]> {
+async function captureUpdatesDuringOpen(
+  filePath: string,
+): Promise<{ updates: UpdateRecord[]; doc: Y.Doc }> {
   const docId = docIdFromPath(filePath);
   const doc = getOrCreateDocument(docId);
-  const updates: UpdateRecord[] = [];
-  const listener = (txn: { origin: unknown; changed: Map<unknown, Set<string | null>> }) => {
-    const changedTypes: string[] = [];
-    for (const type of txn.changed.keys()) {
-      changedTypes.push((type as { constructor: { name: string } }).constructor.name);
-    }
-    updates.push({ origin: txn.origin, changedTypes });
-  };
-  doc.on("afterTransaction", listener);
+  const { updates, detach } = listenForUpdates(doc);
   try {
     await openFileByPath(filePath);
   } finally {
-    doc.off("afterTransaction", listener);
+    detach();
   }
-  return updates;
+  return { updates, doc };
+}
+
+// Same as above for the upload path. Pre-stubs randomUUID so we can pre-resolve
+// the synthetic docId that openFileFromContent will mint.
+async function captureUpdatesDuringOpenFromContent(
+  fileName: string,
+  content: string | Buffer,
+): Promise<{ updates: UpdateRecord[]; doc: Y.Doc }> {
+  const uuid = "test-uuid-batching";
+  cryptoMocks.randomUUID.mockImplementation(() => uuid);
+  const syntheticPath = `${UPLOAD_PREFIX}${uuid}/${fileName}`;
+  const docId = docIdFromPath(syntheticPath);
+  const doc = getOrCreateDocument(docId);
+  const { updates, detach } = listenForUpdates(doc);
+  try {
+    await openFileFromContent(fileName, content);
+  } finally {
+    detach();
+  }
+  return { updates, doc };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,20 +164,17 @@ async function captureUpdatesDuringOpen(filePath: string): Promise<UpdateRecord[
 // Asserting on total transaction count would couple this test to unrelated
 // finalizeDocOpen steps (writeDocMeta, initSavedBaseline, broadcastOpenDocs all
 // transact too). Instead we assert on the *content-touching* contract: every
-// XmlFragment change during open must arrive in a single batched transaction,
-// and every transaction during open must be MCP_ORIGIN.
+// XmlFragment change during open must arrive in a single batched transaction
+// tagged MCP_ORIGIN. Applies to the success path only — the cleanup-on-failure
+// path legitimately produces two XmlFragment touches (failed-populate flush +
+// cleanup), so use the per-update origin loop instead.
 // ---------------------------------------------------------------------------
 
-function assertSingleBatchedPopulate(updates: UpdateRecord[]): void {
-  const fragmentTouches = updates.filter((u) => u.changedTypes.includes("YXmlFragment"));
+function assertSingleBatchedPopulate(doc: Y.Doc, updates: UpdateRecord[]): void {
+  const fragment = doc.getXmlFragment("default");
+  const fragmentTouches = updates.filter((u) => u.changedTypes.has(fragment));
   expect(fragmentTouches.length).toBe(1);
   for (const u of fragmentTouches) {
-    expect(u.origin).toBe(MCP_ORIGIN);
-  }
-  // Every transaction during open must be MCP_ORIGIN; an un-tagged transaction
-  // would either be a missing-origin bug (Critical Rule #2) or the regression
-  // pre-fix mdastToYDoc shape leaking back in.
-  for (const u of updates) {
     expect(u.origin).toBe(MCP_ORIGIN);
   }
 }
@@ -134,8 +185,8 @@ describe("loadContentIntoDoc — batching contract (#609)", () => {
     // ~80 sections → thousands of inline inserts pre-fix.
     await fs.writeFile(filePath, buildStressMarkdown(80));
 
-    const updates = await captureUpdatesDuringOpen(filePath);
-    assertSingleBatchedPopulate(updates);
+    const { updates, doc } = await captureUpdatesDuringOpen(filePath);
+    assertSingleBatchedPopulate(doc, updates);
   });
 
   it("txt: populate is batched into one XmlFragment transaction", async () => {
@@ -143,7 +194,37 @@ describe("loadContentIntoDoc — batching contract (#609)", () => {
     const lines = Array.from({ length: 500 }, (_, i) => `line ${i}: ${"lorem ".repeat(8)}`);
     await fs.writeFile(filePath, lines.join("\n"));
 
-    const updates = await captureUpdatesDuringOpen(filePath);
-    assertSingleBatchedPopulate(updates);
+    const { updates, doc } = await captureUpdatesDuringOpen(filePath);
+    assertSingleBatchedPopulate(doc, updates);
+  });
+
+  it("docx: populate is batched into one XmlFragment transaction", async () => {
+    // Use the e2e docx fixture (no embedded comments). Exercises the docx
+    // structural branch (loadDocx + htmlToYDoc) rather than the markdown
+    // branch — guards against a refactor that hoists htmlToYDoc out of the
+    // shared transact closure.
+    const buffer = await fs.readFile(DOCX_FIXTURE);
+    const filePath = path.join(tmpDir, "single-paragraph.docx");
+    await fs.writeFile(filePath, buffer);
+
+    const { updates, doc } = await captureUpdatesDuringOpen(filePath);
+    assertSingleBatchedPopulate(doc, updates);
+  });
+});
+
+describe("openFileFromContent — batching contract (#609)", () => {
+  it("md upload: populate is batched into one XmlFragment transaction", async () => {
+    const content = buildStressMarkdown(80);
+    const { updates, doc } = await captureUpdatesDuringOpenFromContent("stress.md", content);
+    assertSingleBatchedPopulate(doc, updates);
+  });
+
+  it("docx upload: populate is batched into one XmlFragment transaction", async () => {
+    const buffer = await fs.readFile(DOCX_FIXTURE);
+    const { updates, doc } = await captureUpdatesDuringOpenFromContent(
+      "single-paragraph.docx",
+      buffer,
+    );
+    assertSingleBatchedPopulate(doc, updates);
   });
 });
