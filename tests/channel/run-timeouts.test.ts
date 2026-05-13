@@ -20,32 +20,12 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { countMatches, expectFetchWithTimeoutEndpoint } from "../helpers/fetch-source-asserts.js";
 
 const RUN_TS_PATH = fileURLToPath(new URL("../../src/channel/run.ts", import.meta.url));
 const EVENT_BRIDGE_PATH = fileURLToPath(
   new URL("../../src/channel/event-bridge.ts", import.meta.url),
 );
-
-function countMatches(src: string, re: RegExp): number {
-  return src.match(re)?.length ?? 0;
-}
-
-function expectFetchWithTimeoutEndpoint(src: string, endpoint: string, timeoutConstant: string) {
-  const escapedTimeout = timeoutConstant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Accept either the literal path or the `API_*` constant that resolves to it
-  // (post-#283 the channel/server use the constants from src/shared/api-paths.ts).
-  const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const constantName = `API${endpoint
-    .replace(/^\//, "")
-    .replace(/^api\//, "")
-    .replace(/-/g, "_")
-    .toUpperCase()
-    .replace(/^/, "_")}`;
-  const endpointAlternation = `(?:${escapedEndpoint}|${constantName})`;
-  expect(src).toMatch(
-    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${endpointAlternation}[\\s\\S]*?${escapedTimeout}`),
-  );
-}
 
 describe("channel/run.ts timeout coverage", () => {
   it("does not import authFetch directly — all HTTP goes through fetchWithTimeout", async () => {

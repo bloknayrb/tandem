@@ -177,18 +177,16 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         },
 
         view(editorView) {
-          // Coalesce a burst of Y.Map observer fires into a single rebuild.
-          // On initial sync (force-reload, session restore, docx import), the
-          // Y.Map observer can fire dozens to hundreds of times in one tick.
-          // Without coalescing, each fire dispatches a transaction that calls
-          // `buildDecorations()` — O(n) over every annotation in the map —
-          // making the load O(n²). rAF is enough to merge a single event-loop
-          // burst; per-event dispatches still feel instant. See #610.
+          // Coalesce bursts of Y.Map observer fires into a single rebuild —
+          // initial sync (force-reload, session restore, docx import) can fire
+          // the observer hundreds of times per tick, each rebuilding O(n).
           let rafId: number | null = null;
+          let rebuiltSinceMount = false;
           function scheduleRebuild() {
             if (rafId !== null) return;
             rafId = requestAnimationFrame(() => {
               rafId = null;
+              rebuiltSinceMount = true;
               const tr = editorView.state.tr.setMeta(annotationPluginKey, true);
               editorView.dispatch(tr);
             });
@@ -201,13 +199,11 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           };
           annotationsMap.observe(observer);
 
-          // Post-sync settle: y-prosemirror can populate the editor doc after
-          // the Y.Map observer has already attached and (silently) fired with
-          // a still-empty PM doc. Mirrors authorship.ts:223 — the same hazard
-          // pattern in a separate decoration plugin. The 500ms delay is the
-          // documented post-sync settling window.
+          // y-prosemirror can populate the editor doc after the Y.Map observer
+          // attached and fired against an empty PM doc; rebuild once if the
+          // observer never fired during the settling window.
           const syncRebuild = setTimeout(() => {
-            if (annotationsMap.size > 0) observer();
+            if (!rebuiltSinceMount && rafId === null && annotationsMap.size > 0) observer();
           }, 500);
 
           return {

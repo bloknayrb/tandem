@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { countMatches, expectFetchWithTimeoutEndpoint } from "../helpers/fetch-source-asserts.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -9,25 +10,6 @@ import {
 } from "./fetch-harness.js";
 
 const MONITOR_PATH = fileURLToPath(new URL("../../src/monitor/index.ts", import.meta.url));
-
-function countMatches(src: string, re: RegExp): number {
-  return src.match(re)?.length ?? 0;
-}
-
-function expectFetchWithTimeoutEndpoint(src: string, endpoint: string, timeoutConstant: string) {
-  const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedTimeout = timeoutConstant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Accept either the literal path or the `API_*` constant that resolves to it
-  // (post-#283 the monitor uses the constants from src/shared/api-paths.ts).
-  const constantName = `API_${endpoint
-    .replace(/^\/api\//, "")
-    .replace(/-/g, "_")
-    .toUpperCase()}`;
-  const endpointAlternation = `(?:${escapedEndpoint}|${constantName})`;
-  expect(src).toMatch(
-    new RegExp(`fetchWithTimeout\\([\\s\\S]*?${endpointAlternation}[\\s\\S]*?${escapedTimeout}`),
-  );
-}
 
 describe("monitor authenticated fetch surface", () => {
   let stub: ReturnType<typeof createFetchStub>;

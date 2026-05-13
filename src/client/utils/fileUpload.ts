@@ -3,10 +3,6 @@ import { DEFAULT_MCP_PORT } from "../../shared/constants";
 /**
  * Origin of the Tandem server for client-side fetches. Path constants live in
  * `src/shared/api-paths.ts`; clients build URLs as `${API_BASE}${API_FOO}`.
- *
- * Prior to #283 this string ended in `/api`, and callers concatenated bare
- * path tails like `/scratchpad`. That left routes drift-prone (the registration
- * site says `"/api/scratchpad"` while the client says `"/scratchpad"`).
  */
 export const API_BASE = `http://localhost:${DEFAULT_MCP_PORT}`;
 

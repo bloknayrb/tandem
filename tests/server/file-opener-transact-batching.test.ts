@@ -58,6 +58,7 @@ import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
+import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOCX_FIXTURE = path.resolve(__dirname, "../e2e/fixtures/single-paragraph.docx");
@@ -84,49 +85,8 @@ afterAll(async () => {
   delete process.env.TANDEM_APP_DATA_DIR;
 });
 
-// Build a synthetic .docx Buffer with N inline Word comments anchored to short
-// text ranges. Pattern lifted from tests/server/docx-comments.test.ts:297-338.
-// Used by the M1a docx-with-comments batching test below.
-async function buildDocxWithComments(commentCount: number): Promise<Buffer> {
-  const JSZip = (await import("jszip")).default;
-  const zip = new JSZip();
-
-  const runs: string[] = [];
-  const commentEls: string[] = [];
-  for (let i = 1; i <= commentCount; i++) {
-    runs.push(
-      `<w:commentRangeStart w:id="${i}"/>` +
-        `<w:r><w:t>Word${i}</w:t></w:r>` +
-        `<w:commentRangeEnd w:id="${i}"/>` +
-        `<w:r><w:t> spacer </w:t></w:r>`,
-    );
-    commentEls.push(
-      `<w:comment w:id="${i}" w:author="Author${i}" w:date="2026-01-01T00:00:00Z">` +
-        `<w:p><w:r><w:t>Body of comment ${i}</w:t></w:r></w:p>` +
-        `</w:comment>`,
-    );
-  }
-
-  zip.file(
-    "word/document.xml",
-    `<?xml version="1.0"?>` +
-      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
-      `<w:body><w:p>${runs.join("")}</w:p></w:body>` +
-      `</w:document>`,
-  );
-  zip.file(
-    "word/comments.xml",
-    `<?xml version="1.0"?>` +
-      `<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
-      `${commentEls.join("")}` +
-      `</w:comments>`,
-  );
-
-  return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
-}
-
-// Build a stress-shape markdown that mirrors the document that triggered #609:
-// many headings, nested lists, inline code spans, bold/italic runs.
+// Build a stress-shape markdown: many headings, nested lists, inline code,
+// bold/italic — mirrors the document that surfaced the pre-batching freeze.
 function buildStressMarkdown(sectionCount: number): string {
   const sections: string[] = ["# Stress fixture", ""];
   for (let i = 0; i < sectionCount; i++) {

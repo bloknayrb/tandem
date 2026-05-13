@@ -137,17 +137,11 @@ let docsLoading = $state(false);
 let docsError = $state<string | null>(null);
 let activeSection = $state<SettingsSection>("appearance");
 
-// Clear stale fetch errors when the user navigates away from the section that
-// produced them. Without this, an error from Appearance's Changelog button
-// stays visible after switching to Editor and back.
-//
-// Only assign when the values are currently non-null. Setting null → null is a
-// no-op for primitives, but explicit guarding keeps this effect off the suspect
-// list for prod-only effect_update_depth chains (#613).
+// Clear stale fetch errors when the user navigates between sections.
 $effect(() => {
   activeSection;
-  if (changelogError !== null) changelogError = null;
-  if (docsError !== null) docsError = null;
+  changelogError = null;
+  docsError = null;
 });
 
 // Idle-sync: sync only when NOT focused and value differs
