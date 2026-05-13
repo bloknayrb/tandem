@@ -44,11 +44,46 @@ vi.mock("../../src/server/file-io/markdown", async () => {
   };
 });
 
+// Hoisted so M1b/M2 can swap injectCommentsAsAnnotations / extractDocxComments
+// implementations per-test without affecting other suites. The mock falls
+// through to the real impl unless a test sets an explicit implementation.
+const docxCommentsMocks = vi.hoisted(() => ({
+  inject: vi.fn(),
+  extract: vi.fn(),
+}));
+vi.mock("../../src/server/file-io/docx-comments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/file-io/docx-comments")>();
+  return {
+    ...actual,
+    injectCommentsAsAnnotations: (
+      ...args: Parameters<typeof actual.injectCommentsAsAnnotations>
+    ) => {
+      const impl = docxCommentsMocks.inject.getMockImplementation();
+      if (impl) return docxCommentsMocks.inject(...args);
+      return actual.injectCommentsAsAnnotations(...args);
+    },
+    extractDocxComments: (...args: Parameters<typeof actual.extractDocxComments>) => {
+      const impl = docxCommentsMocks.extract.getMockImplementation();
+      if (impl) return docxCommentsMocks.extract(...args);
+      return actual.extractDocxComments(...args);
+    },
+  };
+});
+
+// Mock pushNotification so M1b/M2 can assert on call shape. Pattern from
+// tests/server/annotations/store.test.ts:17-22.
+vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
+  return { ...actual, pushNotification: vi.fn() };
+});
+
 import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
 import { openFileByPath } from "../../src/server/mcp/file-opener.js";
+import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 
 let tmpDir: string;
 
@@ -58,6 +93,10 @@ beforeEach(async () => {
   }
   setActiveDocId(null);
   vi.clearAllMocks();
+  // mockReset() drops implementations too — clearAllMocks only clears call
+  // history, so without this M1b's inject impl could leak into M2.
+  docxCommentsMocks.inject.mockReset();
+  docxCommentsMocks.extract.mockReset();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-cleanup-"));
 });
 
@@ -74,6 +113,47 @@ afterAll(async () => {
 interface UpdateRecord {
   origin: unknown;
   changedTypes: Set<Y.AbstractType<unknown>>;
+}
+
+// Synthetic .docx Buffer with N inline Word comments. Same shape as the helper
+// in file-opener-transact-batching.test.ts; duplicated inline to keep test
+// files independent.
+async function buildDocxWithComments(commentCount: number): Promise<Buffer> {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+
+  const runs: string[] = [];
+  const commentEls: string[] = [];
+  for (let i = 1; i <= commentCount; i++) {
+    runs.push(
+      `<w:commentRangeStart w:id="${i}"/>` +
+        `<w:r><w:t>Word${i}</w:t></w:r>` +
+        `<w:commentRangeEnd w:id="${i}"/>` +
+        `<w:r><w:t> spacer </w:t></w:r>`,
+    );
+    commentEls.push(
+      `<w:comment w:id="${i}" w:author="Author${i}" w:date="2026-01-01T00:00:00Z">` +
+        `<w:p><w:r><w:t>Body of comment ${i}</w:t></w:r></w:p>` +
+        `</w:comment>`,
+    );
+  }
+
+  zip.file(
+    "word/document.xml",
+    `<?xml version="1.0"?>` +
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+      `<w:body><w:p>${runs.join("")}</w:p></w:body>` +
+      `</w:document>`,
+  );
+  zip.file(
+    "word/comments.xml",
+    `<?xml version="1.0"?>` +
+      `<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+      `${commentEls.join("")}` +
+      `</w:comments>`,
+  );
+
+  return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
 }
 
 describe("populateDocFromContent — cleanup on populate failure", () => {
@@ -123,5 +203,97 @@ describe("populateDocFromContent — cleanup on populate failure", () => {
         typeof call[0] === "string" && call[0].includes("populateDocFromContent: populate failed"),
     );
     expect(cleanupLog).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M1b — injectCommentsAsAnnotations mid-throw partial-rollback contract.
+// The PR's snapshot/undo dance is the most subtle code in the change: it
+// records annotation keys before the inject call and deletes any new keys if
+// the inject throws (Yjs does not roll back inner-transact writes). This test
+// proves the dance works AND that the H1 notification fires.
+// ---------------------------------------------------------------------------
+
+describe("populateDocFromContent — injectCommentsAsAnnotations mid-throw", () => {
+  it("undoes partial annotation writes, leaves HTML content, fires warning notification", async () => {
+    // Mock inject to land a partial annotation BEFORE throwing. Without this
+    // write the test would pass vacuously: an empty map stays empty whether
+    // or not the production catch's snapshot/undo loop runs.
+    docxCommentsMocks.inject.mockImplementation((doc: Y.Doc) => {
+      const annot = doc.getMap(Y_MAP_ANNOTATIONS);
+      annot.set("partial-write-marker", { id: "partial-write-marker" } as never);
+      throw new Error("simulated inject failure after partial write");
+    });
+
+    const buffer = await buildDocxWithComments(1);
+    const filePath = path.join(tmpDir, "inject-fail.docx");
+    await fs.writeFile(filePath, buffer);
+
+    const docId = docIdFromPath(filePath);
+    const doc = getOrCreateDocument(docId);
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // The inner catch swallows the inject throw — populate succeeds.
+    await expect(openFileByPath(filePath)).resolves.toBeDefined();
+
+    errSpy.mockRestore();
+
+    // Load-bearing: the partial key was actually written before the throw,
+    // and the production catch's snapshot/before loop undid it.
+    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+    expect(annotations.has("partial-write-marker")).toBe(false);
+    expect(annotations.size).toBe(0);
+
+    // HTML content still landed (htmlToYDoc ran before the inject call).
+    expect(doc.getXmlFragment("default").length).toBeGreaterThan(0);
+
+    // H1 notification fired with the right shape.
+    const calls = vi.mocked(pushNotification).mock.calls;
+    const injectFailureCalls = calls.filter(
+      ([n]) => n.dedupKey === `docx-comments-inject:${filePath}`,
+    );
+    expect(injectFailureCalls).toHaveLength(1);
+    const [n] = injectFailureCalls[0];
+    expect(n.severity).toBe("warning");
+    expect(n.type).toBe("annotation-error");
+    expect(n.message).not.toContain("See server log"); // L3 trim verification
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2 — extractDocxComments failure notification path.
+// The PR's extract-failure .catch returns an empty array and pushes a warning
+// notification. Untested in the original PR.
+// ---------------------------------------------------------------------------
+
+describe("populateDocFromContent — extractDocxComments failure", () => {
+  it("falls through to empty comments, fires warning notification, document still loads", async () => {
+    docxCommentsMocks.extract.mockImplementation(async () => {
+      throw new Error("simulated extract failure");
+    });
+
+    const buffer = await buildDocxWithComments(1);
+    const filePath = path.join(tmpDir, "extract-fail.docx");
+    await fs.writeFile(filePath, buffer);
+
+    const docId = docIdFromPath(filePath);
+    const doc = getOrCreateDocument(docId);
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(openFileByPath(filePath)).resolves.toBeDefined();
+    errSpy.mockRestore();
+
+    // HTML content lands; no annotations.
+    expect(doc.getXmlFragment("default").length).toBeGreaterThan(0);
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+
+    const calls = vi.mocked(pushNotification).mock.calls;
+    const extractFailureCalls = calls.filter(([n]) => n.dedupKey === `docx-comments:${filePath}`);
+    expect(extractFailureCalls).toHaveLength(1);
+    const [n] = extractFailureCalls[0];
+    expect(n.severity).toBe("warning");
+    expect(n.type).toBe("annotation-error");
+    expect(n.message).not.toContain("See server log"); // L3 trim verification
   });
 });

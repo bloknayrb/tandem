@@ -25,6 +25,14 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   watchFile: vi.fn(),
 }));
 
+// Mocked so M1a can assert that the docx-with-comments success path does NOT
+// fire either the extract-failure or the inject-failure notification. Pattern
+// from tests/server/annotations/store.test.ts:17-22.
+vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
+  return { ...actual, pushNotification: vi.fn() };
+});
+
 // Mock node:crypto's randomUUID so the upload-path test can pre-compute the
 // synthetic docId that openFileFromContent will mint, then pre-subscribe to
 // the matching Y.Doc before invoking the opener. The mock falls through to
@@ -46,7 +54,9 @@ import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
 import { openFileByPath, openFileFromContent } from "../../src/server/mcp/file-opener.js";
+import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -73,6 +83,47 @@ afterAll(async () => {
   if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
   delete process.env.TANDEM_APP_DATA_DIR;
 });
+
+// Build a synthetic .docx Buffer with N inline Word comments anchored to short
+// text ranges. Pattern lifted from tests/server/docx-comments.test.ts:297-338.
+// Used by the M1a docx-with-comments batching test below.
+async function buildDocxWithComments(commentCount: number): Promise<Buffer> {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+
+  const runs: string[] = [];
+  const commentEls: string[] = [];
+  for (let i = 1; i <= commentCount; i++) {
+    runs.push(
+      `<w:commentRangeStart w:id="${i}"/>` +
+        `<w:r><w:t>Word${i}</w:t></w:r>` +
+        `<w:commentRangeEnd w:id="${i}"/>` +
+        `<w:r><w:t> spacer </w:t></w:r>`,
+    );
+    commentEls.push(
+      `<w:comment w:id="${i}" w:author="Author${i}" w:date="2026-01-01T00:00:00Z">` +
+        `<w:p><w:r><w:t>Body of comment ${i}</w:t></w:r></w:p>` +
+        `</w:comment>`,
+    );
+  }
+
+  zip.file(
+    "word/document.xml",
+    `<?xml version="1.0"?>` +
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+      `<w:body><w:p>${runs.join("")}</w:p></w:body>` +
+      `</w:document>`,
+  );
+  zip.file(
+    "word/comments.xml",
+    `<?xml version="1.0"?>` +
+      `<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+      `${commentEls.join("")}` +
+      `</w:comments>`,
+  );
+
+  return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
+}
 
 // Build a stress-shape markdown that mirrors the document that triggered #609:
 // many headings, nested lists, inline code spans, bold/italic runs.
@@ -209,6 +260,38 @@ describe("loadContentIntoDoc — batching contract (#609)", () => {
 
     const { updates, doc } = await captureUpdatesDuringOpen(filePath);
     assertSingleBatchedPopulate(doc, updates);
+  });
+
+  // M1a — Docx-with-comments success path. The PR's batching test only used a
+  // comment-free fixture, so injectCommentsAsAnnotations' inner-transact flatten
+  // had no regression coverage. This test proves comments actually land as
+  // annotations, the inner transact flattens into the outer (annotations land
+  // in the SAME transaction as the fragment), and the success path emits no
+  // notifications.
+  it("docx-with-comments: annotations land in the SAME flattened populate transact", async () => {
+    const buffer = await buildDocxWithComments(3);
+    const filePath = path.join(tmpDir, "with-comments.docx");
+    await fs.writeFile(filePath, buffer);
+
+    const { updates, doc } = await captureUpdatesDuringOpen(filePath);
+
+    assertSingleBatchedPopulate(doc, updates);
+
+    const fragment = doc.getXmlFragment("default");
+    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+    const fragmentTouch = updates.find((u) => u.changedTypes.has(fragment));
+    expect(fragmentTouch).toBeDefined();
+    // Inner-transact flatten: the same transaction that touched the fragment
+    // also touched the annotations map. A refactor that hoisted
+    // injectCommentsAsAnnotations OUT of the outer transact (or that no-op'd
+    // it) would fail this assertion.
+    expect(fragmentTouch?.changedTypes.has(annotations)).toBe(true);
+
+    // 3 comments actually landed as annotations.
+    expect(annotations.size).toBe(3);
+
+    // Success path: no notifications.
+    expect(pushNotification).not.toHaveBeenCalled();
   });
 });
 

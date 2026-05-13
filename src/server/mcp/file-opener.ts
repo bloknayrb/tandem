@@ -463,7 +463,7 @@ async function populateDocFromContent(
           id: generateNotificationId(),
           type: "annotation-error",
           severity: "warning",
-          message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments. See server log.`,
+          message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments.`,
           dedupKey: `docx-comments:${ctx.dedupSource}`,
           timestamp: Date.now(),
         });
@@ -491,6 +491,18 @@ async function populateDocFromContent(
             "[docx-comments] inject failed mid-transact; document loads without imported comments:",
             err,
           );
+          // Symmetric with the extract-failure notification ~30 lines above:
+          // both modes mean "docx loaded without (some) comments" from the
+          // user's perspective. Distinct dedupKey namespace so a file that
+          // hits both modes shows two toasts, not one collapsed one.
+          pushNotification({
+            id: generateNotificationId(),
+            type: "annotation-error",
+            severity: "warning",
+            message: `Failed to import some Word comments from ${ctx.displayName}. Document opened, but comments may be missing.`,
+            dedupKey: `docx-comments-inject:${ctx.dedupSource}`,
+            timestamp: Date.now(),
+          });
         }
       }
     };
@@ -519,6 +531,9 @@ async function populateDocFromContent(
         // even if the inner containment caught the throw (Yjs does not roll
         // back inner-transact writes). REPLIES is not touched during populate,
         // so leave it alone.
+        // MAINTENANCE: if a future populate helper writes to Y_MAP_ANNOTATION_REPLIES
+        // (e.g. importing a format with threaded comments), this cleanup must
+        // clear them too — the cleanup is silently incomplete until that happens.
         const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
         annotations.forEach((_, k) => annotations.delete(k));
       }, MCP_ORIGIN);
