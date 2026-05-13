@@ -18,6 +18,26 @@ Three reviewers (annotation-model, CRDT, security) validated every dead-code can
 
 ---
 
+## Status: all recommendations executed
+
+All five recommendations below were executed in PR #621 (this report's home PR). 11 commits, ~250 LOC removed, all CI green:
+
+| Item | Commit |
+|---|---|
+| Audit foundation (tooling) | `2a1c2ff` |
+| Audit doc | `9bff594` |
+| PR-C (audit:origins AST rewrite) | `002197d` |
+| PR-A1 (reloadFromDisk → FILE_SYNC_ORIGIN) | `8300a33` |
+| PR-A2 (tutorial note author) | `88273c8` |
+| PR-A2b (useTutorial hook fix) | `373e58e` |
+| PR-A3 (specific error codes) | `e78d34b` |
+| PR-B (Y.Map keys + dep removals) | `5cd29d7` |
+| PR-D1 (13 React-migration stubs) | `8a1f4c4` |
+| PR-D2 (server unused exports + alias migration) | `0fff766` |
+| PR-D3 (shared constants + types + doc refs) | `7b7b2a5` |
+| PR-D4 (client unused exports) | `9249540` |
+| PR-D5 (colors.ts + CLAUDE.md) | `e4c5de8` |
+
 ## Top 5 Recommendations (ranked)
 
 The full findings appendix is below for engineers; the items here are the ones I recommend you approve now.
