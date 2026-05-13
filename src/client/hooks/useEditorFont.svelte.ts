@@ -1,7 +1,5 @@
 import { applyEditorFontToRoot, type EditorFontKey } from "./useEditorFont.js";
 
-export { applyEditorFont, applyEditorFontToRoot, type EditorFontKey } from "./useEditorFont.js";
-
 /**
  * Svelte 5 effect that applies --tandem-editor-font-family to
  * document.documentElement whenever the font setting changes. Use this in

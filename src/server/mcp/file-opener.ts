@@ -851,7 +851,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
           }
           // RANGE_GONE: annotation text was deleted entirely — leave as-is
         }
-      }, FILE_SYNC_ORIGIN);
+      }, MCP_ORIGIN);
     }
 
     // 5. Reattach event queue observers (idempotent)

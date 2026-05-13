@@ -38,11 +38,15 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "ENOENT":
     case "FILE_NOT_FOUND":
     case "NO_DOCUMENT":
+    case "NOT_FOUND":
       return 404;
     case "INVALID_PATH":
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
+    case "INVALID_ARGUMENT":
       return 400;
+    case "ANNOTATION_RESOLVED":
+      return 409;
     case "FILE_TOO_LARGE":
       return 413;
     case "EBUSY":

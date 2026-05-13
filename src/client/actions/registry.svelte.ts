@@ -24,7 +24,7 @@ export interface Action {
 }
 
 // $state-backed Map so derived consumers react to add/remove.
-// We expose a plain snapshot array via getActions() to avoid leaking the Map.
+// Consumers read via getActionsMap() (ReadonlyMap) to avoid leaking write access.
 let actionsMap = $state(new Map<string, Action>());
 
 export interface RegisterOptions {
