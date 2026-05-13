@@ -242,15 +242,6 @@ export interface ToolError {
 
 export type ToolResponse<T = unknown> = ToolSuccess<T> | ToolError;
 
-export interface AwarenessState {
-  user: string;
-  color: string;
-  cursor?: { from: number; to: number };
-  status?: string;
-  isTyping?: boolean;
-  lastActivity?: number;
-}
-
 /** Claude's awareness state as stored in Y.Map('awareness') key 'claude' */
 export interface ClaudeAwareness {
   status: string;

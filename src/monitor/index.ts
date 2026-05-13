@@ -427,9 +427,6 @@ export async function shutdownMonitor(signal: string): Promise<void> {
   process.exit(ok ? 0 : 1);
 }
 
-/** @deprecated Use shutdownMonitor. Kept for backwards compatibility during the rename. */
-export const shutdownForTests = shutdownMonitor;
-
 /** Exposed for testing only — seeds the lastDocumentId that shutdown reads. */
 export function _setLastDocumentIdForTests(id: string | null): void {
   shutdownTimers.lastDocumentId = id;

@@ -239,13 +239,3 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     ];
   },
 });
-
-/**
- * Helper to read Claude's current status from the awareness Y.Map.
- * Used by StatusBar component.
- */
-export function getClaudeStatus(ydoc: Y.Doc): ClaudeAwareness | null {
-  const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
-  const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
-  return claude ?? null;
-}
