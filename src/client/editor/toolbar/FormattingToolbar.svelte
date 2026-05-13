@@ -22,14 +22,24 @@ let showLinkInput = $state(false);
 let linkInputValue = $state("");
 let linkInputEl = $state<HTMLInputElement | null>(null);
 
+// Capture `editor` into a local `const` so the cleanup `.off()` runs against
+// the same instance we attached to. Without the capture, Svelte 5's reactive
+// prop getter returns the CURRENT value at cleanup time — which becomes `null`
+// during tab switch when `onEditorReady(null)` fires from the previous
+// editor's destroy. Calling `.off()` on null throws inside Svelte's effect
+// flush, the effect is retried, and the editor never finishes mounting (a
+// multi-second freeze + missing .ProseMirror element). Captured `ed` matches
+// the safe pattern in `FormattingBar.svelte` and the other `editor.off`
+// callsites in the codebase.
 $effect(() => {
-  if (!editor) return;
+  const ed = editor;
+  if (!ed || ed.isDestroyed) return;
   const handler = () => {
-    if (!editor.isDestroyed) tick++;
+    if (!ed.isDestroyed) tick++;
   };
-  editor.on("transaction", handler);
+  ed.on("transaction", handler);
   return () => {
-    editor.off("transaction", handler);
+    if (!ed.isDestroyed) ed.off("transaction", handler);
   };
 });
 
