@@ -32,6 +32,9 @@ export const ToolErrorCodeSchema = z.enum([
   "FILE_NOT_FOUND",
   "NO_DOCUMENT",
   "INVALID_RANGE",
+  "INVALID_ARGUMENT",
+  "NOT_FOUND",
+  "ANNOTATION_RESOLVED",
   "FORMAT_ERROR",
   "PERMISSION_DENIED",
 ]);
