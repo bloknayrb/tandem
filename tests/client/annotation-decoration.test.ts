@@ -254,6 +254,97 @@ describe("annotation plugin apply() recovery branch", () => {
   });
 });
 
+// --- #610: rAF coalescing on Y.Map observer bursts ---
+
+describe("annotation plugin observer coalescing (#610)", () => {
+  let savedRAF: typeof globalThis.requestAnimationFrame;
+  let savedCancelRAF: typeof globalThis.cancelAnimationFrame;
+  // Map id → callback so `cancelAnimationFrame` only removes the matching
+  // entry (matches real browser semantics; a sloppy "clear-all" cancel mock
+  // would mask a bug where production canceled an unrelated frame).
+  let rafQueue: Map<number, FrameRequestCallback>;
+  let rafCount: number;
+
+  beforeEach(() => {
+    rafQueue = new Map();
+    rafCount = 0;
+    savedRAF = globalThis.requestAnimationFrame;
+    savedCancelRAF = globalThis.cancelAnimationFrame;
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      const id = ++rafCount;
+      rafQueue.set(id, cb);
+      return id;
+    }) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      rafQueue.delete(id);
+    }) as typeof globalThis.cancelAnimationFrame;
+  });
+
+  function restoreRAF() {
+    globalThis.requestAnimationFrame = savedRAF;
+    globalThis.cancelAnimationFrame = savedCancelRAF;
+  }
+
+  function flushRAF() {
+    const callbacks = [...rafQueue.values()];
+    rafQueue.clear();
+    for (const cb of callbacks) cb(0);
+  }
+
+  function makeMockEditorView(): { view: any; dispatchCount: () => number } {
+    let dispatchCount = 0;
+    const view = {
+      state: {
+        tr: {
+          setMeta: () => ({ docChanged: false, getMeta: () => true }),
+        },
+      },
+      dispatch: () => {
+        dispatchCount++;
+      },
+    };
+    return { view, dispatchCount: () => dispatchCount };
+  }
+
+  it("coalesces a burst of N observer fires into one rebuild per frame", () => {
+    const ydoc = new Y.Doc();
+    const plugin = getPlugin(ydoc);
+    const { view, dispatchCount } = makeMockEditorView();
+    const viewReturn = plugin.spec.view(view);
+
+    // Simulate a burst of Y.Map mutations within one tick.
+    for (let i = 0; i < 100; i++) addAnnotation(ydoc, `ann-${i}`);
+
+    // One rAF scheduled regardless of N; no dispatches yet (frame hasn't fired).
+    expect(rafQueue.size).toBe(1);
+    expect(dispatchCount()).toBe(0);
+
+    flushRAF();
+    expect(dispatchCount()).toBe(1);
+
+    viewReturn.destroy();
+    restoreRAF();
+  });
+
+  it("destroy() cancels a pending rAF rebuild", () => {
+    const ydoc = new Y.Doc();
+    const plugin = getPlugin(ydoc);
+    const { view, dispatchCount } = makeMockEditorView();
+    const viewReturn = plugin.spec.view(view);
+
+    addAnnotation(ydoc, "ann-pending");
+    expect(rafQueue.size).toBe(1);
+
+    // Destroy before the frame fires; the queued rebuild must not dispatch.
+    viewReturn.destroy();
+    expect(rafQueue.size).toBe(0);
+    flushRAF();
+    expect(dispatchCount()).toBe(0);
+
+    restoreRAF();
+  });
+});
+
 // --- AR2: five visual languages ---
 
 describe("AR2: annotation decoration attrs — five visual languages", () => {
