@@ -3,8 +3,6 @@
  *
  * Server route registration (`src/server/mcp/{api,channel}-routes.ts`) and every
  * client/CLI/channel-shim/monitor caller import from here so a rename hits one file.
- *
- * See #283.
  */
 
 // --- Channel / event stream (SSE + push-back) -------------------------------

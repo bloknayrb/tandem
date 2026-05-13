@@ -41,8 +41,6 @@ export const ToolErrorCodeSchema = z.enum([
  * `/api/channel-error` on terminal failure. The server logs them; defining
  * them as a closed set lets call sites import the constants instead of
  * free-form strings, and the route handler can validate before logging.
- *
- * See #284.
  */
 export const ChannelErrorCodeSchema = z.enum(["CHANNEL_CONNECT_FAILED", "MONITOR_CONNECT_FAILED"]);
 export type ChannelErrorCode = z.infer<typeof ChannelErrorCodeSchema>;
