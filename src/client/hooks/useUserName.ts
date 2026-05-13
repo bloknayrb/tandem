@@ -1,7 +1,14 @@
-import { USER_NAME_DEFAULT, USER_NAME_EVENT, USER_NAME_KEY } from "../../shared/constants";
+import {
+  USER_NAME_DEFAULT,
+  USER_NAME_EVENT,
+  USER_NAME_KEY,
+  USER_NAME_MAX_LEN,
+} from "../../shared/constants";
 
 export function resolveUserName(stored: string | null | undefined): string {
-  return stored?.trim() || USER_NAME_DEFAULT;
+  const trimmed = stored?.trim();
+  if (!trimmed) return USER_NAME_DEFAULT;
+  return trimmed.slice(0, USER_NAME_MAX_LEN);
 }
 
 export function readStoredName(): string {
