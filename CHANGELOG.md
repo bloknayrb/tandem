@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-05-13
+
+### Fixed
+
+- **`effect_update_depth_exceeded` on Tauri launch (PR #614, closes #613)** — installed v0.11.1 desktop builds threw Svelte's effect-depth error immediately on launch; the dev build (`npm run dev:tauri`) did not reproduce, narrowing the trigger to production-mode effect-flush scheduling. Three defense-in-depth fixes: (1) the authorship-toggle effect in `App.svelte` no longer dispatches a ProseMirror transaction on its first run — the plugin already reads `localStorage[AUTHORSHIP_TOGGLE_KEY]` at construction so the editor starts in the correct state; (2) rail-tab reconcile effects now `untrack` their writes to break any read-then-write self-dep; (3) the SettingsPopover error-clear effect skips assignment when values are already null. The existing in-code comment had explicitly warned this dispatch could "exceed the 1000-update depth limit"; under prod's tighter effect scheduling it did.
+
 ## [0.11.1] - 2026-05-13
 
 ### Added
