@@ -108,6 +108,72 @@ describe("DocumentTabs drag/drop", () => {
     expect(reorder).toHaveBeenCalledWith("a", "b", expect.stringMatching(/^(left|right)$/));
   });
 
+  it("case D: handleDragOver does NOT preventDefault when no drag is in flight (foreign-drag gate)", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    expect(tabB).toBeTruthy();
+
+    // No prior dragstart — draggedId is null. A foreign drag (e.g. a file from
+    // Explorer, now reachable in the WebView because tauri dragDropEnabled is
+    // false) must fall through to OS no-drop instead of being preventDefault'd.
+    const dt = stubDt("");
+    const evt = makeDragEvent("dragover", dt, 0, 0);
+    const pdSpy = vi.spyOn(evt, "preventDefault");
+    tabB.dispatchEvent(evt);
+    await tick();
+
+    expect(pdSpy).not.toHaveBeenCalled();
+  });
+
+  it("case E: handleDrop reports side:right for right half, side:left for left half", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    expect(tabA).toBeTruthy();
+    expect(tabB).toBeTruthy();
+
+    // happy-dom getBoundingClientRect returns zeros; stub a 100px-wide rect so
+    // clientX positions land cleanly on either side of midX (=50).
+    vi.spyOn(tabB, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      right: 100,
+      width: 100,
+      top: 0,
+      bottom: 20,
+      height: 20,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    } as DOMRect);
+
+    const dt = stubDt("");
+    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
+    await tick();
+    tabB.dispatchEvent(makeDragEvent("drop", dt, 80, 10));
+    await tick();
+
+    expect(reorder).toHaveBeenCalledTimes(1);
+    expect(reorder).toHaveBeenCalledWith("a", "b", "right");
+
+    // Second drop on left half of the same tab.
+    reorder.mockClear();
+    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
+    await tick();
+    tabB.dispatchEvent(makeDragEvent("drop", dt, 20, 10));
+    await tick();
+
+    expect(reorder).toHaveBeenCalledTimes(1);
+    expect(reorder).toHaveBeenCalledWith("a", "b", "left");
+  });
+
   it("case C: dragged tab removed mid-drag → narrower $effect clears draggedId, drop becomes no-op", async () => {
     const reorder = vi.fn();
     const tabsInit = [makeTab("a"), makeTab("b")];

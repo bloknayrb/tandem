@@ -66,6 +66,7 @@ function clearDragState() {
 // No-op unless an id has actually disappeared — must NOT become a broad
 // clearDragState() (would null draggedId on every Yjs awareness ping).
 $effect(() => {
+  if (!draggedId && !dropTarget) return;
   const ids = new Set(tabs.map((t) => t.id));
   if (draggedId && !ids.has(draggedId)) draggedId = null;
   if (dropTarget && !ids.has(dropTarget.id)) dropTarget = null;
