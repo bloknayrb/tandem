@@ -2,6 +2,33 @@
 
 Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. npm global install (Step 9, PR #161) is complete. This document contains the design spec for remaining work.
 
+## Active — v0.12.0
+
+In-flight slate (8 parallel units from the v0.12.0 prep batch, plus the sequential follow-ups gated on this batch landing). Tracking checklist; flip to `[x]` as each unit's PR merges. See `.claude/plans/cryptic-chasing-pond.md` for the full plan.
+
+**Parallel batch (8 units):**
+
+- [ ] Unit 1 — #622 `reloadFromDisk` two-write crash fix (`skipTransact` opt-in on `refreshAllRanges`)
+- [ ] Unit 2 — AR4 annotation card dispatcher refactor (5 presentational variants: highlight, note, comment, suggestion, imported)
+- [ ] Unit 3 — #477 PR 2: browser deprecation + CORS narrowing + `TANDEM_OPEN_BROWSER` → `TANDEM_TAURI_SIDECAR` migration
+- [ ] Unit 4 — #576 spike A: LibreOffice headless docx write-back feasibility
+- [ ] Unit 5 — #576 spike B: `docx` npm Tiptap→docx converter feasibility
+- [ ] Unit 6 — #477 Phase 0: sidecar launcher validation spike
+- [ ] Unit 7 — Anchor-drift regression test for `tutorial-annotations.ts` (lands after Unit 1)
+- [ ] Unit 8 — Release scaffolding (this entry + CHANGELOG `## [Unreleased] — v0.12.0` section)
+
+**Sequential follow-ups (hand-rolled after the batch lands):**
+
+- [ ] AR5 — Word import batch-promote (gated on Unit 2 AR4)
+- [ ] AR6 — Tutorial annotations as import example (gated on Unit 2 AR4)
+- [ ] #477 PR 1 — Integration picker UI (gated on Unit 6 spike verdict)
+- [ ] #477 PR 3 — `tandem setup` removal + sidecar-only launch path (gated on Unit 3 PR 2 landing)
+- [ ] #477 PR 4 — MCP config rewrite from picker (gated on Unit 6 spike verdict)
+- [ ] #477 PR 5 — Provider slot extension points (gated on PRs 1/3/4)
+- [ ] #576 production decision — wire LibreOffice or `docx` npm into MCP tools based on spike verdicts (gated on Units 4 and 5)
+
+**Out of scope for v0.12.0:** version bump (`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` stay at 0.11.2 until release PR), AR7 redesign test suite (deferred), #589 shared dismiss utility (shipped in v0.11.x Internal section).
+
 ## Step 5: File I/O
 
 ### Goal

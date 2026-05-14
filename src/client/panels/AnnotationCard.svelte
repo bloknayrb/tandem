@@ -1,9 +1,14 @@
 <script lang="ts">
-import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor } from "../../shared/constants";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
+import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
+import CommentCard from "./CommentCard.svelte";
+import HighlightCard from "./HighlightCard.svelte";
+import ImportedCard from "./ImportedCard.svelte";
+import NoteCard from "./NoteCard.svelte";
 import ReplyThread from "./ReplyThread.svelte";
+import SuggestionCard from "./SuggestionCard.svelte";
 
 interface Props {
   annotation: Annotation;
@@ -36,6 +41,8 @@ let {
   onClick,
 }: Props = $props();
 
+// Shared edit-mode state owned by the dispatcher; variants are presentational
+// and never own state. The edit form replaces the variant body when isEditing.
 let isEditing = $state(false);
 let editText = $state("");
 let editNewText = $state("");
@@ -43,49 +50,17 @@ let editReason = $state("");
 
 const isPending = $derived(annotation.status === "pending");
 const hasSuggestedText = $derived(annotation.suggestedText !== undefined);
+const canEdit = $derived(onEdit !== undefined);
+const cardLabel = $derived(getCardLabel(annotation));
 
-function getDisplayType(ann: Annotation): string {
-  if (ann.suggestedText !== undefined) return "replacement";
-  return ann.type;
-}
-
-function getAuthorLabel(author: Annotation["author"]): string {
-  if (author === "claude") return "Claude";
-  if (author === "import") return "Imported";
-  return "You";
-}
-
-function getBorderColor(ann: Annotation): string {
-  if (ann.color) {
-    return HIGHLIGHT_COLOR_VARS[normalizeHighlightColor(ann.color)];
-  }
-  if (ann.suggestedText !== undefined) return "var(--tandem-suggestion)";
-  if (ann.type === "note") return "var(--tandem-warning)";
+const borderColor = $derived.by(() => {
+  if (annotation.type === "highlight") return getHighlightBorder(annotation);
+  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)";
+  if (annotation.type === "note") return "var(--tandem-warning)";
   return "var(--tandem-author-user)";
-}
+});
 
-function getCardBackground(ann: Annotation, reviewTarget?: boolean): string {
-  if (reviewTarget) return "var(--tandem-accent-bg)";
-  if (ann.type === "note") return "var(--tandem-surface)";
-  return "var(--tandem-surface)";
-}
-
-const displayType = $derived(getDisplayType(annotation));
-const borderColor = $derived(getBorderColor(annotation));
-const cardBg = $derived(getCardBackground(annotation, isReviewTarget));
-const isPrivateNote = $derived(annotation.type === "note");
-
-const truncatedContent = $derived(
-  annotation.content
-    ? annotation.content.length > 60
-      ? annotation.content.slice(0, 57) + "..."
-      : annotation.content
-    : "",
-);
-
-const cardLabel = $derived(
-  `${isPrivateNote ? "private " : ""}${displayType} annotation${truncatedContent ? ": " + truncatedContent : ""}, ${annotation.status}`,
-);
+const cardBg = $derived(isReviewTarget ? "var(--tandem-accent-bg)" : "var(--tandem-surface)");
 
 function enterEditMode() {
   if (hasSuggestedText) {
@@ -133,78 +108,51 @@ function handleKeyDown(e: KeyboardEvent) {
     ? '0 0 0 3px var(--tandem-accent-bg)'
     : 'none'}; transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;"
 >
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px;">
-    <span
-      style="font-weight: 600; text-transform: capitalize; display: flex; align-items: center; gap: 6px; color: var(--tandem-fg-muted); font-size: 11px;"
-    >
-      <span
-        class="annotation-type-badge"
-        style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-2xs); letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: var(--tandem-r-pill); background: {hasSuggestedText
-          ? 'var(--tandem-suggestion-bg)'
-          : annotation.type === 'note'
-            ? 'var(--tandem-warning-bg)'
-            : 'var(--tandem-surface-sunk)'}; color: {hasSuggestedText
-          ? 'var(--tandem-suggestion-fg-strong)'
-          : annotation.type === 'note'
-            ? 'var(--tandem-warning-fg-strong)'
-            : 'var(--tandem-fg-muted)'};"
-      >
-        {displayType}
-      </span>
-      {#if isPrivateNote}
-        <span
-          data-testid="annotation-private-pill"
-          aria-hidden="true"
-          title="Private note"
-          style="padding: 1px 6px; font-size: var(--tandem-text-2xs); font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--tandem-warning-fg); background: var(--tandem-warning); border-radius: var(--tandem-r-2); line-height: 1;"
-        >
-          Private
-        </span>
-      {/if}
-      {#if !isPending}
-        <span
-          style="margin-left: 6px; font-size: 10px; color: {annotation.status === 'accepted'
-            ? 'var(--tandem-success)'
-            : 'var(--tandem-error)'}; font-weight: 600;"
-        >
-          {annotation.status}
-        </span>
-      {/if}
-      {#if isPending && onEdit && !isReviewTarget && !isEditing}
-        <button
-          data-testid="edit-btn-{annotation.id}"
-          onclick={(e) => {
-            e.stopPropagation();
-            enterEditMode();
-          }}
-          style="padding: 1px 4px; font-size: 11px; border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer; line-height: 1;"
-          title="Edit this annotation's content"
-        >
-          ✎ Edit
-        </button>
-      {/if}
-    </span>
-    <span
-      style="font-size: 11px; color: var(--tandem-fg-subtle); display: flex; align-items: center; gap: 4px;"
-    >
-      {#if annotation.editedAt}
-        <span style="font-style: italic; font-size: 10px; color: var(--tandem-fg-subtle);">
-          (edited)
-        </span>
-      {/if}
-      {getAuthorLabel(annotation.author)}
-    </span>
-  </div>
-
-  {#if annotation.textSnapshot}
-    <div
-      data-testid="annotation-snippet-{annotation.id}"
-      style="padding: 4px 8px; margin-bottom: 6px; border-left: 3px solid var(--tandem-border-strong); color: var(--tandem-fg-muted); font-size: 12px; font-style: italic; background-color: var(--tandem-surface-muted); border-radius: var(--tandem-r-1);"
-    >
-      {annotation.textSnapshot.length > 80
-        ? annotation.textSnapshot.slice(0, 77) + "..."
-        : annotation.textSnapshot}
-    </div>
+  {#if annotation.author === "import"}
+    <ImportedCard
+      annotation={annotation as Annotation & { author: "import" }}
+      {isPending}
+      {isReviewTarget}
+      {isEditing}
+      {canEdit}
+      onEnterEdit={enterEditMode}
+    />
+  {:else if annotation.type === "highlight"}
+    <HighlightCard
+      {annotation}
+      {isPending}
+      {isReviewTarget}
+      {isEditing}
+      {canEdit}
+      onEnterEdit={enterEditMode}
+    />
+  {:else if annotation.type === "note"}
+    <NoteCard
+      {annotation}
+      {isPending}
+      {isReviewTarget}
+      {isEditing}
+      {canEdit}
+      onEnterEdit={enterEditMode}
+    />
+  {:else if annotation.suggestedText !== undefined}
+    <SuggestionCard
+      annotation={annotation as Annotation & { type: "comment"; suggestedText: string }}
+      {isPending}
+      {isReviewTarget}
+      {isEditing}
+      {canEdit}
+      onEnterEdit={enterEditMode}
+    />
+  {:else}
+    <CommentCard
+      annotation={annotation as Annotation & { type: "comment"; suggestedText?: undefined }}
+      {isPending}
+      {isReviewTarget}
+      {isEditing}
+      {canEdit}
+      onEnterEdit={enterEditMode}
+    />
   {/if}
 
   {#if isEditing}
@@ -221,40 +169,6 @@ function handleKeyDown(e: KeyboardEvent) {
       onSave={handleSave}
       onCancel={handleCancel}
     />
-  {:else}
-    <div style="margin: 0; color: var(--tandem-fg); line-height: 1.45;">
-      {#if hasSuggestedText}
-        <div
-          data-testid="suggestion-diff-{annotation.id}"
-          style="padding: 4px 8px; margin-bottom: {annotation.content
-            ? '4px'
-            : '0'}; background-color: var(--tandem-surface-muted); border-radius: var(--tandem-r-2); font-size: 12px; line-height: 1.5;"
-        >
-          {#if annotation.textSnapshot}
-            <span
-              style="text-decoration: line-through; color: var(--tandem-error); background-color: var(--tandem-error-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
-            >
-              {annotation.textSnapshot}
-            </span>
-          {/if}
-          {#if annotation.textSnapshot}
-            {" → "}
-          {/if}
-          <span
-            style="color: var(--tandem-success-fg-strong); background-color: var(--tandem-success-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
-          >
-            {annotation.suggestedText}
-          </span>
-        </div>
-        {#if annotation.content}
-          <p style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
-            {annotation.content}
-          </p>
-        {/if}
-      {:else}
-        <p style="margin: 0;">{annotation.content || "(no note)"}</p>
-      {/if}
-    </div>
   {/if}
 
   <AnnotationCardActions
@@ -277,11 +191,3 @@ function handleKeyDown(e: KeyboardEvent) {
     {onReply}
   />
 </div>
-
-<style>
-  @media (forced-colors: active) {
-    .annotation-type-badge {
-      border: 1px solid ButtonText;
-    }
-  }
-</style>

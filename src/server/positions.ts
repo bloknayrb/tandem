@@ -348,17 +348,31 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
   return updated;
 }
 
-/** Refresh all annotations in a batch, wrapping Y.Map writes in a transaction. */
+/**
+ * Refresh all annotations in a batch, wrapping Y.Map writes in a transaction.
+ *
+ * When `skipTransact` is true, writes happen inline without wrapping a
+ * `ydoc.transact`. The caller is responsible for providing an outer
+ * transaction with the appropriate origin. Used by `reloadFromDisk` to merge
+ * this pass with the subsequent textSnapshot relocation pass into a single
+ * `MCP_ORIGIN` transaction (closes the two-write crash window — GH #622).
+ */
 export function refreshAllRanges(
   annotations: Annotation[],
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
+  opts?: { skipTransact?: boolean },
 ): Annotation[] {
   const results: Annotation[] = [];
-  ydoc.transact(() => {
+  const run = () => {
     for (const ann of annotations) {
       results.push(refreshRange(ann, ydoc, map));
     }
-  }, MCP_ORIGIN);
+  };
+  if (opts?.skipTransact) {
+    run();
+  } else {
+    ydoc.transact(run, MCP_ORIGIN);
+  }
   return results;
 }
