@@ -5,7 +5,7 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — v0.12.0
 
 ### Fixed
 
@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Define `ChannelErrorCodeSchema` enum for `/api/channel-error` payloads (closes #284)** — channel-shim and monitor failure codes (`CHANNEL_CONNECT_FAILED`, `MONITOR_CONNECT_FAILED`) are now z.enum constants in `src/shared/types.ts` instead of free-form strings. The server route handler validates the incoming `error` field and returns 400 on unknown codes (still logs the rejected value so the diagnostic trail survives). Mirrors the existing `ToolErrorCodeSchema` pattern.
 - **Extract shared `onOutsideEvent` dismiss helper (closes #589)** — `Toolbar.svelte` (scroll-based dismiss) and `HighlightColorPicker.svelte` (mousedown-based dismiss) both rolled their own document-listener + `contains(event.target)` guard. Consolidates into `src/client/utils/dismiss-outside.ts`. Capture-phase parity preserved at each call site.
 - **Route `clearAndReload` through `populateDocFromContent` (closes #611)** — the force-reload path was the last remaining inline duplication of `loadDocx` + `extractDocxComments` + `htmlToYDoc` + `injectCommentsAsAnnotations`. Routing it through the shared helper means the rollback containment, partial-write cleanup, and comment-extract/inject notification UX that #612 added to the normal-open path now also apply on force-reload. Net delete: ~50 LOC, zero functional regressions.
+
+### Changed
+
+<!-- Populated as PRs land. -->
+
+### Deferred
+
+<!-- Populated as PRs land. -->
 
 ## [0.11.2] - 2026-05-13
 
