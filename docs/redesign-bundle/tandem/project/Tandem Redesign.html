@@ -7,10 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=fmtbar8">
 <link rel="stylesheet" href="settings.css?v=2">
 <link rel="stylesheet" href="surfaces.css?v=1">
-<link rel="stylesheet" href="annotation-redesign.css?v=2">
+<link rel="stylesheet" href="annotation-redesign.css?v=3">
 <style>
   html, body { height: 100%; background: #ECECE6; }
   body { font-family: 'Inter Tight', sans-serif; }
@@ -134,10 +134,10 @@
   </div>
 
   <div class="legend">
-    <div class="item"><span class="num">01</span><div><strong>Selection mini-toolbar.</strong> Highlight any text and the formatting + Highlight / Comment / Ask Claude / Flag tools surface in place. The cursor never has to leave the page.</div></div>
-    <div class="item"><span class="num">02</span><div><strong>Authorship gutter.</strong> A 2px thread to the left of every paragraph shows who last touched it — blue for you, coral for Claude. Pulses softly when Claude is reading.</div></div>
-    <div class="item"><span class="num">03</span><div><strong>Quieter chrome.</strong> A single thin top bar with brand, doc title, mode toggle, and panel controls. Tabs are a 30px secondary row. No shadows except things that float.</div></div>
-    <div class="item"><span class="num">04</span><div><strong>Editorial typography.</strong> Source Serif 4 for prose, Inter Tight for chrome, JetBrains Mono for status and timestamps. All overrideable in Tweaks.</div></div>
+    <div class="item"><span class="num">01</span><div><strong>Audience-first annotation.</strong> The selection popup asks <em>who is this for</em> — Note (private) or Comment (to Claude). Two buttons, one decision. Highlights stay quick with four color swatches (yellow / green / blue / pink).</div></div>
+    <div class="item"><span class="num">02</span><div><strong>Authorship gutter.</strong> A 2px thread left of every paragraph shows who last touched it — blue for you, coral for Claude. Pulses softly when Claude is active. Togglable in Accessibility settings.</div></div>
+    <div class="item"><span class="num">03</span><div><strong>Quieter chrome.</strong> Thin top bar with brand, mode toggle (Solo / Tandem), and panel controls. Tabs are a 30px secondary row. Status bar carries inline name editor and Claude presence dot.</div></div>
+    <div class="item"><span class="num">04</span><div><strong>3-type data model.</strong> highlight / comment / flag — visual variants (suggestion, note, imported) derived via <code>suggestedText</code> and <code>directedAt</code> discriminator fields. Settings: stdio + HTTP only, all About values dynamic.</div></div>
   </div>
 
   <design-canvas></design-canvas>
@@ -161,7 +161,7 @@ const { useState, useEffect } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accent": "#5B5BD6",
-  "theme": "dark",
+  "theme": "light",
   "density": "cozy",
   "panelLayout": "right",
   "editorFont": "serif",
@@ -189,6 +189,7 @@ function EmptyDoc({ tw }) {
         docs={[{ id: 'd1', name: 'untitled.md', ext: 'M' }]}
         active="d1"
       />
+      <FormattingBar leftVisible={false} rightVisible={false}/>
       <div className="main" data-rail="hidden">
         <div className="editor-wrap">
           <div className="editor-scroll">
@@ -221,6 +222,7 @@ function ChatFocus({ tw }) {
         ]}
         active="d1"
       />
+      <FormattingBar leftVisible={false} rightVisible={true}/>
       <div className="main" data-rail="right">
         <EditorBody showMini={false} showCursor={true}/>
         <SideRail mode="chat" annotations={ANNOS} chat={CHAT}/>
@@ -244,6 +246,7 @@ function DarkLeft({ tw }) {
         ]}
         active="d2"
       />
+      <FormattingBar leftVisible={true} rightVisible={false}/>
       <div className="main" data-rail="left">
         <EditorBody showMini={true} showCursor={true}/>
         <SideRail mode="annotations" annotations={ANNOS} chat={CHAT}/>
@@ -264,6 +267,7 @@ function OutlineFocus({ tw }) {
         docs={[{ id: 'd1', name: 'q2-dashboard-review.md', ext: 'M', dirty: true }]}
         active="d1"
       />
+      <FormattingBar leftVisible={false} rightVisible={true}/>
       <div className="main" data-rail="right">
         <EditorBody showMini={false} showCursor={true}/>
         <SideRail mode="outline" annotations={ANNOS} chat={CHAT}/>
@@ -287,6 +291,7 @@ function SoloRailHidden({ tw }) {
         ]}
         active="d1"
       />
+      <FormattingBar leftVisible={false} rightVisible={false}/>
       <div className="main" data-rail="hidden">
         <EditorBody showMini={false} showCursor={false}/>
       </div>
@@ -309,6 +314,7 @@ function SoloMode({ tw }) {
         ]}
         active="d1"
       />
+      <FormattingBar leftVisible={false} rightVisible={true}/>
       <div className="main" data-rail="right">
         <EditorBody showMini={false} showCursor={false}/>
         <SideRail
@@ -337,6 +343,7 @@ function WordDoc({ tw }) {
         ]}
         active="d3"
       />
+      <FormattingBar leftVisible={false} rightVisible={true}/>
       <div className="main" data-rail="right">
         <EditorBody showMini={false} showCursor={true} docType="docx"/>
         <SideRail mode="annotations" annotations={ANNOS} chat={CHAT}/>
@@ -357,11 +364,301 @@ function Compact({ tw }) {
         docs={[{ id: 'd3', name: 'partner-update.docx', ext: 'W', readOnly: true }]}
         active="d3"
       />
+      <FormattingBar leftVisible={false} rightVisible={true}/>
       <div className="main" data-rail="right">
         <EditorBody showMini={false} showCursor={false} docType="docx"/>
         <SideRail mode="annotations" annotations={ANNOS.slice(0,3)} chat={CHAT} readOnly={true}/>
       </div>
       <StatusBar claudeState="idle" paged={true} docName="partner-update.docx" dirty={false}/>
+    </div>
+  );
+}
+
+// ---------- Tool Placement Research artboard ----------
+function ToolPlacementFrame() {
+  const mono = { fontFamily: 'JetBrains Mono, monospace', fontSize: 10, letterSpacing: '0.07em', textTransform: 'uppercase' };
+  const ink  = 'oklch(0.22 0.012 280)';
+  const muted = 'oklch(0.48 0.008 280)';
+  const faint = 'oklch(0.62 0.006 280)';
+  const hair  = 'oklch(0.92 0.004 280)';
+  const surf  = 'oklch(0.97 0.004 80)';
+  const accent = 'oklch(0.52 0.18 275)';
+  const accentSoft = 'oklch(0.94 0.04 275)';
+
+  function Label({ children, color = faint }) {
+    return <div style={{ ...mono, color, marginBottom: 8 }}>{children}</div>;
+  }
+
+  function Pill({ children, color = muted, bg = 'transparent', border = hair }) {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        padding: '2px 8px', borderRadius: 99,
+        background: bg, border: `1px solid ${border}`,
+        fontSize: 11, color, fontFamily: 'Inter Tight, sans-serif',
+        whiteSpace: 'nowrap',
+      }}>{children}</span>
+    );
+  }
+
+  function ToolChip({ label, kbd, inPopup, inToolbar }) {
+    return (
+      <div style={{
+        display: 'grid', gridTemplateColumns: '110px 1fr 56px 56px',
+        alignItems: 'center', gap: 8,
+        padding: '5px 10px',
+        borderRadius: 6,
+        background: inPopup ? 'oklch(0.97 0.015 275)' : 'transparent',
+        border: `1px solid ${inPopup ? 'oklch(0.88 0.04 275)' : 'transparent'}`,
+        marginBottom: 3,
+      }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: ink }}>{label}</span>
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5, color: faint }}>{kbd}</span>
+        <div style={{ textAlign: 'center' }}>
+          {inToolbar && <span style={{ fontSize: 14, color: 'oklch(0.55 0.12 150)' }}>✓</span>}
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          {inPopup && <span style={{ fontSize: 14, color: accent }}>✓</span>}
+        </div>
+      </div>
+    );
+  }
+
+  // Mock persistent toolbar strip
+  function MockToolbar() {
+    const btn = (label, title, bold = false, italic = false, mono_ = false) => (
+      <button title={title} style={{
+        height: 26, minWidth: 26, padding: '0 7px',
+        border: 'none', borderRadius: 4,
+        background: 'transparent', cursor: 'pointer',
+        fontFamily: mono_ ? 'JetBrains Mono, monospace' : 'Inter Tight, sans-serif',
+        fontSize: mono_ ? 11 : 12.5, fontWeight: bold ? 700 : 400,
+        fontStyle: italic ? 'italic' : 'normal',
+        color: ink, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      }}>{label}</button>
+    );
+    const divider = () => <div style={{ width: 1, height: 16, background: hair, margin: '0 2px', flexShrink: 0 }}/>;
+    const iconBtn = (svg) => (
+      <button style={{ width: 26, height: 26, border: 'none', background: 'transparent', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 4, color: ink, padding: 0 }}>
+        <svg viewBox="0 0 16 16" width={13} height={13} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{svg}</svg>
+      </button>
+    );
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 1,
+        padding: '4px 10px',
+        background: 'oklch(0.985 0.003 80)',
+        border: `1px solid ${hair}`,
+        borderRadius: '8px 8px 0 0',
+        flexWrap: 'nowrap', overflow: 'hidden',
+      }}>
+        {/* Undo/Redo */}
+        {iconBtn(<><path d="M3 7h7a3 3 0 0 1 0 6H6"/><path d="M5 4L2 7l3 3"/></>)}
+        {iconBtn(<><path d="M13 7H6a3 3 0 0 0 0 6h4"/><path d="M11 4l3 3-3 3"/></>)}
+        {divider()}
+        {/* Heading */}
+        <button title="Heading" style={{ height: 26, padding: '0 7px', border: 'none', background: 'transparent', borderRadius: 4, fontFamily: 'Inter Tight, sans-serif', fontSize: 12, fontWeight: 600, color: ink, cursor: 'pointer' }}>H ▾</button>
+        {divider()}
+        {/* Inline marks */}
+        {btn('B', 'Bold', true)}
+        {btn('I', 'Italic', false, true)}
+        {btn('S', 'Strikethrough')}
+        {btn('</>', 'Inline code', false, false, true)}
+        {divider()}
+        {/* Lists */}
+        {iconBtn(<><circle cx="2.5" cy="4.5" r="0.8" fill="currentColor"/><circle cx="2.5" cy="8" r="0.8" fill="currentColor"/><circle cx="2.5" cy="11.5" r="0.8" fill="currentColor"/><path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/></>)}
+        {iconBtn(<><path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><text x="0" y="6" fontSize="4" fill="currentColor" stroke="none" fontFamily="monospace" fontWeight="bold">1.</text><text x="0" y="9.5" fontSize="4" fill="currentColor" stroke="none" fontFamily="monospace" fontWeight="bold">2.</text><text x="0" y="13" fontSize="4" fill="currentColor" stroke="none" fontFamily="monospace" fontWeight="bold">3.</text></>)}
+        {iconBtn(<><rect x="0.5" y="2" width="3" height="12" rx="1.5"/><path d="M5 4h9M5 8h7M5 12h8" opacity="0.7"/></>)}
+        {divider()}
+        {/* Link + HR + code block */}
+        {iconBtn(<><path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5L8 4.5"/><path d="M9 7a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5L8 11.5"/></>)}
+        {btn('—', 'Horizontal rule')}
+        {iconBtn(<><path d="M5 4l-3 4 3 4"/><path d="M11 4l3 4-3 4"/><path d="M9 2l-2 12"/></>)}
+        {divider()}
+        {/* Highlight */}
+        <div style={{ display: 'flex', gap: 3, padding: '0 2px' }}>
+          {['rgba(234,179,8,0.5)','rgba(34,197,94,0.5)','rgba(96,165,250,0.5)','rgba(236,72,153,0.5)'].map((c,i) => (
+            <span key={i} style={{ width: 13, height: 13, borderRadius: 3, background: c, display: 'inline-block', border: `1px solid ${hair}` }}/>
+          ))}
+        </div>
+        {divider()}
+        {/* Comment + Note — selection-gated */}
+        <button style={{ height: 26, padding: '0 8px', border: `1px solid ${hair}`, background: 'transparent', borderRadius: 4, fontSize: 11.5, color: muted, cursor: 'pointer', fontFamily: 'Inter Tight, sans-serif' }}>Comment</button>
+        <button style={{ height: 26, padding: '0 8px', border: `1px solid ${hair}`, background: 'transparent', borderRadius: 4, fontSize: 11.5, color: muted, cursor: 'pointer', fontFamily: 'Inter Tight, sans-serif' }}>Note</button>
+      </div>
+    );
+  }
+
+  // Mock popup
+  function MockPopup() {
+    return (
+      <div style={{
+        display: 'inline-flex', alignItems: 'center', gap: 1,
+        padding: '4px 6px',
+        background: 'white',
+        border: `1px solid ${hair}`,
+        borderRadius: 8,
+        boxShadow: '0 2px 4px oklch(0.22 0.012 280 / 0.06), 0 8px 24px oklch(0.22 0.012 280 / 0.10)',
+        whiteSpace: 'nowrap',
+      }}>
+        {/* B + I only */}
+        <button style={{ width: 28, height: 28, border: 'none', background: 'transparent', borderRadius: 4, fontWeight: 700, fontSize: 13, color: ink, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>B</button>
+        <button style={{ width: 28, height: 28, border: 'none', background: 'transparent', borderRadius: 4, fontStyle: 'italic', fontSize: 13, color: ink, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>I</button>
+        {/* divider */}
+        <div style={{ width: 1, height: 16, background: hair, margin: '0 2px' }}/>
+        {/* 4 highlight swatches */}
+        {['rgba(234,179,8,0.5)','rgba(34,197,94,0.5)','rgba(96,165,250,0.5)','rgba(236,72,153,0.5)'].map((c,i) => (
+          <span key={i} style={{ width: 14, height: 14, borderRadius: 3, background: c, display: 'inline-block', border: `1px solid ${hair}`, margin: '0 1px' }}/>
+        ))}
+        {/* divider */}
+        <div style={{ width: 1, height: 16, background: hair, margin: '0 4px 0 6px' }}/>
+        {/* Note + Comment */}
+        <button style={{ height: 26, padding: '0 9px', border: `1px solid ${hair}`, background: 'transparent', borderRadius: 4, fontSize: 11.5, color: ink, cursor: 'pointer', fontFamily: 'Inter Tight, sans-serif' }}>Note</button>
+        <button style={{ height: 26, padding: '0 9px', border: 'none', background: accent, borderRadius: 4, fontSize: 11.5, color: 'white', cursor: 'pointer', fontFamily: 'Inter Tight, sans-serif', display: 'flex', alignItems: 'center', gap: 5 }}>
+          <svg viewBox="0 0 16 16" width={11} height={11} fill="none" stroke="white" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 3h11v8h-7l-3 2.5V11H2.5z"/></svg>
+          Comment
+        </button>
+      </div>
+    );
+  }
+
+  const tools = [
+    { label: 'Undo / Redo',     kbd: 'Ctrl+Z / Ctrl+Shift+Z', toolbar: true,  popup: false, reason: 'Document-level history — irrelevant to a selection context' },
+    { label: 'Heading H1–H3',   kbd: 'Ctrl+Alt+1–3',           toolbar: true,  popup: false, reason: 'Structure decision made while composing, not while reviewing' },
+    { label: 'Bold',            kbd: 'Ctrl+B',                  toolbar: true,  popup: true,  reason: 'Applied post-reading: "emphasise this phrase." Lightweight.' },
+    { label: 'Italic',          kbd: 'Ctrl+I',                  toolbar: true,  popup: true,  reason: 'Same as Bold — the two marks you apply after re-reading.' },
+    { label: 'Strikethrough',   kbd: 'Ctrl+Shift+X',            toolbar: true,  popup: false, reason: 'Rare inline mark; keyboard shortcut suffices at point of use' },
+    { label: 'Inline code',     kbd: 'Ctrl+E',                  toolbar: true,  popup: false, reason: 'Authoring-time mark; popup already crowded without it' },
+    { label: 'Bullet list',     kbd: 'Ctrl+Shift+8',            toolbar: true,  popup: false, reason: 'Block-level structure — not applied mid-review; use / command' },
+    { label: 'Ordered list',    kbd: 'Ctrl+Shift+7',            toolbar: true,  popup: false, reason: 'Same as bullet list' },
+    { label: 'Blockquote',      kbd: 'Ctrl+Shift+B',            toolbar: true,  popup: false, reason: 'Composing-time block; use / or keyboard' },
+    { label: 'Code block',      kbd: '```',                     toolbar: true,  popup: false, reason: 'Always authored via / menu or markdown; never post-selection' },
+    { label: 'Link',            kbd: 'Ctrl+K',                  toolbar: true,  popup: false, reason: 'Link dialog needs a URL input — use keyboard shortcut instead' },
+    { label: 'Horizontal rule', kbd: '---',                     toolbar: true,  popup: false, reason: 'Document structure; not applied to selected prose' },
+    { label: 'Highlight (×4)',  kbd: '—',                       toolbar: true,  popup: true,  reason: 'One-click, no audience decision — perfect quick-reaction path' },
+    { label: 'Note',            kbd: '↵',                       toolbar: true,  popup: true,  reason: 'Primary collaboration surface — must be front-and-center' },
+    { label: 'Comment',         kbd: 'Ctrl+↵',                  toolbar: true,  popup: true,  reason: 'The headline action — colored CTA, always visible in popup' },
+  ];
+
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: surf,
+      padding: '40px 52px',
+      display: 'flex', flexDirection: 'column', gap: 28,
+      fontFamily: 'Inter Tight, sans-serif',
+      boxSizing: 'border-box',
+      overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
+        <div style={{ ...mono, color: accent, fontSize: 11 }}>UX Research · Tool Placement</div>
+        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: ink, letterSpacing: '-0.02em', fontFamily: 'Source Serif 4, serif' }}>
+          Two surfaces, two intents
+        </h2>
+        <div style={{ fontSize: 13, color: muted, flex: 1, textAlign: 'right' }}>
+          Persistent toolbar = composing · Selection popup = reacting
+        </div>
+      </div>
+
+      {/* The two mocks side by side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+        {/* Toolbar mock */}
+        <div>
+          <Label color={muted}>Persistent toolbar — always visible, anchored above editor</Label>
+          <MockToolbar/>
+          <div style={{
+            background: 'white', border: `1px solid ${hair}`, borderTop: 'none',
+            borderRadius: '0 0 8px 8px',
+            padding: '14px 16px',
+            fontSize: 13, lineHeight: 1.6, color: muted,
+          }}>
+            <span style={{ fontWeight: 600, color: ink }}>15 tools.</span> Covers all formatting including structure tools (headings, lists, blockquote, code block) that are needed during <em>composition</em>, not review. Undo/redo always accessible. Comment + Note buttons are here too, but selection-gated with a "Select text first" tooltip.
+          </div>
+        </div>
+
+        {/* Popup mock */}
+        <div>
+          <Label color={muted}>Selection popup — appears on text selection, dismisses on click-away</Label>
+          <div style={{
+            background: 'white', border: `1px solid ${hair}`,
+            borderRadius: '8px 8px 0 0',
+            padding: '32px 24px 24px',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0,
+            position: 'relative',
+          }}>
+            {/* fake selected text */}
+            <p style={{ margin: '0 0 14px', fontFamily: 'Source Serif 4, serif', fontSize: 15, lineHeight: 1.6, color: ink, textAlign: 'center', maxWidth: 340 }}>
+              …the dashboard timeline{' '}
+              <span style={{ background: 'oklch(0.85 0.10 245 / 0.35)', borderRadius: 2, padding: '0 1px' }}>slipped due to an unexpected API redesign</span>
+              {' '}in May.
+            </p>
+            <MockPopup/>
+            {/* arrow */}
+            <div style={{ width: 0, height: 0, borderLeft: '7px solid transparent', borderRight: '7px solid transparent', borderTop: '7px solid white', filter: 'drop-shadow(0 1px 0 oklch(0.88 0.004 280))', marginTop: 0 }}/>
+          </div>
+          <div style={{
+            background: 'white', border: `1px solid ${hair}`, borderTop: 'none',
+            borderRadius: '0 0 8px 8px',
+            padding: '14px 16px',
+            fontSize: 13, lineHeight: 1.6, color: muted,
+          }}>
+            <span style={{ fontWeight: 600, color: ink }}>6 actions.</span> Bold + Italic (the two marks applied post-reading), 4 highlight swatches (one-click, no audience decision), Note + Comment. The <span style={{ color: accent, fontWeight: 600 }}>Comment</span> button is the only colored CTA — it&apos;s the action that matters most.
+          </div>
+        </div>
+      </div>
+
+      {/* Decision table */}
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, minHeight: 0 }}>
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 56px 56px', gap: 8, padding: '4px 10px', marginBottom: 4 }}>
+            <span style={{ ...mono, color: faint }}>Tool</span>
+            <span style={{ ...mono, color: faint }}>Shortcut</span>
+            <span style={{ ...mono, color: faint, textAlign: 'center' }}>Bar</span>
+            <span style={{ ...mono, color: accent, textAlign: 'center' }}>Pop</span>
+          </div>
+          {tools.slice(0, 8).map(t => (
+            <div key={t.label} style={{
+              display: 'grid', gridTemplateColumns: '110px 1fr 56px 56px',
+              alignItems: 'center', gap: 8,
+              padding: '4px 10px',
+              borderRadius: 5,
+              background: t.popup ? accentSoft : 'transparent',
+              border: `1px solid ${t.popup ? 'oklch(0.88 0.06 275)' : 'transparent'}`,
+              marginBottom: 2,
+            }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: ink }}>{t.label}</span>
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: faint }}>{t.kbd}</span>
+              <div style={{ textAlign: 'center', fontSize: 13, color: 'oklch(0.52 0.12 150)' }}>{t.toolbar ? '✓' : ''}</div>
+              <div style={{ textAlign: 'center', fontSize: 13, color: accent }}>{t.popup ? '✓' : ''}</div>
+            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 56px 56px', gap: 8, padding: '4px 10px', marginBottom: 4 }}>
+            <span style={{ ...mono, color: faint }}>Tool</span>
+            <span style={{ ...mono, color: faint }}>Rationale</span>
+            <span style={{ ...mono, color: faint, textAlign: 'center' }}>Bar</span>
+            <span style={{ ...mono, color: accent, textAlign: 'center' }}>Pop</span>
+          </div>
+          {tools.slice(8).map(t => (
+            <div key={t.label} style={{
+              display: 'grid', gridTemplateColumns: '110px 1fr 56px 56px',
+              alignItems: 'center', gap: 8,
+              padding: '4px 10px',
+              borderRadius: 5,
+              background: t.popup ? accentSoft : 'transparent',
+              border: `1px solid ${t.popup ? 'oklch(0.88 0.06 275)' : 'transparent'}`,
+              marginBottom: 2,
+            }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: ink }}>{t.label}</span>
+              <span style={{ fontSize: 11, color: muted, lineHeight: 1.35 }}>{t.reason}</span>
+              <div style={{ textAlign: 'center', fontSize: 13, color: 'oklch(0.52 0.12 150)' }}>{t.toolbar ? '✓' : ''}</div>
+              <div style={{ textAlign: 'center', fontSize: 13, color: accent }}>{t.popup ? '✓' : ''}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -428,41 +725,8 @@ function ToolsCloseUp() {
   );
 }
 
-// ---------- Annotation card states close-up ----------
-function CardStates({ tw }) {
-  const variants = [
-    { ...ANNOS[0], _label: 'Suggestion · active' },
-    { ...ANNOS[1], _label: 'Question from Claude' },
-    { ...ANNOS[2], _label: 'Flag from you' },
-    { ...ANNOS[3], _label: 'Comment with anchor' },
-    { ...ANNOS[0], resolved: true, _label: 'Resolved' },
-  ];
-  return (
-    <div style={{
-      width: '100%', height: '100%',
-      padding: 50, background: 'oklch(0.96 0.008 80)',
-      fontFamily: 'Inter Tight, sans-serif',
-      overflow: 'auto',
-    }}>
-      <div className="app" data-theme="light" data-density="cozy" style={{
-        '--accent': tw.accent,
-        height: 'auto',
-        background: 'transparent',
-        gridTemplateRows: 'auto',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(2, 1fr)',
-        gap: 16,
-      }}>
-        {variants.map((a, i) => (
-          <div key={i}>
-            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'oklch(0.55 0.008 280)', marginBottom: 8 }}>{a._label}</div>
-            <AnnotationCard a={a} active={i === 0}/>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+// (Annotation card-state close-up was retired in v2. The audience-first
+// `ar-states` artboard in the Annotation system section is the replacement.)
 
 // ---------- Render ----------
 function Page() {
@@ -511,8 +775,8 @@ function Page() {
         <DCArtboard id="tools" label="Selection toolbar & slash menu" width={1280} height={520}>
           <ToolsCloseUp/>
         </DCArtboard>
-        <DCArtboard id="cards" label="Annotation card variants" width={900} height={780}>
-          <CardStates tw={tw}/>
+        <DCArtboard id="tool-placement" label="↳ Tool placement rationale — what goes where and why" width={1280} height={720}>
+          <ToolPlacementFrame/>
         </DCArtboard>
       </DCSection>
 
@@ -531,9 +795,6 @@ function Page() {
         </DCArtboard>
         <DCArtboard id="onboarding" label="First-run — model select, default mode, key shortcuts" width={1280} height={820}>
           <Frame title="Tandem — welcome"><OnboardingFrame tw={tw}/></Frame>
-        </DCArtboard>
-        <DCArtboard id="share" label="Share & export — link, role, formats, embed" width={1280} height={820}>
-          <Frame title="Tandem — share q2-dashboard-review.md"><ShareFrame tw={tw}/></Frame>
         </DCArtboard>
         <DCArtboard id="settings-network" label="Settings → Network — sidecar config, retries, telemetry" width={1000} height={700}>
           <div style={{ width: '100%', height: '100%', background: 'oklch(0.96 0.008 80)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>

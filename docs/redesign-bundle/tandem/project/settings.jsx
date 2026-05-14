@@ -383,7 +383,7 @@ function SettingsDialog({ embedded = false, platform = (typeof window !== 'undef
             <div className="settings-row">
               <div className="settings-row-label">
                 <div className="t">Bind mode</div>
-                <div className="d">Which MCP transport Claude Code should use to reach this session.</div>
+                <div className="d">Which MCP transport Claude Code should use to reach this session. stdio and HTTP only — named pipe is not implemented.</div>
               </div>
               <div className="settings-row-control">
                 <SegSm value="stdio" options={[
@@ -452,19 +452,27 @@ function SettingsDialog({ embedded = false, platform = (typeof window !== 'undef
             <div className="about-grid">
               <div className="about-row">
                 <span className="about-k">Version</span>
-                <span className="about-v mono">0.8.0 <span className="faint">(build 2026.04.18-a3f1)</span></span>
+                <span className="about-v mono setting-dyn">read from APP_VERSION at runtime</span>
               </div>
               <div className="about-row">
-                <span className="about-k">Channel</span>
-                <span className="about-v">Stable · no beta channel exists yet</span>
+                <span className="about-k">Tools</span>
+                <span className="about-v mono setting-dyn">read from server at runtime · 31 in v0.8.0</span>
               </div>
               <div className="about-row">
-                <span className="about-k">Engine</span>
-                <span className="about-v mono setting-dyn">claude-sonnet-4.5 · MCP 0.7.2</span>
+                <span className="about-k">MCP SDK</span>
+                <span className="about-v mono setting-dyn">read from package.json at runtime</span>
+              </div>
+              <div className="about-row">
+                <span className="about-k">Transport</span>
+                <span className="about-v mono setting-dyn">read from running server at runtime</span>
               </div>
               <div className="about-row">
                 <span className="about-k">Storage</span>
-                <span className="about-v mono setting-dyn">~/Library/Application Support/tandem/sessions/ · 12.4 MB</span>
+                <span className="about-v mono setting-dyn">platform-dependent — macOS: ~/Library/Application Support/tandem/sessions/ · Windows: %LOCALAPPDATA%\tandem\Data\sessions\ · Linux: ~/.local/share/tandem/sessions/</span>
+              </div>
+              <div className="about-row">
+                <span className="about-k">Token</span>
+                <span className="about-v mono setting-dyn">rotation timestamp read from disk at runtime</span>
               </div>
             </div>
 

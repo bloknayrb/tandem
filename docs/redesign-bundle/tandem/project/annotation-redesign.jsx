@@ -113,8 +113,6 @@ function ARClaudeCommentCard({ body, snippet, time, active = false }) {
       <div className="ar-actions">
         <button className="ar-act ar-act-primary">Reply</button>
         <button className="ar-act">Dismiss</button>
-        <span className="ar-act-spacer"/>
-        <span className="ar-kbd-pill"><span className="ar-k">Y</span><span>accept</span><span className="ar-k">N</span><span>dismiss</span></span>
       </div>
     </div>
   );
@@ -141,8 +139,6 @@ function ARSuggestionCard({ del, add, body, time, active = true }) {
         </button>
         <button className="ar-act">Dismiss</button>
         <button className="ar-act">Reply</button>
-        <span className="ar-act-spacer"/>
-        <span className="ar-kbd-pill"><span className="ar-k">Y</span><span>/</span><span className="ar-k">N</span></span>
       </div>
     </div>
   );

@@ -1,0 +1,409 @@
+/* calm-v1.css — synthesis of the strongest moves across A/B/C/D/E.
+   Borderless chrome (A), editor sheet (B), anchor-aligned tinted cards (C+E),
+   frost reserved for transient overlays (D). */
+
+:root {
+  --c1-canvas: oklch(0.945 0.012 70);
+  --c1-canvas-soft: oklch(0.960 0.010 75);
+  --c1-canvas-deep: oklch(0.920 0.014 65);
+  --c1-sheet: oklch(0.998 0.003 80);
+  --c1-ink: oklch(0.22 0.012 280);
+  --c1-ink-muted: oklch(0.48 0.010 280);
+  --c1-ink-faint: oklch(0.66 0.008 280);
+
+  --c1-shadow-sheet:
+    0 1px 1px oklch(0 0 0 / 0.025),
+    0 6px 12px -2px oklch(0 0 0 / 0.045),
+    0 28px 56px -22px oklch(0 0 0 / 0.10);
+  --c1-shadow-float:
+    0 1px 2px oklch(0 0 0 / 0.05),
+    0 10px 28px -8px oklch(0 0 0 / 0.14);
+}
+
+.c1-frame {
+  width: 100%; height: 100%;
+  font-family: var(--font-sans);
+  color: var(--c1-ink);
+  overflow: hidden;
+  position: relative;
+  background:
+    radial-gradient(ellipse at 60% -10%, oklch(0.965 0.010 75) 0%, transparent 55%),
+    var(--c1-canvas);
+  display: grid;
+  grid-template-rows: 44px 30px 1fr 24px;
+}
+
+/* ── Titlebar (from A — borderless, sits on the canvas) ───────────── */
+.c1-titlebar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 18px;
+  font-size: 13px;
+  color: var(--c1-ink-muted);
+}
+.c1-brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 700; color: var(--c1-ink); letter-spacing: -0.01em;
+  font-size: 14px;
+}
+.c1-mark {
+  width: 20px; height: 20px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, var(--author-user) 48%, var(--author-claude) 52%);
+  box-shadow: inset 0 -1px 0 oklch(0 0 0 / 0.08);
+}
+.c1-titlebar .grow { flex: 1; }
+.c1-doc-name { color: var(--c1-ink); font-weight: 500; }
+.c1-crumb {
+  color: var(--c1-ink-faint);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.c1-dirty {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--warning); display: inline-block;
+}
+
+.c1-seg {
+  display: inline-flex;
+  background: oklch(from var(--c1-canvas) calc(l - 0.035) c h);
+  border-radius: 99px;
+  padding: 2px;
+  gap: 2px;
+}
+.c1-seg button {
+  height: 24px; padding: 0 14px;
+  border: none; background: transparent;
+  border-radius: 99px;
+  font-size: 12px; font-weight: 500;
+  color: var(--c1-ink-muted); cursor: pointer;
+  font-family: inherit;
+}
+.c1-seg button.on {
+  background: var(--c1-sheet); color: var(--c1-ink);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
+}
+.c1-icbtn {
+  width: 28px; height: 28px;
+  border: none; background: transparent;
+  border-radius: 7px;
+  color: var(--c1-ink-muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.c1-icbtn:hover { background: oklch(from var(--c1-canvas) calc(l - 0.035) c h); color: var(--c1-ink); }
+.c1-claude-pulse {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--author-claude);
+  box-shadow: 0 0 0 3px oklch(from var(--author-claude) l c h / 0.20);
+}
+
+/* ── Tabs (from A — flush, no hairline) ────────────────────────────── */
+.c1-tabs {
+  display: flex; align-items: end;
+  padding: 0 18px;
+  gap: 22px;
+}
+.c1-tab {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px;
+  color: var(--c1-ink-faint);
+  padding-bottom: 8px;
+  cursor: pointer;
+}
+.c1-tab .ext {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--c1-ink-faint);
+}
+.c1-tab.on { color: var(--c1-ink); }
+.c1-tab.on .ext { color: var(--accent); }
+.c1-tab.on::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.c1-tab.dirty .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--warning);
+}
+
+/* ── Main: editor sheet + docked rail (no border between rail & canvas) ─ */
+.c1-main {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  min-height: 0;
+  padding: 6px 22px 12px 22px;
+  gap: 28px;
+  position: relative;
+}
+
+/* ── Editor sheet (from B — centered paper with soft shadow) ────────── */
+.c1-editor-wrap {
+  min-width: 0;
+  overflow: auto;
+  padding: 14px 0 60px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start; /* let the sheet grow to fit content, wrap scrolls */
+}
+.c1-sheet {
+  background: var(--c1-sheet);
+  border-radius: 12px;
+  box-shadow: var(--c1-shadow-sheet);
+  padding: 40px 60px 56px;
+  width: 100%;
+  max-width: 760px;
+  position: relative;
+}
+.c1-doc {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  line-height: 1.68;
+  color: var(--c1-ink);
+  max-width: 60ch;
+  margin: 0 auto;
+}
+.c1-doc h1 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 30px;
+  letter-spacing: -0.022em; line-height: 1.1;
+  margin: 0 0 14px;
+}
+.c1-doc h2 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 19px;
+  letter-spacing: -0.012em; margin: 20px 0 8px;
+}
+.c1-doc p { margin: 0 0 12px; }
+.c1-meta {
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c1-ink-faint);
+  margin-bottom: 10px;
+}
+
+.c1-para { position: relative; }
+.c1-para::before {
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 0.55em;
+  bottom: 0.55em;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  opacity: 0.42;
+}
+.c1-para[data-author="user"]::before { background: var(--author-user); }
+.c1-para[data-author="claude"]::before { background: var(--author-claude); }
+
+.c1-anno {
+  background: oklch(from var(--warning) l c h / 0.20);
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+}
+/* inline annotation spans — matched to real types */
+.c1-anno.comment {
+  background: oklch(from var(--author-claude) l c h / 0.12);
+  border-bottom: 1.5px dotted oklch(from var(--author-claude) l c h / 0.55);
+}
+.c1-anno.comment {
+  background: oklch(from var(--author-claude) l c h / 0.11);
+  border-bottom: 1.5px dotted oklch(from var(--author-claude) l c h / 0.55);
+}
+.c1-anno.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Selection demo (text user has selected — formatted by floating toolbar) */
+.c1-selected {
+  background: oklch(from var(--author-user) l c h / 0.18);
+  border-radius: 2px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px oklch(from var(--author-user) l c h / 0.20);
+}
+
+/* ── Mini-toolbar (from D — frosted, floats over editor) ──────────── */
+.c1-mini {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 5px;
+  background: oklch(0.998 0.003 80 / 0.78);
+  backdrop-filter: saturate(140%) blur(14px);
+  -webkit-backdrop-filter: saturate(140%) blur(14px);
+  border-radius: 10px;
+  box-shadow: var(--c1-shadow-float);
+  z-index: 30;
+}
+.c1-mini-btn {
+  height: 28px; min-width: 28px;
+  padding: 0 8px;
+  border: none; background: transparent;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 500;
+  color: var(--c1-ink); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: inherit;
+}
+.c1-mini-btn:hover { background: oklch(0 0 0 / 0.04); }
+.c1-mini-btn.accent { color: var(--accent); }
+.c1-mini-btn.accent:hover { background: oklch(from var(--accent) l c h / 0.10); }
+.c1-mini-divider { width: 1px; height: 18px; background: oklch(0 0 0 / 0.10); margin: 0 4px; }
+.c1-mini-sw {
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.c1-mini-sw:hover { transform: scale(1.1); }
+.c1-mini::after {
+  content: '';
+  position: absolute;
+  bottom: -5px; left: 24px;
+  width: 10px; height: 10px;
+  background: inherit;
+  backdrop-filter: inherit;
+  -webkit-backdrop-filter: inherit;
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+
+/* ── Rail (docked but no border; cards float in column) ──────────── */
+.c1-rail {
+  overflow: auto;
+  padding: 18px 4px 60px 4px;
+  display: flex; flex-direction: column;
+  position: relative;
+}
+.c1-rail-head {
+  display: flex; align-items: center; gap: 16px;
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c1-ink-faint);
+  padding: 0 8px 14px;
+}
+.c1-rail-head .on { color: var(--c1-ink); }
+.c1-rail-head .count {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--c1-ink-faint);
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+/* anchor-aligned card column (from C) — each card positioned relative to
+   where its anchor sits in the editor; static offsets here for the mock */
+.c1-cards { position: relative; min-height: 540px; }
+
+.c1-card {
+  position: absolute;
+  left: 4px; right: 4px;
+  padding: 12px 14px 12px 16px;
+  border-radius: 10px;
+  display: flex; flex-direction: column; gap: 7px;
+  font-size: 13px; line-height: 1.5;
+  background: var(--c1-canvas-soft);
+  /* tinted left rail does the kind cue (from C — the leader bar) */
+  box-shadow: inset 3px 0 0 0 oklch(0 0 0 / 0.10);
+  transition: transform 140ms, box-shadow 140ms;
+}
+.c1-card:hover {
+  transform: translateX(-2px);
+  box-shadow:
+    inset 3px 0 0 0 var(--c1-leader, oklch(0 0 0 / 0.18)),
+    0 6px 18px -8px oklch(0 0 0 / 0.10);
+}
+.c1-card.active {
+  background: var(--c1-sheet);
+  box-shadow:
+    inset 3px 0 0 0 var(--c1-leader, var(--accent)),
+    0 10px 26px -10px oklch(0 0 0 / 0.14);
+}
+
+/* kind tints (from E) — applied as background + leader-color CSS variable */
+.c1-card.highlight {
+  background: oklch(from var(--warning) l c h / 0.10);
+  --c1-leader: oklch(from var(--warning) l c h / 0.65);
+  box-shadow: inset 3px 0 0 0 var(--c1-leader);
+}
+.c1-card.note {
+  background: oklch(from var(--warning) l c h / 0.10);
+  --c1-leader: oklch(from var(--warning) l c h / 0.65);
+  box-shadow: inset 3px 0 0 0 var(--c1-leader);
+}
+.c1-card.replacement {
+  background: oklch(from var(--suggestion) l c h / 0.09);
+  --c1-leader: oklch(from var(--suggestion) l c h / 0.65);
+  box-shadow: inset 3px 0 0 0 var(--c1-leader);
+}
+.c1-card.comment {
+  background: oklch(from var(--author-claude) l c h / 0.10);
+  --c1-leader: oklch(from var(--author-claude) l c h / 0.55);
+  box-shadow: inset 3px 0 0 0 var(--c1-leader);
+}
+
+.c1-card .head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--c1-ink-muted);
+}
+.c1-card .head .who { font-weight: 600; }
+.c1-card .head .who.u { color: var(--author-user); }
+.c1-card .head .who.c { color: var(--author-claude); }
+.c1-card .head .dot { width: 6px; height: 6px; border-radius: 50%; }
+.c1-card .head .dot.u { background: var(--author-user); }
+.c1-card .head .dot.c { background: var(--author-claude); }
+.c1-card .head .t { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--c1-ink-faint); }
+.c1-card .kind {
+  font-family: var(--font-mono); font-size: 9.5px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--c1-ink-muted);
+}
+.c1-card .snip {
+  font-family: var(--font-serif); font-style: italic;
+  font-size: 12.5px; color: var(--c1-ink-muted);
+  padding-left: 10px;
+  border-left: 1.5px solid oklch(0 0 0 / 0.10);
+}
+.c1-card.highlight .snip { border-left-color: oklch(from var(--warning) l c h / 0.55); }
+.c1-card.note .snip        { border-left-color: oklch(from var(--warning) l c h / 0.55); }
+.c1-card.replacement .snip { border-left-color: oklch(from var(--suggestion) l c h / 0.55); }
+.c1-card.comment .snip { border-left-color: oklch(from var(--author-claude) l c h / 0.55); }
+.c1-card .body { color: var(--c1-ink); }
+.c1-card .actions {
+  display: flex; gap: 10px; margin-top: 4px;
+  font-size: 11.5px; color: var(--c1-ink-muted);
+}
+.c1-card .actions span { cursor: pointer; }
+.c1-card .actions .primary { color: var(--accent); font-weight: 500; }
+
+/* horizontal leader from anchor to card (active only) */
+.c1-leader-line {
+  position: absolute;
+  height: 1px;
+  background: linear-gradient(to right,
+    oklch(from var(--c1-leader, var(--accent)) l c h / 0) 0%,
+    oklch(from var(--c1-leader, var(--accent)) l c h / 0.55) 30%,
+    oklch(from var(--c1-leader, var(--accent)) l c h / 0.55) 100%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ── Status bar (from A — plain mono labels on the canvas) ────────── */
+.c1-status {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 22px;
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--c1-ink-faint); letter-spacing: 0.02em;
+}
+.c1-status .ok { color: oklch(from var(--success) calc(l - 0.05) c h); }
+.c1-status .right { margin-left: auto; display: inline-flex; gap: 16px; }
+.c1-status .sb-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block;
+  background: var(--success);
+  vertical-align: middle;
+  margin-right: 4px;
+}

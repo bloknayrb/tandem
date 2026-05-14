@@ -20,7 +20,7 @@ const Icon = ({ name, size = 16, stroke = 1.6, ...props }) => {
     sparkle: <><path d="M8 2v4"/><path d="M8 10v4"/><path d="M2 8h4"/><path d="M10 8h4"/><path d="M4 4l1.5 1.5"/><path d="M10.5 10.5L12 12"/><path d="M12 4l-1.5 1.5"/><path d="M5.5 10.5L4 12"/></>,
     undo: <><path d="M3 7h7a3 3 0 0 1 0 6H6"/><path d="M5 4L2 7l3 3"/></>,
     redo: <><path d="M13 7H6a3 3 0 0 0 0 6h4"/><path d="M11 4l3 3-3 3"/></>,
-    settings: <><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4"/></>,
+    settings: <><path d="M6.5 1.5h3l.5 2 1.5.87 2-.67 1.5 2.6-1.5 1.5v1.73l1.5 1.5-1.5 2.6-2-.67-1.5.87-.5 2h-3l-.5-2-1.5-.87-2 .67-1.5-2.6 1.5-1.5V8.27l-1.5-1.5 1.5-2.6 2 .67 1.5-.87.5-2z" strokeLinejoin="round"/><circle cx="8" cy="8" r="2.2"/></>,
     search: <><circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/></>,
     plus: <><path d="M8 3v10M3 8h10"/></>,
     x: <><path d="M4 4l8 8M12 4l-8 8"/></>,

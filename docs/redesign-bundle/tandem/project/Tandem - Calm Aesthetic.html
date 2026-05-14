@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tandem — Calm aesthetic proposals</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="calm-aesthetic.css">
+<style>
+  html, body { height: 100%; background: oklch(0.94 0.010 75); }
+  body { font-family: 'Inter Tight', sans-serif; }
+  .canvas-bg {
+    min-height: 100vh;
+    padding: 48px 56px 120px;
+    background:
+      radial-gradient(circle at 10% 0%, oklch(0.97 0.014 80) 0, transparent 55%),
+      radial-gradient(circle at 90% 30%, oklch(0.96 0.012 60) 0, transparent 60%),
+      oklch(0.945 0.010 75);
+  }
+  .hero { max-width: 1100px; margin: 0 auto 36px; color: oklch(0.22 0.012 280); }
+  .hero h1 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 44px; font-weight: 500; line-height: 1.08;
+    letter-spacing: -0.02em; margin: 0 0 16px;
+  }
+  .hero h1 em { font-style: italic; color: oklch(0.52 0.16 275); }
+  .hero p { font-size: 15px; line-height: 1.6; color: oklch(0.40 0.010 280); max-width: 740px; margin: 0 0 8px; }
+  .hero .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: oklch(0.55 0.008 280); text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 20px;
+  }
+  .diagnosis {
+    max-width: 1100px; margin: 0 auto 56px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .diag-card {
+    background: oklch(0.99 0.004 80);
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: 0 1px 2px rgba(20,20,30,0.04), 0 8px 22px -10px rgba(20,20,30,0.10);
+  }
+  .diag-card h3 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: oklch(0.48 0.010 280);
+    font-weight: 500;
+  }
+  .diag-card ul {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 6px;
+    font-size: 13px; line-height: 1.5;
+    color: oklch(0.30 0.012 280);
+  }
+  .diag-card li::before {
+    content: '— '; color: oklch(0.66 0.008 280);
+  }
+  .diag-card.findings { background: oklch(0.97 0.015 60); }
+
+  .frame {
+    width: 100%; height: 100%;
+    overflow: hidden; position: relative;
+  }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" fill="oklch(0.94 0.010 75)"/>
+    <rect x="18" y="22" width="50" height="56" rx="3" fill="oklch(0.995 0.003 80)" filter="url(#sh)"/>
+    <rect x="72" y="34" width="14" height="32" rx="2" fill="oklch(0.99 0.004 80)" opacity="0.85"/>
+    <rect x="22" y="30" width="22" height="2.5" rx="1" fill="#5B5BD6"/>
+    <rect x="22" y="36" width="38" height="1.8" rx="1" fill="#222" opacity="0.45"/>
+    <rect x="22" y="41" width="32" height="1.8" rx="1" fill="#222" opacity="0.35"/>
+    <rect x="22" y="46" width="36" height="1.8" rx="1" fill="#D97757" opacity="0.6"/>
+    <rect x="22" y="51" width="30" height="1.8" rx="1" fill="#222" opacity="0.35"/>
+    <text x="18" y="90" fill="#5B5BD6" font-size="5" font-family="monospace">calm aesthetic</text>
+    <defs>
+      <filter id="sh" x="-10%" y="-10%" width="120%" height="120%">
+        <feGaussianBlur stdDeviation="1.5"/>
+      </filter>
+    </defs>
+  </svg>
+</template>
+
+<div class="canvas-bg">
+  <div class="hero">
+    <div class="meta">Tandem · calm aesthetic exploration · 2026-05-12</div>
+    <h1>Less line, more air.<br/><em>Five directions toward a calmer surface.</em></h1>
+    <p>v3 today separates regions almost entirely with 1px hairlines: titlebar, tabs, fmt bar, rail edge, every annotation card, every banner. The hairlines are doing all the work because the surface tones are nearly identical. The result reads as busy.</p>
+    <p>These five proposals each remove that load differently — some keep the docked rail and strip its borders, some detach panels to float, one moves notes into the margin and dispenses with the rail entirely. They share the warm paper canvas, the serif editor, the authorship colors, and the type scale — only the chrome treatment differs, so you can mix freely.</p>
+  </div>
+
+  <div class="diagnosis">
+    <div class="diag-card">
+      <h3>What's busy today</h3>
+      <ul>
+        <li>Five horizontal hairlines stacked top-to-bottom: titlebar → tabs → fmt bar → main → status bar</li>
+        <li>Rail joins on left edge with another 1px, then again at every tab header</li>
+        <li>Every annotation card has a 1px border, gaining colored accent borders on hover/active</li>
+        <li>Banners (held, info, conn) repeat: tinted fill + tinted 1px border + radius</li>
+        <li>Chrome (--surface-muted, 0.975) is almost the same tone as bg (0.985) — borders carry all the separation</li>
+      </ul>
+    </div>
+    <div class="diag-card findings">
+      <h3>Calming moves shared by all</h3>
+      <ul>
+        <li>Warmer paper canvas (oklch 0.965 → 0.94) so a clean sheet at 0.995 actually reads as "lifted"</li>
+        <li>Tone difference replaces hairlines wherever possible — chrome is the canvas, editor is the sheet</li>
+        <li>Author color, kind tint, and weight carry meaning previously carried by borders</li>
+        <li>Shadows do separation only when something is actually floating (sheet, popover, frost)</li>
+        <li>Status bar becomes mono labels on the canvas — no top border</li>
+      </ul>
+    </div>
+  </div>
+
+  <design-canvas></design-canvas>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="calm-aesthetic.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+function Page() {
+  return (
+    <>
+      <DCSection id="a-onepaper" title="A — One Paper · borderless chrome, tone+air does the work">
+        <DCArtboard id="a-onepaper-art" label="A · Chrome and editor share the warm paper canvas; no hairlines. Tabs sit flush, status is plain mono on the canvas. Rail dividers become extra vertical space and a hair-thin tint." width={1280} height={820}>
+          <div className="frame"><CalmA_OnePaper /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="b-sheet" title="B — Sheet on Desk · editor floats as paper; chrome floats as a pill">
+        <DCArtboard id="b-sheet-art" label="B · Whole window is a warm desk tone. Editor is a centered white sheet with soft shadow. Toolbar becomes a centered floating pill. Inspector cards float as a column on the right with no rail container around them." width={1280} height={820}>
+          <div className="frame"><CalmB_Sheet /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="c-margin" title="C — Margin Notes · no rail; annotations live next to the text">
+        <DCArtboard id="c-margin-art" label="C · The annotation rail disappears entirely. Notes float in the editor's right margin, anchored to their target paragraph by vertical position. A 2px tinted leader carries kind (suggest/flag/comment), no card chrome at all." width={1280} height={820}>
+          <div className="frame"><CalmC_Margin /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="d-frost" title="D — Frosted Overlays · editor full-bleed; panels are translucent floats">
+        <DCArtboard id="d-frost-art" label="D · Editor takes the full canvas. Titlebar, inspector and status are translucent frosted cards floating on top — visible but not fenced. Best when users want the doc to feel primary and chrome to recede." width={1280} height={820}>
+          <div className="frame"><CalmD_Frosted /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="e-tinted" title="E — Tinted Shells · keep docked rail; cards lose borders, gain kind tint">
+        <DCArtboard id="e-tinted-art" label="E · Closest to today's structure — docked rail stays, status bar stays, but card borders go entirely. A soft kind-tint (yellow/violet/red/coral) replaces the 1px border. Lowest-effort migration; most familiar to existing users." width={1280} height={820}>
+          <div className="frame"><CalmE_Tinted /></div>
+        </DCArtboard>
+      </DCSection>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.querySelector('design-canvas')).render(<Page />);
+</script>
+</body>
+</html>
