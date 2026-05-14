@@ -10,6 +10,13 @@ export interface Toast extends TandemNotification {
 export interface NotificationsState {
   readonly toasts: Toast[];
   dismiss: (id: string) => void;
+  /**
+   * Surface a client-originated toast (not delivered via SSE). Use for
+   * ephemeral UI feedback like "couldn't reopen file" or "enable setting to
+   * use this shortcut" — places where console.warn would land in devtools
+   * the user never opens.
+   */
+  push: (notification: TandemNotification) => void;
 }
 
 /**
@@ -49,15 +56,7 @@ export function createNotifications(): NotificationsState {
   const url = `http://localhost:${DEFAULT_MCP_PORT}${API_NOTIFY_STREAM}`;
   const es = new EventSource(url);
 
-  es.onmessage = (event) => {
-    let notification: TandemNotification;
-    try {
-      notification = JSON.parse(event.data) as TandemNotification;
-    } catch {
-      console.warn("[useNotifications] Malformed SSE data:", event.data);
-      return;
-    }
-
+  const ingest = (notification: TandemNotification) => {
     // Dedup: if incoming has a dedupKey matching an existing toast, replace and increment count
     if (notification.dedupKey) {
       const existingIdx = toasts.findIndex((t) => t.dedupKey === notification.dedupKey);
@@ -86,6 +85,17 @@ export function createNotifications(): NotificationsState {
     scheduleDismiss(newToast.id, newToast.severity);
   };
 
+  es.onmessage = (event) => {
+    let notification: TandemNotification;
+    try {
+      notification = JSON.parse(event.data) as TandemNotification;
+    } catch {
+      console.warn("[useNotifications] Malformed SSE data:", event.data);
+      return;
+    }
+    ingest(notification);
+  };
+
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) {
       console.warn(
@@ -108,5 +118,6 @@ export function createNotifications(): NotificationsState {
       return toasts;
     },
     dismiss,
+    push: ingest,
   };
 }

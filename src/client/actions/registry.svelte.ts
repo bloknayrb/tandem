@@ -12,7 +12,7 @@
  * ADR-029 (docs/decisions.md) records the design rationale.
  */
 
-export const ACTION_GROUPS = ["editor", "navigation", "view", "document"] as const;
+export const ACTION_GROUPS = ["editor", "navigation", "view", "document", "annotations"] as const;
 export type ActionGroup = (typeof ACTION_GROUPS)[number];
 
 export interface Action {

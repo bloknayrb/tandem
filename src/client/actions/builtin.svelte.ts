@@ -21,7 +21,21 @@ interface ActionDeps {
   getActiveTabId: () => string | null;
   openSettings: () => void;
   toggleSoloMode: () => void;
-  openFindBar: () => void; // wired when find/replace bar (PR 570) merges
+  openFindBar: () => void;
+  openFindBarTabs: () => void;
+  findNext: () => void;
+  findPrev: () => void;
+  closeActiveTab: () => void;
+  openFileDialog: () => void;
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
+  reopenClosedTab: () => void;
+  annotationNext: () => void;
+  annotationPrev: () => void;
+  annotationAccept: () => void;
+  annotationDismiss: () => void;
+  selectBlock: () => void;
+  toggleAuthorship: () => void;
 }
 
 let deps: ActionDeps | null = null;
@@ -123,6 +137,7 @@ const BUILTINS: Action[] = [
     id: "toggle-mode",
     label: "Toggle Solo / Tandem mode",
     group: "document",
+    shortcut: "Ctrl+Shift+M",
     run() {
       guardedRun("toggle-mode", (d) => d.toggleSoloMode());
     },
@@ -134,6 +149,145 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+N",
     run() {
       void createScratchpad();
+    },
+  },
+  {
+    id: "close-tab",
+    label: "Close active tab",
+    group: "document",
+    shortcut: "Ctrl+W",
+    run() {
+      guardedRun("close-tab", (d) => d.closeActiveTab());
+    },
+  },
+  {
+    id: "open-file",
+    label: "Open file…",
+    group: "document",
+    shortcut: "Ctrl+O",
+    run() {
+      guardedRun("open-file", (d) => d.openFileDialog());
+    },
+  },
+  {
+    id: "find",
+    label: "Find / Replace",
+    group: "navigation",
+    shortcut: "Ctrl+F",
+    run() {
+      guardedRun("find", (d) => d.openFindBar());
+    },
+  },
+  {
+    id: "find-in-tabs",
+    label: "Find in open tabs",
+    group: "navigation",
+    shortcut: "Ctrl+Shift+F",
+    run() {
+      guardedRun("find-in-tabs", (d) => d.openFindBarTabs());
+    },
+  },
+  {
+    id: "find-next",
+    label: "Find next match",
+    group: "navigation",
+    shortcut: "Ctrl+G",
+    run() {
+      guardedRun("find-next", (d) => d.findNext());
+    },
+  },
+  {
+    id: "find-previous",
+    label: "Find previous match",
+    group: "navigation",
+    shortcut: "Ctrl+Shift+G",
+    run() {
+      guardedRun("find-previous", (d) => d.findPrev());
+    },
+  },
+  {
+    id: "toggle-left-panel",
+    label: "Toggle left panel",
+    group: "view",
+    shortcut: "Ctrl+\\",
+    run() {
+      guardedRun("toggle-left-panel", (d) => d.toggleLeftPanel());
+    },
+  },
+  {
+    id: "toggle-right-panel",
+    label: "Toggle right panel",
+    group: "view",
+    shortcut: "Ctrl+Shift+\\",
+    run() {
+      guardedRun("toggle-right-panel", (d) => d.toggleRightPanel());
+    },
+  },
+  {
+    id: "reopen-closed-tab",
+    label: "Reopen closed tab (this session)",
+    group: "document",
+    shortcut: "Ctrl+Alt+T",
+    run() {
+      guardedRun("reopen-closed-tab", (d) => d.reopenClosedTab());
+    },
+  },
+  {
+    id: "annotation-next",
+    label: "Next annotation",
+    group: "annotations",
+    shortcut: "Alt+]",
+    run() {
+      guardedRun("annotation-next", (d) => d.annotationNext());
+    },
+  },
+  {
+    id: "annotation-previous",
+    label: "Previous annotation",
+    group: "annotations",
+    shortcut: "Alt+[",
+    run() {
+      guardedRun("annotation-previous", (d) => d.annotationPrev());
+    },
+  },
+  {
+    id: "annotation-accept",
+    label: "Accept focused annotation",
+    group: "annotations",
+    shortcut: "Ctrl+Enter",
+    run() {
+      guardedRun("annotation-accept", (d) => d.annotationAccept());
+    },
+  },
+  {
+    id: "annotation-dismiss",
+    label: "Dismiss focused annotation",
+    group: "annotations",
+    shortcut: "Ctrl+Shift+Enter",
+    run() {
+      guardedRun("annotation-dismiss", (d) => d.annotationDismiss());
+    },
+  },
+  // Note: comment-on-selection (Ctrl+Alt+M) is intentionally NOT registered as
+  // a palette action — opening the palette collapses the editor selection
+  // (focus moves to palette input), so a palette-invoked "comment on selection"
+  // would always fire with no selection. Static row in static-shortcuts.ts.
+  {
+    id: "select-block",
+    label: "Select containing block",
+    group: "editor",
+    shortcut: "Alt+L",
+    run() {
+      guardedRun("select-block", (d) => d.selectBlock());
+    },
+  },
+  {
+    id: "toggle-authorship",
+    label: "Toggle authorship colors",
+    group: "view",
+    shortcut: "Ctrl+Alt+A",
+    run() {
+      guardedRun("toggle-authorship", (d) => d.toggleAuthorship());
     },
   },
 ];

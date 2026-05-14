@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { API_OPEN } from "../shared/api-paths.js";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -15,6 +16,7 @@ import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
+import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
@@ -25,20 +27,29 @@ import { isTauriRuntime } from "./cowork/cowork-helpers";
 import DocxPageContainer from "./editor/DocxPageContainer.svelte";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
+import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
+import {
+  nextAnnotationId,
+  prevAnnotationId,
+  sortAnnotationsByPosition,
+} from "./hooks/useAnnotationOrder.js";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
+import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
+import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
+import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
@@ -49,15 +60,76 @@ import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
+import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { API_BASE } from "./utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 const yjsSync = createYjsSync();
 onDestroy(() => yjsSync.destroy());
+
+// In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
+// the app session; resets on reload. See useClosedTabStack.ts for rationale.
+const closedTabStack = createClosedTabStack();
+const inflightReopens = new Set<string>();
+
+function closeTabAndRecord(tabId: string) {
+  const tab = yjsSync.tabs.find((t) => t.id === tabId);
+  if (tab && !isUploadPath(tab.filePath)) {
+    closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
+  }
+  yjsSync.handleTabClose(tabId);
+}
+
+async function reopenClosedTab() {
+  const rec = closedTabStack.pop();
+  if (!rec) return;
+  // Server may have rejected the original close (rare); also covers the
+  // close→reopen→close→reopen rapid cycle for the same path. If the file is
+  // still open, just activate it.
+  const existing = yjsSync.tabs.find((t) => t.filePath === rec.filePath);
+  if (existing) {
+    yjsSync.setActiveTabId(existing.id);
+    return;
+  }
+  if (inflightReopens.has(rec.filePath)) return;
+  inflightReopens.add(rec.filePath);
+  const handleFailure = (reason: string) => {
+    // Restore the record so the user can retry with another Ctrl+Alt+T;
+    // silent drop would also surprise users who expect LIFO to be retryable.
+    closedTabStack.push(rec);
+    const basename = rec.filePath.split(/[\\/]/).pop() || rec.filePath;
+    notifications.push({
+      id: `reopen-failed-${Date.now()}`,
+      type: "general-error",
+      severity: "error",
+      message: `Couldn't reopen ${basename}: ${reason}`,
+      dedupKey: `reopen-failed:${rec.filePath}`,
+      timestamp: Date.now(),
+    });
+  };
+  try {
+    const response = await fetch(`${API_BASE}${API_OPEN}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: rec.filePath }),
+    });
+    if (!response.ok) {
+      // fetch() only rejects on network errors — server-side 4xx/5xx never
+      // throw. Without this branch, the record was silently dropped on a
+      // failed reopen and the toast never fired.
+      handleFailure(`server returned ${response.status}`);
+    }
+  } catch (err) {
+    handleFailure(err instanceof Error ? err.message : "network error");
+  } finally {
+    inflightReopens.delete(rec.filePath);
+  }
+}
 
 const tabOrder = createTabOrder(() => yjsSync.tabs);
 createTabCycleKeyboard(
@@ -117,6 +189,7 @@ const fileDrop = createFileDrop();
 let settingsOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 let paletteOpen = $state(false);
+let fileOpenDialogOpen = $state(false);
 
 function toggleSettings() {
   settingsOpen = !settingsOpen;
@@ -133,8 +206,75 @@ wireActionDeps({
   openSettings: () => (settingsOpen = true),
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
-  // openFindBar wired when PR 570 (find/replace bar) merges into this branch
-  openFindBar: () => {},
+  openFindBar: () => {
+    findBarForceScope = "doc";
+    findBarOpen = true;
+  },
+  openFindBarTabs: () => {
+    findBarForceScope = "tabs";
+    findBarOpen = true;
+  },
+  findNext: () => {
+    const ed = editor;
+    const findState = ed ? getFindState(ed.state) : undefined;
+    if (ed && shouldDispatchFindNav(findState)) {
+      ed.commands.findNext();
+    } else {
+      findBarForceScope = "doc";
+      findBarOpen = true;
+    }
+  },
+  findPrev: () => {
+    const ed = editor;
+    const findState = ed ? getFindState(ed.state) : undefined;
+    if (ed && shouldDispatchFindNav(findState)) {
+      ed.commands.findPrev();
+    } else {
+      findBarForceScope = "doc";
+      findBarOpen = true;
+    }
+  },
+  closeActiveTab: () => {
+    const id = yjsSync.activeTabId;
+    if (id) closeTabAndRecord(id);
+  },
+  openFileDialog: () => {
+    fileOpenDialogOpen = true;
+  },
+  toggleLeftPanel: () => toggleLeftPanel(),
+  toggleRightPanel: () => toggleRightPanel(),
+  reopenClosedTab: () => void reopenClosedTab(),
+  annotationNext: () => {
+    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const nextId = nextAnnotationId(sorted, activeAnnotationId);
+    if (nextId) {
+      activeAnnotationId = nextId;
+      const ann = sorted.find((a) => a.id === nextId);
+      if (ann) review.scrollToAnnotation(ann);
+    }
+  },
+  annotationPrev: () => {
+    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const prevId = prevAnnotationId(sorted, activeAnnotationId);
+    if (prevId) {
+      activeAnnotationId = prevId;
+      const ann = sorted.find((a) => a.id === prevId);
+      if (ann) review.scrollToAnnotation(ann);
+    }
+  },
+  annotationAccept: () => {
+    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    if (cur && cur.author !== "user") review.handleAccept(cur.id);
+  },
+  annotationDismiss: () => {
+    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    if (cur && cur.author !== "user") review.handleDismiss(cur.id);
+  },
+  selectBlock: () => editor?.chain().focus().selectParentNode().run(),
+  toggleAuthorship: () =>
+    settingsState.updateSettings({
+      showAuthorship: !settingsState.settings.showAuthorship,
+    }),
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -211,7 +351,9 @@ let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
+let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
+let commentFocusTrigger = $state(0);
 let activeAnnotationFilter = $state<{
   type: FilterType;
   author: FilterAuthor;
@@ -332,22 +474,29 @@ $effect(() => {
       return;
     }
     if (e.ctrlKey || e.metaKey) {
-      if (e.key === "a") {
+      // Letter shortcuts use `e.code` ("KeyA" etc.) instead of `e.key` so they
+      // remain layout-independent on Dvorak/AZERTY AND fire correctly on macOS
+      // when Option is held (Option+letter produces alt characters like "†"/"µ"
+      // that don't match e.key === "t" or "m"). Digit-1..9 already used e.code;
+      // Backslash already used e.code; Enter is layout-stable and stays on
+      // e.key. Shift/Alt modifier discrimination is explicit so intent is on
+      // the page (e.g. Ctrl+M vs Ctrl+Shift+M).
+      if (e.code === "KeyA" && !e.altKey && !e.shiftKey) {
         const active = document.activeElement;
         if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
         if (active?.closest?.(".ProseMirror")) return;
         e.preventDefault();
         editor?.commands.selectAll();
-      } else if (e.key === "s") {
+      } else if (e.code === "KeyS") {
         e.preventDefault();
         void triggerSave(yjsSync.activeTabId);
       } else if (isSettingsShortcut(e)) {
         e.preventDefault();
         settingsOpen = true;
-      } else if (e.shiftKey && e.key === "P") {
+      } else if (e.shiftKey && e.code === "KeyP") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
-      } else if (e.key === "n") {
+      } else if (e.code === "KeyN") {
         const el = e.target as HTMLElement;
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
         e.preventDefault();
@@ -357,19 +506,185 @@ $effect(() => {
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
         e.preventDefault();
         showHelp = untrack(() => !showHelp);
+      } else if (e.code === "KeyW") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        const id = yjsSync.activeTabId;
+        if (id) closeTabAndRecord(id);
+      } else if (e.code === "KeyO") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        fileOpenDialogOpen = true;
+      } else if (/^Digit[1-9]$/.test(e.code)) {
+        if (shouldIgnoreShortcut(e)) return;
+        const nextId = pickTabByDigit(yjsSync.tabs, Number(e.code.slice(5)));
+        if (nextId) {
+          e.preventDefault();
+          yjsSync.setActiveTabId(nextId);
+        }
+      } else if (e.shiftKey && !e.altKey && e.code === "KeyM") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
+      } else if (e.code === "Backslash") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        if (e.shiftKey) toggleRightPanel();
+        else toggleLeftPanel();
+      } else if (e.altKey && e.code === "KeyT") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        void reopenClosedTab();
       }
     }
-    // Ctrl/Cmd+F — focus outline search if the outline panel is visible; fall back to find bar.
-    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    // Ctrl/Cmd+F — focus outline search if outline panel visible; else open find bar (doc scope).
+    // Ctrl/Cmd+Shift+F — open find bar pre-scoped to "Open tabs" (bypasses outline route).
+    // Note: intentionally NOT gated on shouldIgnoreShortcut — Ctrl+F should always
+    // claim find behavior to prevent the browser's native find-in-page from firing.
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyF") {
       e.preventDefault();
+      if (e.shiftKey) {
+        findBarForceScope = "tabs";
+        findBarOpen = true;
+        return;
+      }
       const isOutlineVisible =
         (effectiveLeftVisible && activeLeftRailTab === "outline") ||
         (effectiveRightVisible && activeRailTab === "outline");
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
+        findBarForceScope = "doc";
         findBarOpen = true;
       }
+    }
+    // Ctrl/Cmd+G — find next; Ctrl/Cmd+Shift+G — find previous.
+    // With no active query, fall back to opening the find bar.
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
+      if (shouldIgnoreShortcut(e)) return;
+      e.preventDefault();
+      const ed = editor;
+      const findState = ed ? getFindState(ed.state) : undefined;
+      if (ed && shouldDispatchFindNav(findState)) {
+        if (e.shiftKey) ed.commands.findPrev();
+        else ed.commands.findNext();
+      } else {
+        findBarForceScope = "doc";
+        findBarOpen = true;
+      }
+    }
+    // Alt+] / Alt+[ — next / previous annotation. Plain Alt (no ctrl/meta/shift)
+    // so they work cross-platform without an fn-key on Mac (unlike F8).
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (e.code === "BracketRight") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+        const nextId = nextAnnotationId(sorted, activeAnnotationId);
+        if (nextId) {
+          activeAnnotationId = nextId;
+          const ann = sorted.find((a) => a.id === nextId);
+          if (ann) review.scrollToAnnotation(ann);
+        }
+        return;
+      }
+      if (e.code === "BracketLeft") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+        const prevId = prevAnnotationId(sorted, activeAnnotationId);
+        if (prevId) {
+          activeAnnotationId = prevId;
+          const ann = sorted.find((a) => a.id === prevId);
+          if (ann) review.scrollToAnnotation(ann);
+        }
+        return;
+      }
+    }
+    // Ctrl/Cmd+Enter — accept focused annotation; Ctrl/Cmd+Shift+Enter — dismiss.
+    // Only Claude- or import-authored annotations can be accepted/dismissed
+    // (mirrors the SidePanel.svelte:440 prop gate). User-authored notes never
+    // become review-targets so the underlying handler is also gated.
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      if (shouldIgnoreShortcut(e)) return;
+      e.preventDefault();
+      const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+      if (cur && cur.author !== "user") {
+        if (e.shiftKey) review.handleDismiss(cur.id);
+        else review.handleAccept(cur.id);
+      }
+      return;
+    }
+    // Ctrl/Cmd+Alt+M — open the comment popup focused on its textarea, using
+    // whatever text is currently selected in the editor. Intentionally NOT
+    // gated on shouldIgnoreShortcut: contenteditable focus is the common case
+    // (user has selected text in the editor) and we want this to fire there.
+    //
+    // Three orthogonal preconditions gate the popup; branch feedback so a
+    // disabled-setting toast doesn't misfire when the real cause is "no
+    // selection" or "read-only doc". Suppression from palette/find is silent
+    // — the user is already in a different UI context.
+    if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === "KeyM") {
+      e.preventDefault();
+      const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
+      const reviewOnly = activeTab?.readOnly === true;
+      const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
+      if (popupSuppressed) {
+        // Palette/find UI is the active context; user understands why.
+        return;
+      }
+      if (!hasSelection) {
+        notifications.push({
+          id: `comment-shortcut-no-selection-${Date.now()}`,
+          type: "general-error",
+          severity: "info",
+          message: "Select text to comment",
+          dedupKey: "comment-shortcut-no-selection",
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      if (reviewOnly) {
+        notifications.push({
+          id: `comment-shortcut-readonly-${Date.now()}`,
+          type: "general-error",
+          severity: "info",
+          message: "Document is read-only",
+          dedupKey: "comment-shortcut-readonly",
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      if (!settingsState.settings.selectionToolbar) {
+        notifications.push({
+          id: `comment-shortcut-toolbar-off-${Date.now()}`,
+          type: "general-error",
+          severity: "info",
+          message: "Enable selection toolbar in Settings to comment via keyboard",
+          dedupKey: "comment-shortcut-toolbar-off",
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      commentFocusTrigger += 1;
+      return;
+    }
+    // Alt+L — select the containing block (paragraph / heading / list item).
+    // Chosen over Ctrl+L to avoid the browser address-bar conflict in dev mode.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyL") {
+      if (shouldIgnoreShortcut(e)) return;
+      e.preventDefault();
+      if (editor) editor.chain().focus().selectParentNode().run();
+      return;
+    }
+    // Ctrl/Cmd+Alt+A — toggle authorship colors. Works even when focus is in
+    // a form input (it's a global UI preference, not a contextual action).
+    if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === "KeyA") {
+      e.preventDefault();
+      settingsState.updateSettings({
+        showAuthorship: !settingsState.settings.showAuthorship,
+      });
+      return;
     }
   }
   window.addEventListener("keydown", handler);
@@ -377,6 +692,26 @@ $effect(() => {
 });
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
+
+// Lifted from SidePanel.svelte so that:
+//   1. There's exactly one review instance (both rails would otherwise mount
+//      their own, doubling accept/dismiss writes — which would also double
+//      `applySuggestion`'s text insertion before the idempotency guard fix).
+//   2. App-level keyboard shortcuts (Ctrl+Enter accept, etc.) can dispatch
+//      directly without an upward callback.
+// SidePanel now receives `review` as a prop.
+const review = useAnnotationReview({
+  getYdoc: () => activeTab?.ydoc ?? null,
+  getEditor: () => editor,
+  getAnnotations: () => modeGate.visibleAnnotations,
+  onActiveAnnotationChange: (id) => {
+    activeAnnotationId = id;
+  },
+  getScrollBehavior: () => (settingsState.settings.reduceMotion ? "auto" : "smooth"),
+  // Lets the hook's auto-set effect avoid clobbering externally-set ids
+  // (e.g., from Alt+]/Alt+[ keyboard navigation).
+  getActiveAnnotationId: () => activeAnnotationId,
+});
 
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
@@ -429,15 +764,17 @@ const tutorial = createTutorial(
       ydoc={activeTab?.ydoc ?? null}
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
+      requestCommentFocus={commentFocusTrigger}
     />
 
     <DocumentTabs
       tabs={tabOrder.orderedTabs}
       activeTabId={yjsSync.activeTabId}
       onTabSwitch={yjsSync.setActiveTabId}
-      onTabClose={yjsSync.handleTabClose}
+      onTabClose={closeTabAndRecord}
       reorder={tabOrder.reorder}
       reduceMotion={settingsState.settings.reduceMotion}
+      onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
     />
 
     <FormattingBar
@@ -524,6 +861,7 @@ const tutorial = createTutorial(
               onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
               reduceMotion={settingsState.settings.reduceMotion}
               storeReadOnly={yjsSync.storeReadOnly}
+              {review}
               visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
             />
             <PanelSlot
@@ -572,6 +910,10 @@ const tutorial = createTutorial(
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+
+    {#if fileOpenDialogOpen}
+      <FileOpenDialog onClose={() => (fileOpenDialogOpen = false)} />
+    {/if}
 
     <CommandPalette
       open={paletteOpen}
@@ -695,6 +1037,7 @@ const tutorial = createTutorial(
       open={findBarOpen}
       onClose={() => (findBarOpen = false)}
       tabs={yjsSync.tabs}
+      forceScope={findBarForceScope}
     />
   </div>
 {/snippet}
@@ -781,6 +1124,7 @@ const tutorial = createTutorial(
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}
       storeReadOnly={yjsSync.storeReadOnly}
+      {review}
       onFilterChange={(type, author, status) => {
         activeAnnotationFilter = { type, author, status };
       }}

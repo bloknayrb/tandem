@@ -24,9 +24,21 @@ interface Props {
   ydoc: Y.Doc | null;
   selectionToolbar?: boolean;
   suppressSelectionToolbar?: boolean;
+  /**
+   * Counter prop — when it changes, the comment popup is shown (if there's a
+   * non-empty editor selection) and focus moves to its textarea. Used by the
+   * Ctrl+Alt+M global shortcut in App.svelte.
+   */
+  requestCommentFocus?: number;
 }
 
-let { editor, ydoc, selectionToolbar = true, suppressSelectionToolbar = false }: Props = $props();
+let {
+  editor,
+  ydoc,
+  selectionToolbar = true,
+  suppressSelectionToolbar = false,
+  requestCommentFocus = 0,
+}: Props = $props();
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{ left: number; top: number } | null>(null);
@@ -152,6 +164,22 @@ $effect(() => {
     // Only clear draft text if user isn't actively typing (prevents resize-glitch data loss)
     if (document.activeElement !== textareaEl) annotationText = "";
   }
+});
+
+// Counter-trigger from App.svelte's Ctrl+Alt+M handler. Captures the current
+// editor selection and focuses the textarea once Svelte commits the popup DOM.
+// Plain `let`, not `$state` — only `requestCommentFocus` is reactive. Tracking
+// the cursor in $state would create a self-triggering effect loop (the $effect
+// writes to the cursor inside its own reactive scope on every fire).
+let lastSeenCommentTrigger = 0;
+$effect(() => {
+  if (requestCommentFocus === lastSeenCommentTrigger) return;
+  lastSeenCommentTrigger = requestCommentFocus;
+  if (requestCommentFocus === 0 || !editor) return;
+  const { from, to } = editor.state.selection;
+  if (from === to) return; // No selection → no-op
+  untrack(() => captureSelectionRange());
+  requestAnimationFrame(() => textareaEl?.focus());
 });
 
 $effect(() => {
