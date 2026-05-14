@@ -42,8 +42,9 @@ export const TANDEM_SETTINGS_KEY = "tandem:settings";
 // changing the strings would invalidate every existing user's saved widths.
 // Do not "fix" the style — the key string is the persistence contract.
 //
-// Right-side panel width is shared between the tabbed layout and the
-// three-panel right panel. The left key only applies in three-panel mode.
+// Right-side panel width is shared between the tabbed layout and any
+// future left-panel variant. The left key only applies when the left
+// panel is visible.
 export const PANEL_WIDTH_KEY = "tandem-panel-width";
 export const LEFT_PANEL_WIDTH_KEY = "tandem-left-panel-width";
 

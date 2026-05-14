@@ -194,7 +194,9 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 **Solution:** Bypass `unloadDocument` entirely and manipulate Hocuspocus's internal state directly:
 
 ```typescript
-const hp = getHocuspocus();
+// Note: `getHocuspocus()` was removed in audit v2 (zero callers). The pattern below
+// works against any direct Hocuspocus instance reference held by the caller.
+const hp = hocuspocusInstance;
 // 1. Force-close WebSocket connections (fire-and-forget safety net)
 hp.closeConnections(docName);
 // 2. Remove from Hocuspocus's internal Document map

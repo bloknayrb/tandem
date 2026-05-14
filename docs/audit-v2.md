@@ -20,7 +20,7 @@ Three reviewers (annotation-model, CRDT, security) validated every dead-code can
 
 ## Status: all recommendations executed
 
-All five recommendations below were executed in PR #621 (this report's home PR). 11 commits, ~250 LOC removed, all CI green:
+All five recommendations below were executed in PR #621 (this report's home PR). 16 commits, ~250 LOC removed, all CI green:
 
 | Item | Commit |
 |---|---|
@@ -55,7 +55,7 @@ The full findings appendix is below for engineers; the items here are the ones I
 ### 1. Fix the 3 bonus correctness findings the reviewers spotted (HIGH)
 While validating dead-code candidates, the CRDT and annotation reviewers spotted three genuine correctness bugs the mechanical scans missed. These are not leanness items — they're real bugs.
 
-- **`reloadFromDisk` uses `MCP_ORIGIN` where it should use `FILE_SYNC_ORIGIN`** (`file-opener.ts:798-811`). Per Critical Rule #2, file-watcher reloads should not echo through the channel as user-intent writes. The durable-annotation sync observer skips `FILE_SYNC_ORIGIN`, so MCP-tagging here can re-persist state just loaded from disk. **Needs deeper review** — may have been deliberate.
+- **`reloadFromDisk` uses `MCP_ORIGIN` where the FIRST transaction should use `FILE_SYNC_ORIGIN`** (`file-opener.ts:798-811`). Per Critical Rule #2, file-watcher reloads should not re-persist state just loaded from disk; the durable-annotation sync observer skips `FILE_SYNC_ORIGIN`. The post-merge CRDT review (see section below) narrowed this to *only* the first transaction — the second (relocation pass) must stay `MCP_ORIGIN` so its writes reach disk via the sync observer.
 - **`tutorial-annotations.ts:85` writes `author: "claude"` for a user-private note.** The sanitize/filter pipeline gates on `type`, not `author`, so it's not a privacy leak — but the data model is inconsistent. Consider `author: "import"` or a `"system"` author.
 - **`annotations.ts` returns `INVALID_RANGE` for non-range failures** (lines 478, 505, 530, 536, 541, 548 — e.g., "annotation not found", "cannot edit a dismissed annotation"). The reply helper at line 642 already uses correct codes (`NOT_FOUND`, etc.); these handlers should match.
 
@@ -91,7 +91,7 @@ Three flagged files are **KEEP** — knip's blind spot for lazy `() => import(..
 - `panels/DocumentHealth.svelte`
 - `hooks/useModeGate.svelte.ts`
 
-One needs a final caller check: `hooks/useReviewCompletion.svelte.ts` (CRDT reviewer found tests reference it but no production import — Svelte reviewer says verify before deletion).
+One was a tougher call: `hooks/useReviewCompletion.svelte.ts`. The test file `tests/client/use-review-completion.test.ts` *mentions* the hook in a comment but doesn't import it (it inlines its own predicate copy, matching the `use-annotation-review.test.ts` pattern). Default-keep recommended because deleting the hook drops the live implementation while the test would silently continue passing on its inlined copy — a future refactor should either restore the import or delete the hook + test together.
 
 Plus dead constants + types in `shared/`:
 - 8 unused constants with zero non-decl uses: `MAX_WS_PAYLOAD`, `MAX_WS_CONNECTIONS`, `IDLE_TIMEOUT`, `OVERLAY_STALE_DEBOUNCE`, `SERVER_INFO_DIR`, `SERVER_INFO_FILE`, `EDITOR_WIDTH_MODE_KEY`, and one more (knip false positive on `COWORK_RESCAN_DEBOUNCE_MS`)
@@ -136,23 +136,23 @@ These were flagged by knip but confirmed alive. Catalogued so audit-v3 doesn't r
 | `docx-apply.ts:104-105` raw `relPosToFlatOffset` | Critical Rule #4 pre-scan flagged it | Read-only collection during a write batch; can't mutate via `refreshRange` |
 | `document.ts:65,68` raw position imports | Critical Rule #4 pre-scan flagged it | Re-exports for the public position API surface |
 
-**The lazy-import pattern in `svelte-harness/registry.ts` is a permanent knip blind spot.** Any future `.svelte` file flagged by knip must be cross-checked against that registry before deletion. Worth adding the registry path to `knip.json` `ignore` entries explicitly so the rule is documented.
+**The lazy-import pattern in `svelte-harness/registry.ts` is a permanent knip blind spot.** Any future `.svelte` file flagged by knip must be cross-checked against that registry before deletion. The registry path is already in `knip.json`'s `ignore` block (`src/client/svelte-harness/**`) so a future audit-v3 won't re-surface these.
 
 ---
 
 ## Bonus correctness findings
 
-Things the domain reviewers spotted *while validating dead-code candidates* — outside the audit's scan scope. These are the highest-value items in the entire audit.
+Things the domain reviewers spotted *while validating dead-code candidates* — outside the audit's scan scope. These are the highest-value items in the entire audit. **4 of the 7 were addressed in this PR; 3 remain as v0.12 followups.**
 
-| Finding | File | Reviewer | Severity |
-|---|---|---|---|
-| `reloadFromDisk` tagged `MCP_ORIGIN`, should likely be `FILE_SYNC_ORIGIN` | `src/server/mcp/file-opener.ts:798-811` | CRDT | HIGH |
-| `textSnapshot` mismatch after CRDT-resolved offsets in `docx-apply.ts` | `src/server/mcp/docx-apply.ts:100-118` | CRDT | MEDIUM |
-| Tutorial note has `author: "claude"` instead of user/system | `src/server/mcp/tutorial-annotations.ts:85` | Annotation | LOW |
-| `INVALID_RANGE` error code used for non-range failures (6 sites) | `src/server/mcp/annotations.ts:478,505,530,536,541,548` | Annotation | MEDIUM |
-| `notesExcluded` count uses already-filtered results | `src/server/mcp/annotations.ts:445` | Annotation | LOW |
-| `use-review-completion.test.ts` doesn't exercise the actual hook (inline reimplementation) | `tests/client/use-review-completion.test.ts` | CRDT | LOW |
-| **Doc/code discrepancy:** `CLAUDE.md:85` (and `docs/run-b-plan.md:179`) advertise `errorStateColors`/`successStateColors`/`suggestionStateColors` as an API to prefer, but no surface imports them. Either delete the constants + update docs, OR add knip ignore entries if a near-term refactor will use them. | `src/client/utils/colors.ts:10,19,37` + `CLAUDE.md:85` | Svelte | MEDIUM |
+| Finding | File | Reviewer | Severity | Status |
+|---|---|---|---|---|
+| `reloadFromDisk` tagged `MCP_ORIGIN`, first transaction should be `FILE_SYNC_ORIGIN` | `src/server/mcp/file-opener.ts:798-811` | CRDT | HIGH | **FIXED** (PR-A1 + post-merge scope correction in `8d9c0ce`) |
+| `textSnapshot` mismatch after CRDT-resolved offsets in `docx-apply.ts` | `src/server/mcp/docx-apply.ts:100-118` | CRDT | MEDIUM | Followup |
+| Tutorial note has `author: "claude"` instead of user/system | `src/server/mcp/tutorial-annotations.ts:85` | Annotation | LOW | **FIXED** (PR-A2 + tutorial-hook fix in PR-A2b) |
+| `INVALID_RANGE` error code used for non-range failures (6 sites) | `src/server/mcp/annotations.ts:478,505,530,536,541,548` | Annotation | MEDIUM | **FIXED** (PR-A3 + post-merge `errorCodeToLabel` follow-on) |
+| `notesExcluded` count uses already-filtered results | `src/server/mcp/annotations.ts:445` | Annotation | LOW | Followup |
+| `use-review-completion.test.ts` doesn't exercise the actual hook (inline reimplementation) | `tests/client/use-review-completion.test.ts` | CRDT | LOW | Followup (see load-bearing notes) |
+| **Doc/code discrepancy:** `CLAUDE.md:85` (and `docs/run-b-plan.md:179`) advertise `errorStateColors`/`successStateColors`/`suggestionStateColors` as an API to prefer, but no surface imports them. | `src/client/utils/colors.ts:10,19,37` + `CLAUDE.md:85` | Svelte | MEDIUM | **FIXED** (PR-D5 — exports deleted, CLAUDE.md + `docs/run-b-plan.md` updated) |
 
 ---
 

@@ -67,12 +67,16 @@ function errorCodeToLabel(code: string): string {
     case "ENOENT":
     case "FILE_NOT_FOUND":
     case "NO_DOCUMENT":
+    case "NOT_FOUND":
       return "NOT_FOUND";
     case "INVALID_PATH":
       return "INVALID_PATH";
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
+    case "INVALID_ARGUMENT":
       return "BAD_REQUEST";
+    case "ANNOTATION_RESOLVED":
+      return "ANNOTATION_RESOLVED";
     case "FILE_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":

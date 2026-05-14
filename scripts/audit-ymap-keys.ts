@@ -5,8 +5,8 @@
 // Critical Rule #1 in CLAUDE.md: raw Y.Map key strings drift over time and
 // break observers silently.
 //
-// Heuristic: extract Y_MAP_* string values from constants.ts, then grep
-// .set("VALUE" / .get("VALUE") across src/{server,client,shared}. Reports
+// Heuristic: extract Y_MAP_* string values from constants.ts, then regex-scan
+// for .set("VALUE" / .get("VALUE") across src/{server,client,shared}. Reports
 // every hit; humans triage false positives (plain Map<string,X> calls).
 
 import { readdirSync, readFileSync } from "node:fs";
