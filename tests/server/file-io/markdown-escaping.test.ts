@@ -1,28 +1,18 @@
+import type { Root } from "mdast";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import remarkGfm from "remark-gfm";
-import remarkParse from "remark-parse";
-import { unified } from "unified";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import {
-  loadMarkdown,
-  saveMarkdown,
-  serializeMdast,
-} from "../../../src/server/file-io/markdown.js";
-import type { Root } from "mdast";
+import { mdParser, saveMarkdown, serializeMdast } from "../../../src/server/file-io/markdown.js";
+import { makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 afterEach(() => doc?.destroy());
 
 function roundTrip(input: string): string {
-  doc = new Y.Doc();
-  loadMarkdown(doc, input);
+  doc = makeMarkdownDoc(input);
   return saveMarkdown(doc);
 }
-
-// Local parser for parse-equality assertions (production parser is module-internal).
-const parser = unified().use(remarkParse).use(remarkGfm).freeze();
 
 /**
  * Serializer-only round-trip: parse → serialize WITHOUT a Y.Doc detour.
@@ -31,7 +21,7 @@ const parser = unified().use(remarkParse).use(remarkGfm).freeze();
  * itself behaves correctly.
  */
 function serializerRoundTrip(input: string): string {
-  return serializeMdast(parser.parse(input) as Root);
+  return serializeMdast(mdParser.parse(input) as Root);
 }
 
 // Strip mdast `position` metadata so two trees compare semantically even when
@@ -50,7 +40,7 @@ function stripPositions(tree: unknown): unknown {
 }
 
 function parseEqual(a: string, b: string): void {
-  expect(stripPositions(parser.parse(a))).toEqual(stripPositions(parser.parse(b)));
+  expect(stripPositions(mdParser.parse(a))).toEqual(stripPositions(mdParser.parse(b)));
 }
 
 describe("markdown escaping (#605)", () => {
@@ -94,9 +84,9 @@ describe("markdown escaping (#605)", () => {
 
   describe("preserves escapes where un-escape would change semantics", () => {
     it("collapsed reference link: `[foo]` matching a `[foo]: url` definition stays escaped", () => {
-      // NOTE: Y.Doc cannot represent `definition` nodes, so we test the
-      // serializer in isolation. The parse-aware guard in markdown.ts is the
-      // last line of defense if a future mdast-ydoc.ts adds ref-def support.
+      // Y.Doc cannot represent `definition` nodes, so test the serializer in
+      // isolation. The parse-aware guard in markdown.ts is the last line of
+      // defense if a future mdast-ydoc.ts adds ref-def support.
       const input = "See \\[foo] info.\n\n[foo]: https://example.com\n";
       const out = serializerRoundTrip(input);
       expect(out).toMatch(/\\\[foo]/);
@@ -136,17 +126,18 @@ describe("markdown escaping (#605)", () => {
   });
 
   describe("CHANGELOG.md golden file", () => {
-    const projectRoot = path.resolve(__dirname, "../../..");
-    const changelogPath = path.join(projectRoot, "CHANGELOG.md");
+    const changelogPath = path.resolve(__dirname, "../../..", "CHANGELOG.md");
+    let changelog: string;
+    beforeAll(() => {
+      changelog = fs.readFileSync(changelogPath, "utf-8");
+    });
 
     it("round-trips byte-identically", () => {
-      const input = fs.readFileSync(changelogPath, "utf-8");
-      expect(roundTrip(input)).toBe(input);
+      expect(roundTrip(changelog)).toBe(changelog);
     });
 
     it("is idempotent (a second pass is a no-op)", () => {
-      const input = fs.readFileSync(changelogPath, "utf-8");
-      const once = roundTrip(input);
+      const once = roundTrip(changelog);
       expect(roundTrip(once)).toBe(once);
     });
   });
