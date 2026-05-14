@@ -56,7 +56,37 @@
       "nsis": {
         "installerHooks": "windows/installer-hook.nsi"
       }
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown"],
+        "name": "com.tandem.markdown",
+        "description": "Markdown Document",
+        "role": "Editor",
+        "mimeType": "text/markdown"
+      },
+      {
+        "ext": ["txt"],
+        "name": "com.tandem.text",
+        "description": "Text Document",
+        "role": "Editor",
+        "mimeType": "text/plain"
+      },
+      {
+        "ext": ["html"],
+        "name": "com.tandem.html",
+        "description": "HTML Document",
+        "role": "Editor",
+        "mimeType": "text/html"
+      },
+      {
+        "ext": ["docx"],
+        "name": "com.tandem.docx",
+        "description": "Word Document",
+        "role": "Editor",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      }
+    ]
   },
   "plugins": {
     "updater": {

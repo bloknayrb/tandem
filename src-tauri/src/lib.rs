@@ -31,11 +31,25 @@ use tauri_plugin_updater::UpdaterExt;
 /// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479)
 const HEALTH_URL: &str = "http://localhost:3479/health";
 const SETUP_URL: &str = "http://localhost:3479/api/setup";
+const OPEN_URL: &str = "http://localhost:3479/api/open";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
+
+/// File extensions Tandem can open via OS file association. Keep aligned with
+/// `SUPPORTED_EXTENSIONS` in `src/server/mcp/file-opener.ts` — server-side is
+/// the authority; this list is defense-in-depth to reject obviously-wrong argv
+/// before issuing an HTTP request.
+pub(crate) const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
+    &["md", "markdown", "txt", "html", "docx"];
+
+/// Set to `true` once the sidecar's /health endpoint has responded 200 AND the
+/// pending-opens queue has been drained. Read by the `RunEvent::Opened` handler
+/// to decide between posting immediately vs queueing. Static (process-wide):
+/// there is exactly one sidecar per process.
+static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
 
 /// Strip the Windows extended-length path prefix (`\\?\`) that Tauri's
 /// `resource_dir()` / `app_data_dir()` return. Node.js can't resolve these.
@@ -55,6 +69,277 @@ const MAIN_WINDOW_LABEL: &str = "main";
 
 /// Tracks the sidecar child process so we can kill it on shutdown.
 struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+/// Queue of file paths that arrived (via macOS `RunEvent::Opened` Apple Events,
+/// or in principle any pre-health second-instance launch) BEFORE the sidecar's
+/// HTTP server was ready to accept `POST /api/open`. Drained once
+/// `wait_for_health()` returns Ok, then `SIDECAR_HEALTHY` is flipped so future
+/// events post directly.
+struct PendingOpens(Mutex<Vec<std::path::PathBuf>>);
+
+/// Extract a file path to open from a process's command-line args.
+///
+/// Rules:
+/// - Skip the executable (args\[0\]).
+/// - Skip any arg whose first byte is `-` (covers both `-x` and `--long`).
+///   We do **not** parse `--key=value` style flags — the value is treated as
+///   part of the flag.
+/// - Skip a literal `--` separator.
+/// - Take the FIRST remaining arg.
+/// - On Windows, reject paths containing a `:` outside the drive-letter slot
+///   (defends against NTFS alternate-data-stream paths like
+///   `file.md:Zone.Identifier`).
+/// - Resolve relative to `cwd`.
+/// - Verify the extension is in `SUPPORTED_FILE_ASSOC_EXTS` (case-insensitive).
+/// - Verify the path exists as a regular file.
+///
+/// This is `pub` so the integration test in `tests/file_association.rs` can
+/// exercise it.
+pub fn extract_file_arg(
+    args: &[String],
+    cwd: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let candidate = args.iter().skip(1).find(|a| !a.starts_with('-') && a.as_str() != "--")?;
+
+    let p = std::path::Path::new(candidate);
+    let absolute: std::path::PathBuf =
+        if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+
+    #[cfg(target_os = "windows")]
+    {
+        // Reject any colon outside the drive-letter position (index 1) on the
+        // resolved absolute path. Catches NTFS Alternate Data Stream syntax
+        // (`file.md:Zone.Identifier`) both when the colon lands at an absolute
+        // index >1 (e.g. `C:\tmp\file.md:ADS`) and when a relative candidate
+        // joined against `cwd` produces an absolute path with the suspicious
+        // colon. The previous version scanned the un-joined candidate string,
+        // which let relative paths like `foo:ADS.md` slip through (colon at
+        // index 3 in the candidate -> rejected; but if it were at index 1 of
+        // the candidate, e.g. `f:ADS.md`, it would have passed). Scanning the
+        // resolved absolute closes that gap.
+        let absolute_str = absolute.to_string_lossy();
+        for (i, b) in absolute_str.as_bytes().iter().enumerate() {
+            if *b == b':' && i != 1 {
+                log::warn!(
+                    "extract_file_arg: rejecting path with suspicious ':' at index {i}: {absolute_str}"
+                );
+                return None;
+            }
+        }
+    }
+
+    let ext = absolute
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
+        log::warn!(
+            "extract_file_arg: rejecting unsupported extension '.{ext}' for {}",
+            absolute.display()
+        );
+        return None;
+    }
+
+    // is_file() follows symlinks intentionally — the final read goes through
+    // server-side openFileByPath which is the authority for path validation
+    // (extension, size, UNC rejection, etc.). Resolving symlinks here would
+    // duplicate that check without adding defense in depth, since a symlink
+    // pointing at a disallowed target would be rejected on the server hop.
+    if !absolute.is_file() {
+        log::warn!(
+            "extract_file_arg: path is not a regular file: {}",
+            absolute.display()
+        );
+        return None;
+    }
+
+    Some(absolute)
+}
+
+/// POST `{ filePath }` to the sidecar's `/api/open` endpoint with the auth
+/// token as a Bearer header. Loopback currently bypasses Bearer enforcement
+/// (`src/server/auth/middleware.ts:156-185`) but we include the header anyway
+/// for defense-in-depth.
+async fn request_open_file(
+    client: &reqwest::Client,
+    auth_token: Option<&str>,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let body = serde_json::json!({ "filePath": path.to_string_lossy() });
+    let mut req = client.post(OPEN_URL).json(&body);
+    if let Some(token) = auth_token {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("POST {OPEN_URL} failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(format!("POST {OPEN_URL} returned {status}: {body_text}"));
+    }
+    log::info!("Opened file via OS association: {}", path.display());
+    Ok(())
+}
+
+/// Consumer-side critical section: flip `SIDECAR_HEALTHY` to true AND drain
+/// the pending queue while holding the `PendingOpens` mutex. Returns the
+/// drained paths so the async caller can POST them outside the lock (we can't
+/// hold a `std::sync::Mutex` across `.await`).
+///
+/// Pairs with `try_queue_or_post` on the producer side: producers also read
+/// `SIDECAR_HEALTHY` only while holding the same mutex, which serializes all
+/// flag access through it and closes every TOCTOU window where a producer's
+/// load-before-push could orphan a path. See the doc comment on
+/// `try_queue_or_post` for the full ordering argument.
+pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<std::path::PathBuf> {
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned — recovering");
+            poisoned.into_inner()
+        }
+    };
+    SIDECAR_HEALTHY.store(true, Ordering::Release);
+    std::mem::take(&mut *guard)
+}
+
+/// Inverse of `promote_healthy_and_drain`: clear `SIDECAR_HEALTHY` while
+/// holding the `PendingOpens` mutex so any concurrent producer either pushes
+/// (and the next promote_and_drain captures the path) or observes flag=false
+/// (and queues). Bare `SIDECAR_HEALTHY.store(false)` outside the lock would
+/// re-open the same TOCTOU window the lock was introduced to close: a
+/// producer could read flag=true between `kill_sidecar` and the clear, then
+/// POST to a sidecar that no longer exists. Used by `restart_sidecar`.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
+    let _guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned during clear — recovering");
+            poisoned.into_inner()
+        }
+    };
+    SIDECAR_HEALTHY.store(false, Ordering::Release);
+}
+
+/// Producer-side critical section: under the `PendingOpens` mutex, decide
+/// whether to queue the path (sidecar not yet healthy) or hand it back to the
+/// caller to POST directly (sidecar healthy). Returns `Ok(())` on queue,
+/// `Err(path)` when the caller should POST.
+///
+/// Ordering proof (paired with `promote_healthy_and_drain`):
+/// - Consumer's flag-flip and drain are atomic under the mutex.
+/// - Producer's flag-load and push are atomic under the same mutex.
+/// - Any producer that acquires the lock BEFORE the consumer pushes, then
+///   the consumer's drain captures it.
+/// - Any producer that acquires the lock AFTER the consumer reads
+///   `SIDECAR_HEALTHY=true` (set by the consumer while holding the lock) and
+///   either POSTs directly. No orphan window remains.
+// Used by `handle_opened_urls` (macOS only) and by unit tests; the
+// non-macOS, non-test build sees no call sites.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn try_queue_or_post(
+    state: &PendingOpens,
+    path: std::path::PathBuf,
+) -> Result<(), std::path::PathBuf> {
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned — recovering and queueing");
+            poisoned.into_inner()
+        }
+    };
+    if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+        Err(path)
+    } else {
+        log::info!("Queueing file (sidecar not yet healthy): {}", path.display());
+        guard.push(path);
+        Ok(())
+    }
+}
+
+/// POST every queued path to `/api/open`. The flag flip + drain has already
+/// happened atomically in `promote_healthy_and_drain`; this just runs the I/O.
+async fn post_drained_paths(
+    paths: Vec<std::path::PathBuf>,
+    client: &reqwest::Client,
+) {
+    if paths.is_empty() {
+        return;
+    }
+    let token = match token_store::get_or_create_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("Token retrieval failed for drained-path POSTs: {e}");
+            None
+        }
+    };
+    for path in paths {
+        if let Err(e) = request_open_file(client, token.as_deref(), &path).await {
+            log::warn!(
+                "request_open_file (drain) failed for {}: {e}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Handle a batch of file URLs delivered via macOS `RunEvent::Opened` (Apple
+/// Event `kAEOpenDocuments`). Posts directly when the sidecar is healthy,
+/// queues when it is not.
+#[cfg(target_os = "macos")]
+fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
+    show_main_window(app);
+    // Hoist token retrieval out of the per-URL loop so a multi-file "Open
+    // With" batch hits the keyring once, not N times. Mirrors
+    // `post_drained_paths`. Falls back to anonymous on retrieval failure;
+    // loopback bypasses Bearer enforcement so this is non-fatal.
+    let batch_token: Option<String> = match token_store::get_or_create_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("Token retrieval failed for Opened-event batch: {e}");
+            None
+        }
+    };
+    for url in urls {
+        if url.scheme() != "file" {
+            log::warn!("Ignoring non-file URL from Opened event: {url}");
+            continue;
+        }
+        // `file://host/share/...` SMB-style URLs would surprise the user; require
+        // an empty/missing host on macOS.
+        if url.host_str().map(|h| !h.is_empty()).unwrap_or(false) {
+            log::warn!("Ignoring file URL with host: {url}");
+            continue;
+        }
+        let Ok(path) = url.to_file_path() else {
+            log::warn!("Failed to convert URL to file path: {url}");
+            continue;
+        };
+        // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
+        // through the same mutex used by promote_healthy_and_drain. This is
+        // the load-bearing piece of the drain-race fix: any producer that
+        // acquires the lock either pushes (and gets drained) or sees
+        // flag=true (and is handed back the path to POST directly). No
+        // load-before-push window remains.
+        let pending = app.state::<PendingOpens>();
+        if let Err(path) = try_queue_or_post(pending.inner(), path) {
+            let app = app.clone();
+            let token = batch_token.clone();
+            tauri::async_runtime::spawn(async move {
+                let client = app.state::<reqwest::Client>().inner().clone();
+                if let Err(e) = request_open_file(&client, token.as_deref(), &path).await {
+                    log::warn!(
+                        "request_open_file (Opened) failed for {}: {e}",
+                        path.display()
+                    );
+                }
+            });
+        }
+    }
+}
 
 /// Show, unminimize, and focus the main window.
 fn show_main_window(app: &tauri::AppHandle) {
@@ -83,7 +368,29 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log::info!("Second instance detected — args: {args:?}, cwd: {cwd}");
             show_main_window(app);
-            // TODO: if args contains a file path, open it via the sidecar API
+            let cwd_path = std::path::PathBuf::from(&cwd);
+            // On macOS, "Open With" actions reactivate the existing app via
+            // Apple Events (RunEvent::Opened) — args won't contain the file
+            // path. This call is a no-op there, intentionally defensive for
+            // shell-invoke edge cases.
+            if let Some(path) = extract_file_arg(&args, &cwd_path) {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let client = app_handle.state::<reqwest::Client>().inner().clone();
+                    let token = match token_store::get_or_create_token() {
+                        Ok(t) => Some(t),
+                        Err(e) => {
+                            log::warn!("Token retrieval failed for second-instance POST: {e}");
+                            None
+                        }
+                    };
+                    if let Err(e) =
+                        request_open_file(&client, token.as_deref(), &path).await
+                    {
+                        log::warn!("request_open_file (second-instance) failed: {e}");
+                    }
+                });
+            }
         }))
         // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
         // DevTools, Find, Print, and right-click are preserved. Fixes #541.
@@ -101,6 +408,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
+        .manage(PendingOpens(Mutex::new(Vec::new())))
         .setup(move |app| {
             let log_level = if cfg!(debug_assertions) {
                 log::LevelFilter::Info
@@ -117,6 +425,25 @@ pub fn run() {
                 .expect("Failed to build HTTP client");
             app.manage(client.clone());
 
+            // Cold-start file path: if the OS launched us via file association
+            // (Windows / Linux pass it on argv; macOS uses Apple Events handled by
+            // RunEvent::Opened instead). Resolved here ONCE at process start and
+            // threaded explicitly into the first `start_sidecar` invocation, so
+            // any later `restart_sidecar` (which passes `None`) never re-opens
+            // the file. This is the only argv read for file-association — no
+            // global statics, no env-var side effects.
+            let cold_start_file: Option<std::path::PathBuf> = {
+                let args: Vec<String> = std::env::args().collect();
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                extract_file_arg(&args, &cwd)
+            };
+            if let Some(ref p) = cold_start_file {
+                log::info!(
+                    "Tauri cold-start: passing TANDEM_OPEN_FILE={} to sidecar",
+                    p.display()
+                );
+            }
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Copy sample files BEFORE sidecar spawn so the server's
@@ -125,7 +452,7 @@ pub fn run() {
                     log::warn!("Sample file copy failed (non-fatal): {e}");
                 }
 
-                if let Err(e) = start_sidecar(&handle, &client).await {
+                if let Err(e) = start_sidecar(&handle, &client, cold_start_file.as_deref()).await {
                     log::error!("Sidecar failed: {e}");
                     use tauri_plugin_dialog::DialogExt;
                     handle
@@ -325,9 +652,17 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                kill_sidecar(app);
+        .run(|_app, _event| {
+            match _event {
+                tauri::RunEvent::Exit => kill_sidecar(_app),
+                // macOS: file paths from "Open With" arrive here, not on argv.
+                // The single-instance callback's args are empty for these events.
+                // RunEvent::Opened does not exist on Windows/Linux — gate with
+                // cfg to keep the match exhaustive there. Tandem targets desktop
+                // only; iOS is not a build target.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => handle_opened_urls(_app, urls),
+                _ => {}
             }
         });
 }
@@ -336,10 +671,20 @@ pub fn run() {
 #[tauri::command]
 fn restart_sidecar(app: tauri::AppHandle) {
     kill_sidecar(&app);
+    // Reset healthy flag so any RunEvent::Opened arriving mid-restart queues
+    // instead of POSTing to a dying server. Must clear under the PendingOpens
+    // mutex (see clear_healthy_under_lock) — a bare atomic store here would
+    // race a concurrent producer that read flag=true a moment ago.
+    // `start_sidecar` will set it back to true after the next successful
+    // `wait_for_health`.
+    let pending: tauri::State<'_, PendingOpens> = app.state();
+    clear_healthy_under_lock(&pending);
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = start_sidecar(&handle, &client).await {
+        // Restart never re-injects the cold-start file: the original `setup()`
+        // invocation already opened it and registered it in `openDocuments`.
+        if let Err(e) = start_sidecar(&handle, &client, None).await {
             eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
         }
     });
@@ -372,7 +717,11 @@ fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
 
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
-async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> Result<(), String> {
+async fn start_sidecar(
+    handle: &tauri::AppHandle,
+    client: &reqwest::Client,
+    cold_start_file: Option<&std::path::Path>,
+) -> Result<(), String> {
     // Debug-only: skip spawn if a server is already running (e.g. `npm run dev:standalone`
     // alongside `cargo tauri dev`). In release builds the installed app must own its
     // sidecar exclusively — a stale `tsx watch` dev session, an older release process,
@@ -429,6 +778,15 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
         }
 
+        // Cold-start file open from OS file association (Windows/Linux argv).
+        // Only set on the first spawn — sidecar restarts must not re-trigger
+        // an open (the file has already been registered in openDocuments).
+        if attempt == 0 {
+            if let Some(p) = cold_start_file {
+                cmd = cmd.env("TANDEM_OPEN_FILE", p.to_string_lossy().as_ref());
+            }
+        }
+
         let (rx, child) = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
@@ -474,6 +832,16 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
         match wait_for_health(&client, &sidecar_dead).await {
             Ok(()) => {
                 log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
+
+                // Promote SIDECAR_HEALTHY=true AND drain the pending queue in
+                // a single critical section over `PendingOpens` mutex. Then
+                // POST the drained paths outside the lock (we can't hold a
+                // std::sync::Mutex across .await). See docs on
+                // `promote_healthy_and_drain` and `try_queue_or_post` for the
+                // ordering argument that proves no path is orphaned.
+                let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
+                post_drained_paths(drained, client).await;
+
                 return Ok(());
             }
             Err(e) => {
@@ -1664,5 +2032,146 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
             };
             show_update_error_dialog(app, &dialog_msg);
         }
+    }
+}
+
+#[cfg(test)]
+mod pending_opens_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // Serialize tests that mutate SIDECAR_HEALTHY (a process-wide static).
+    static FLAG_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fresh_state() -> PendingOpens {
+        PendingOpens(Mutex::new(Vec::new()))
+    }
+
+    #[test]
+    fn promote_healthy_and_drain_returns_fifo_and_clears_queue() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("a"));
+        state.0.lock().unwrap().push(PathBuf::from("b"));
+        state.0.lock().unwrap().push(PathBuf::from("c"));
+
+        let drained = promote_healthy_and_drain(&state);
+        assert_eq!(
+            drained,
+            vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")],
+            "drain order should match push order"
+        );
+        assert!(state.0.lock().unwrap().is_empty(), "queue should be cleared");
+        assert!(
+            SIDECAR_HEALTHY.load(Ordering::Acquire),
+            "SIDECAR_HEALTHY should be flipped to true"
+        );
+
+        // Reset for other tests.
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn promote_healthy_and_drain_on_empty_queue_still_flips_flag() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let drained = promote_healthy_and_drain(&state);
+        assert!(drained.is_empty());
+        assert!(SIDECAR_HEALTHY.load(Ordering::Acquire));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn try_queue_or_post_queues_when_unhealthy() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let result = try_queue_or_post(&state, PathBuf::from("queued"));
+        assert!(result.is_ok());
+        assert_eq!(
+            *state.0.lock().unwrap(),
+            vec![PathBuf::from("queued")],
+            "path should be in queue"
+        );
+    }
+
+    #[test]
+    fn try_queue_or_post_returns_path_when_healthy() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+
+        let state = fresh_state();
+        let result = try_queue_or_post(&state, PathBuf::from("direct"));
+        assert_eq!(
+            result,
+            Err(PathBuf::from("direct")),
+            "caller should be handed back the path to POST directly"
+        );
+        assert!(state.0.lock().unwrap().is_empty(), "no queue side effect");
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn restart_clears_flag_under_lock_so_late_producer_queues() {
+        // Inverse of drain_then_late_producer_under_lock_sees_healthy_flag:
+        // restart_sidecar clears SIDECAR_HEALTHY via clear_healthy_under_lock.
+        // A producer that races the clear can only mutate state while
+        // holding the same mutex; once it does, it observes flag=false (set
+        // inside the same lock by the clear) and queues the path. A bare
+        // atomic store outside the lock would let a producer that read
+        // flag=true before kill_sidecar still POST to the dying server.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+
+        let state = fresh_state();
+
+        // Simulate the locked clear that restart_sidecar performs.
+        clear_healthy_under_lock(&state);
+
+        // Late producer arriving after the clear observes flag=false and
+        // queues the path instead of POSTing.
+        let result = try_queue_or_post(&state, PathBuf::from("after-restart"));
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *state.0.lock().unwrap(),
+            vec![PathBuf::from("after-restart")]
+        );
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn drain_then_late_producer_under_lock_sees_healthy_flag() {
+        // Reproduces the lock-ordering proof: after the consumer drains and
+        // flips the flag, a subsequent producer that acquires the same lock
+        // observes flag=true and returns Err(path) for direct-POST. No path
+        // can be orphaned in the queue.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("early"));
+
+        // Consumer side.
+        let drained = promote_healthy_and_drain(&state);
+        assert_eq!(drained, vec![PathBuf::from("early")]);
+
+        // Late producer that read flag=false BEFORE the consumer ran can only
+        // mutate the queue while holding the lock; once it does, it sees
+        // flag=true (set inside the same lock) and the helper hands the path
+        // back instead of queuing it.
+        let result = try_queue_or_post(&state, PathBuf::from("late"));
+        assert_eq!(result, Err(PathBuf::from("late")));
+        assert!(state.0.lock().unwrap().is_empty());
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
     }
 }

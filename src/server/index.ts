@@ -44,6 +44,7 @@ import {
   cleanupSessions,
   stopAutoSave,
 } from "./session/manager.js";
+import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
 import { getOrCreateDocument, setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
 
@@ -369,8 +370,22 @@ async function main() {
       console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
     }
 
+    // OS file-association cold start: Tauri's argv parser (lib.rs) exports
+    // TANDEM_OPEN_FILE before spawning the sidecar when the user double-clicks
+    // a .md/.txt/etc. file. Open it BEFORE bind so stale tabs don't CRDT-merge
+    // a doc list missing the requested doc. Skipping welcome.md happens
+    // naturally below via docCount() === 0.
+    const startupFileRequested = !!process.env.TANDEM_OPEN_FILE?.trim();
+    const startupFileOpened = await maybeOpenStartupFile(process.env.TANDEM_OPEN_FILE);
+
     // Auto-open sample/welcome.md when no documents are open (fresh install or empty restored session).
     if (docCount() === 0 && !process.env.TANDEM_NO_SAMPLE) {
+      if (startupFileRequested && !startupFileOpened) {
+        // Correlate this fallback with the per-failure log line inside
+        // maybeOpenStartupFile so support investigations don't have to
+        // infer the link from two unrelated-looking error messages.
+        console.error("[Tandem] Falling back to welcome.md after TANDEM_OPEN_FILE failure");
+      }
       const sampleBase = process.env.TANDEM_DATA_DIR || projectRoot;
       const samplePath = path.join(sampleBase, "sample/welcome.md");
       try {
