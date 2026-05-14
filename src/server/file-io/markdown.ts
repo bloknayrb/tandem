@@ -66,7 +66,15 @@ export function loadMarkdown(doc: Y.Doc, markdown: string): void {
 
 /** Serialize a Y.Doc's XmlFragment back to markdown */
 export function saveMarkdown(doc: Y.Doc): string {
-  const tree = yDocToMdast(doc);
+  return serializeMdast(yDocToMdast(doc));
+}
+
+/**
+ * Serialize an mdast Root tree to markdown using the project's configured
+ * serializer. Exposed for tests and any future code path that has an mdast
+ * tree but no Y.Doc.
+ */
+export function serializeMdast(tree: Root): string {
   currentRefDefs.clear();
   visit(tree, "definition", (node) => {
     currentRefDefs.add(node.identifier.toLowerCase());
