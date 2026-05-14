@@ -16,9 +16,9 @@
  * proves that an observer with the production skip rule actually receives
  * the relocation write.
  *
- * Related GH issue: #622 (pre-existing two-write crash window). When that
- * fix lands, transaction count for reload should drop from 2 → 1 — update
- * Test B accordingly.
+ * Related GH issue: #622 (pre-existing two-write crash window). The fix
+ * merges the two MCP_ORIGIN transactions into one via `skipTransact` —
+ * Test C below is the dedicated single-transaction regression guard.
  */
 
 import fs from "node:fs/promises";
@@ -238,5 +238,40 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
 
     expect(observedNonFileSyncWrites).toBeGreaterThanOrEqual(1);
     expect(lastObservedRange).toBeDefined();
+  });
+
+  it("Test C (#622): exactly ONE MCP_ORIGIN transaction writes to Y_MAP_ANNOTATIONS during reload", async () => {
+    // Closes the two-write crash window: refreshAllRanges + textSnapshot
+    // relocation are now merged into a single MCP_ORIGIN transact via
+    // `skipTransact: true`. A process kill between the two passes can no
+    // longer leave annotations durably stored at partially-refreshed ranges.
+    const { doc, filePath, triggerReload } = await setupOpenedFile("Hello world foo bar baz");
+
+    // Seed an annotation on "foo" so both passes have work to do (refresh +
+    // textSnapshot relocation, since we move "foo" on disk below).
+    seedAnnotationOnText(doc, "foo", "annotation on foo");
+
+    // Move "foo" to a different offset so relocation actually runs.
+    await fs.writeFile(filePath, "Greetings, world — foo bar baz\n", "utf-8");
+
+    const { records, detach } = listenForTransactions(doc);
+    try {
+      await triggerReload();
+    } finally {
+      detach();
+    }
+
+    const annMapRef = doc.getMap(Y_MAP_ANNOTATIONS);
+    const mcpAnnotationWrites = records.filter(
+      (r) => r.origin === MCP_ORIGIN && r.changedTypes.has(annMapRef),
+    );
+
+    expect(mcpAnnotationWrites).toHaveLength(1);
+
+    // The legitimate FILE_SYNC_ORIGIN content txn must still exist (durable
+    // sync skips it intentionally — this assertion guards against an
+    // overzealous fix that flips it to MCP_ORIGIN).
+    const fileSyncTxns = records.filter((r) => r.origin === FILE_SYNC_ORIGIN);
+    expect(fileSyncTxns.length).toBeGreaterThanOrEqual(1);
   });
 });
