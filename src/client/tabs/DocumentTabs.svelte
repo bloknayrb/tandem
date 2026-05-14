@@ -102,12 +102,6 @@ $effect(() => {
   }
 });
 
-// Clear drag state when tab list changes mid-drag
-$effect(() => {
-  void tabs.length;
-  clearDragState();
-});
-
 // DnD handlers
 function handleDragStart(e: DragEvent, id: string) {
   draggedId = id;
@@ -131,7 +125,7 @@ function handleDragOver(e: DragEvent, id: string) {
 
 function handleDrop(e: DragEvent, targetId: string) {
   e.preventDefault();
-  const fromId = e.dataTransfer?.getData("text/plain");
+  const fromId = draggedId || e.dataTransfer?.getData("text/plain") || "";
   if (fromId && fromId !== targetId && reorder) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midX = rect.left + rect.width / 2;

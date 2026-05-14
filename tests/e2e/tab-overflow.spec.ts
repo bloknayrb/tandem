@@ -90,6 +90,36 @@ test("keyboard reorder with Alt+Arrow swaps tabs", async ({ page }) => {
   expect(newText).toBe("sample2.md");
 });
 
+test("mouse drag reorders tabs", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
+  await page.goto("http://localhost:5173");
+
+  const tabs = page.locator("[data-testid^='tab-'][role='tab']");
+  const sample1Tab = tabs.filter({ hasText: "sample.md" });
+  const sample2Tab = tabs.filter({ hasText: "sample2.md" });
+  await expect(sample1Tab).toBeVisible();
+  await expect(sample2Tab).toBeVisible();
+
+  const allNames = page.locator("[data-testid^='tab-name-']");
+  const initial = await allNames.allTextContents();
+  const initialS1 = initial.indexOf("sample.md");
+  const initialS2 = initial.indexOf("sample2.md");
+  expect(initialS1).toBeGreaterThanOrEqual(0);
+  expect(initialS2).toBeGreaterThanOrEqual(0);
+
+  // Drag sample2 onto sample1 — their relative order should flip
+  const [from, to] = initialS1 < initialS2 ? [sample2Tab, sample1Tab] : [sample1Tab, sample2Tab];
+  await from.dragTo(to, { targetPosition: { x: 5, y: 10 } });
+
+  await expect
+    .poll(async () => {
+      const names = await allNames.allTextContents();
+      return names.indexOf("sample.md") < names.indexOf("sample2.md");
+    })
+    .toBe(initialS1 > initialS2);
+});
+
 test("open file button is always visible", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://localhost:5173");
