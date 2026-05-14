@@ -146,7 +146,7 @@ function getDocFileName(docId?: string): string | null {
 
 async function clearChat() {
   try {
-    await fetch(`http://localhost:${DEFAULT_MCP_PORT}${API_CHAT}`, { method: "DELETE" });
+    await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_CHAT}`, { method: "DELETE" });
   } catch (err) {
     console.warn("[ChatPanel] Failed to clear chat:", err);
   }

@@ -53,7 +53,7 @@ export function createNotifications(): NotificationsState {
     clearTimer(id);
   };
 
-  const url = `http://localhost:${DEFAULT_MCP_PORT}${API_NOTIFY_STREAM}`;
+  const url = `http://127.0.0.1:${DEFAULT_MCP_PORT}${API_NOTIFY_STREAM}`;
   const es = new EventSource(url);
 
   const ingest = (notification: TandemNotification) => {
