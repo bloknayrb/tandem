@@ -29,6 +29,7 @@ interface ActionDeps {
   openFileDialog: () => void;
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
+  reopenClosedTab: () => void;
 }
 
 let deps: ActionDeps | null = null;
@@ -214,6 +215,15 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+Shift+\\",
     run() {
       guardedRun("toggle-right-panel", (d) => d.toggleRightPanel());
+    },
+  },
+  {
+    id: "reopen-closed-tab",
+    label: "Reopen closed tab (this session)",
+    group: "document",
+    shortcut: "Ctrl+Alt+T",
+    run() {
+      guardedRun("reopen-closed-tab", (d) => d.reopenClosedTab());
     },
   },
 ];

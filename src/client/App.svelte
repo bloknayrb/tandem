@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { API_OPEN } from "../shared/api-paths.js";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -31,6 +32,7 @@ import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
+import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
@@ -58,10 +60,50 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { API_BASE } from "./utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 
 const yjsSync = createYjsSync();
 onDestroy(() => yjsSync.destroy());
+
+// In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
+// the app session; resets on reload. See useClosedTabStack.ts for rationale.
+const closedTabStack = createClosedTabStack();
+const inflightReopens = new Set<string>();
+
+function closeTabAndRecord(tabId: string) {
+  const tab = yjsSync.tabs.find((t) => t.id === tabId);
+  if (tab && !isUploadPath(tab.filePath)) {
+    closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
+  }
+  yjsSync.handleTabClose(tabId);
+}
+
+async function reopenClosedTab() {
+  const rec = closedTabStack.pop();
+  if (!rec) return;
+  // Server may have rejected the original close (rare); also covers the
+  // close→reopen→close→reopen rapid cycle for the same path. If the file is
+  // still open, just activate it.
+  const existing = yjsSync.tabs.find((t) => t.filePath === rec.filePath);
+  if (existing) {
+    yjsSync.setActiveTabId(existing.id);
+    return;
+  }
+  if (inflightReopens.has(rec.filePath)) return;
+  inflightReopens.add(rec.filePath);
+  try {
+    await fetch(`${API_BASE}${API_OPEN}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: rec.filePath }),
+    });
+  } catch (err) {
+    console.warn("[tandem] reopen closed tab failed:", err);
+  } finally {
+    inflightReopens.delete(rec.filePath);
+  }
+}
 
 const tabOrder = createTabOrder(() => yjsSync.tabs);
 createTabCycleKeyboard(
@@ -168,13 +210,14 @@ wireActionDeps({
   },
   closeActiveTab: () => {
     const id = yjsSync.activeTabId;
-    if (id) yjsSync.handleTabClose(id);
+    if (id) closeTabAndRecord(id);
   },
   openFileDialog: () => {
     fileOpenDialogOpen = true;
   },
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
+  reopenClosedTab: () => void reopenClosedTab(),
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -402,7 +445,7 @@ $effect(() => {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         const id = yjsSync.activeTabId;
-        if (id) yjsSync.handleTabClose(id);
+        if (id) closeTabAndRecord(id);
       } else if (e.key === "o") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
@@ -423,6 +466,10 @@ $effect(() => {
         e.preventDefault();
         if (e.shiftKey) toggleRightPanel();
         else toggleLeftPanel();
+      } else if (e.altKey && (e.key === "t" || e.key === "T")) {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        void reopenClosedTab();
       }
     }
     // Ctrl/Cmd+F — focus outline search if outline panel visible; else open find bar (doc scope).
@@ -525,7 +572,7 @@ const tutorial = createTutorial(
       tabs={tabOrder.orderedTabs}
       activeTabId={yjsSync.activeTabId}
       onTabSwitch={yjsSync.setActiveTabId}
-      onTabClose={yjsSync.handleTabClose}
+      onTabClose={closeTabAndRecord}
       reorder={tabOrder.reorder}
       reduceMotion={settingsState.settings.reduceMotion}
       onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}

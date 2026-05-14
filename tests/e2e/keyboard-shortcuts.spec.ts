@@ -127,6 +127,7 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Toggle Solo / Tandem mode")).toBeVisible();
   await expect(modal.getByText("Toggle left panel")).toBeVisible();
   await expect(modal.getByText("Toggle right panel")).toBeVisible();
+  await expect(modal.getByText("Reopen closed tab (this session)")).toBeVisible();
 });
 
 test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {
@@ -223,4 +224,60 @@ test("Ctrl+Shift+\\ toggles the right panel", async ({ page }) => {
 
   await page.keyboard.press("Control+Shift+\\");
   await expect.poll(async () => rightHandle.count()).toBe(initial);
+});
+
+test("Ctrl+Alt+T reopens the most recently closed tab", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
+  await page.goto("http://localhost:5173");
+
+  const sample = page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" });
+  const sample2 = page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" });
+  await expect(sample).toBeVisible();
+  await expect(sample2).toBeVisible();
+
+  // Close active tab (sample2.md is last-opened, so it's active).
+  await page.keyboard.press("Control+w");
+  await expect(sample2).toHaveCount(0);
+
+  // Reopen via Ctrl+Alt+T.
+  await page.keyboard.press("Control+Alt+t");
+  await expect(sample2).toBeVisible();
+});
+
+test("Ctrl+Alt+T no-ops when no tabs have been closed", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  // No tabs closed yet — pressing the shortcut should be a silent no-op.
+  await page.keyboard.press("Control+Alt+t");
+  await expect(page.locator("[data-testid^='tab-name-']")).toHaveCount(1);
+  expect(errors).toHaveLength(0);
+});
+
+test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", async ({ page }) => {
+  // Verifies that closeTabAndRecord wraps the DocumentTabs onTabClose prop, not
+  // just the Ctrl+W keydown branch.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
+  await page.goto("http://localhost:5173");
+
+  const sample2 = page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" });
+  await expect(sample2).toBeVisible();
+
+  // Click the X button on sample2's tab. The TabItem renders a close button
+  // inside the tab; locate it relative to the tab-name span's tab container.
+  // (Per CLAUDE.md the tab itself has data-testid="tab-{id}", and the close
+  //  button is inside it with role="button" / appropriate aria.)
+  const sample2Tab = page.locator("[role='tab']").filter({ has: sample2 });
+  // The close button is the only button inside the tab item.
+  await sample2Tab.locator("button").first().click();
+  await expect(sample2).toHaveCount(0);
+
+  await page.keyboard.press("Control+Alt+t");
+  await expect(sample2).toBeVisible();
 });
