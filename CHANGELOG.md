@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Markdown serializer escape noise on `.md` saves (#605, v1.0 blocker)** — every `.md` file Tandem auto-saved was silently rewritten with backslash-escape noise by `remark-stringify`'s default `unsafe` table (`[anchor]` → `\[anchor]`, `foo_bar` → `foo\_bar`, etc.). The serializer in `src/server/file-io/markdown.ts` now overrides the `text` handler to call `state.safe()` (preserving block-context escapes for line-leading `# `, `- `, `> `, fence runs, table pipes, setext underlines) and then selectively un-escape four intra-text classes: `\[label]` when `label` is not a `definition` identifier in the same tree (parse-aware via a `unist-util-visit` pre-pass — guards against the collapsed-reference-link regression class; label is normalized per CommonMark; negative lookahead also rejects an immediately following `[` to block adjacent-bracket reference-link injection; label character class excludes `\` to prevent O(n²) backtracking on adversarial input like `\[\[\[\[\[…`), `\_` strictly between word chars (CommonMark §6.2 intra-word flanking rule), standalone `` \` ``, and `\~` not followed by another `~` (GFM strikethrough needs `~~`). GFM autolink-literal `@`/`.`/`:` and table `|` escapes still flow through `safe()` untouched. `CHANGELOG.md` was re-serialized through the fixed code as a one-time data cleanup. The `readOnly: true` workaround on the upgrade auto-open path (PR #603) is retained as defense-in-depth.
 
+### Added
+
+- **15 keyboard shortcuts (#626)** — grouped by area:
+  - **Tabs:** `Ctrl+W` close active tab (records to in-memory LIFO), `Ctrl+Alt+T` reopen most-recently-closed tab, `Ctrl+1`..`Ctrl+9` jump to tab by index, `Ctrl+O` open file dialog.
+  - **Find / outline:** `Ctrl+F` focus outline search when outline panel is visible, otherwise open find bar (doc scope); `Ctrl+Shift+F` open find bar pre-scoped to "Open tabs"; `Ctrl+G` / `Ctrl+Shift+G` find next/previous (falls back to opening find bar when no active query).
+  - **Panels / chrome:** `Ctrl+\` toggle left panel, `Ctrl+Shift+\` toggle right panel, `Ctrl+Shift+M` toggle solo/tandem mode.
+  - **Annotations:** `Alt+]` / `Alt+[` next/previous annotation; `Ctrl+Enter` / `Ctrl+Shift+Enter` accept/dismiss focused annotation; `Ctrl+Alt+M` open the comment popup on current selection; `Ctrl+Alt+A` toggle authorship colors.
+  - **Editor polish:** `Alt+L` select containing block (paragraph / heading / list item).
+
+  All letter shortcuts use `KeyboardEvent.code` (e.g. `KeyT`, `KeyM`) rather than `e.key` so they remain layout-independent (Dvorak / AZERTY) and fire correctly on macOS when Option is held — `Option+letter` produces alt characters (`†`, `µ`, `¬`, `å`) that don't match the unmodified letter `e.key`. Digits and Backslash already used `e.code`; Enter is layout-stable and remains on `e.key`. `Ctrl+M` vs `Ctrl+Shift+M` discrimination is now explicit (`!e.shiftKey` / `e.shiftKey`).
+
+  `reopenClosedTab` now checks `response.ok` so server-side 4xx/5xx no longer silently drop the popped record (fetch only rejects on network failures). Failure restores the record onto the stack and surfaces a toast with the basename so the user can retry; previously a failed reopen was logged to devtools only and the record was lost.
+
+  `Ctrl+Alt+M` distinguishes its preconditions: no selection → "Select text to comment"; read-only doc → "Document is read-only"; palette/find open → silent (the user is in a different UI context); selection toolbar setting off → "Enable selection toolbar in Settings to comment via keyboard". A single toast string would have misfired in three out of four cases.
+
+  `useNotifications` now exposes a `push()` method so client-originated UI feedback (the toasts above) can be surfaced through the same toast container as server-pushed notifications, instead of `console.warn`-ing into devtools the user never opens.
+
 ### Known Issues
 
 - **`reloadFromDisk` two-write crash window (#622, v0.12.0 fix)** — when the file watcher detects an external edit, `reloadFromDisk` runs `refreshAllRanges` (own `MCP_ORIGIN` transact) and then a relocation pass (separate `MCP_ORIGIN` transact). Both flow through the durable-annotation sync observer. If the server is killed between the two transactions, durable annotation state can be left at partially-refreshed ranges. Pre-existing in master (not introduced by PR #621; surfaced by audit v2). Bounded by the narrow synchronous window between the two transactions. Tracked for fix in v0.12.0 via a `skipTransact` parameter on `refreshAllRanges` so reload can merge both passes into a single transaction.

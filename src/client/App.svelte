@@ -98,14 +98,34 @@ async function reopenClosedTab() {
   }
   if (inflightReopens.has(rec.filePath)) return;
   inflightReopens.add(rec.filePath);
+  const handleFailure = (reason: string) => {
+    // Restore the record so the user can retry with another Ctrl+Alt+T;
+    // silent drop would also surprise users who expect LIFO to be retryable.
+    closedTabStack.push(rec);
+    const basename = rec.filePath.split(/[\\/]/).pop() || rec.filePath;
+    notifications.push({
+      id: `reopen-failed-${Date.now()}`,
+      type: "general-error",
+      severity: "error",
+      message: `Couldn't reopen ${basename}: ${reason}`,
+      dedupKey: `reopen-failed:${rec.filePath}`,
+      timestamp: Date.now(),
+    });
+  };
   try {
-    await fetch(`${API_BASE}${API_OPEN}`, {
+    const response = await fetch(`${API_BASE}${API_OPEN}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filePath: rec.filePath }),
     });
+    if (!response.ok) {
+      // fetch() only rejects on network errors — server-side 4xx/5xx never
+      // throw. Without this branch, the record was silently dropped on a
+      // failed reopen and the toast never fired.
+      handleFailure(`server returned ${response.status}`);
+    }
   } catch (err) {
-    console.warn("[tandem] reopen closed tab failed:", err);
+    handleFailure(err instanceof Error ? err.message : "network error");
   } finally {
     inflightReopens.delete(rec.filePath);
   }
@@ -454,22 +474,29 @@ $effect(() => {
       return;
     }
     if (e.ctrlKey || e.metaKey) {
-      if (e.key === "a") {
+      // Letter shortcuts use `e.code` ("KeyA" etc.) instead of `e.key` so they
+      // remain layout-independent on Dvorak/AZERTY AND fire correctly on macOS
+      // when Option is held (Option+letter produces alt characters like "†"/"µ"
+      // that don't match e.key === "t" or "m"). Digit-1..9 already used e.code;
+      // Backslash already used e.code; Enter is layout-stable and stays on
+      // e.key. Shift/Alt modifier discrimination is explicit so intent is on
+      // the page (e.g. Ctrl+M vs Ctrl+Shift+M).
+      if (e.code === "KeyA" && !e.altKey && !e.shiftKey) {
         const active = document.activeElement;
         if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
         if (active?.closest?.(".ProseMirror")) return;
         e.preventDefault();
         editor?.commands.selectAll();
-      } else if (e.key === "s") {
+      } else if (e.code === "KeyS") {
         e.preventDefault();
         void triggerSave(yjsSync.activeTabId);
       } else if (isSettingsShortcut(e)) {
         e.preventDefault();
         settingsOpen = true;
-      } else if (e.shiftKey && e.key === "P") {
+      } else if (e.shiftKey && e.code === "KeyP") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
-      } else if (e.key === "n") {
+      } else if (e.code === "KeyN") {
         const el = e.target as HTMLElement;
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
         e.preventDefault();
@@ -479,12 +506,12 @@ $effect(() => {
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
         e.preventDefault();
         showHelp = untrack(() => !showHelp);
-      } else if (e.key === "w") {
+      } else if (e.code === "KeyW") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         const id = yjsSync.activeTabId;
         if (id) closeTabAndRecord(id);
-      } else if (e.key === "o") {
+      } else if (e.code === "KeyO") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         fileOpenDialogOpen = true;
@@ -495,7 +522,7 @@ $effect(() => {
           e.preventDefault();
           yjsSync.setActiveTabId(nextId);
         }
-      } else if (e.shiftKey && (e.key === "m" || e.key === "M")) {
+      } else if (e.shiftKey && !e.altKey && e.code === "KeyM") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
@@ -504,7 +531,7 @@ $effect(() => {
         e.preventDefault();
         if (e.shiftKey) toggleRightPanel();
         else toggleLeftPanel();
-      } else if (e.altKey && (e.key === "t" || e.key === "T")) {
+      } else if (e.altKey && e.code === "KeyT") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         void reopenClosedTab();
@@ -514,7 +541,7 @@ $effect(() => {
     // Ctrl/Cmd+Shift+F — open find bar pre-scoped to "Open tabs" (bypasses outline route).
     // Note: intentionally NOT gated on shouldIgnoreShortcut — Ctrl+F should always
     // claim find behavior to prevent the browser's native find-in-page from firing.
-    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyF") {
       e.preventDefault();
       if (e.shiftKey) {
         findBarForceScope = "tabs";
@@ -533,7 +560,7 @@ $effect(() => {
     }
     // Ctrl/Cmd+G — find next; Ctrl/Cmd+Shift+G — find previous.
     // With no active query, fall back to opening the find bar.
-    if ((e.ctrlKey || e.metaKey) && (e.key === "g" || e.key === "G")) {
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
       if (shouldIgnoreShortcut(e)) return;
       e.preventDefault();
       const ed = editor;
@@ -592,14 +619,59 @@ $effect(() => {
     // whatever text is currently selected in the editor. Intentionally NOT
     // gated on shouldIgnoreShortcut: contenteditable focus is the common case
     // (user has selected text in the editor) and we want this to fire there.
-    if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === "m" || e.key === "M")) {
+    //
+    // Three orthogonal preconditions gate the popup; branch feedback so a
+    // disabled-setting toast doesn't misfire when the real cause is "no
+    // selection" or "read-only doc". Suppression from palette/find is silent
+    // — the user is already in a different UI context.
+    if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === "KeyM") {
       e.preventDefault();
+      const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
+      const reviewOnly = activeTab?.readOnly === true;
+      const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
+      if (popupSuppressed) {
+        // Palette/find UI is the active context; user understands why.
+        return;
+      }
+      if (!hasSelection) {
+        notifications.push({
+          id: `comment-shortcut-no-selection-${Date.now()}`,
+          type: "general-error",
+          severity: "info",
+          message: "Select text to comment",
+          dedupKey: "comment-shortcut-no-selection",
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      if (reviewOnly) {
+        notifications.push({
+          id: `comment-shortcut-readonly-${Date.now()}`,
+          type: "general-error",
+          severity: "info",
+          message: "Document is read-only",
+          dedupKey: "comment-shortcut-readonly",
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      if (!settingsState.settings.selectionToolbar) {
+        notifications.push({
+          id: `comment-shortcut-toolbar-off-${Date.now()}`,
+          type: "general-error",
+          severity: "info",
+          message: "Enable selection toolbar in Settings to comment via keyboard",
+          dedupKey: "comment-shortcut-toolbar-off",
+          timestamp: Date.now(),
+        });
+        return;
+      }
       commentFocusTrigger += 1;
       return;
     }
     // Alt+L — select the containing block (paragraph / heading / list item).
     // Chosen over Ctrl+L to avoid the browser address-bar conflict in dev mode.
-    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "l" || e.key === "L")) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyL") {
       if (shouldIgnoreShortcut(e)) return;
       e.preventDefault();
       if (editor) editor.chain().focus().selectParentNode().run();
@@ -607,7 +679,7 @@ $effect(() => {
     }
     // Ctrl/Cmd+Alt+A — toggle authorship colors. Works even when focus is in
     // a form input (it's a global UI preference, not a contextual action).
-    if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === "a" || e.key === "A")) {
+    if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === "KeyA") {
       e.preventDefault();
       settingsState.updateSettings({
         showAuthorship: !settingsState.settings.showAuthorship,

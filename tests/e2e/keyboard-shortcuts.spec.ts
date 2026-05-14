@@ -341,6 +341,21 @@ test("Ctrl+Alt+M opens the comment popup focused on its textarea", async ({ page
     timeout: 10_000,
   });
 
+  // Pin selectionToolbar=on so a future default flip in settings doesn't
+  // fail this test for an unrelated reason. The Ctrl+Alt+M handler now
+  // routes to a toast when the setting is off; this test asserts the
+  // happy path.
+  await page.evaluate(() => {
+    const raw = localStorage.getItem("tandem:settings");
+    const settings = raw ? JSON.parse(raw) : {};
+    settings.selectionToolbar = true;
+    localStorage.setItem("tandem:settings", JSON.stringify(settings));
+  });
+  await page.reload();
+  await expect(page.locator(".ProseMirror", { hasText: "Test Document" })).toBeVisible({
+    timeout: 10_000,
+  });
+
   // Select the title via Ctrl+A then narrow with another key combo. Easier:
   // triple-click selects the paragraph.
   await page.locator(".ProseMirror h1, .ProseMirror p").first().click({ clickCount: 3 });

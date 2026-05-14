@@ -168,6 +168,9 @@ $effect(() => {
 
 // Counter-trigger from App.svelte's Ctrl+Alt+M handler. Captures the current
 // editor selection and focuses the textarea once Svelte commits the popup DOM.
+// Plain `let`, not `$state` — only `requestCommentFocus` is reactive. Tracking
+// the cursor in $state would create a self-triggering effect loop (the $effect
+// writes to the cursor inside its own reactive scope on every fire).
 let lastSeenCommentTrigger = 0;
 $effect(() => {
   if (requestCommentFocus === lastSeenCommentTrigger) return;
