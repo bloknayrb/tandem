@@ -39,6 +39,48 @@ security posture and must fail review.
    Atomic write + restrictive permissions are the responsibility of the
    config-rewrite layer (existing pattern in `src/cli/setup.ts`).
 
+## PR 4 acceptance criteria
+
+The following four items are out-of-scope for this spike but MUST be
+implemented in PR 4. Each maps to a real attack surface surfaced during
+the multi-agent review of this spike, and each is tracked as a separate
+GitHub issue blocking #477. A fifth issue tracks the unrelated env-var
+migration the spike review surfaced.
+
+1. **[#642] Pointer-file hardening (TOCTOU, symlinks, install-root allowlist).**
+   The spike's `UnvalidatedSidecarLocation::validate()` rejects symlinks at
+   the resolved exe and supports an install-root allowlist parameter — but
+   the allowlist is empty by default and the parent-dir ownership / world-
+   writable check is unimplemented. PR 4 must close the remaining TOCTOU
+   surfaces (canonicalisation before allowlist comparison, parent-dir mode
+   check, Windows ACL check on the pointer file itself) before the
+   `UnvalidatedSidecarLocation` newtype can be promoted to a spawnable
+   `SidecarLocation` in production.
+2. **[#643] Windows ACL on the rewritten `.claude.json`.** POSIX
+   `chmod 600` is a no-op on Windows. Without an explicit ACL restricting
+   the file to the current user SID, the bearer token sits at
+   `%USERPROFILE%\.claude.json` readable by any local user. PR 4 must use
+   `icacls` or Win32 `SetSecurityInfo` and verify the resulting DACL
+   excludes `BUILTIN\Users` / `Authenticated Users` / `Everyone`.
+3. **[#644] Backup-or-prompt before overwriting existing
+   `mcpServers.tandem`.** The spike's `rewrite_mcp_config()` is explicit
+   replace-not-deep-merge (correct: stale tokens must not survive). PR 4
+   must give users a recovery path by writing `.claude.json.bak-<timestamp>`
+   before any mutation, prompting on non-default existing entries, and
+   logging the backup path to stderr.
+4. **[#645] Full malformed/missing `.claude.json` matrix.** The spike
+   covers in-memory failure modes (root-is-array, `mcpServers`-is-string,
+   etc.) via `rewrite_rejects_invalid_inputs`. PR 4 must extend coverage
+   to the I/O-layer (file missing, empty/mid-write, parse failure) with
+   one negative-test fixture per row of the truth table in #645.
+
+Adjacent (unrelated to the launcher itself but surfaced by review):
+
+- **[#646] Complete `TANDEM_OPEN_BROWSER` → `TANDEM_TAURI_SIDECAR`
+  migration.** A partial rename in this spike PR was reverted because it
+  left server-side readers unchanged. #646 tracks the full migration in
+  one PR.
+
 ## Hard constraints respected during the spike
 
 - **No real user MCP config was read.** All config-rewrite tests use
