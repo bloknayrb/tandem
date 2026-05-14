@@ -14,7 +14,7 @@ import AnnotationCard from "./AnnotationCard.svelte";
 import BulkActions from "./BulkActions.svelte";
 import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar.svelte";
 import FilterBar from "./FilterBar.svelte";
-import { useAnnotationReview } from "./useAnnotationReview.svelte";
+import type { UseAnnotationReviewReturn } from "./useAnnotationReview.svelte";
 
 interface Props {
   annotations: Annotation[];
@@ -31,11 +31,19 @@ interface Props {
   onFilterChange?: (type: FilterType, author: FilterAuthor, status: FilterStatus) => void;
   /** True when the annotation store is locked by another Tandem instance. */
   storeReadOnly?: boolean;
+  /**
+   * Annotation-review API lifted to App.svelte so there's exactly one
+   * instance across both rails. Provides accept/dismiss/scrollToAnnotation
+   * + getReviewTargets/getActiveReviewAnn for the bulk-confirm UI.
+   */
+  review: UseAnnotationReviewReturn;
 }
 
 let {
   annotations,
-  editor,
+  // editor is part of the public Props for API stability but is now unused
+  // here — App.svelte passes the editor to the lifted useAnnotationReview.
+  editor: _editor,
   ydoc,
   heldCount = 0,
   tandemMode: _tandemMode,
@@ -43,10 +51,13 @@ let {
   activeDocFormat,
   documentId,
   activeAnnotationId,
-  onActiveAnnotationChange,
+  // onActiveAnnotationChange likewise: the lifted review writes activeAnnotationId
+  // directly via App.svelte's setter.
+  onActiveAnnotationChange: _onActiveAnnotationChange,
   reduceMotion,
   onFilterChange,
   storeReadOnly = false,
+  review,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
@@ -175,14 +186,8 @@ const hasFilters = $derived(
   filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all",
 );
 
-// useAnnotationReview hook
-const review = useAnnotationReview({
-  getYdoc: () => ydoc,
-  getEditor: () => editor,
-  getAnnotations: () => annotations,
-  onActiveAnnotationChange: (id) => onActiveAnnotationChange(id),
-  getScrollBehavior: () => scrollBehavior,
-});
+// `review` is a prop now (lifted to App.svelte) — see App.svelte for the single
+// useAnnotationReview() instantiation that both rails share.
 
 // Scroll container reset on filter change
 let didMountFilters = false;
@@ -432,7 +437,10 @@ function handleBulk(status: "accepted" | "dismissed") {
   {:else}
   <div style="padding: var(--tandem-space-3); flex: 1;" role="list" aria-label="Annotations">
       {#each filteredData.pending as ann (ann.id)}
-        {@const isTarget = review.getActiveReviewAnn()?.id === ann.id}
+        {@const isTarget =
+          activeAnnotationId !== null
+            ? activeAnnotationId === ann.id
+            : review.getActiveReviewAnn()?.id === ann.id}
         <AnnotationCard
           annotation={ann}
           replies={repliesMap.get(ann.id) ?? []}

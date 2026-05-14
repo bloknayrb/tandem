@@ -31,6 +31,11 @@ import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
+import {
+  nextAnnotationId,
+  prevAnnotationId,
+  sortAnnotationsByPosition,
+} from "./hooks/useAnnotationOrder.js";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
@@ -55,6 +60,7 @@ import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
+import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
@@ -218,6 +224,32 @@ wireActionDeps({
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
   reopenClosedTab: () => void reopenClosedTab(),
+  annotationNext: () => {
+    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const nextId = nextAnnotationId(sorted, activeAnnotationId);
+    if (nextId) {
+      activeAnnotationId = nextId;
+      const ann = sorted.find((a) => a.id === nextId);
+      if (ann) review.scrollToAnnotation(ann);
+    }
+  },
+  annotationPrev: () => {
+    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const prevId = prevAnnotationId(sorted, activeAnnotationId);
+    if (prevId) {
+      activeAnnotationId = prevId;
+      const ann = sorted.find((a) => a.id === prevId);
+      if (ann) review.scrollToAnnotation(ann);
+    }
+  },
+  annotationAccept: () => {
+    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    if (cur && cur.author !== "user") review.handleAccept(cur.id);
+  },
+  annotationDismiss: () => {
+    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    if (cur && cur.author !== "user") review.handleDismiss(cur.id);
+  },
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -296,6 +328,7 @@ let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
+let commentFocusTrigger = $state(0);
 let activeAnnotationFilter = $state<{
   type: FilterType;
   author: FilterAuthor;
@@ -508,12 +541,83 @@ $effect(() => {
         findBarOpen = true;
       }
     }
+    // Alt+] / Alt+[ — next / previous annotation. Plain Alt (no ctrl/meta/shift)
+    // so they work cross-platform without an fn-key on Mac (unlike F8).
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (e.code === "BracketRight") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+        const nextId = nextAnnotationId(sorted, activeAnnotationId);
+        if (nextId) {
+          activeAnnotationId = nextId;
+          const ann = sorted.find((a) => a.id === nextId);
+          if (ann) review.scrollToAnnotation(ann);
+        }
+        return;
+      }
+      if (e.code === "BracketLeft") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+        const prevId = prevAnnotationId(sorted, activeAnnotationId);
+        if (prevId) {
+          activeAnnotationId = prevId;
+          const ann = sorted.find((a) => a.id === prevId);
+          if (ann) review.scrollToAnnotation(ann);
+        }
+        return;
+      }
+    }
+    // Ctrl/Cmd+Enter — accept focused annotation; Ctrl/Cmd+Shift+Enter — dismiss.
+    // Only Claude- or import-authored annotations can be accepted/dismissed
+    // (mirrors the SidePanel.svelte:440 prop gate). User-authored notes never
+    // become review-targets so the underlying handler is also gated.
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      if (shouldIgnoreShortcut(e)) return;
+      e.preventDefault();
+      const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+      if (cur && cur.author !== "user") {
+        if (e.shiftKey) review.handleDismiss(cur.id);
+        else review.handleAccept(cur.id);
+      }
+      return;
+    }
+    // Ctrl/Cmd+Alt+M — open the comment popup focused on its textarea, using
+    // whatever text is currently selected in the editor. Intentionally NOT
+    // gated on shouldIgnoreShortcut: contenteditable focus is the common case
+    // (user has selected text in the editor) and we want this to fire there.
+    if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === "m" || e.key === "M")) {
+      e.preventDefault();
+      commentFocusTrigger += 1;
+      return;
+    }
   }
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
 });
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
+
+// Lifted from SidePanel.svelte so that:
+//   1. There's exactly one review instance (both rails would otherwise mount
+//      their own, doubling accept/dismiss writes — which would also double
+//      `applySuggestion`'s text insertion before the idempotency guard fix).
+//   2. App-level keyboard shortcuts (Ctrl+Enter accept, etc.) can dispatch
+//      directly without an upward callback.
+// SidePanel now receives `review` as a prop.
+const review = useAnnotationReview({
+  getYdoc: () => activeTab?.ydoc ?? null,
+  getEditor: () => editor,
+  getAnnotations: () => modeGate.visibleAnnotations,
+  onActiveAnnotationChange: (id) => {
+    activeAnnotationId = id;
+  },
+  getScrollBehavior: () => (settingsState.settings.reduceMotion ? "auto" : "smooth"),
+  // Lets the hook's auto-set effect avoid clobbering externally-set ids
+  // (e.g., from Alt+]/Alt+[ keyboard navigation).
+  getActiveAnnotationId: () => activeAnnotationId,
+});
 
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
@@ -566,6 +670,7 @@ const tutorial = createTutorial(
       ydoc={activeTab?.ydoc ?? null}
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
+      requestCommentFocus={commentFocusTrigger}
     />
 
     <DocumentTabs
@@ -662,6 +767,7 @@ const tutorial = createTutorial(
               onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
               reduceMotion={settingsState.settings.reduceMotion}
               storeReadOnly={yjsSync.storeReadOnly}
+              {review}
               visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
             />
             <PanelSlot
@@ -924,6 +1030,7 @@ const tutorial = createTutorial(
       onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
       reduceMotion={settingsState.settings.reduceMotion}
       storeReadOnly={yjsSync.storeReadOnly}
+      {review}
       onFilterChange={(type, author, status) => {
         activeAnnotationFilter = { type, author, status };
       }}

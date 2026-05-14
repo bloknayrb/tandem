@@ -47,6 +47,14 @@ export interface UseAnnotationReviewParams {
   getAnnotations: () => Annotation[];
   onActiveAnnotationChange: (id: string | null) => void;
   getScrollBehavior: () => ScrollBehavior;
+  /**
+   * Getter for the current active annotation id. The auto-advance effect uses
+   * this to AVOID clobbering an externally-set active id (e.g., from the
+   * Alt+]/Alt+[ keyboard shortcut). Without this, every reactive read of
+   * `getAnnotations()` would re-fire the effect and reset the active id to
+   * `targets[reviewIndex]`.
+   */
+  getActiveAnnotationId?: () => string | null;
 }
 
 export interface UseAnnotationReviewReturn {
@@ -69,6 +77,7 @@ export function useAnnotationReview({
   getAnnotations,
   onActiveAnnotationChange,
   getScrollBehavior,
+  getActiveAnnotationId,
 }: UseAnnotationReviewParams): UseAnnotationReviewReturn {
   // Reactive state
   let reviewIndex = $state(0);
@@ -100,6 +109,11 @@ export function useAnnotationReview({
     const map = y.getMap(Y_MAP_ANNOTATIONS);
     const raw = map.get(id) as Annotation | undefined;
     if (!raw) return;
+    // Idempotency: if the annotation has already been resolved (accepted or
+    // dismissed), no-op. Defends against any future double-fire path —
+    // critically, prevents `applySuggestion` from running twice and inserting
+    // the suggested text twice.
+    if (raw.status !== "pending") return;
     const ann = sanitizeAnnotation(raw, devSanitizeWarn);
     map.set(id, { ...ann, status });
 
@@ -214,10 +228,24 @@ export function useAnnotationReview({
     el?.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
   }
 
-  // Sync activeAnnotationId when review index changes
+  // Auto-set activeAnnotationId to the bulk-review target (default: first
+  // pending annotation) on initial mount AND whenever the previously-active
+  // annotation goes missing from `targets` (e.g., it was resolved). DOES NOT
+  // clobber an externally-set active id — that's the contract that makes
+  // App.svelte's Alt+]/Alt+[ keyboard nav stick.
   $effect(() => {
     const targets = getReviewTargets();
-    onActiveAnnotationChange(targets[reviewIndex]?.id ?? null);
+    const fallbackId = targets[reviewIndex]?.id ?? null;
+    const currentActive = getActiveAnnotationId?.() ?? null;
+    if (currentActive === null) {
+      onActiveAnnotationChange(fallbackId);
+      return;
+    }
+    // If current active is gone from targets (was resolved or filtered out),
+    // fall back to the bulk-review target. Otherwise leave it alone.
+    if (!targets.some((t) => t.id === currentActive)) {
+      onActiveAnnotationChange(fallbackId);
+    }
   });
 
   // Keep review index in bounds when annotations change

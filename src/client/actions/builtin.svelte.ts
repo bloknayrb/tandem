@@ -30,6 +30,10 @@ interface ActionDeps {
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
   reopenClosedTab: () => void;
+  annotationNext: () => void;
+  annotationPrev: () => void;
+  annotationAccept: () => void;
+  annotationDismiss: () => void;
 }
 
 let deps: ActionDeps | null = null;
@@ -226,6 +230,46 @@ const BUILTINS: Action[] = [
       guardedRun("reopen-closed-tab", (d) => d.reopenClosedTab());
     },
   },
+  {
+    id: "annotation-next",
+    label: "Next annotation",
+    group: "annotations",
+    shortcut: "Alt+]",
+    run() {
+      guardedRun("annotation-next", (d) => d.annotationNext());
+    },
+  },
+  {
+    id: "annotation-previous",
+    label: "Previous annotation",
+    group: "annotations",
+    shortcut: "Alt+[",
+    run() {
+      guardedRun("annotation-previous", (d) => d.annotationPrev());
+    },
+  },
+  {
+    id: "annotation-accept",
+    label: "Accept focused annotation",
+    group: "annotations",
+    shortcut: "Ctrl+Enter",
+    run() {
+      guardedRun("annotation-accept", (d) => d.annotationAccept());
+    },
+  },
+  {
+    id: "annotation-dismiss",
+    label: "Dismiss focused annotation",
+    group: "annotations",
+    shortcut: "Ctrl+Shift+Enter",
+    run() {
+      guardedRun("annotation-dismiss", (d) => d.annotationDismiss());
+    },
+  },
+  // Note: comment-on-selection (Ctrl+Alt+M) is intentionally NOT registered as
+  // a palette action — opening the palette collapses the editor selection
+  // (focus moves to palette input), so a palette-invoked "comment on selection"
+  // would always fire with no selection. Static row in static-shortcuts.ts.
 ];
 
 for (const action of BUILTINS) {

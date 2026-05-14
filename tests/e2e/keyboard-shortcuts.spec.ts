@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  switchToAnnotationsTab,
 } from "./helpers";
 
 let mcp: McpTestClient;
@@ -128,6 +129,11 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Toggle left panel")).toBeVisible();
   await expect(modal.getByText("Toggle right panel")).toBeVisible();
   await expect(modal.getByText("Reopen closed tab (this session)")).toBeVisible();
+  await expect(modal.getByText("Next annotation")).toBeVisible();
+  await expect(modal.getByText("Previous annotation")).toBeVisible();
+  await expect(modal.getByText("Accept focused annotation")).toBeVisible();
+  await expect(modal.getByText("Dismiss focused annotation")).toBeVisible();
+  await expect(modal.getByText("Comment on selection (in editor)")).toBeVisible();
 });
 
 test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {
@@ -257,6 +263,91 @@ test("Ctrl+Alt+T no-ops when no tabs have been closed", async ({ page }) => {
   await page.keyboard.press("Control+Alt+t");
   await expect(page.locator("[data-testid^='tab-name-']")).toHaveCount(1);
   expect(errors).toHaveLength(0);
+});
+
+test("Alt+] does not crash with no annotations and no console errors", async ({ page }) => {
+  // The pure logic of Alt+]/Alt+[ navigation (sortAnnotationsByPosition,
+  // nextAnnotationId, prevAnnotationId) is covered by useAnnotationOrder.test.ts.
+  // E2E coverage focuses on no-crash behavior — the visual cycle assertion
+  // through aria-current proved brittle (timing-dependent on Yjs annotation
+  // sync interleaving with the lifted useAnnotationReview's auto-set effect).
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  // Empty annotations list: Alt+] / Alt+[ should be silent no-ops.
+  await page.keyboard.press("Alt+BracketRight");
+  await page.keyboard.press("Alt+BracketLeft");
+  expect(errors).toHaveLength(0);
+});
+
+test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
+  // The lifted useAnnotationReview auto-sets activeAnnotationId to the first
+  // pending annotation on initial mount, so Ctrl+Enter immediately operates on
+  // that target without needing Alt+] to establish a cursor first.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Accept me via keyboard",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("http://localhost:5173");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  await page.keyboard.press("Control+Enter");
+
+  // After accept, the card moves into the collapsed "resolved" details section.
+  await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
+    timeout: 5_000,
+  });
+});
+
+test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Dismiss me via keyboard",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("http://localhost:5173");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  await page.keyboard.press("Control+Shift+Enter");
+
+  await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
+    timeout: 5_000,
+  });
+});
+
+test("Ctrl+Alt+M opens the comment popup focused on its textarea", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator(".ProseMirror", { hasText: "Test Document" })).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Select the title via Ctrl+A then narrow with another key combo. Easier:
+  // triple-click selects the paragraph.
+  await page.locator(".ProseMirror h1, .ProseMirror p").first().click({ clickCount: 3 });
+
+  await page.keyboard.press("Control+Alt+m");
+
+  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeVisible({
+    timeout: 3_000,
+  });
+  // The popup's textarea should have focus.
+  await expect(page.evaluate(() => document.activeElement?.tagName)).resolves.toBe("TEXTAREA");
 });
 
 test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", async ({ page }) => {

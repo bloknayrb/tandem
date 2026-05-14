@@ -8,4 +8,5 @@ export const STATIC_SHORTCUT_ROWS = [
   { keys: "Ctrl+Tab", description: "Next document tab" },
   { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
   { keys: "Ctrl+1 – Ctrl+9", description: "Jump to tab by number" },
+  { keys: "Ctrl+Alt+M", description: "Comment on selection (in editor)" },
 ] as const;
