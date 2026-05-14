@@ -25,6 +25,20 @@ function readCompleted(): boolean {
   }
 }
 
+/**
+ * True iff the annotation is authored by the user AND is not a tutorial seed.
+ *
+ * Load-bearing: used by the step-1 advance effect. A tutorial-seeded annotation
+ * must NOT trip this predicate even though tutorial notes carry `author="user"`
+ * to satisfy ADR-027 (only the user can author notes). The `TUTORIAL_ANNOTATION_PREFIX`
+ * marker is the ONLY thing distinguishing a seed from a real user note —
+ * renaming that constant without updating this predicate silently re-introduces
+ * the step-1 auto-advance bug from PR #621 PR-A2b.
+ */
+export function isNonTutorialUserAnnotation(a: Annotation): boolean {
+  return a.author === "user" && !a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX);
+}
+
 function writeCompleted(): void {
   try {
     localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
@@ -82,16 +96,12 @@ export function createTutorial(
     }
   });
 
-  // Step 1: detect user-authored annotation (excluding the tutorial's own
-  // seeded note, which is author='user' per ADR-027 since notes are private
-  // and Claude can't author user content)
+  // Step 1: detect user-authored annotation (excluding tutorial seeds —
+  // see isNonTutorialUserAnnotation JSDoc for ADR-027 context).
   $effect(() => {
     if (!tutorialActive || currentStep !== 1) return;
     const annotations = getAnnotations();
-    const hasUserAnnotation = annotations.some(
-      (a) => a.author === "user" && !a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX),
-    );
-    if (hasUserAnnotation) {
+    if (annotations.some(isNonTutorialUserAnnotation)) {
       stepAdvancedAt = Date.now();
       currentStep = 2;
     }
