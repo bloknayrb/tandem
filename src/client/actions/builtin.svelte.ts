@@ -34,6 +34,8 @@ interface ActionDeps {
   annotationPrev: () => void;
   annotationAccept: () => void;
   annotationDismiss: () => void;
+  selectBlock: () => void;
+  toggleAuthorship: () => void;
 }
 
 let deps: ActionDeps | null = null;
@@ -270,6 +272,24 @@ const BUILTINS: Action[] = [
   // a palette action — opening the palette collapses the editor selection
   // (focus moves to palette input), so a palette-invoked "comment on selection"
   // would always fire with no selection. Static row in static-shortcuts.ts.
+  {
+    id: "select-block",
+    label: "Select containing block",
+    group: "editor",
+    shortcut: "Alt+L",
+    run() {
+      guardedRun("select-block", (d) => d.selectBlock());
+    },
+  },
+  {
+    id: "toggle-authorship",
+    label: "Toggle authorship colors",
+    group: "view",
+    shortcut: "Ctrl+Alt+A",
+    run() {
+      guardedRun("toggle-authorship", (d) => d.toggleAuthorship());
+    },
+  },
 ];
 
 for (const action of BUILTINS) {

@@ -250,6 +250,11 @@ wireActionDeps({
     const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
+  selectBlock: () => editor?.chain().focus().selectParentNode().run(),
+  toggleAuthorship: () =>
+    settingsState.updateSettings({
+      showAuthorship: !settingsState.settings.showAuthorship,
+    }),
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -590,6 +595,23 @@ $effect(() => {
     if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === "m" || e.key === "M")) {
       e.preventDefault();
       commentFocusTrigger += 1;
+      return;
+    }
+    // Alt+L — select the containing block (paragraph / heading / list item).
+    // Chosen over Ctrl+L to avoid the browser address-bar conflict in dev mode.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "l" || e.key === "L")) {
+      if (shouldIgnoreShortcut(e)) return;
+      e.preventDefault();
+      if (editor) editor.chain().focus().selectParentNode().run();
+      return;
+    }
+    // Ctrl/Cmd+Alt+A — toggle authorship colors. Works even when focus is in
+    // a form input (it's a global UI preference, not a contextual action).
+    if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      settingsState.updateSettings({
+        showAuthorship: !settingsState.settings.showAuthorship,
+      });
       return;
     }
   }

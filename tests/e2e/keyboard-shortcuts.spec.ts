@@ -134,6 +134,10 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Accept focused annotation")).toBeVisible();
   await expect(modal.getByText("Dismiss focused annotation")).toBeVisible();
   await expect(modal.getByText("Comment on selection (in editor)")).toBeVisible();
+  await expect(modal.getByText("Heading 1")).toBeVisible();
+  await expect(modal.getByText("Heading 6")).toBeVisible();
+  await expect(modal.getByText("Select containing block")).toBeVisible();
+  await expect(modal.getByText("Toggle authorship colors")).toBeVisible();
 });
 
 test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {
