@@ -654,3 +654,22 @@ Mirror the identical step already present in `tauri-release.yml`.
 **Companion lesson:** For reactive-race regressions where the bug requires interleaving an async event (a Yjs awareness ping re-deriving an upstream prop) *between* dragstart and drop, the synchronous `page.evaluate` recipe is not sufficient — the race never opens. Move that regression guard into a Vitest component test that uses `render` + `rerender` from `@testing-library/svelte` to simulate the mid-drag prop change explicitly. See `tests/client/DocumentTabs.svelte.test.ts` case B.
 
 **Key insight:** Playwright is a mouse simulator, not a DOM-event simulator. Whenever the production handler is listening on a non-pointer event family (drag, paste, contextmenu, etc.), assume Playwright's high-level helpers won't fire it and dispatch the event explicitly. Verify by running the proposed spec against a bugged version of the code *before* trusting it as a regression guard.
+
+## 71. DOM-Nested Positioning Beats Manual Scroll Sync for Content-Anchored Overlays
+
+**Problem:** PR #657 (#649 margin annotation view PR 1) needed to render bubbles in the document gutter at the vertical position of their anchor text, and have those bubbles follow the text as the user scrolls. The natural-but-wrong design is "margin column is a sibling of the editor at the scroll-container box level, with a `scroll` listener that re-applies `transform: translateY(-scrollTop)` to all bubbles." That path forces an rAF-throttled scroll listener, drags in identity-comparison plumbing to avoid the `effect_update_depth_exceeded` Svelte gotcha (see lessons in `feedback_svelte_state_bind_this_loop` and `feedback_svelte_effect_depth_guard` for prior incidents in this repo), and still produces sub-frame jitter on fast scrolls because the listener fires after layout has already painted.
+
+**Solution:** Nest the overlay inside a `position: relative` positioning layer that wraps the editor content, all inside the existing `.editor-scroll` overflow container. Compute each bubble's `top` as `view.coordsAtPos(pos).top - layer.getBoundingClientRect().top`. That value is **scroll-invariant** by construction — both terms shift by the same `scrollTop` when the user scrolls, so the difference is constant. The bubble scrolls naturally because it lives inside the layer, which is inside the scrolling content.
+
+**Recompute triggers (still required):**
+- `editor.on("transaction", ...)` — doc edits move anchors
+- `ResizeObserver` on the positioning layer — width/font changes reflow
+- **Not** `scroll` — by design
+
+**Failure handling:**
+1. **`coordsAtPos` throws on invalid positions** (deleted nodes, mid-transaction Y.js state, freshly-inserted but not-yet-rendered ranges). Wrap per-annotation in `try/catch` and skip the offending bubble for the frame — one stale anchor must not kill the whole render pass.
+2. **Sub-pixel jitter from reflow is real.** Compare last and next position maps with a 0.5px tolerance before re-assigning the reactive `$state`. Without the tolerance, a `clientHeight: 700.0` → `699.7` reflow propagates into every downstream `$effect` that reads the map.
+
+**Where this lives:** `src/client/hooks/useMarginPositions.svelte.ts` (composable), `src/client/panels/MarginColumn.svelte` (overlay container), `src/client/App.svelte` (positioning-layer wrapper around the editor branch). See PR #657 commit `49ec66f`.
+
+**Key insight:** Whenever a brief sounds like *"X should appear next to Y and follow it as the user scrolls,"* the right move is DOM nesting, not listener plumbing. The "free scroll sync" comes from putting the overlay inside the same scrolling content as its anchor — the browser does the work the listener would have done, and you only need to react to actual layout changes. Reach for this pattern for sticky-position indicators, gutter dots, inline suggestion previews, comment bubbles, and similar content-anchored UI.
