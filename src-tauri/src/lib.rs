@@ -17,6 +17,10 @@ mod firewall;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
 
+// Spike #477 PR 4: sidecar launcher validation. Test-only; not shipped.
+#[cfg(test)]
+mod integrations_probe;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

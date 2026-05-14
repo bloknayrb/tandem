@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "some-other-server": {
+      "type": "http",
+      "url": "http://127.0.0.1:9999/mcp",
+      "headers": {
+        "Authorization": "Bearer test-token-do-not-use-other"
+      }
+    },
+    "tandem": {
+      "type": "http",
+      "url": "http://127.0.0.1:3479/mcp",
+      "headers": {
+        "Authorization": "Bearer test-token-do-not-use-tandem"
+      }
+    }
+  }
+}
