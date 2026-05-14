@@ -124,6 +124,9 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Find in open tabs")).toBeVisible();
   await expect(modal.getByText("Find next match")).toBeVisible();
   await expect(modal.getByText("Find previous match")).toBeVisible();
+  await expect(modal.getByText("Toggle Solo / Tandem mode")).toBeVisible();
+  await expect(modal.getByText("Toggle left panel")).toBeVisible();
+  await expect(modal.getByText("Toggle right panel")).toBeVisible();
 });
 
 test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {
@@ -171,3 +174,53 @@ test("Ctrl+G with no active query opens the find bar", async ({ page }) => {
 //   CI — match-count timing depends on collab-extension sync internals.
 // - The "Ctrl+G is ignored when a form input has focus" guard is covered by
 //   the existing "Ctrl+W is ignored" test (same shouldIgnoreShortcut helper).
+
+test("Ctrl+Shift+M toggles solo / tandem mode", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  // Default mode is tandem.
+  const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
+  const soloBtn = page.locator("[data-testid='mode-solo-btn']");
+  await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
+
+  await page.keyboard.press("Control+Shift+M");
+  await expect(soloBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(tandemBtn).toHaveAttribute("aria-pressed", "false");
+
+  await page.keyboard.press("Control+Shift+M");
+  await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
+});
+
+test("Ctrl+\\ toggles the left panel", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  // Capture initial left-panel visibility via the resize-handle testid.
+  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  const initial = await leftHandle.count();
+
+  await page.keyboard.press("Control+\\");
+  await expect.poll(async () => leftHandle.count()).not.toBe(initial);
+
+  await page.keyboard.press("Control+\\");
+  await expect.poll(async () => leftHandle.count()).toBe(initial);
+});
+
+test("Ctrl+Shift+\\ toggles the right panel", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  const rightHandle = page.locator("[data-testid='panel-resize-handle']");
+  const initial = await rightHandle.count();
+
+  await page.keyboard.press("Control+Shift+\\");
+  await expect.poll(async () => rightHandle.count()).not.toBe(initial);
+
+  await page.keyboard.press("Control+Shift+\\");
+  await expect.poll(async () => rightHandle.count()).toBe(initial);
+});

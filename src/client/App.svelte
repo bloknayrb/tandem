@@ -173,6 +173,8 @@ wireActionDeps({
   openFileDialog: () => {
     fileOpenDialogOpen = true;
   },
+  toggleLeftPanel: () => toggleLeftPanel(),
+  toggleRightPanel: () => toggleRightPanel(),
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -412,6 +414,15 @@ $effect(() => {
           e.preventDefault();
           yjsSync.setActiveTabId(nextId);
         }
+      } else if (e.shiftKey && (e.key === "m" || e.key === "M")) {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
+      } else if (e.code === "Backslash") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        if (e.shiftKey) toggleRightPanel();
+        else toggleLeftPanel();
       }
     }
     // Ctrl/Cmd+F — focus outline search if outline panel visible; else open find bar (doc scope).

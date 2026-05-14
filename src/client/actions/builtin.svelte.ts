@@ -27,6 +27,8 @@ interface ActionDeps {
   findPrev: () => void;
   closeActiveTab: () => void;
   openFileDialog: () => void;
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
 }
 
 let deps: ActionDeps | null = null;
@@ -128,6 +130,7 @@ const BUILTINS: Action[] = [
     id: "toggle-mode",
     label: "Toggle Solo / Tandem mode",
     group: "document",
+    shortcut: "Ctrl+Shift+M",
     run() {
       guardedRun("toggle-mode", (d) => d.toggleSoloMode());
     },
@@ -193,6 +196,24 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+Shift+G",
     run() {
       guardedRun("find-previous", (d) => d.findPrev());
+    },
+  },
+  {
+    id: "toggle-left-panel",
+    label: "Toggle left panel",
+    group: "view",
+    shortcut: "Ctrl+\\",
+    run() {
+      guardedRun("toggle-left-panel", (d) => d.toggleLeftPanel());
+    },
+  },
+  {
+    id: "toggle-right-panel",
+    label: "Toggle right panel",
+    group: "view",
+    shortcut: "Ctrl+Shift+\\",
+    run() {
+      guardedRun("toggle-right-panel", (d) => d.toggleRightPanel());
     },
   },
 ];
