@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Known Issues
+
+- **`reloadFromDisk` two-write crash window (#622, v0.12.0 fix)** — when the file watcher detects an external edit, `reloadFromDisk` runs `refreshAllRanges` (own `MCP_ORIGIN` transact) and then a relocation pass (separate `MCP_ORIGIN` transact). Both flow through the durable-annotation sync observer. If the server is killed between the two transactions, durable annotation state can be left at partially-refreshed ranges. Pre-existing in master (not introduced by PR #621; surfaced by audit v2). Bounded by the narrow synchronous window between the two transactions. Tracked for fix in v0.12.0 via a `skipTransact` parameter on `refreshAllRanges` so reload can merge both passes into a single transaction.
+
 ### Fixed
 
 - **Codebase leanness audit v2 (PR #621)** — eight-step audit (`docs/audit-v2.md`) covering dead code, dependency bloat, over-engineering, wrong-tool-for-the-job, and stale docs. Validated by four domain reviewers (annotation-model, crdt, security, svelte-migration) before any deletion. Outcomes:

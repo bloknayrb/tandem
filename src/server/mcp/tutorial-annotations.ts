@@ -88,7 +88,11 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         author: def.type === "note" ? ("user" as const) : ("claude" as const),
         type: def.type,
         range: result.range,
-        relRange: result.relRange,
+        // Only attach a CRDT-anchored relRange when fully resolved. Matches
+        // the reloadFromDisk pattern (file-opener.ts) — a partial anchor
+        // leaks a half-resolved RelativePosition that downstream code would
+        // re-anchor anyway via the lazy-attach path in refreshRange.
+        ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
         content: def.content,
         status: "pending" as const,
         timestamp: Date.now(),
