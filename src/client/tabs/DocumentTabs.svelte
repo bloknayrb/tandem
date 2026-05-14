@@ -1,7 +1,6 @@
 <script lang="ts">
 import { API_OPEN } from "../../shared/api-paths.js";
 import { createScratchpad } from "../actions/builtin.svelte.js";
-import FileOpenDialog from "../components/FileOpenDialog.svelte";
 import type { OpenTab } from "../types.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
@@ -15,6 +14,7 @@ interface Props {
   onTabClose: (tabId: string) => void;
   reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
   reduceMotion?: boolean;
+  onRequestOpenDialog?: () => void;
 }
 
 const {
@@ -24,11 +24,11 @@ const {
   onTabClose,
   reorder,
   reduceMotion = false,
+  onRequestOpenDialog,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
-let showDialog = $state(false);
 let showRecent = $state(false);
 let recentFiles = $state<string[]>([]);
 let openBtnEl: HTMLButtonElement | null = $state(null);
@@ -304,14 +304,10 @@ $effect(() => {
       }}
       onBrowse={() => {
         showRecent = false;
-        showDialog = true;
+        onRequestOpenDialog?.();
       }}
       onClose={() => (showRecent = false)}
     />
-  {/if}
-
-  {#if showDialog}
-    <FileOpenDialog onClose={() => (showDialog = false)} />
   {/if}
 </div>
 

@@ -22,6 +22,8 @@ interface ActionDeps {
   openSettings: () => void;
   toggleSoloMode: () => void;
   openFindBar: () => void; // wired when find/replace bar (PR 570) merges
+  closeActiveTab: () => void;
+  openFileDialog: () => void;
 }
 
 let deps: ActionDeps | null = null;
@@ -134,6 +136,24 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+N",
     run() {
       void createScratchpad();
+    },
+  },
+  {
+    id: "close-tab",
+    label: "Close active tab",
+    group: "document",
+    shortcut: "Ctrl+W",
+    run() {
+      guardedRun("close-tab", (d) => d.closeActiveTab());
+    },
+  },
+  {
+    id: "open-file",
+    label: "Open file…",
+    group: "document",
+    shortcut: "Ctrl+O",
+    run() {
+      guardedRun("open-file", (d) => d.openFileDialog());
     },
   },
 ];

@@ -15,6 +15,7 @@ import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
+import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
@@ -39,6 +40,7 @@ import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
+import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
@@ -117,6 +119,7 @@ const fileDrop = createFileDrop();
 let settingsOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 let paletteOpen = $state(false);
+let fileOpenDialogOpen = $state(false);
 
 function toggleSettings() {
   settingsOpen = !settingsOpen;
@@ -135,6 +138,13 @@ wireActionDeps({
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
   // openFindBar wired when PR 570 (find/replace bar) merges into this branch
   openFindBar: () => {},
+  closeActiveTab: () => {
+    const id = yjsSync.activeTabId;
+    if (id) yjsSync.handleTabClose(id);
+  },
+  openFileDialog: () => {
+    fileOpenDialogOpen = true;
+  },
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -357,6 +367,22 @@ $effect(() => {
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
         e.preventDefault();
         showHelp = untrack(() => !showHelp);
+      } else if (e.key === "w") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        const id = yjsSync.activeTabId;
+        if (id) yjsSync.handleTabClose(id);
+      } else if (e.key === "o") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        fileOpenDialogOpen = true;
+      } else if (/^Digit[1-9]$/.test(e.code)) {
+        if (shouldIgnoreShortcut(e)) return;
+        const nextId = pickTabByDigit(yjsSync.tabs, Number(e.code.slice(5)));
+        if (nextId) {
+          e.preventDefault();
+          yjsSync.setActiveTabId(nextId);
+        }
       }
     }
     // Ctrl/Cmd+F — focus outline search if the outline panel is visible; fall back to find bar.
@@ -438,6 +464,7 @@ const tutorial = createTutorial(
       onTabClose={yjsSync.handleTabClose}
       reorder={tabOrder.reorder}
       reduceMotion={settingsState.settings.reduceMotion}
+      onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
     />
 
     <FormattingBar
@@ -572,6 +599,10 @@ const tutorial = createTutorial(
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+
+    {#if fileOpenDialogOpen}
+      <FileOpenDialog onClose={() => (fileOpenDialogOpen = false)} />
+    {/if}
 
     <CommandPalette
       open={paletteOpen}

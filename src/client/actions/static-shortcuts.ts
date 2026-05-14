@@ -8,4 +8,5 @@ export const STATIC_SHORTCUT_ROWS = [
   { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
   { keys: "Ctrl+Tab", description: "Next document tab" },
   { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
+  { keys: "Ctrl+1 – Ctrl+9", description: "Jump to tab by number" },
 ] as const;
