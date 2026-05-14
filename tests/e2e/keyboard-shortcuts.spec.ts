@@ -52,6 +52,20 @@ test("Ctrl+O opens the file dialog", async ({ page }) => {
   await expect(page.locator("[data-testid='file-open-dialog']")).toBeVisible();
 });
 
+test("'+' button → Browse opens the file dialog", async ({ page }) => {
+  // Guards the post-refactor onRequestOpenDialog plumbing: DocumentTabs no longer
+  // renders FileOpenDialog directly, so the existing "+" → Browse path must still
+  // reach the lifted dialog rendering in App.svelte.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid='open-file-btn']")).toBeVisible();
+
+  await page.locator("[data-testid='open-file-btn']").click();
+  await page.getByRole("menuitem", { name: "Browse files…" }).click();
+
+  await expect(page.locator("[data-testid='file-open-dialog']")).toBeVisible();
+});
+
 test("Ctrl+N switches to the Nth tab", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
