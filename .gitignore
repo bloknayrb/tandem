@@ -23,6 +23,7 @@ AGENTS.md
 .claude/settings.local.json
 .claude/plans/
 .claude/scheduled_tasks.lock
+.claude/.workflow-state/
 .clone/
 .superpowers/
 skills-lock.json
