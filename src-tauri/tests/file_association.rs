@@ -165,3 +165,26 @@ fn windows_alternate_data_stream_path_is_rejected() {
         "Path with colon outside drive-letter slot must be rejected"
     );
 }
+
+#[test]
+fn warm_start_single_instance_args_shape() {
+    // Reproduces the arg shape passed by `tauri-plugin-single-instance`:
+    // `args[0]` is the executable path (potentially with spaces), `args[1]`
+    // is the file the OS handed off. `cwd` is the second-instance's working
+    // directory, supplied as a separate parameter by the plugin.
+    let dir = TempDir::new().unwrap();
+    let target = touch(&dir, "notes.md");
+
+    let warm_args = vec![
+        "C:\\Program Files\\Tandem\\tandem.exe".to_string(),
+        target.to_string_lossy().into_owned(),
+    ];
+    let cwd = dir.path().to_path_buf();
+
+    let result = extract_file_arg(&warm_args, &cwd);
+    assert_eq!(
+        result,
+        Some(target),
+        "warm-start arg shape must resolve the file path"
+    );
+}

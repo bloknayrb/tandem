@@ -170,24 +170,80 @@ async fn request_open_file(
     Ok(())
 }
 
-/// Drain `PendingOpens` and POST each path to `/api/open`. Called once after
-/// `wait_for_health()` succeeds, before `SIDECAR_HEALTHY` is set.
-async fn drain_pending_opens(handle: &tauri::AppHandle, client: &reqwest::Client) {
-    let paths: Vec<std::path::PathBuf> = {
-        let state = handle.state::<PendingOpens>();
-        let mut guard = match state.0.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                log::error!("PendingOpens mutex poisoned — recovering");
-                poisoned.into_inner()
-            }
-        };
-        guard.drain(..).collect()
+/// Consumer-side critical section: flip `SIDECAR_HEALTHY` to true AND drain
+/// the pending queue while holding the `PendingOpens` mutex. Returns the
+/// drained paths so the async caller can POST them outside the lock (we can't
+/// hold a `std::sync::Mutex` across `.await`).
+///
+/// Pairs with `try_queue_or_post` on the producer side: producers also read
+/// `SIDECAR_HEALTHY` only while holding the same mutex, which serializes all
+/// flag access through it and closes every TOCTOU window where a producer's
+/// load-before-push could orphan a path. See the doc comment on
+/// `try_queue_or_post` for the full ordering argument.
+pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<std::path::PathBuf> {
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned — recovering");
+            poisoned.into_inner()
+        }
     };
+    SIDECAR_HEALTHY.store(true, Ordering::Release);
+    std::mem::take(&mut *guard)
+}
+
+/// Producer-side critical section: under the `PendingOpens` mutex, decide
+/// whether to queue the path (sidecar not yet healthy) or hand it back to the
+/// caller to POST directly (sidecar healthy). Returns `Ok(())` on queue,
+/// `Err(path)` when the caller should POST.
+///
+/// Ordering proof (paired with `promote_healthy_and_drain`):
+/// - Consumer's flag-flip and drain are atomic under the mutex.
+/// - Producer's flag-load and push are atomic under the same mutex.
+/// - Any producer that acquires the lock BEFORE the consumer pushes, then
+///   the consumer's drain captures it.
+/// - Any producer that acquires the lock AFTER the consumer reads
+///   `SIDECAR_HEALTHY=true` (set by the consumer while holding the lock) and
+///   either POSTs directly. No orphan window remains.
+// Used by `handle_opened_urls` (macOS only) and by unit tests; the
+// non-macOS, non-test build sees no call sites.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn try_queue_or_post(
+    state: &PendingOpens,
+    path: std::path::PathBuf,
+) -> Result<(), std::path::PathBuf> {
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned — recovering and queueing");
+            poisoned.into_inner()
+        }
+    };
+    if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+        Err(path)
+    } else {
+        log::info!("Queueing file (sidecar not yet healthy): {}", path.display());
+        guard.push(path);
+        Ok(())
+    }
+}
+
+/// POST every queued path to `/api/open`. The flag flip + drain has already
+/// happened atomically in `promote_healthy_and_drain`; this just runs the I/O.
+async fn post_drained_paths(
+    paths: Vec<std::path::PathBuf>,
+    client: &reqwest::Client,
+) {
     if paths.is_empty() {
         return;
     }
-    let token = token_store::get_or_create_token().ok();
+    let token = match token_store::get_or_create_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("Token retrieval failed for drained-path POSTs: {e}");
+            None
+        }
+    };
     for path in paths {
         if let Err(e) = request_open_file(client, token.as_deref(), &path).await {
             log::warn!(
@@ -219,11 +275,24 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
             log::warn!("Failed to convert URL to file path: {url}");
             continue;
         };
-        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+        // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
+        // through the same mutex used by promote_healthy_and_drain. This is
+        // the load-bearing piece of the drain-race fix: any producer that
+        // acquires the lock either pushes (and gets drained) or sees
+        // flag=true (and is handed back the path to POST directly). No
+        // load-before-push window remains.
+        let pending = app.state::<PendingOpens>();
+        if let Err(path) = try_queue_or_post(pending.inner(), path) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 let client = app.state::<reqwest::Client>().inner().clone();
-                let token = token_store::get_or_create_token().ok();
+                let token = match token_store::get_or_create_token() {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        log::warn!("Token retrieval failed for Opened-event POST: {e}");
+                        None
+                    }
+                };
                 if let Err(e) = request_open_file(&client, token.as_deref(), &path).await {
                     log::warn!(
                         "request_open_file (Opened) failed for {}: {e}",
@@ -231,18 +300,6 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
                     );
                 }
             });
-        } else {
-            let state = app.state::<PendingOpens>();
-            match state.0.lock() {
-                Ok(mut guard) => {
-                    log::info!("Queueing file from Opened event (sidecar not yet healthy): {}", path.display());
-                    guard.push(path);
-                }
-                Err(poisoned) => {
-                    log::error!("PendingOpens mutex poisoned — recovering and queueing");
-                    poisoned.into_inner().push(path);
-                }
-            }
         }
     }
 }
@@ -729,14 +786,14 @@ async fn start_sidecar(
             Ok(()) => {
                 log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
 
-                // Drain queued file-open requests (Apple Events that arrived
-                // pre-health), THEN flip the healthy flag. Ordering matters:
-                // if we flipped first, a concurrent Opened event could read
-                // SIDECAR_HEALTHY=true and POST while drain was still pulling
-                // from the queue. Drain → store=true keeps the queue
-                // monotonically draining.
-                drain_pending_opens(handle, client).await;
-                SIDECAR_HEALTHY.store(true, Ordering::Release);
+                // Promote SIDECAR_HEALTHY=true AND drain the pending queue in
+                // a single critical section over `PendingOpens` mutex. Then
+                // POST the drained paths outside the lock (we can't hold a
+                // std::sync::Mutex across .await). See docs on
+                // `promote_healthy_and_drain` and `try_queue_or_post` for the
+                // ordering argument that proves no path is orphaned.
+                let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
+                post_drained_paths(drained, client).await;
 
                 return Ok(());
             }
@@ -1928,5 +1985,117 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
             };
             show_update_error_dialog(app, &dialog_msg);
         }
+    }
+}
+
+#[cfg(test)]
+mod pending_opens_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // Serialize tests that mutate SIDECAR_HEALTHY (a process-wide static).
+    static FLAG_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fresh_state() -> PendingOpens {
+        PendingOpens(Mutex::new(Vec::new()))
+    }
+
+    #[test]
+    fn promote_healthy_and_drain_returns_fifo_and_clears_queue() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("a"));
+        state.0.lock().unwrap().push(PathBuf::from("b"));
+        state.0.lock().unwrap().push(PathBuf::from("c"));
+
+        let drained = promote_healthy_and_drain(&state);
+        assert_eq!(
+            drained,
+            vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")],
+            "drain order should match push order"
+        );
+        assert!(state.0.lock().unwrap().is_empty(), "queue should be cleared");
+        assert!(
+            SIDECAR_HEALTHY.load(Ordering::Acquire),
+            "SIDECAR_HEALTHY should be flipped to true"
+        );
+
+        // Reset for other tests.
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn promote_healthy_and_drain_on_empty_queue_still_flips_flag() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let drained = promote_healthy_and_drain(&state);
+        assert!(drained.is_empty());
+        assert!(SIDECAR_HEALTHY.load(Ordering::Acquire));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn try_queue_or_post_queues_when_unhealthy() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let result = try_queue_or_post(&state, PathBuf::from("queued"));
+        assert!(result.is_ok());
+        assert_eq!(
+            *state.0.lock().unwrap(),
+            vec![PathBuf::from("queued")],
+            "path should be in queue"
+        );
+    }
+
+    #[test]
+    fn try_queue_or_post_returns_path_when_healthy() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+
+        let state = fresh_state();
+        let result = try_queue_or_post(&state, PathBuf::from("direct"));
+        assert_eq!(
+            result,
+            Err(PathBuf::from("direct")),
+            "caller should be handed back the path to POST directly"
+        );
+        assert!(state.0.lock().unwrap().is_empty(), "no queue side effect");
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn drain_then_late_producer_under_lock_sees_healthy_flag() {
+        // Reproduces the lock-ordering proof: after the consumer drains and
+        // flips the flag, a subsequent producer that acquires the same lock
+        // observes flag=true and returns Err(path) for direct-POST. No path
+        // can be orphaned in the queue.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("early"));
+
+        // Consumer side.
+        let drained = promote_healthy_and_drain(&state);
+        assert_eq!(drained, vec![PathBuf::from("early")]);
+
+        // Late producer that read flag=false BEFORE the consumer ran can only
+        // mutate the queue while holding the lock; once it does, it sees
+        // flag=true (set inside the same lock) and the helper hands the path
+        // back instead of queuing it.
+        let result = try_queue_or_post(&state, PathBuf::from("late"));
+        assert_eq!(result, Err(PathBuf::from("late")));
+        assert!(state.0.lock().unwrap().is_empty());
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
     }
 }
