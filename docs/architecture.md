@@ -233,6 +233,51 @@ Chat state persists across server restarts via the same `saveCtrlSession` / `res
 
 On server startup, `listSessionFilePaths()` scans the session directory and `restoreOpenDocuments()` reopens all previously-open files via `openFileByPath()`. `restoreCtrlSession()` returns the previous active document ID so the correct tab is selected. If a session's source file no longer exists (ENOENT), the stale session is cleaned up. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open. Both run **before** Hocuspocus and MCP start to prevent CRDT merge races with stale browser tabs.
 
+### OS File-Association Open
+
+When the Tauri desktop app is launched via the OS file-association handler (double-clicking a `.md` / `.txt` / `.html` / `.docx` file in Finder, Explorer, or a Linux file manager), the file path reaches the editor via three platform-specific routes:
+
+```
+Cold start, Windows / Linux:
+  OS double-click  ──▶  tandem.exe <path>  ──▶  lib.rs:extract_file_arg
+                                              ──▶  spawn sidecar with
+                                                    TANDEM_OPEN_FILE=<path>
+                                              ──▶  Node startup-file.ts:
+                                                    maybeOpenStartupFile()
+                                              ──▶  openFileByPath()  [BEFORE bind]
+                                              ──▶  HTTP / Hocuspocus bind
+                                              ──▶  browser opens, sees the doc
+
+Cold start, macOS:
+  OS double-click  ──▶  Tandem.app launched  ──▶  setup() spawns sidecar
+                                              ──▶  Apple Event kAEOpenDocuments
+                                                    fires as RunEvent::Opened
+                                              ──▶  handle_opened_urls() queues
+                                                    path in PendingOpens
+                                              ──▶  wait_for_health() returns Ok
+                                              ──▶  drain_pending_opens()
+                                                    POSTs /api/open
+                                              ──▶  SIDECAR_HEALTHY ← true
+
+Warm start, Windows / Linux:
+  OS double-click  ──▶  tandem.exe <path>  ──▶  tauri-plugin-single-instance
+                                                    fires callback in the
+                                                    running app
+                                              ──▶  extract_file_arg(&args)
+                                              ──▶  show_main_window() + spawn
+                                                    POST /api/open
+
+Warm start, macOS:
+  OS double-click  ──▶  LaunchServices reactivates app
+                                              ──▶  RunEvent::Opened
+                                              ──▶  SIDECAR_HEALTHY=true path:
+                                                    POST /api/open directly
+```
+
+File associations are declared in `src-tauri/tauri.conf.json#bundle.fileAssociations`. Tauri's bundler writes the Windows NSIS registry keys (`HKCR\.<ext>\OpenWithProgids` + ProgID class), the macOS `Info.plist` `CFBundleDocumentTypes`, and the Linux `.desktop` `MimeType=` entries. Registering an extension makes Tandem *eligible* — the OS user opts in to "always open with Tandem" via Settings or "Open With → Always".
+
+Known limitation: macOS cold-start may briefly show `welcome.md` before the requested file becomes active, because Apple Events arrive after `setup()` schedules the sidecar spawn. This window is typically 100–300 ms.
+
 ## Channel Push (Real-Time Events)
 
 The channel replaces polling for user actions. Instead of Claude calling `tandem_checkInbox` repeatedly, the channel shim pushes events to Claude Code as they happen.
