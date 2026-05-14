@@ -560,6 +560,19 @@ function aboutRows() {
               />
               <span>Show floating selection toolbar</span>
             </label>
+
+            <label
+              data-testid="margin-view-toggle"
+              style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+            >
+              <input
+                type="checkbox"
+                checked={settings.marginView}
+                onchange={(e) => onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
+                style="accent-color: var(--tandem-accent);"
+              />
+              <span>Margin annotation view (Word-style)</span>
+            </label>
             {#if isTauriRuntime()}
               {#await import("./CoworkSettings.svelte")}
                 <div

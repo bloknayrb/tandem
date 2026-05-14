@@ -256,6 +256,47 @@ describe("loadSettings — reduceMotion", () => {
   });
 });
 
+describe("loadSettings — marginView", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to false when no settings are stored", () => {
+    expect(loadSettings().marginView).toBe(false);
+  });
+
+  it("defaults to false when settings exist but marginView key is absent", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: "dark" }));
+    expect(loadSettings().marginView).toBe(false);
+  });
+
+  it("returns true for literal boolean true", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ marginView: true }));
+    expect(loadSettings().marginView).toBe(true);
+  });
+
+  it("returns false for the string 'true' (strict === true guard)", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ marginView: "true" }));
+    expect(loadSettings().marginView).toBe(false);
+  });
+
+  it("returns false for the number 1 (truthy non-boolean)", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ marginView: 1 }));
+    expect(loadSettings().marginView).toBe(false);
+  });
+
+  it("returns false for literal boolean false", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ marginView: false }));
+    expect(loadSettings().marginView).toBe(false);
+  });
+});
+
 describe("useTandemSettings — updateSettings write path", () => {
   // mergeAndClampSettings is the pure core of updateSettings — exercising it
   // directly covers the clamp-on-write contract without spinning up a React
@@ -286,11 +327,17 @@ describe("useTandemSettings — updateSettings write path", () => {
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
+    marginView: false,
   };
 
   it("clamps editorWidthPercent above 100 down to 100", () => {
     const next = mergeAndClampSettings(BASE, { editorWidthPercent: 120 });
     expect(next.editorWidthPercent).toBe(100);
+  });
+
+  it("round-trips marginView=true through merge (write-side covers the strict-true load guard)", () => {
+    const next = mergeAndClampSettings(BASE, { marginView: true });
+    expect(next.marginView).toBe(true);
   });
 
   it("clamps editorWidthPercent below 40 up to 40", () => {
@@ -567,6 +614,7 @@ describe("mergeAndClampSettings — rail array clamps", () => {
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
+    marginView: false,
   };
 
   it("clamps leftRailTabs [] to default", () => {
