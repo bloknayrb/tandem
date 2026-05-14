@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OS file-association review fixes round 2 (#628 follow-up)** — three additional findings from a multi-PR review pass:
+  - `restart_sidecar` now clears `SIDECAR_HEALTHY` via a new `clear_healthy_under_lock` helper that takes the `PendingOpens` mutex, mirroring `promote_healthy_and_drain`'s consumer-side flip. A bare atomic store outside the lock re-opened the same TOCTOU window the lock was introduced to close: a macOS `RunEvent::Opened` reading flag=true after `kill_sidecar` but before the clear could POST to a dying server. New `pending_opens_tests::restart_clears_flag_under_lock_so_late_producer_queues` materializes the proof.
+  - `handle_opened_urls` hoists `token_store::get_or_create_token` out of the per-URL loop. An "Open With Tandem" multi-file batch now hits the keyring once instead of N times. Mirrors `post_drained_paths`.
+  - `extract_file_arg` now documents that `is_file()` follows symlinks intentionally — the final read goes through server-side `openFileByPath` which is the authority for path validation. Prevents a future reviewer from "tightening" this into `symlink_metadata`-based checks and duplicating the server's allowlist.
 - **OS file-association review fixes (#628 follow-up)** — six fixes addressing findings from a multi-agent review pass on the cold-start file-open path:
   - Cold-start file is now resolved once in Tauri's `setup()` and threaded into `start_sidecar` as an explicit parameter. `restart_sidecar` passes `None`, so a Settings → Restart Sidecar (or any auto-restart) no longer re-injects `TANDEM_OPEN_FILE` and never re-opens the original launch file.
   - Closed the `PendingOpens` drain TOCTOU window by serializing `SIDECAR_HEALTHY` access through the queue mutex on both consumer (`promote_healthy_and_drain`: flip flag + drain in one critical section) and producer (`try_queue_or_post`: check flag under same lock before push). Eliminates the load-before-push race the original drain-then-flip ordering left open.

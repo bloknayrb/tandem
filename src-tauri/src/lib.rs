@@ -140,6 +140,11 @@ pub fn extract_file_arg(
         return None;
     }
 
+    // is_file() follows symlinks intentionally — the final read goes through
+    // server-side openFileByPath which is the authority for path validation
+    // (extension, size, UNC rejection, etc.). Resolving symlinks here would
+    // duplicate that check without adding defense in depth, since a symlink
+    // pointing at a disallowed target would be rejected on the server hop.
     if !absolute.is_file() {
         log::warn!(
             "extract_file_arg: path is not a regular file: {}",
@@ -198,6 +203,25 @@ pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<std::path::
     };
     SIDECAR_HEALTHY.store(true, Ordering::Release);
     std::mem::take(&mut *guard)
+}
+
+/// Inverse of `promote_healthy_and_drain`: clear `SIDECAR_HEALTHY` while
+/// holding the `PendingOpens` mutex so any concurrent producer either pushes
+/// (and the next promote_and_drain captures the path) or observes flag=false
+/// (and queues). Bare `SIDECAR_HEALTHY.store(false)` outside the lock would
+/// re-open the same TOCTOU window the lock was introduced to close: a
+/// producer could read flag=true between `kill_sidecar` and the clear, then
+/// POST to a sidecar that no longer exists. Used by `restart_sidecar`.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
+    let _guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned during clear — recovering");
+            poisoned.into_inner()
+        }
+    };
+    SIDECAR_HEALTHY.store(false, Ordering::Release);
 }
 
 /// Producer-side critical section: under the `PendingOpens` mutex, decide
@@ -268,6 +292,17 @@ async fn post_drained_paths(
 #[cfg(target_os = "macos")]
 fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     show_main_window(app);
+    // Hoist token retrieval out of the per-URL loop so a multi-file "Open
+    // With" batch hits the keyring once, not N times. Mirrors
+    // `post_drained_paths`. Falls back to anonymous on retrieval failure;
+    // loopback bypasses Bearer enforcement so this is non-fatal.
+    let batch_token: Option<String> = match token_store::get_or_create_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("Token retrieval failed for Opened-event batch: {e}");
+            None
+        }
+    };
     for url in urls {
         if url.scheme() != "file" {
             log::warn!("Ignoring non-file URL from Opened event: {url}");
@@ -292,15 +327,9 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
         let pending = app.state::<PendingOpens>();
         if let Err(path) = try_queue_or_post(pending.inner(), path) {
             let app = app.clone();
+            let token = batch_token.clone();
             tauri::async_runtime::spawn(async move {
                 let client = app.state::<reqwest::Client>().inner().clone();
-                let token = match token_store::get_or_create_token() {
-                    Ok(t) => Some(t),
-                    Err(e) => {
-                        log::warn!("Token retrieval failed for Opened-event POST: {e}");
-                        None
-                    }
-                };
                 if let Err(e) = request_open_file(&client, token.as_deref(), &path).await {
                     log::warn!(
                         "request_open_file (Opened) failed for {}: {e}",
@@ -643,9 +672,13 @@ pub fn run() {
 fn restart_sidecar(app: tauri::AppHandle) {
     kill_sidecar(&app);
     // Reset healthy flag so any RunEvent::Opened arriving mid-restart queues
-    // instead of POSTing to a dying server. `start_sidecar` will set it back
-    // to true after the next successful `wait_for_health`.
-    SIDECAR_HEALTHY.store(false, Ordering::Release);
+    // instead of POSTing to a dying server. Must clear under the PendingOpens
+    // mutex (see clear_healthy_under_lock) — a bare atomic store here would
+    // race a concurrent producer that read flag=true a moment ago.
+    // `start_sidecar` will set it back to true after the next successful
+    // `wait_for_health`.
+    let pending: tauri::State<'_, PendingOpens> = app.state();
+    clear_healthy_under_lock(&pending);
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -2082,6 +2115,35 @@ mod pending_opens_tests {
             "caller should be handed back the path to POST directly"
         );
         assert!(state.0.lock().unwrap().is_empty(), "no queue side effect");
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn restart_clears_flag_under_lock_so_late_producer_queues() {
+        // Inverse of drain_then_late_producer_under_lock_sees_healthy_flag:
+        // restart_sidecar clears SIDECAR_HEALTHY via clear_healthy_under_lock.
+        // A producer that races the clear can only mutate state while
+        // holding the same mutex; once it does, it observes flag=false (set
+        // inside the same lock by the clear) and queues the path. A bare
+        // atomic store outside the lock would let a producer that read
+        // flag=true before kill_sidecar still POST to the dying server.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+
+        let state = fresh_state();
+
+        // Simulate the locked clear that restart_sidecar performs.
+        clear_healthy_under_lock(&state);
+
+        // Late producer arriving after the clear observes flag=false and
+        // queues the path instead of POSTing.
+        let result = try_queue_or_post(&state, PathBuf::from("after-restart"));
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *state.0.lock().unwrap(),
+            vec![PathBuf::from("after-restart")]
+        );
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
     }
