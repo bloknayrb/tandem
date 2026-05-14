@@ -598,7 +598,7 @@ test("selections are buffered, not pushed as SSE events (#188)", async ({ page }
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Subscribe to SSE events
-  const eventsUrl = `http://localhost:${DEFAULT_MCP_PORT}/api/events`;
+  const eventsUrl = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api/events`;
   await page.evaluate((url) => {
     (window as unknown as { __tandemEvents: unknown[] }).__tandemEvents = [];
     const es = new EventSource(url);

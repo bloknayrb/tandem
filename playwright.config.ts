@@ -7,7 +7,7 @@ export default defineConfig({
   retries: 1,
   workers: 1, // server supports one MCP session at a time
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: "http://127.0.0.1:5173",
     headless: true,
   },
   // Two webServer entries instead of `npm run dev:standalone`:
@@ -26,7 +26,7 @@ export default defineConfig({
   webServer: [
     {
       command: "npm run dev",
-      url: "http://localhost:5173",
+      url: "http://127.0.0.1:5173",
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
