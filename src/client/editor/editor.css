@@ -3,6 +3,19 @@
   font-size: var(--tandem-editor-font-size, 17px);
   line-height: 1.65;
 }
+/* Selection visibility when the editor loses focus.
+ * The browser's native ::selection background only paints while its containing
+ * element has focus. When an annotation popup or BubbleMenu input takes focus,
+ * the native highlight vanishes and users lose any visual signal of what's
+ * selected. SelectionDecorationExtension renders this class over the selection
+ * range; the focus-within rule below hides it during normal editing so native
+ * ::selection paints unobstructed. */
+.tandem-editor .tandem-selection-blurred {
+  background-color: var(--tandem-selection-blurred-bg);
+}
+.tandem-editor:focus-within .tandem-selection-blurred {
+  background-color: transparent;
+}
 .tandem-editor h1 {
   font-family: var(--tandem-editor-font-family);
   font-size: 2em;

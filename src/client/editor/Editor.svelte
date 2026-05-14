@@ -21,6 +21,7 @@ import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
+import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./extensions/slash-command";
 import "./editor.css";
 
@@ -154,6 +155,7 @@ $effect(() => {
       AwarenessExtension.configure({ ydoc }),
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
       FindReplaceExtension,
+      SelectionDecorationExtension,
     ],
     editorProps: {
       attributes: {
