@@ -76,6 +76,15 @@ case "$TOOL_NAME" in
   Bash)
     if _ws_is_git_commit "$COMMAND" && [[ "${EXIT_CODE:-1}" == "0" ]]; then
       _ws_mark "$STATE_DIR" "$_WS_MARK_COMMIT"
+      # Clear stop-nudged so the next post-commit edit cycle re-fires the
+      # reminder. Without this, stop-cycle-check.sh's per-session early-return
+      # short-circuits forever after the first nudge.
+      rm -f "${STATE_DIR}/${_WS_MARK_STOP_NUDGED}" 2>/dev/null || true
+      # Surface systemic clear-failure (Windows file lock, AV scanner) to
+      # stderr so it's visible in hook logs without escalating to a hard fail.
+      if [[ -f "${STATE_DIR}/${_WS_MARK_STOP_NUDGED}" ]]; then
+        echo "warn: stop-nudged mark survived commit clear at $(date -Iseconds 2>/dev/null || date)" >&2
+      fi
     fi
     ;;
 esac

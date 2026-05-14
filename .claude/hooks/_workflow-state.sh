@@ -90,10 +90,13 @@ _ws_is_git_commit() {
   [[ "$cmd" =~ ^[[:space:]]*git([[:space:]]+(-[^[:space:]]+|--[^[:space:]=]+(=[^[:space:]]+)?)([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$) ]]
 }
 
-# Return 0 if the (forward-slashed) path looks like a source-tree edit:
+# Return 0 if the path looks like a source-tree edit:
 # under src/ or src-tauri/, not a test, not markdown, not generated.
+# Self-normalizes \ -> / so callers can pass JSON-derived paths directly on
+# Windows; Windows filenames cannot contain literal backslashes, so the
+# substitution is unambiguous.
 _ws_is_source_edit() {
-  local p="$1"
+  local p="${1//\\//}"
   [[ -n "$p" ]] || return 1
   [[ "$p" =~ (^|/)src(-tauri)?/ ]] || return 1
   [[ "$p" =~ \.(test|spec)\.[tj]sx?$ ]] && return 1

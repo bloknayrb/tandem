@@ -42,7 +42,7 @@ PLAN_HASH=$(printf '%s' "$PLAN_PATH" | node -e "
   process.stdin.on('end', () => {
     process.stdout.write(require('crypto').createHash('sha1').update(d).digest('hex').slice(0, 16));
   });
-" 2>/dev/null || printf 'unknown')
+" 2>/dev/null || printf 'unknown-%s' "$$")
 NUDGE_MARK="${STATE_DIR}/nudged-plan-${PLAN_HASH}"
 [[ -f "$NUDGE_MARK" ]] && exit 0
 : > "$NUDGE_MARK"

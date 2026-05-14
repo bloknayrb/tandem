@@ -191,7 +191,7 @@ Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse 
 - `nudge-simplify-before-commit.sh` -- Warns on `git commit` when source edits have happened since last `/simplify` (one-shot per edit batch)
 
 **PostToolUse — unmatched (every tool):**
-- `track-workflow-events.sh` -- Records markers used by nudge hooks: `last-plan-write`, `last-source-edit`, `last-agent-call`, `last-simplify`, `last-commit`. Fast-paths uninteresting tools to skip the node spawn.
+- `track-workflow-events.sh` -- Records markers used by nudge hooks: `last-plan-write`, `last-source-edit`, `last-agent-call`, `last-simplify`, and `last-commit` (detected from successful `git commit` invocations in `Bash` tool calls). Also clears the `stop-nudged` marker on successful commit so the stop reminder can re-fire after the next edit cycle. Fast-paths uninteresting tools to skip the node spawn.
 
 **PostToolUse — `Edit|Write` matcher:**
 - `typecheck-on-edit.sh` -- Runs `tsc --noEmit` after `.ts`/`.tsx` edits
