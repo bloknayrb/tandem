@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Markdown serializer escape noise on `.md` saves (#605, v1.0 blocker)** — every `.md` file Tandem auto-saved was silently rewritten with backslash-escape noise by `remark-stringify`'s default `unsafe` table (`[anchor]` → `\[anchor]`, `foo_bar` → `foo\_bar`, etc.). The serializer in `src/server/file-io/markdown.ts` now overrides the `text` handler to call `state.safe()` (preserving block-context escapes for line-leading `# `, `- `, `> `, fence runs, table pipes, setext underlines) and then selectively un-escape four intra-text classes: `\[label]` when `label` is not a `definition` identifier in the same tree (parse-aware via a `unist-util-visit` pre-pass — guards against the collapsed-reference-link regression class; label is normalized per CommonMark; negative lookahead also rejects an immediately following `[` to block adjacent-bracket reference-link injection; label character class excludes `\` to prevent O(n²) backtracking on adversarial input like `\[\[\[\[\[…`), `\_` strictly between word chars (CommonMark §6.2 intra-word flanking rule), standalone `` \` ``, and `\~` not followed by another `~` (GFM strikethrough needs `~~`). GFM autolink-literal `@`/`.`/`:` and table `|` escapes still flow through `safe()` untouched. `CHANGELOG.md` was re-serialized through the fixed code as a one-time data cleanup. The `readOnly: true` workaround on the upgrade auto-open path (PR #603) is retained as defense-in-depth.
+
 ### Known Issues
 
 - **`reloadFromDisk` two-write crash window (#622, v0.12.0 fix)** — when the file watcher detects an external edit, `reloadFromDisk` runs `refreshAllRanges` (own `MCP_ORIGIN` transact) and then a relocation pass (separate `MCP_ORIGIN` transact). Both flow through the durable-annotation sync observer. If the server is killed between the two transactions, durable annotation state can be left at partially-refreshed ranges. Pre-existing in master (not introduced by PR #621; surfaced by audit v2). Bounded by the narrow synchronous window between the two transactions. Tracked for fix in v0.12.0 via a `skipTransact` parameter on `refreshAllRanges` so reload can merge both passes into a single transaction.
@@ -62,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Token-violation hook promoted to blocking** — `check-token-violation.sh` PostToolUse hook now exits 2 (blocking) with `continueOnBlock` framing redirected to stderr so Claude Code sees actionable `file:line` details from the semantic-token scanner instead of silently warning. Hook framing aligned with `block-no-verify.sh` and `block-e2e-port-kill.sh`.
 
-## \[0.11.0] - 2026-05-11
+## [0.11.0] - 2026-05-11
 
 ### Added
 
@@ -85,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Authorship toggle moved to toolbar (closes #587)** — The "Show Authorship" toggle moved from the Settings popover Accessibility section to the main toolbar right cluster for faster access. New testid: `toolbar-authorship-toggle`.
 - **Settings dialog responsive breakpoint (closes #515)** — stacked single-column layout at ≤640px; sidebar capped at 45% of dialog height with vertical scroll; four E2E tests cover nav reachability, Tab cycling, focus-after-resize, and content width.
-- **Redesign bundle checked into&#x20;****docs/redesign-bundle/****&#x20;(#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
+- **Redesign bundle checked into ****docs/redesign-bundle/**** (#521)** — captured the current handoff, HTML previews, CSS, and JSX surfaces used for the app-shell visual pass so follow-on UI work is grounded in a repo-local artifact instead of a transient design URL.
 - **Regression coverage added for the remaining app-shell contracts (#521)** — new Playwright and Vitest checks now cover connection banners, reply threads, panel resize, layout switching, onboarding, readonly DOCX review, and apply-changes behavior.
 - **Keyboard navigation E2E tests for floating selection toolbar (closes #516)** — Tab/Shift+Tab focus traversal, Enter activation, and Escape-to-editor focus return are now covered by four Playwright tests documenting APG-compliant behavior for transient contextual toolbars.
 - **Redesign final QA suite (closes #522)** — Playwright tests covering viewport layouts (600/1280/1920px), `prefers-reduced-motion`, forced-colors/high-contrast mode, dark/light color scheme switching, and keyboard Tab-order reachability.
@@ -106,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **ReviewSummary****&#x20;overlay removed with review mode already gone (#521)** — the dead component and `App.svelte` mount path are deleted rather than carried forward as unreachable redesign debt.
+- **ReviewSummary**\*\* overlay removed with review mode already gone (#521)\*\* — the dead component and `App.svelte` mount path are deleted rather than carried forward as unreachable redesign debt.
 
 ### Fixed
 
@@ -115,28 +119,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Browser path: no light-flash on first paint for dark-mode users** — an inline pre-mount script in `index.html` reads the persisted theme preference (falling back to `matchMedia`) and sets `data-theme` on `<html>` before Svelte mounts, matching the behaviour the Tauri shell already provided via `window.__TANDEM_INITIAL_THEME__` (#551 partial — FOUC mitigated; matchMedia source-of-truth fix deferred to #477)
 - **ErrorBoundary now offers in-place recovery before falling back to a full reload (#507)** — the app-root `<svelte:boundary>` re-renders children via `reset()` on a "Try to recover" click, capped at three attempts before forcing the user to reload. The budget resets after each successful recovery so an unrelated subsequent error gets a fresh three attempts. Failed-state surface uses `--tandem-error-bg`/`-border`/`-fg-strong` tokens (was neutral) and re-announces via `role="alert"` on each fresh failure.
 - **Toolbar**: HighlightColorPicker border now uses `--tandem-border` token, correctly adapting to light/dark theme switching (#536)
-- **Theme system: Tauri shell now reads Windows app-mode preference (****AppsUseLightTheme****) for&#x20;****theme: "system"****&#x20;instead of taskbar color mode (closes #535)** — `get_app_theme` Rust command reads `WebviewWindow::theme()`, which maps to `HKCU\...\Personalize\AppsUseLightTheme`. Initial theme is seeded before Svelte mounts; `useTauriTheme.svelte.ts` subscribes to `onThemeChanged` and polls every 3s while focused. `matchMedia` subscription is skipped in Tauri to prevent race conditions.
+- **Theme system: Tauri shell now reads Windows app-mode preference (****AppsUseLightTheme****) for ****theme: "system"**** instead of taskbar color mode (closes #535)** — `get_app_theme` Rust command reads `WebviewWindow::theme()`, which maps to `HKCU\...\Personalize\AppsUseLightTheme`. Initial theme is seeded before Svelte mounts; `useTauriTheme.svelte.ts` subscribes to `onThemeChanged` and polls every 3s while focused. `matchMedia` subscription is skipped in Tauri to prevent race conditions.
 - **Tauri shell: live OS app-mode flips now retheme without restart** — `systemTheme()` reads the live `tauriTheme.current` reactive store (updated by the Tauri theme bridge) instead of a startup-only snapshot; `applyTheme()` in `useTheme.svelte.ts` subscribes reactively so `<html data-theme>` updates immediately when the user switches Windows between light and dark app mode (Codex P1 follow-up to #535).
 - **Dark annotation highlight colors** — `--tandem-highlight-yellow/green/blue/pink` now have dark-adapted overrides in `[data-theme="dark"]`; the light `rgba(255, 235, 59, 0.3)`-style values were washed out against dark surfaces.
 - **Forced-colors fallbacks for background-only state surfaces (closes #311)** — StatusBar status dots, toast badge, ModeToggle active button, BulkActions confirm button, AnnotationCard type-badge and Private pill now have `border`/`outline` fallbacks in `@media (forced-colors: active)`.
 
-## \[0.10.1] - Unreleased
+## [0.10.1] - Unreleased
 
 Plugin URL and auth resolution for custom-port and network-remote setups.
 
 ### Changed
 
-- **Monitor and channel honor&#x20;****CLAUDE\_PLUGIN\_OPTION\_SERVER\_URL** — `resolveTandemUrl()` now checks the `CLAUDE_PLUGIN_OPTION_SERVER_URL` environment variable (exported by Claude Code's plugin host from `plugin.json` `userConfig`) before falling back to `TANDEM_URL` and the localhost default. Both the monitor (`src/monitor/index.ts`) and channel shim (`src/channel/run.ts`) benefit automatically. No change for existing installs that don't use `userConfig`.
-- **Monitor and channel honor&#x20;****CLAUDE\_PLUGIN\_OPTION\_AUTH\_TOKEN** — new `resolveAuthToken()` function in `src/shared/cli-runtime.ts` mirrors `resolveTandemUrl()`. Precedence: `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` → `TANDEM_AUTH_TOKEN`. `authFetch` uses it automatically, so all stdio subcommands gain the new lookup without caller changes.
+- \*\*Monitor and channel honor \*\***CLAUDE_PLUGIN_OPTION_SERVER_URL** — `resolveTandemUrl()` now checks the `CLAUDE_PLUGIN_OPTION_SERVER_URL` environment variable (exported by Claude Code's plugin host from `plugin.json` `userConfig`) before falling back to `TANDEM_URL` and the localhost default. Both the monitor (`src/monitor/index.ts`) and channel shim (`src/channel/run.ts`) benefit automatically. No change for existing installs that don't use `userConfig`.
+- \*\*Monitor and channel honor \*\***CLAUDE_PLUGIN_OPTION_AUTH_TOKEN** — new `resolveAuthToken()` function in `src/shared/cli-runtime.ts` mirrors `resolveTandemUrl()`. Precedence: `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` → `TANDEM_AUTH_TOKEN`. `authFetch` uses it automatically, so all stdio subcommands gain the new lookup without caller changes.
 
-## \[0.10.0] - 2026-05-03
+## [0.10.0] - 2026-05-03
 
 Complete React → Svelte 5 migration. All 39 client `.tsx` files have been replaced with Svelte 5 rune-based equivalents; `react`, `react-dom`, and `@tiptap/react` are no longer in the bundle. Includes a review-mode correctness fix, accessibility improvements, and follow-on Codex security hardening.
 
 ### Removed
 
-- **react****,&#x20;****react-dom****,&#x20;****@tiptap/react****&#x20;dropped (#472, #508)** — the React adapter layer is gone. The editor integrates directly with `@tiptap/core` via Svelte 5 components. Bundle size and startup time both decrease.
-- **tandem\_suggest****,&#x20;****tandem\_flag****,&#x20;****tandem\_highlight****&#x20;hard-removed** — stub tools deprecated in v0.9.0 (ADR-027) are now fully removed. MCP tool count: 28 → 25.
+- **react**\*\*, ****react-dom****, ****@tiptap/react**** dropped (#472, #508)\*\* — the React adapter layer is gone. The editor integrates directly with `@tiptap/core` via Svelte 5 components. Bundle size and startup time both decrease.
+- **tandem_suggest**\*\*, ****tandem_flag****, ****tandem_highlight**** hard-removed\*\* — stub tools deprecated in v0.9.0 (ADR-027) are now fully removed. MCP tool count: 28 → 25.
 
 ### Changed
 
@@ -146,11 +150,11 @@ Complete React → Svelte 5 migration. All 39 client `.tsx` files have been repl
 ### Fixed
 
 - **Review mode incorrectly treated private notes as review targets (#512, #523)** — Tab/Y/N keyboard navigation, "Accept All" / "Dismiss All" bulk actions, the "Review Complete" overlay trigger, tally counts, and the chat tab badge now all exclude `type: "note"` annotations. Notes remain visible as cards in the side panel. Word-imported comments (`author: "import"`) continue to be review targets.
-- **Note privacy —&#x20;****tandem\_getAnnotations****&#x20;and channel events never surface notes to Claude** — `type: "note"` entries are filtered from MCP tool responses and SSE channel events (Codex security review).
+- **Note privacy — ****tandem_getAnnotations**** and channel events never surface notes to Claude** — `type: "note"` entries are filtered from MCP tool responses and SSE channel events (Codex security review).
 - **Y.Map key strings enforced via constants** — raw string literals for Y.Map keys eliminated across the codebase; all access goes through `Y_MAP_ANNOTATIONS`, `Y_MAP_AWARENESS`, etc. from `shared/constants.ts` (Codex security review).
 - **Chat message XSS hardening** — link rendering in the chat panel now enforces a protocol allowlist (`https:`, `http:`, `mailto:`), blocking `javascript:` and other unsafe schemes (Codex security review).
-- **annotation:edited****&#x20;channel event deduplication** — rapid successive edits no longer emit duplicate events to the channel (Codex security review).
-- **svelte-check --fail-on-warnings****&#x20;now gates the build** — 26 pre-existing Svelte type warnings cleared; CI enforces zero-warning policy going forward.
+- **annotation:edited**\*\* channel event deduplication\*\* — rapid successive edits no longer emit duplicate events to the channel (Codex security review).
+- **svelte-check --fail-on-warnings**\*\* now gates the build\*\* — 26 pre-existing Svelte type warnings cleared; CI enforces zero-warning policy going forward.
 
 ### Added
 
@@ -159,7 +163,7 @@ Complete React → Svelte 5 migration. All 39 client `.tsx` files have been repl
 - **Form label associations (#511, #524)** — AnnotationEditForm inputs are now properly associated with their `<label>` elements.
 - **AnnotationCard role corrected (#511, #524)** — changed from `role="button"` (nested-button violation) to `role="listitem"`.
 
-## \[0.9.1] - 2026-05-01
+## [0.9.1] - 2026-05-01
 
 Hotfix patch bundling ADR-027 surface cleanup and file-I/O correctness fixes before the v0.10.0 Svelte conversion. All changes are patch-class; no MCP API changes.
 
@@ -177,32 +181,32 @@ Hotfix patch bundling ADR-027 surface cleanup and file-I/O correctness fixes bef
 
 - **E2E toolbar regression guard (#484)** — Playwright coverage for the redesigned toolbar (ADR-027 note/comment/highlight flow), including a regression guard for the note button empty-annotation bug (#480).
 
-## \[0.9.0] - 2026-04-28
+## [0.9.0] - 2026-04-28
 
 ### Breaking Changes (MCP)
 
 This is the last breaking-change window before semver lock. MCP tool count: 31 → 28.
 
-- **tandem\_suggest****&#x20;deprecated (#259)** — returns a structured error stub pointing to `tandem_comment` with `suggestedText`. Hard-remove in v0.10.0.
-- **tandem\_getContent****&#x20;removed (#259)** — superseded by `tandem_getTextContent`.
-- **tandem\_getSelections****&#x20;removed (#259)** — superseded by `tandem_checkInbox`.
-- **tandem\_setStatus****&#x20;merged into&#x20;****tandem\_status****&#x20;(#259)** — `tandem_status` now accepts optional write params (`text`, `focusParagraph`, `focusOffset`). When params are present it writes to awareness; when absent it reads.
-- **tandem\_flag****&#x20;deprecated (ADR-027, #473)** — returns a `DEPRECATED` error stub. Use `tandem_comment` instead. Hard-remove in v0.10.0.
-- **tandem\_highlight****&#x20;deprecated (ADR-027, #473)** — returns a `DEPRECATED` error stub. Highlights are user-only. Hard-remove in v0.10.0.
-- **Annotation&#x20;****directedAt****&#x20;field removed (ADR-027, #473)** — silently ignored on input; stripped from on-disk records via `sanitizeAnnotation` and the `normalizeAnnotation` fast path on read.
+- **tandem_suggest**\*\* deprecated (#259)\*\* — returns a structured error stub pointing to `tandem_comment` with `suggestedText`. Hard-remove in v0.10.0.
+- **tandem_getContent**\*\* removed (#259)\*\* — superseded by `tandem_getTextContent`.
+- **tandem_getSelections**\*\* removed (#259)\*\* — superseded by `tandem_checkInbox`.
+- **tandem_setStatus**\*\* merged into ****tandem_status**** (#259)\*\* — `tandem_status` now accepts optional write params (`text`, `focusParagraph`, `focusOffset`). When params are present it writes to awareness; when absent it reads.
+- **tandem_flag**\*\* deprecated (ADR-027, #473)\*\* — returns a `DEPRECATED` error stub. Use `tandem_comment` instead. Hard-remove in v0.10.0.
+- **tandem_highlight**\*\* deprecated (ADR-027, #473)\*\* — returns a `DEPRECATED` error stub. Highlights are user-only. Hard-remove in v0.10.0.
+- **Annotation ****directedAt**** field removed (ADR-027, #473)** — silently ignored on input; stripped from on-disk records via `sanitizeAnnotation` and the `normalizeAnnotation` fast path on read.
 
 ### Added
 
-- **/api/info****&#x20;endpoint (#441)** — returns app version, MCP SDK version, tool count, data directory, and platform. Serves the Settings panel About footer.
+- **/api/info**\*\* endpoint (#441)\*\* — returns app version, MCP SDK version, tool count, data directory, and platform. Serves the Settings panel About footer.
 - **Tabbed-left layout variant (#445)** — new `"tabbed-left"` layout mode places the side panel on the left and editor on the right. Three layout modes total: `tabbed`, `tabbed-left`, `three-panel`.
 - **App version in Settings (#435)** — `useAppInfo` hook fetches `/api/info` and displays version + MCP SDK version in the Settings popover footer.
 - **View Changelog button (#437)** — Settings panel button opens `CHANGELOG.md` as a read-only document tab via `POST /api/open` with `readOnly: true`.
-- **Authorship&#x20;****data-tandem-author****&#x20;attributes (#443)** — authorship decorations switched from CSS classes (`.tandem-authorship--user`) to data attributes (`[data-tandem-author="user"]`), per ADR-026. Enables future attribute-based styling without class proliferation.
+- **Authorship ****data-tandem-author**** attributes (#443)** — authorship decorations switched from CSS classes (`.tandem-authorship--user`) to data attributes (`[data-tandem-author="user"]`), per ADR-026. Enables future attribute-based styling without class proliferation.
 - **Schema foundations (#440, #442, #444, #450)** — `heldInSolo` field on `AnnotationBase`; 7 new `TandemSettings` fields (`accentHue`, `editorFont`, `density`, `defaultMode`, `highContrast`, `annotationPatterns`, `selectionToolbar`); `showAuthorship` default flipped to `true`; editor width minimum lowered from 50% to 40%.
 - **Highlight palette migration (#450)** — palette switched from 5 colors to 4 (yellow/green/blue/pink). `LEGACY_COLOR_MAP` migrates `red` → `yellow`, `purple` → `blue` on annotation load.
 - **CI stdio smoke test (#341)** — GitHub Actions step validates the Cowork stdio bridge (`scripts/ci/stdio-smoke.mjs`) on every push.
-- **\_\_MCP\_SDK\_VERSION\_\_****&#x20;build-time injection** — tsup reads the real SDK version from the package root (not the CJS type marker) and injects it at build time.
-- **tandem\_getAnnotations****&#x20;****includeImports****&#x20;opt-in (ADR-027, #473)** — accepts `includeImports: true` to surface `author: "import"` reviewer comments imported from `.docx` files. Default still excludes them so the user triages first. When imports are filtered out, the response includes `importsExcluded: N` so Claude can prompt the user to opt in.
+- **\__MCP_SDK_VERSION\_\_\*\*\*\* build-time injection** — tsup reads the real SDK version from the package root (not the CJS type marker) and injects it at build time.
+- **tandem_getAnnotations**\*\* ****includeImports**** opt-in (ADR-027, #473)\*\* — accepts `includeImports: true` to surface `author: "import"` reviewer comments imported from `.docx` files. Default still excludes them so the user triages first. When imports are filtered out, the response includes `importsExcluded: N` so Claude can prompt the user to opt in.
 - **Deprecated-tool user notifications (ADR-027, #473)** — `tandem_highlight`, `tandem_flag`, and `tandem_suggest` stubs now `pushNotification` a warning toast in addition to returning the `DEPRECATED` mcpError, so the user sees what Claude tried.
 
 ### Fixed
@@ -215,7 +219,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - **Event-bridge error handling** — uncaught errors in SSE delivery no longer crash the event loop.
 - **MCP SDK version resolution** — `require("@modelcontextprotocol/sdk/package.json")` resolves to `dist/cjs/package.json` (a CJS type marker without `version`); build now walks back past `dist/` to find the real version.
 - **Silent-migration logging (ADR-027, #473)** — `parseAnnotationDoc`, `migrateToV1`, and the `directedAt` strip fast path now log via the new `migration-log.ts` module (once per `${docHash}:${kind}`) instead of silently rewriting v0 records. Restores forensic trail for the v0→v1 transition.
-- **normalizeReply****&#x20;validation (#473)** — replies are now Zod-validated before being merged; malformed entries are dropped + logged instead of poisoning the envelope.
+- **normalizeReply**\*\* validation (#473)\*\* — replies are now Zod-validated before being merged; malformed entries are dropped + logged instead of poisoning the envelope.
 
 ### Changed
 
@@ -233,13 +237,13 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - `file-opener` read-only mode support for changelog viewing.
 - 900+ lines of new test coverage: authorship decorations, annotation decorations, panel layout, app info hook, settings fields, schema migration, info route, document edit edge cases.
 
-## \[0.8.0] - 2026-04-26
+## [0.8.0] - 2026-04-26
 
 ### Added
 
 - **NSIS pre-install sidecar kill (#434)** — the NSIS installer now kills the running `node-sidecar.exe` process before file replacement, preventing "Error opening file for writing" failures during upgrade installs. Uses `nsis_tauri_utils::KillProcessCurrentUser` for user-scoped process termination. Tauri's built-in `CheckIfAppIsRunning` already handles the main binary.
 - **Semantic token lint enforcement (#356)** — `npm run check:tokens` scans `src/client/` for raw hex and non-neutral `rgba()` violations. Runs on pre-commit via lint-staged, blocking merges that introduce unsanctioned color literals.
-- **--tandem-suggestion-\*****&#x20;token family (#340)** — violet semantic tokens for replacement/suggestion annotations (`--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`), visually distinct from the indigo accent family.
+- **--tandem-suggestion-\*\*\*\*\* token family (#340)** — violet semantic tokens for replacement/suggestion annotations (`--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`), visually distinct from the indigo accent family.
 - **Annotation drop count surfacing (#351)** — `normalizeAnnotation` now returns drop counts in snapshot metadata so callers can detect lossy session migrations.
 - **Plugin monitor declaration (#376)** — `plugin.json` now declares the `monitor` entry, closing the event push gap where Claude Code plugin installs didn't receive real-time notifications.
 - **Persistent annotation undo (#415)** — undo state survives panel switches and scrolling; persists until page reload instead of clearing on the next render cycle.
@@ -274,23 +278,23 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - `@xmldom/xmldom` dependency bump (#390).
 - CI: typecheck/lint/test gates on all PR base branches.
 
-## \[0.7.1] - 2026-04-20
+## [0.7.1] - 2026-04-20
 
 ### Fixed
 
 - **MSIX Claude Desktop detection** — `tandem setup` now detects Claude Desktop installed via MSIX (Microsoft Store) and generates stdio MCP entries for it (#372)
 
-## \[0.7.0] - 2026-04-20
+## [0.7.0] - 2026-04-20
 
 ### Added
 
 - **Auth token storage** — on first boot the server generates a 32-byte base64url token and persists it to the platform data directory (`%LOCALAPPDATA%\tandem\Data\auth-token` on Windows, `~/.local/share/tandem/auth-token` on Linux, `~/Library/Application Support/tandem/auth-token` on macOS). Subsequent boots reuse the token. First-boot race is protected by `O_EXCL` file creation. Tauri mode receives the token via `TANDEM_AUTH_TOKEN` env before sidecar spawn and never regenerates.
 - **Auth middleware** — non-loopback MCP and API requests require `Authorization: Bearer <token>`. Loopback connections (`127.0.0.1`, `::1`, `::ffff:127.0.0.1`) remain exempt, preserving zero-config Claude Code usage. Token comparison uses SHA-256 on both sides before `crypto.timingSafeEqual` to eliminate the length oracle. Rate-limiting (5 attempts / 60 s) keyed by IPv4 address or IPv6 `/64` prefix with LRU eviction; Authorization headers are redacted from all rejection logs.
-- **TANDEM\_BIND\_HOST****&#x20;bind-mode selection** — MCP HTTP server binds to `127.0.0.1` by default; set `TANDEM_BIND_HOST=0.0.0.0` (or a specific LAN IP) to expose Tandem on the local network. Hocuspocus WebSocket always stays loopback. Non-loopback bind without a token file exits 1 with guidance; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is the escape hatch. Multi-homed machines require `TANDEM_LAN_IP` to be set explicitly.
+- **TANDEM_BIND_HOST**\*\* bind-mode selection\*\* — MCP HTTP server binds to `127.0.0.1` by default; set `TANDEM_BIND_HOST=0.0.0.0` (or a specific LAN IP) to expose Tandem on the local network. Hocuspocus WebSocket always stays loopback. Non-loopback bind without a token file exits 1 with guidance; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is the escape hatch. Multi-homed machines require `TANDEM_LAN_IP` to be set explicitly.
 - **tandem rotate-token** — new CLI subcommand that atomically regenerates the auth token, notifies the running server to open a 60-second grace window for in-flight sessions, and re-runs `tandem setup` across all detected MCP config files. Prints old and new token fingerprints (first 8 hex chars of SHA-256). Refuses rotation when `TANDEM_AUTH_TOKEN` is set in the environment (Tauri mode).
 - **Token forwarding in stdio bridge, monitor, and channel sidecars** — `tandem mcp-stdio`, `tandem monitor`, and the channel sidecar now forward `TANDEM_AUTH_TOKEN` as `Authorization: Bearer` on upstream HTTP calls. Malformed tokens (empty, `Bearer`-prefixed, < 32 chars, non-URL-safe) exit 1 with a specific message.
 - **OAuth protected-resource metadata** — `/.well-known/oauth-protected-resource/mcp` now declares `bearer_methods_supported: ["header"]` and a literal-`localhost` `resource` field per RFC 9728.
-- **/health****&#x20;session-presence guard** — `hasSession` is omitted from `/health` responses on non-loopback requests, preventing session-presence leakage on LAN binds.
+- **/health**\*\* session-presence guard\*\* — `hasSession` is omitted from `/health` responses on non-loopback requests, preventing session-presence leakage on LAN binds.
 
 ### Security
 
@@ -298,27 +302,27 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - Fail-closed on LAN bind: `TANDEM_BIND_HOST=0.0.0.0` without a token file exits 1; the server never auto-generates a token and proceeds silently.
 - `crypto.randomBytes` failure or non-writable data directory → server exits 1; no silent fallback.
 
-## \[0.6.4] - 2026-04-20
+## [0.6.4] - 2026-04-20
 
 ### Fixed
 
 - **Flaky layout-switch E2E test (#281)** — `toHaveCount` assertions on resize-handle locators lacked explicit timeouts, causing intermittent CI failures under load when React re-renders were slower than the default 5 s expectation. All 8 assertions now carry `{ timeout: 10_000 }`, and the missing `right-panel-resize-handle` absence assertion in the tabbed-layout block has been added.
 - **Silent crashes in CLI entry points (#336)** — `src/cli/index.ts` and `src/channel/index.ts` lacked `process.once("uncaughtException")` / `process.once("unhandledRejection")` handlers. Uncaught throws in `tandem start`, `tandem setup`, and the Tauri channel sidecar exited silently with code 0, surfacing as "tools never appear" with no diagnostics. Both entries now write a labelled message to stderr and exit 1. The `uncaughtException` handler uses `err: unknown` with an `instanceof Error` guard so non-Error throws (strings, plain objects) produce the actual thrown value rather than `"undefined"`.
 
-## \[0.6.3] - 2026-04-19
+## [0.6.3] - 2026-04-19
 
 ### Fixed
 
 - **Annotation GC race on startup (#334)** — `cleanupOrphanedAnnotationFiles` previously ran as a `.then()` chain during boot, racing the boot-path doc opens. On upgrade paths where `sample/welcome.md` or `CHANGELOG.md` hadn't been opened in 30+ days, the GC could unlink the annotation file between read intent and the actual read, silently returning an empty doc. Now `await`-ed before all boot-path opens.
 - **Settings Popover extends out of view (#306)** — centered the popover in the viewport with `transform: translate(-50%, -50%)` and added `maxHeight: calc(100vh - 32px)` + `overflowY: auto` so it is always fully visible and internally scrollable on short screens.
-- **Dark-mode&#x20;****\*-bg****&#x20;tokens inconsistent (#307)** — `--tandem-success-bg` and `--tandem-warning-bg` in dark mode were hand-coded hex while `--tandem-error-bg` used `color-mix`. All three now use `color-mix(in srgb, var(--tandem-<semantic>) 15%, var(--tandem-surface))` for consistency with light-mode behavior.
+- **Dark-mode ****\*-bg**** tokens inconsistent (#307)** — `--tandem-success-bg` and `--tandem-warning-bg` in dark mode were hand-coded hex while `--tandem-error-bg` used `color-mix`. All three now use `color-mix(in srgb, var(--tandem-<semantic>) 15%, var(--tandem-surface))` for consistency with light-mode behavior.
 - **stdio bridge silent-failure paths (#336 partial)** — three paths in `src/cli/mcp-stdio.ts` (preflight exit, `http.onclose`, `http.start()` TOCTOU) previously closed stdio without writing a JSON-RPC error, producing "tools never appear in Cowork" with no diagnostics. All three now synthesize `-32000` for any in-flight request ID before exit. Remaining #336 items (channel-shim tests, Windows npx smoke, nits) carry to v0.7.0.
 
 ### Changed
 
 - **Annotation module internals** — extracted `mergeMap<T>` helper (#324), promoted `UPLOAD_PREFIX` to shared constants (#327), centralized app-data dir resolution in `platform.ts` (#328), extracted `ReplyAuthorSchema`, trimmed module headers, and dropped unused `docContexts` map (#332). No user-facing behavior changes.
-- **Annotation serialization upgrades legacy&#x20;****type****&#x20;values on write (#329)** — records with non-canonical `type` (`"suggestion"` / `"question"` / anything outside `highlight` / `comment` / `flag`) are now routed through `sanitizeAnnotation` during snapshot serialization, which rewrites them to `"comment"`. **One-way lossy migration:** users with legacy-type annotations will see `type` flip to `"comment"` on the next durable write for that document — the original distinction between `suggestion` and `question` is not recoverable.
-- **migrateToV1****&#x20;reports drop counts (#330)** — `migrateToV1(raw)` now returns `{ doc, droppedAnnotations, droppedReplies }` so future production callers can surface lossy upgrades to users rather than silently discarding malformed records. No production caller exists yet; a follow-up will wire drop counts to `npm run doctor` or a toast when the first caller lands.
+- **Annotation serialization upgrades legacy ****type**** values on write (#329)** — records with non-canonical `type` (`"suggestion"` / `"question"` / anything outside `highlight` / `comment` / `flag`) are now routed through `sanitizeAnnotation` during snapshot serialization, which rewrites them to `"comment"`. **One-way lossy migration:** users with legacy-type annotations will see `type` flip to `"comment"` on the next durable write for that document — the original distinction between `suggestion` and `question` is not recoverable.
+- **migrateToV1**\*\* reports drop counts (#330)\*\* — `migrateToV1(raw)` now returns `{ doc, droppedAnnotations, droppedReplies }` so future production callers can surface lossy upgrades to users rather than silently discarding malformed records. No production caller exists yet; a follow-up will wire drop counts to `npm run doctor` or a toast when the first caller lands.
 
 ### Internal
 
@@ -327,19 +331,19 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - Accessibility: forced-colors fallback audit on PR #303 annotation surfaces (#311).
 - CI: typecheck / lint / tests now gate on all PRs regardless of base branch; dropped unused `baseUrl` from `tsconfig.server.json` (#310).
 
-## \[0.6.2] - 2026-04-16
+## [0.6.2] - 2026-04-16
 
 ### Fixed
 
 - **Plugin stdio entries crash-loop on Windows** — `tandem-editor@0.6.1`'s published `package.json` shipped `"workspaces": ["packages/*"]`, a dev-only field for the vestigial `packages/tandem-doc/` alias stub. On Windows with Node 24 + npm 11, the presence of `workspaces` in an installed consumer package caused `npx -y tandem-editor …` to fail with `ERR_UNSUPPORTED_ESM_URL_SCHEME` (the bin path was handed to the ESM loader as a raw `c:\…` string instead of a `file://` URL). Claude Desktop's plugin loader spawns the stdio entries via `npx -y`, so both `tandem` and `tandem-channel` crash-exited before any user code ran, manifesting in Cowork sessions as entries that flapped "connecting → gone" and never surfaced `tandem_*` tools. Removed the unused `packages/tandem-doc/` directory and the `workspaces` field; direct `node dist/cli/index.js` invocation was never affected, so the Tauri desktop app's bundled sidecar was fine and only the npm-tarball/`npx` path needed the fix.
 
-## \[0.6.1] - 2026-04-15
+## [0.6.1] - 2026-04-15
 
 ### Fixed
 
 - **Tauri desktop app fails to start** — `src/cli/skill-content.ts` reads `skills/tandem/SKILL.md` at module-init via `readFileSync`, and `src/server/mcp/api-routes.ts` transitively imports it, so the bundled sidecar server crashed on startup with `ENOENT: skills/tandem/SKILL.md`. The `skills/` directory was never declared in `src-tauri/tauri.conf.json` bundle resources (latent since the v0.5.1 refactor to read SKILL.md at runtime). Add `"../skills/": "skills/"` so the sidecar's relative path resolution matches the npm-install layout. npm-published 0.6.0 was unaffected because `skills/` ships in the npm tarball via `package.json` `files`.
 
-## \[0.6.0] - 2026-04-15
+## [0.6.0] - 2026-04-15
 
 ### Added
 
@@ -363,19 +367,19 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 
 ### Fixed
 
-- **Monitor preserves last-known&#x20;****documentId** — doc-less events (e.g. `chat:message`) no longer blank out the tracked document, so the shutdown awareness clear always targets a valid document.
+- \*\*Monitor preserves last-known \*\***documentId** — doc-less events (e.g. `chat:message`) no longer blank out the tracked document, so the shutdown awareness clear always targets a valid document.
 - **Monitor exits 1 on shutdown awareness failure** — if the final `clearAwareness` POST fails during SIGINT/SIGTERM, the monitor exits with a non-zero status rather than silently succeeding.
-- **/api/setup****&#x20;returns accurate status codes** — 207 on partial failure (some targets configured, some failed) and 500 on total failure, instead of always returning 200.
+- **/api/setup**\*\* returns accurate status codes\*\* — 207 on partial failure (some targets configured, some failed) and 500 on total failure, instead of always returning 200.
 - **Checkpoint after stdout write** — `lastEventId` is only advanced after `process.stdout.write` returns, so EPIPE on a closed pipe no longer silently skips an event on reconnect.
 - **Async EPIPE surfaces as exit(1)** — `process.stdout.on('error')` listener now catches asynchronous EPIPE (plugin host closes pipe mid-stream); monitor exits 1 instead of silently advancing `lastEventId` past lost events.
 - **Defensive exit on monitor fallthrough** — the retry loop exits 1 if it ever terminates without hitting the explicit exhaustion path.
 
-## \[0.5.1] - 2026-04-13
+## [0.5.1] - 2026-04-13
 
 ### Added
 
 - **Claude Code plugin support** — monitor-based event push (`src/monitor/index.ts`) gives real-time notifications without polling or the channel shim. Install via `claude plugin marketplace add bloknayrb/tandem`.
-- **--with-channel-shim****&#x20;opt-in** — `tandem setup --with-channel-shim` writes the legacy `tandem-channel` MCP entry for setups that can't install the plugin.
+- **--with-channel-shim**\*\* opt-in\*\* — `tandem setup --with-channel-shim` writes the legacy `tandem-channel` MCP entry for setups that can't install the plugin.
 
 ### Changed
 
@@ -389,10 +393,10 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - **Exponential backoff on reconnect** — monitor reconnects use 2s/4s/8s/16s/30s backoff instead of a fixed 2s delay.
 - **SIGINT/SIGTERM clears awareness** — monitor posts a final `clearAwareness` before exit so the "Claude is active" indicator doesn't hang in the browser.
 - **Per-route fetch timeouts** — `AbortSignal.timeout` enforces budgets per route (connect 10s, mode 2s, awareness 5s, error report 3s) to prevent hung SSE connects or mode lookups from stalling the monitor.
-- **SSE parse errors don't advance&#x20;****lastEventId** — JSON parse failures and schema validation errors are logged with event ID + frame tail but do not advance `lastEventId`, so bad events are re-delivered on reconnect rather than silently dropped.
+- \*\*SSE parse errors don't advance \*\***lastEventId** — JSON parse failures and schema validation errors are logged with event ID + frame tail but do not advance `lastEventId`, so bad events are re-delivered on reconnect rather than silently dropped.
 - **SKILL.md corrected** — `question` annotation guidance now uses `type === 'comment' && directedAt === 'claude' && author === 'user'`; all 5 highlight colors listed (yellow, red, green, blue, purple).
 
-## \[0.5.0] - 2026-04-13
+## [0.5.0] - 2026-04-13
 
 ### Added
 
@@ -417,7 +421,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - EOL normalizer added to lint-staged for .yml and .md files (#263)
 - Lessons learned applied to codebase and tooling (#280)
 
-## \[0.4.0] - 2026-04-12
+## [0.4.0] - 2026-04-12
 
 ### Added
 
@@ -449,14 +453,14 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - CI: fail build when updater signing key secret is absent
 - CI: summary job catches partial platform build failures rather than reporting false success
 
-## \[0.3.2] - 2026-04-12
+## [0.3.2] - 2026-04-12
 
 ### Changed
 
 - **Annotation type unification:** Three semantically identical types (`comment`, `suggestion`, `question`) collapsed into a single `comment` type with optional `suggestedText` and `directedAt` fields. `AnnotationTypeSchema` reduced from 5 values to 3: `highlight`, `comment`, `flag`. (#193, #245, #255)
 - **Toolbar:** Three annotation buttons (Comment, Suggest, Ask Claude) replaced with a single Comment button with "Replace" and "@Claude" toggles (#193)
 - **Side panel filters:** "Suggestions" → "With replacement", "Questions" → "For Claude" (#193)
-- **sanitizeAnnotation()****&#x20;moved to&#x20;****src/shared/sanitize.ts** — now available to both server and client code. Client-side Y.Map reads are sanitized to handle legacy session data. (#255)
+- \*\*sanitizeAnnotation()\*\*\*\* moved to \*\***src/shared/sanitize.ts** — now available to both server and client code. Client-side Y.Map reads are sanitized to handle legacy session data. (#255)
 
 ### Added
 
@@ -490,7 +494,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - **MCP wire change:** Removed unused `"overlay"` annotation kind from `AnnotationTypeSchema`. External clients sending `type: "overlay"` will now receive a Zod validation error. (#249)
 - **MCP wire change:** `suggestion` and `question` annotation types removed from `AnnotationTypeSchema`. Use `comment` with `suggestedText` or `directedAt` fields. Legacy data is migrated automatically via `sanitizeAnnotation()`. (#193)
 
-## \[0.3.0] - 2026-04-07
+## [0.3.0] - 2026-04-07
 
 ### Wave 4: Notification & Interruption Redesign
 
@@ -504,7 +508,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - `Y_MAP_MODE` constant, Zod validation for mode reads, error logging in channel event bridge
 - 894 tests passing
 
-## \[0.2.12] - 2026-04-06
+## [0.2.12] - 2026-04-06
 
 ### Added
 
@@ -517,7 +521,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 
 - Guard all localStorage access with try-catch for private/disabled browser storage modes; reset scroll position on annotation filter clear (#212, #202)
 
-## \[0.2.11] - 2026-04-06
+## [0.2.11] - 2026-04-06
 
 ### Added
 
@@ -525,7 +529,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - File watcher module with 500ms debounce and self-write suppression (prevents reload loops when Tandem saves)
 - Toast notification when a document is reloaded from disk
 - Runtime warning when `onDocSwapped` callback is missing during Hocuspocus doc swap (defensive guard for #178 audit)
-- 28 new tests: observer reattachment, CTRL\_ROOM lifecycle, buffer cap, file watcher debounce/suppress, annotation-preserving reload
+- 28 new tests: observer reattachment, CTRL_ROOM lifecycle, buffer cap, file watcher debounce/suppress, annotation-preserving reload
 
 ### Fixed
 
@@ -536,7 +540,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 
 - CLAUDE.md gotcha for Hocuspocus doc replacement updated to document the automatic `onDocSwapped` callback lifecycle (#178)
 
-## \[0.2.10] - 2026-04-05
+## [0.2.10] - 2026-04-05
 
 ### Added
 
@@ -552,14 +556,14 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 
 - `atomicWrite()` extracted as shared helper in session manager — consolidates duplicate write-tmp-rename logic with exponential backoff retry
 
-## \[0.2.9] - 2026-04-05
+## [0.2.9] - 2026-04-05
 
 ### Fixed
 
 - Changelog tab no longer disappears after upgrade — version check and sample/welcome.md now open before servers start, preventing CRDT merge races with stale browser tabs
 - Tutorial annotation injection errors now get their own log message instead of being misattributed as file-open failures
 
-## \[0.2.8] - 2026-04-05
+## [0.2.8] - 2026-04-05
 
 ### Added
 
@@ -567,7 +571,7 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 - `checkVersionChange` helper tracks version transitions via `last-seen-version` file
 - CHANGELOG.md now ships in the npm package
 
-## \[0.2.7] - 2026-04-05
+## [0.2.7] - 2026-04-05
 
 ### Fixed
 
@@ -579,44 +583,44 @@ This is the last breaking-change window before semver lock. MCP tool count: 31 �
 
 - 4 new tests for force-reload (annotation clearing, awareness clearing, .txt reload, metadata)
 
-## \[0.2.6] - 2026-04-05
+## [0.2.6] - 2026-04-05
 
 ### Fixed
 
 - Demo script rewritten to be self-referential for recording
 - Observer ownership documentation added to architecture.md
 
-## \[0.2.5] - 2026-04-05
+## [0.2.5] - 2026-04-05
 
 ### Fixed
 
 - `tandem setup` Claude Code MCP config path updated
 
-## \[0.2.4] - 2026-04-05
+## [0.2.4] - 2026-04-05
 
 ### Fixed
 
 - Security audit findings (DNS rebinding, CORS, input validation)
 
-## \[0.2.3] - 2026-04-05
+## [0.2.3] - 2026-04-05
 
 ### Fixed
 
 - `tandem setup` now writes Claude Code MCP config to `~/.claude.json` instead of `~/.claude/mcp_settings.json`, which Claude Code no longer reads
 
-## \[0.2.2] - 2025-04-05
+## [0.2.2] - 2025-04-05
 
 ### Fixed
 
 - Silent failure review findings
 
-## \[0.2.1] - 2025-04-05
+## [0.2.1] - 2025-04-05
 
 ### Fixed
 
 - Full security audit — 25 findings across 7 categories (#172)
 
-## \[0.2.0] - 2025-04-04
+## [0.2.0] - 2025-04-04
 
 ### Added
 

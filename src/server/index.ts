@@ -355,8 +355,10 @@ async function main() {
     const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
     // Open CHANGELOG.md as active tab on first startup after an update.
-    // Opened read-only so the 60s autosave timer does not round-trip the file
-    // through the markdown serializer and rewrite it with escape noise.
+    // Opened read-only as defense-in-depth — the underlying remark-stringify
+    // over-escape was fixed in #605, but CHANGELOG is editorially a release
+    // artifact (users shouldn't accidentally edit it) and read-only also
+    // guards against any future regression in the serializer.
     try {
       const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
       if (versionStatus === "upgraded") {
