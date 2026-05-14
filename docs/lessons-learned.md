@@ -641,3 +641,16 @@ Mirror the identical step already present in `tauri-release.yml`.
 **Proper fix (issue #605, v0.12.0 milestone):** Configure `remark-stringify`'s `unsafe` extension or per-node `handlers` to stop over-escaping. The surface fix only covers `CHANGELOG.md`; the same noise still affects **any** `.md` file a user round-trips through Tandem. Needs golden-file fixtures to lock in correct behavior.
 
 **Key insight:** When you see unexpected churn in a file on a clean checkout, suspect the autosave round-trip *before* assuming someone hand-edited it. Tandem treats every writable open file as a live Y.Doc that will be serialized back to disk on the next autosave tick. The escape hatch is `readOnly: true` on the open call — but the underlying serializer config is the real fix.
+
+## 70. Playwright `locator.dragTo()` Does Not Fire HTML5 Drag Events
+
+**Problem:** PR #625 added a `mouse drag reorders tabs` E2E spec to guard the drag-to-reorder fix in `DocumentTabs.svelte`. The spec used `from.dragTo(to, { targetPosition: ... })`. On Chromium, Playwright's `dragTo()` synthesizes `mousedown` / `mousemove` / `mouseup` — it does **not** dispatch HTML5 `dragstart` / `dragover` / `drop`. The production handlers in `DocumentTabs.svelte:218-220` listen to HTML5 drag events exclusively, so the spec passed on master (where reorder was broken) and on the branch — it never exercised the production code path it was supposed to guard. The multi-agent review on PR #625 caught it; otherwise it would have shipped as a false-positive regression guard.
+
+**Solution:** Dispatch real HTML5 `DragEvent`s via `page.evaluate`. Two gotchas worth remembering:
+
+1. **The `DragEvent` constructor ignores the `dataTransfer` init dict** on both Chromium and happy-dom — `new DragEvent("drop", { dataTransfer: dt })` leaves `event.dataTransfer === null`. Build a generic `Event` and assign `dataTransfer` via `Object.defineProperty(evt, "dataTransfer", { value: dt, configurable: true })`. Same for `clientX` / `clientY`. See `tests/e2e/tab-overflow.spec.ts` `mouse drag reorders tabs` for the canonical recipe.
+2. **A single shared stub `DataTransfer`** (with `setData` / `getData` storing into a closure-scoped object) preserves the round-trip that real DnD would do, so the production code's `dataTransfer.getData("text/plain")` fallback path is still exercised.
+
+**Companion lesson:** For reactive-race regressions where the bug requires interleaving an async event (a Yjs awareness ping re-deriving an upstream prop) *between* dragstart and drop, the synchronous `page.evaluate` recipe is not sufficient — the race never opens. Move that regression guard into a Vitest component test that uses `render` + `rerender` from `@testing-library/svelte` to simulate the mid-drag prop change explicitly. See `tests/client/DocumentTabs.svelte.test.ts` case B.
+
+**Key insight:** Playwright is a mouse simulator, not a DOM-event simulator. Whenever the production handler is listening on a non-pointer event family (drag, paste, contextmenu, etc.), assume Playwright's high-level helpers won't fire it and dispatch the event explicitly. Verify by running the proposed spec against a bugged version of the code *before* trusting it as a regression guard.

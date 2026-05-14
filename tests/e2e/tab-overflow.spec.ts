@@ -107,17 +107,73 @@ test("mouse drag reorders tabs", async ({ page }) => {
   const initialS2 = initial.indexOf("sample2.md");
   expect(initialS1).toBeGreaterThanOrEqual(0);
   expect(initialS2).toBeGreaterThanOrEqual(0);
+  const initialDelta = initialS1 - initialS2;
 
-  // Drag sample2 onto sample1 — their relative order should flip
-  const [from, to] = initialS1 < initialS2 ? [sample2Tab, sample1Tab] : [sample1Tab, sample2Tab];
-  await from.dragTo(to, { targetPosition: { x: 5, y: 10 } });
+  // Resolve the document ids of the two tabs by reading data-testid off the
+  // rendered DOM (the [data-testid^='tab-name-'] descendant lives inside the
+  // tab div whose own data-testid is `tab-{id}`).
+  const tabIds = await page.evaluate(() => {
+    const list: Record<string, string> = {};
+    document.querySelectorAll<HTMLElement>("[data-testid^='tab-'][role='tab']").forEach((el) => {
+      const tid = el.getAttribute("data-testid") ?? "";
+      const id = tid.startsWith("tab-") ? tid.slice("tab-".length) : "";
+      const name = el.querySelector("[data-testid^='tab-name-']")?.textContent ?? "";
+      if (id && name) list[name] = id;
+    });
+    return list;
+  });
+  const s1Id = tabIds["sample.md"];
+  const s2Id = tabIds["sample2.md"];
+  expect(s1Id).toBeTruthy();
+  expect(s2Id).toBeTruthy();
 
+  // Drag the later-positioned tab onto the earlier one — their relative order should flip.
+  // Playwright's locator.dragTo synthesizes mouse events on Chromium and does NOT fire
+  // HTML5 dragstart/dragover/drop, which are what DocumentTabs.svelte listens to. Dispatch
+  // real DragEvents via page.evaluate instead. Chromium ignores `dataTransfer` in the
+  // DragEvent init dict, so build a generic Event and assign dataTransfer via defineProperty.
+  // See docs/lessons-learned.md (Playwright dragTo vs HTML5 DnD).
+  const [fromId, toId] = initialS1 < initialS2 ? [s2Id, s1Id] : [s1Id, s2Id];
+  await page.evaluate(
+    ({ fromSel, toSel }) => {
+      const from = document.querySelector<HTMLElement>(fromSel);
+      const to = document.querySelector<HTMLElement>(toSel);
+      if (!from || !to) throw new Error(`tabs not found: from=${!!from} to=${!!to}`);
+      const rect = to.getBoundingClientRect();
+      // Drop on the LEFT half so handleDragOver picks side: "left".
+      const clientX = rect.left + 5;
+      const clientY = rect.top + rect.height / 2;
+      const store: Record<string, string> = {};
+      const dt = {
+        setData: (k: string, v: string) => {
+          store[k] = v;
+        },
+        getData: (k: string) => store[k] ?? "",
+        effectAllowed: "move",
+        dropEffect: "move",
+      } as unknown as DataTransfer;
+      const fire = (el: HTMLElement, type: string) => {
+        const evt = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+        Object.defineProperty(evt, "dataTransfer", { value: dt, configurable: true });
+        Object.defineProperty(evt, "clientX", { value: clientX, configurable: true });
+        Object.defineProperty(evt, "clientY", { value: clientY, configurable: true });
+        el.dispatchEvent(evt);
+      };
+      fire(from, "dragstart");
+      fire(to, "dragover");
+      fire(to, "drop");
+      fire(from, "dragend");
+    },
+    { fromSel: `[data-testid="tab-${fromId}"]`, toSel: `[data-testid="tab-${toId}"]` },
+  );
+
+  // Assert the signed index delta flipped sign. Robust to extra tabs from session restore.
   await expect
     .poll(async () => {
       const names = await allNames.allTextContents();
-      return names.indexOf("sample.md") < names.indexOf("sample2.md");
+      return Math.sign(names.indexOf("sample.md") - names.indexOf("sample2.md"));
     })
-    .toBe(initialS1 > initialS2);
+    .toBe(-Math.sign(initialDelta));
 });
 
 test("open file button is always visible", async ({ page }) => {

@@ -61,6 +61,16 @@ function clearDragState() {
   dropTarget = null;
 }
 
+// Clear drag state if the dragged or target tab is unmounted mid-drag.
+// dragend doesn't fire reliably when the source element leaves the DOM.
+// No-op unless an id has actually disappeared — must NOT become a broad
+// clearDragState() (would null draggedId on every Yjs awareness ping).
+$effect(() => {
+  const ids = new Set(tabs.map((t) => t.id));
+  if (draggedId && !ids.has(draggedId)) draggedId = null;
+  if (dropTarget && !ids.has(dropTarget.id)) dropTarget = null;
+});
+
 function updateScrollState() {
   const el = scrollEl;
   if (!el) return;
@@ -112,8 +122,12 @@ function handleDragStart(e: DragEvent, id: string) {
 }
 
 function handleDragOver(e: DragEvent, id: string) {
+  // Gate preventDefault on draggedId so foreign drags (file from Explorer,
+  // reachable because tauri dragDropEnabled is false) get the OS no-drop
+  // cursor instead of being silently swallowed.
+  if (!draggedId) return;
   e.preventDefault();
-  if (!draggedId || draggedId === id) {
+  if (draggedId === id) {
     dropTarget = null;
     return;
   }
