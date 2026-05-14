@@ -56,6 +56,8 @@ export interface TandemSettings {
   sidecarRetryStrategy: SidecarRetryStrategy;
   // TODO(v0.11.0): wire to annotation queuing in useModeGate
   holdAnnotationsWhileOffline: boolean;
+  // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
+  marginView: boolean;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -96,6 +98,7 @@ const DEFAULTS: TandemSettings = {
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
+  marginView: false,
 };
 
 const VALID_RAIL_TABS: RailTab[] = ["annotations", "chat", "outline"];
@@ -243,6 +246,7 @@ export function loadSettings(): TandemSettings {
             : DEFAULTS.holdAnnotationsWhileOffline,
         leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
         rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
+        marginView: parsed.marginView === true,
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead

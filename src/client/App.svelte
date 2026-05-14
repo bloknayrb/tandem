@@ -45,6 +45,7 @@ import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
+import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
@@ -59,6 +60,7 @@ import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
+import MarginColumn from "./panels/MarginColumn.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
@@ -349,6 +351,7 @@ let activeAnnotationId = $state<string | null>(null);
 let showHelp = $state(false);
 let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
+let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
@@ -713,6 +716,28 @@ const review = useAnnotationReview({
   getActiveAnnotationId: () => activeAnnotationId,
 });
 
+// #649: Word-style margin annotation view.
+// PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync
+// via DOM nesting in the positioning layer. Collision resolution lands in
+// PR 2; rail-collapse and narrow-layout auto-disable in PR 3.
+const marginNotes = $derived(
+  settingsState.settings.marginView
+    ? modeGate.visibleAnnotations.filter((a) => a.type === "note")
+    : [],
+);
+const marginComments = $derived(
+  settingsState.settings.marginView
+    ? modeGate.visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
+    : [],
+);
+const marginPositions = createMarginPositions({
+  getEditor: () => editor,
+  getYdoc: () => activeTab?.ydoc ?? null,
+  getAnnotations: () => [...marginNotes, ...marginComments],
+  getLayerEl: () => marginLayerEl,
+  getEnabled: () => settingsState.settings.marginView,
+});
+
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
   () => editor,
@@ -1012,25 +1037,62 @@ const tutorial = createTutorial(
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
       />
     {/snippet}
-    <!-- DocxPageContainer wraps Editor for .docx; format is stable per activeTab.id key guard —
-         both branches share the same onEditorReady to update the editor ref -->
-    {#if activeTab?.format === "docx"}
-      <DocxPageContainer>
-        {#key activeTab.id}
-          {@render editorContent()}
-        {/key}
-      </DocxPageContainer>
-    {:else}
-      <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
-        {#if activeTab}
+    <!-- Positioning layer for margin annotation bubbles (#649). The layer
+         wraps editor content so its block height matches the editor's, and
+         scroll sync between text and bubbles is free (both live inside the
+         same scrolling block). When marginView is off, the layer is a
+         transparent passthrough. -->
+    <div bind:this={marginLayerEl} style="position: relative;">
+      <!-- DocxPageContainer wraps Editor for .docx; format is stable per activeTab.id key guard —
+           both branches share the same onEditorReady to update the editor ref -->
+      {#if activeTab?.format === "docx"}
+        <DocxPageContainer>
           {#key activeTab.id}
             {@render editorContent()}
           {/key}
-        {:else}
-          <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
-        {/if}
-      </div>
-    {/if}
+        </DocxPageContainer>
+      {:else}
+        <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
+          {#if activeTab}
+            {#key activeTab.id}
+              {@render editorContent()}
+            {/key}
+          {:else}
+            <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
+          {/if}
+        </div>
+      {/if}
+      {#if settingsState.settings.marginView && activeTab}
+        <MarginColumn
+          side="left"
+          annotations={marginNotes}
+          positions={marginPositions.byId}
+          width={240}
+          edgeInset={8}
+          {activeAnnotationId}
+          repliesById={new Map()}
+          onClick={(ann) => {
+            activeAnnotationId = ann.id;
+            review.scrollToAnnotation(ann);
+          }}
+        />
+        <MarginColumn
+          side="right"
+          annotations={marginComments}
+          positions={marginPositions.byId}
+          width={240}
+          edgeInset={8}
+          {activeAnnotationId}
+          repliesById={new Map()}
+          onClick={(ann) => {
+            activeAnnotationId = ann.id;
+            review.scrollToAnnotation(ann);
+          }}
+          onAccept={review.handleAccept}
+          onDismiss={review.handleDismiss}
+        />
+      {/if}
+    </div>
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar
       {editor}

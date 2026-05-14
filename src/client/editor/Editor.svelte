@@ -267,7 +267,12 @@ async function handleEditorClick(e: MouseEvent) {
 }
 </script>
 
-<div bind:this={editorRoot} onclick={handleEditorClick} role="presentation"></div>
+<div
+  bind:this={editorRoot}
+  onclick={handleEditorClick}
+  role="presentation"
+  data-testid="editor-root"
+></div>
 
 <style>
   /* Apply editor font to the Tiptap content DOM (inside Tiptap's own element tree). */
