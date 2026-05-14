@@ -21,7 +21,10 @@ interface ActionDeps {
   getActiveTabId: () => string | null;
   openSettings: () => void;
   toggleSoloMode: () => void;
-  openFindBar: () => void; // wired when find/replace bar (PR 570) merges
+  openFindBar: () => void;
+  openFindBarTabs: () => void;
+  findNext: () => void;
+  findPrev: () => void;
   closeActiveTab: () => void;
   openFileDialog: () => void;
 }
@@ -154,6 +157,42 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+O",
     run() {
       guardedRun("open-file", (d) => d.openFileDialog());
+    },
+  },
+  {
+    id: "find",
+    label: "Find / Replace",
+    group: "navigation",
+    shortcut: "Ctrl+F",
+    run() {
+      guardedRun("find", (d) => d.openFindBar());
+    },
+  },
+  {
+    id: "find-in-tabs",
+    label: "Find in open tabs",
+    group: "navigation",
+    shortcut: "Ctrl+Shift+F",
+    run() {
+      guardedRun("find-in-tabs", (d) => d.openFindBarTabs());
+    },
+  },
+  {
+    id: "find-next",
+    label: "Find next match",
+    group: "navigation",
+    shortcut: "Ctrl+G",
+    run() {
+      guardedRun("find-next", (d) => d.findNext());
+    },
+  },
+  {
+    id: "find-previous",
+    label: "Find previous match",
+    group: "navigation",
+    shortcut: "Ctrl+Shift+G",
+    run() {
+      guardedRun("find-previous", (d) => d.findPrev());
     },
   },
 ];

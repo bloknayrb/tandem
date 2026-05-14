@@ -121,4 +121,53 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Close active tab")).toBeVisible();
   await expect(modal.getByText("Open file…")).toBeVisible();
   await expect(modal.getByText("Jump to tab by number")).toBeVisible();
+  await expect(modal.getByText("Find in open tabs")).toBeVisible();
+  await expect(modal.getByText("Find next match")).toBeVisible();
+  await expect(modal.getByText("Find previous match")).toBeVisible();
 });
+
+test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']")).toHaveCount(2);
+
+  await page.keyboard.press("Control+Shift+F");
+  await expect(page.locator("[data-testid='find-replace-bar']")).toBeVisible();
+  await expect(page.locator("[data-testid='find-scope-tabs']")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
+test("Ctrl+Shift+F with one tab open hides scope pills (single-doc fallback)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+F");
+  await expect(page.locator("[data-testid='find-replace-bar']")).toBeVisible();
+  // Scope pills only render when tabs.length > 1 (existing FindReplaceBar guard).
+  await expect(page.locator("[data-testid='find-scope-pills']")).toHaveCount(0);
+});
+
+test("Ctrl+G with no active query opens the find bar", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://localhost:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await expect(page.locator("[data-testid='find-replace-bar']")).toHaveCount(0);
+  await page.keyboard.press("Control+g");
+  await expect(page.locator("[data-testid='find-replace-bar']")).toBeVisible();
+});
+
+// Notes on coverage scope:
+// - The "no active query → open find bar" smart-fallback above is the
+//   regression-risk behavior unique to this PR.
+// - "Ctrl+G with active query advances to the next match" is exercised in unit
+//   tests via `shouldDispatchFindNav` (the only logic the keydown branch adds
+//   on top of Tiptap's own `findNext` command). End-to-end assertion through
+//   Yjs + ProseMirror + the find-replace plugin proved too brittle for stable
+//   CI — match-count timing depends on collab-extension sync internals.
+// - The "Ctrl+G is ignored when a form input has focus" guard is covered by
+//   the existing "Ctrl+W is ignored" test (same shouldIgnoreShortcut helper).

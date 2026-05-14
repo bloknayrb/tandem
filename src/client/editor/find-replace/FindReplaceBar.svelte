@@ -22,9 +22,10 @@ interface Props {
   open: boolean;
   onClose: () => void;
   tabs?: OpenTab[];
+  forceScope?: "doc" | "tabs";
 }
 
-let { editor, open, onClose, tabs = [] }: Props = $props();
+let { editor, open, onClose, tabs = [], forceScope }: Props = $props();
 
 type Scope = "doc" | "tabs";
 let scope = $state<Scope>("doc");
@@ -138,6 +139,21 @@ let queryInput = $state<HTMLInputElement | null>(null);
 $effect(() => {
   if (!open) return;
   queryInput?.focus();
+});
+
+// Apply forceScope on the false→true open transition. Plain `let` (not $state)
+// so the effect doesn't track this read; the `open` change is the only trigger.
+let prevOpenForScope = false;
+$effect(() => {
+  const isOpening = open && !prevOpenForScope;
+  prevOpenForScope = open;
+  if (!isOpening || !forceScope) return;
+  if (forceScope === "tabs" && tabs.length > 1) {
+    scope = "tabs";
+    scheduleCrossDocSearch(query, caseSensitive);
+  } else {
+    scope = "doc";
+  }
 });
 
 $effect(() => {

@@ -26,6 +26,7 @@ import { isTauriRuntime } from "./cowork/cowork-helpers";
 import DocxPageContainer from "./editor/DocxPageContainer.svelte";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
+import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
@@ -35,6 +36,7 @@ import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
+import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
@@ -136,8 +138,34 @@ wireActionDeps({
   openSettings: () => (settingsOpen = true),
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
-  // openFindBar wired when PR 570 (find/replace bar) merges into this branch
-  openFindBar: () => {},
+  openFindBar: () => {
+    findBarForceScope = "doc";
+    findBarOpen = true;
+  },
+  openFindBarTabs: () => {
+    findBarForceScope = "tabs";
+    findBarOpen = true;
+  },
+  findNext: () => {
+    const ed = editor;
+    const findState = ed ? getFindState(ed.state) : undefined;
+    if (ed && shouldDispatchFindNav(findState)) {
+      ed.commands.findNext();
+    } else {
+      findBarForceScope = "doc";
+      findBarOpen = true;
+    }
+  },
+  findPrev: () => {
+    const ed = editor;
+    const findState = ed ? getFindState(ed.state) : undefined;
+    if (ed && shouldDispatchFindNav(findState)) {
+      ed.commands.findPrev();
+    } else {
+      findBarForceScope = "doc";
+      findBarOpen = true;
+    }
+  },
   closeActiveTab: () => {
     const id = yjsSync.activeTabId;
     if (id) yjsSync.handleTabClose(id);
@@ -221,6 +249,7 @@ let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
+let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
 let activeAnnotationFilter = $state<{
   type: FilterType;
@@ -385,15 +414,39 @@ $effect(() => {
         }
       }
     }
-    // Ctrl/Cmd+F — focus outline search if the outline panel is visible; fall back to find bar.
-    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    // Ctrl/Cmd+F — focus outline search if outline panel visible; else open find bar (doc scope).
+    // Ctrl/Cmd+Shift+F — open find bar pre-scoped to "Open tabs" (bypasses outline route).
+    // Note: intentionally NOT gated on shouldIgnoreShortcut — Ctrl+F should always
+    // claim find behavior to prevent the browser's native find-in-page from firing.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
       e.preventDefault();
+      if (e.shiftKey) {
+        findBarForceScope = "tabs";
+        findBarOpen = true;
+        return;
+      }
       const isOutlineVisible =
         (effectiveLeftVisible && activeLeftRailTab === "outline") ||
         (effectiveRightVisible && activeRailTab === "outline");
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
+        findBarForceScope = "doc";
+        findBarOpen = true;
+      }
+    }
+    // Ctrl/Cmd+G — find next; Ctrl/Cmd+Shift+G — find previous.
+    // With no active query, fall back to opening the find bar.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "g" || e.key === "G")) {
+      if (shouldIgnoreShortcut(e)) return;
+      e.preventDefault();
+      const ed = editor;
+      const findState = ed ? getFindState(ed.state) : undefined;
+      if (ed && shouldDispatchFindNav(findState)) {
+        if (e.shiftKey) ed.commands.findPrev();
+        else ed.commands.findNext();
+      } else {
+        findBarForceScope = "doc";
         findBarOpen = true;
       }
     }
@@ -726,6 +779,7 @@ const tutorial = createTutorial(
       open={findBarOpen}
       onClose={() => (findBarOpen = false)}
       tabs={yjsSync.tabs}
+      forceScope={findBarForceScope}
     />
   </div>
 {/snippet}

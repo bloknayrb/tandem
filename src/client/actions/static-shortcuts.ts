@@ -3,7 +3,6 @@ export const STATIC_SHORTCUT_ROWS = [
   { keys: "Ctrl+I", description: "Italic" },
   { keys: "Ctrl+Z", description: "Undo" },
   { keys: "Ctrl+Y", description: "Redo" },
-  { keys: "Ctrl+F", description: "Find / Replace" },
   { keys: "Ctrl+N", description: "New scratchpad" },
   { keys: "? or Ctrl+/", description: "Show keyboard shortcuts" },
   { keys: "Ctrl+Tab", description: "Next document tab" },
