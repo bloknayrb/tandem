@@ -325,6 +325,25 @@ pub fn run() {
                 .expect("Failed to build HTTP client");
             app.manage(client.clone());
 
+            // Cold-start file path: if the OS launched us via file association
+            // (Windows / Linux pass it on argv; macOS uses Apple Events handled by
+            // RunEvent::Opened instead). Resolved here ONCE at process start and
+            // threaded explicitly into the first `start_sidecar` invocation, so
+            // any later `restart_sidecar` (which passes `None`) never re-opens
+            // the file. This is the only argv read for file-association — no
+            // global statics, no env-var side effects.
+            let cold_start_file: Option<std::path::PathBuf> = {
+                let args: Vec<String> = std::env::args().collect();
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                extract_file_arg(&args, &cwd)
+            };
+            if let Some(ref p) = cold_start_file {
+                log::info!(
+                    "Tauri cold-start: passing TANDEM_OPEN_FILE={} to sidecar",
+                    p.display()
+                );
+            }
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Copy sample files BEFORE sidecar spawn so the server's
@@ -333,7 +352,7 @@ pub fn run() {
                     log::warn!("Sample file copy failed (non-fatal): {e}");
                 }
 
-                if let Err(e) = start_sidecar(&handle, &client).await {
+                if let Err(e) = start_sidecar(&handle, &client, cold_start_file.as_deref()).await {
                     log::error!("Sidecar failed: {e}");
                     use tauri_plugin_dialog::DialogExt;
                     handle
@@ -559,7 +578,9 @@ fn restart_sidecar(app: tauri::AppHandle) {
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = start_sidecar(&handle, &client).await {
+        // Restart never re-injects the cold-start file: the original `setup()`
+        // invocation already opened it and registered it in `openDocuments`.
+        if let Err(e) = start_sidecar(&handle, &client, None).await {
             eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
         }
     });
@@ -592,7 +613,11 @@ fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
 
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
-async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> Result<(), String> {
+async fn start_sidecar(
+    handle: &tauri::AppHandle,
+    client: &reqwest::Client,
+    cold_start_file: Option<&std::path::Path>,
+) -> Result<(), String> {
     // Debug-only: skip spawn if a server is already running (e.g. `npm run dev:standalone`
     // alongside `cargo tauri dev`). In release builds the installed app must own its
     // sidecar exclusively — a stale `tsx watch` dev session, an older release process,
@@ -628,22 +653,6 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
         }
     };
 
-    // Cold-start file path: if the OS launched us via file association
-    // (Windows / Linux pass it on argv; macOS uses Apple Events handled by
-    // RunEvent::Opened instead). Resolved once before the retry loop so
-    // sidecar restarts don't re-open the file.
-    let cold_start_file: Option<std::path::PathBuf> = {
-        let args: Vec<String> = std::env::args().collect();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        extract_file_arg(&args, &cwd)
-    };
-    if let Some(ref p) = cold_start_file {
-        log::info!(
-            "Tauri cold-start: passing TANDEM_OPEN_FILE={} to sidecar",
-            p.display()
-        );
-    }
-
     for attempt in 0..=MAX_RESTARTS {
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt - 1));
@@ -669,7 +678,7 @@ async fn start_sidecar(handle: &tauri::AppHandle, client: &reqwest::Client) -> R
         // Only set on the first spawn — sidecar restarts must not re-trigger
         // an open (the file has already been registered in openDocuments).
         if attempt == 0 {
-            if let Some(ref p) = cold_start_file {
+            if let Some(p) = cold_start_file {
                 cmd = cmd.env("TANDEM_OPEN_FILE", p.to_string_lossy().as_ref());
             }
         }
