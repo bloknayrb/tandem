@@ -17,6 +17,10 @@ mod firewall;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
 
+// Spike #477 PR 4: sidecar launcher validation. Test-only; not shipped.
+#[cfg(test)]
+mod integrations_probe;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -771,7 +775,7 @@ async fn start_sidecar(
             .sidecar("node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
             .args([server_js_str.as_str()])
-            .env("TANDEM_OPEN_BROWSER", "0")
+            .env("TANDEM_TAURI_SIDECAR", "1")
             .env("TANDEM_DATA_DIR", app_data_dir_str.as_str());
 
         if let Some(ref token) = auth_token {
