@@ -25,6 +25,14 @@
 - [Design Decisions](docs/decisions.md) -- ADRs (001-029)
 - [Lessons Learned](docs/lessons-learned.md) -- 68 lessons including E2E testing gotchas
 
+## Development Workflow
+
+Quality over speed. Claude is an AI — time and effort have no cost. Never abbreviate steps. The only goal is the best possible work product.
+
+For every feature or fix: draft a plan (`/plan`), spawn adversarial agents to review the plan from multiple angles before writing any code, implement, run `/simplify`, then verify (`npm run typecheck` + `npm test`; add `npm run test:e2e` for client/integration changes), run whatever manual testing is possible (browser automation via `claude-in-chrome`, MCP probing, etc.), and prompt Bryan to complete any testing that requires human interaction before continuing. Then commit and open the PR with `/commit-commands:commit-push-pr`. After `/pr-review-toolkit:review-pr` surfaces findings, repeat: plan the fixes, adversarial agent review, implement, update PR.
+
+This is a two-person project (Bryan + Claude). Scope gates are minimal — if you encounter something broken while working, fix it rather than filing it for later. For small tangential fixes, bundle them in; for larger detours, note them and finish the current task first.
+
 ## Critical Rules
 
 These WILL break things if violated:
