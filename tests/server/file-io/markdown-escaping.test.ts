@@ -1,6 +1,6 @@
-import type { Root } from "mdast";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Root } from "mdast";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { mdParser, saveMarkdown, serializeMdast } from "../../../src/server/file-io/markdown.js";
