@@ -866,18 +866,23 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     );
 
     if (annotations.length > 0) {
-      const refreshed = refreshAllRanges(annotations, doc, annotationMap);
-
-      // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
+      // Merge the refresh + textSnapshot relocation passes into a single
+      // MCP_ORIGIN transaction. Origin tag is intentionally MCP_ORIGIN (NOT
+      // FILE_SYNC_ORIGIN): these writes update durable annotation state
+      // (range + relRange) that must persist through the durable-annotation
+      // sync observer. The sync observer skips FILE_SYNC_ORIGIN; the channel
+      // observer skips both origins, so there's no phantom channel echo to
+      // silence here. Flipping to FILE_SYNC_ORIGIN would re-introduce the
+      // PR-A1 post-merge blocker (commit 8d9c0ce).
       //
-      // Origin tag is intentionally MCP_ORIGIN (NOT FILE_SYNC_ORIGIN) because these
-      // writes update durable annotation state (range + relRange) that must persist
-      // through the durable-annotation sync observer. The sync observer skips
-      // FILE_SYNC_ORIGIN; the channel observer skips both origins, so there's no
-      // phantom channel echo to silence here. Flipping back to FILE_SYNC_ORIGIN
-      // would re-introduce the PR-A1 post-merge blocker (commit 8d9c0ce). See
-      // GH #622 for the related pre-existing two-write crash window.
+      // Merging into one transact closes the pre-existing two-write crash
+      // window (GH #622) — a process kill between the refresh and relocation
+      // passes previously left annotations durably stored at partially
+      // refreshed ranges.
       doc.transact(() => {
+        const refreshed = refreshAllRanges(annotations, doc, annotationMap, { skipTransact: true });
+
+        // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
         for (const ann of refreshed) {
           if (!ann.textSnapshot) continue;
 
