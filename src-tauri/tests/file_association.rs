@@ -166,6 +166,22 @@ fn windows_alternate_data_stream_path_is_rejected() {
     );
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_relative_path_with_colon_rejected_after_resolution() {
+    // A relative arg like `notes.md:Zone.Identifier` has its colon at index 9
+    // in the candidate string, which the candidate-only scan correctly
+    // rejects. The harder case is when `cwd.join(candidate)` is what would
+    // be passed to the filesystem. We scan the resolved absolute path so the
+    // post-join colon position is what matters.
+    let cwd = PathBuf::from("C:\\Users\\bryan");
+    let result = extract_file_arg(&args(&["notes.md:Zone.Identifier"]), &cwd);
+    assert!(
+        result.is_none(),
+        "Relative path with ADS colon must be rejected after resolution against cwd"
+    );
+}
+
 #[test]
 fn warm_start_single_instance_args_shape() {
     // Reproduces the arg shape passed by `tauri-plugin-single-instance`:

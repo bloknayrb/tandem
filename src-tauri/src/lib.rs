@@ -101,24 +101,32 @@ pub fn extract_file_arg(
 ) -> Option<std::path::PathBuf> {
     let candidate = args.iter().skip(1).find(|a| !a.starts_with('-') && a.as_str() != "--")?;
 
+    let p = std::path::Path::new(candidate);
+    let absolute: std::path::PathBuf =
+        if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+
     #[cfg(target_os = "windows")]
     {
-        // Reject any colon outside the drive-letter position (index 1).
-        // `\\?\C:\…` is not expected from argv (the OS doesn't add the prefix),
-        // so the heuristic stays simple.
-        for (i, b) in candidate.as_bytes().iter().enumerate() {
+        // Reject any colon outside the drive-letter position (index 1) on the
+        // resolved absolute path. Catches NTFS Alternate Data Stream syntax
+        // (`file.md:Zone.Identifier`) both when the colon lands at an absolute
+        // index >1 (e.g. `C:\tmp\file.md:ADS`) and when a relative candidate
+        // joined against `cwd` produces an absolute path with the suspicious
+        // colon. The previous version scanned the un-joined candidate string,
+        // which let relative paths like `foo:ADS.md` slip through (colon at
+        // index 3 in the candidate -> rejected; but if it were at index 1 of
+        // the candidate, e.g. `f:ADS.md`, it would have passed). Scanning the
+        // resolved absolute closes that gap.
+        let absolute_str = absolute.to_string_lossy();
+        for (i, b) in absolute_str.as_bytes().iter().enumerate() {
             if *b == b':' && i != 1 {
                 log::warn!(
-                    "extract_file_arg: rejecting path with suspicious ':' at index {i}: {candidate}"
+                    "extract_file_arg: rejecting path with suspicious ':' at index {i}: {absolute_str}"
                 );
                 return None;
             }
         }
     }
-
-    let p = std::path::Path::new(candidate);
-    let absolute: std::path::PathBuf =
-        if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
 
     let ext = absolute
         .extension()
