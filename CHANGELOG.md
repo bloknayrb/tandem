@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **15 keyboard shortcuts (#626)** — grouped by area:
+
   - **Tabs:** `Ctrl+W` close active tab (records to in-memory LIFO), `Ctrl+Alt+T` reopen most-recently-closed tab, `Ctrl+1`..`Ctrl+9` jump to tab by index, `Ctrl+O` open file dialog.
   - **Find / outline:** `Ctrl+F` focus outline search when outline panel is visible, otherwise open find bar (doc scope); `Ctrl+Shift+F` open find bar pre-scoped to "Open tabs"; `Ctrl+G` / `Ctrl+Shift+G` find next/previous (falls back to opening find bar when no active query).
   - **Panels / chrome:** `Ctrl+\` toggle left panel, `Ctrl+Shift+\` toggle right panel, `Ctrl+Shift+M` toggle solo/tandem mode.
