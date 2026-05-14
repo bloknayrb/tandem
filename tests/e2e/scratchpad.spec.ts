@@ -23,7 +23,7 @@ import {
   McpTestClient,
 } from "./helpers";
 
-const API_BASE = `http://localhost:${DEFAULT_MCP_PORT}/api`;
+const API_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api`;
 
 let mcp: McpTestClient;
 let tmpDir: string;

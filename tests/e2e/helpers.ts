@@ -11,7 +11,7 @@ import type { ToolResponse } from "../../src/shared/types.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}/mcp`;
+const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
 
 /**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.

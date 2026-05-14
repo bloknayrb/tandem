@@ -13,11 +13,15 @@ export function runStart(): void {
     process.exit(1);
   }
 
+  console.error(
+    "[Tandem] Browser distribution is deprecated; the Tauri desktop app is the primary form factor.",
+  );
+  console.error("[Tandem] See https://github.com/bloknayrb/tandem/issues/477 for context.");
   console.error("[Tandem] Starting server...");
 
   const proc = spawn("node", [SERVER_DIST], {
     stdio: "inherit",
-    env: { ...process.env, TANDEM_OPEN_BROWSER: "1" },
+    env: process.env,
   });
 
   proc.on("error", (err) => {

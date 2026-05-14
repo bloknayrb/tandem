@@ -39,7 +39,10 @@ export { errorCodeToHttpStatus, isValidChannelPath, isValidNodeBinary } from "./
 export { runSetupHandler } from "./routes/setup.js";
 
 /**
- * Check if a Host header value is allowed (localhost + optional extra hosts).
+ * Check if a Host header value is allowed (127.0.0.1 + tauri.localhost + optional extra hosts).
+ *
+ * Narrowed in #477 PR 2: the `localhost` hostname is no longer accepted on its own.
+ * Tauri sends `Host: tauri.localhost`; the sidecar health checks use `127.0.0.1`.
  * Exported for testing.
  *
  * @param host - The Host header value (may include port).
@@ -48,7 +51,7 @@ export { runSetupHandler } from "./routes/setup.js";
  */
 export function isHostAllowed(host: string | undefined, extraHosts: string[] = []): boolean {
   const reqHost = (host ?? "").split(":")[0];
-  if (reqHost === "localhost" || reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME) {
+  if (reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME) {
     return true;
   }
   return extraHosts.includes(reqHost);
@@ -58,9 +61,15 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Check if an Origin header is a localhost URL. Exported for testing. */
+/**
+ * Check if an Origin header is an allowed local URL. Exported for testing.
+ *
+ * Narrowed in #477 PR 2: only `127.0.0.1` and `tauri.localhost` are accepted; the
+ * bare `localhost` hostname is rejected to align with the browser-distribution
+ * deprecation and remove a DNS-resolution attack surface.
+ */
 export const LOCALHOST_ORIGIN_RE = new RegExp(
-  `^https?://(localhost|127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
+  `^https?://(127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
 );
 export function isLocalhostOrigin(origin: string | undefined): boolean {
   return LOCALHOST_ORIGIN_RE.test(origin ?? "");

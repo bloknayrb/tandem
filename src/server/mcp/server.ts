@@ -13,7 +13,6 @@ import { createRequire } from "module";
 import { DEFAULT_BIND_HOST, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
-import { openBrowser } from "../open-browser.js";
 import { SESSION_DIR } from "../platform.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
@@ -406,13 +405,6 @@ export async function startMcpServerHttp(
       httpServer.removeListener("error", reject);
       httpServer.on("error", (err: Error) => console.error("[Tandem] HTTP server error:", err));
       console.error(`[Tandem] MCP HTTP server on http://${host}:${port}/mcp`);
-      if (process.env.TANDEM_OPEN_BROWSER === "1") {
-        if (existsSync(CLIENT_DIST)) {
-          openBrowser(`http://localhost:${port}`);
-        } else {
-          console.error("[Tandem] Skipping browser open — no client assets found");
-        }
-      }
       resolve(httpServer);
     });
     httpServer.on("error", reject);

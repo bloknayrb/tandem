@@ -52,9 +52,9 @@ import { getOrCreateDocument, setDocLifecycleCallbacks, startHocuspocus } from "
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
 // In HTTP mode this is defense-in-depth; in stdio mode it's critical.
 
-// In production (global install, TANDEM_OPEN_BROWSER=1), suppress known noisy
+// In production (Tauri sidecar, TANDEM_TAURI_SIDECAR=1), suppress known noisy
 // warnings from dependencies (mammoth, Y.js). In dev mode, show everything.
-const isProduction = process.env.TANDEM_OPEN_BROWSER === "1";
+const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
 const SUPPRESSED_PATTERNS = [/^\[mammoth\]/, /Invalid access/i, /^\s*add yjs type/i];
 
 const originalStderrWrite = process.stderr.write.bind(process.stderr);

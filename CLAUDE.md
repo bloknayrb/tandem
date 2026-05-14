@@ -52,7 +52,7 @@ Three layers: Editor (Tiptap in Tauri desktop or browser) <-> Tandem Server (Hoc
 Key files for navigation:
 - `src/cli/index.ts` -- CLI entrypoint (`tandem` command), arg parsing, dispatches to start/setup
 - `src/cli/setup.ts` -- `tandem setup`: auto-detect Claude installs, write MCP config atomically
-- `src/cli/start.ts` -- `tandem start`: spawn server (opens editor via `TANDEM_OPEN_BROWSER=1`)
+- `src/cli/start.ts` -- `tandem start`: spawn server (browser distribution deprecated in #477 PR 2; Tauri sidecar sets `TANDEM_TAURI_SIDECAR=1`)
 - `src/server/index.ts` -- Entry point, port binding, console redirect
 - `src/server/open-browser.ts` -- Cross-platform browser launcher for npm-install path (execFile-based)
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`

@@ -327,7 +327,7 @@ Native desktop distribution via Tauri v2. The Node.js server runs as a bundled s
 
 ### Step 1: Scaffold + sidecar wiring — DONE
 
-Tauri project scaffolded (`src-tauri/`), Node.js bundled as `node-sidecar` via `externalBin`, server resources bundled (`dist/server/`, `dist/channel/`, `dist/client/`, `sample/`). Sidecar spawned on launch; `TANDEM_OPEN_BROWSER=0` prevents double browser open.
+Tauri project scaffolded (`src-tauri/`), Node.js bundled as `node-sidecar` via `externalBin`, server resources bundled (`dist/server/`, `dist/channel/`, `dist/client/`, `sample/`). Sidecar spawned on launch; `TANDEM_TAURI_SIDECAR=1` toggles production-only suppression for noisy dependency logs.
 
 ### Step 2: Origin + permissions — DONE
 

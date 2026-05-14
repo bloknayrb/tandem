@@ -7,16 +7,15 @@ import {
 import { jsonrpcId } from "../../src/server/mcp/server.js";
 
 describe("isHostAllowed (DNS rebinding protection)", () => {
-  it("allows localhost", () => {
-    expect(isHostAllowed("localhost:3479")).toBe(true);
+  // #477 PR 2 narrowed the allowlist: `localhost` hostname is rejected; only
+  // 127.0.0.1 (sidecar / dev fetch) and tauri.localhost (Tauri WebView).
+  it("rejects the localhost hostname (#477 PR 2)", () => {
+    expect(isHostAllowed("localhost:3479")).toBe(false);
+    expect(isHostAllowed("localhost")).toBe(false);
   });
 
   it("allows 127.0.0.1", () => {
     expect(isHostAllowed("127.0.0.1:3479")).toBe(true);
-  });
-
-  it("allows localhost without port", () => {
-    expect(isHostAllowed("localhost")).toBe(true);
   });
 
   it("rejects external hostnames", () => {
@@ -54,24 +53,16 @@ describe("isHostAllowed (DNS rebinding protection)", () => {
 });
 
 describe("isLocalhostOrigin (CORS validation)", () => {
-  it("allows http://localhost:5173", () => {
-    expect(isLocalhostOrigin("http://localhost:5173")).toBe(true);
-  });
-
-  it("allows http://localhost:5174", () => {
-    expect(isLocalhostOrigin("http://localhost:5174")).toBe(true);
+  // #477 PR 2 narrowed CORS: only 127.0.0.1 and tauri.localhost are accepted.
+  it("rejects the localhost hostname (#477 PR 2)", () => {
+    expect(isLocalhostOrigin("http://localhost:5173")).toBe(false);
+    expect(isLocalhostOrigin("http://localhost:5174")).toBe(false);
+    expect(isLocalhostOrigin("http://localhost")).toBe(false);
+    expect(isLocalhostOrigin("https://localhost:3000")).toBe(false);
   });
 
   it("allows http://127.0.0.1:5173", () => {
     expect(isLocalhostOrigin("http://127.0.0.1:5173")).toBe(true);
-  });
-
-  it("allows http://localhost (no port)", () => {
-    expect(isLocalhostOrigin("http://localhost")).toBe(true);
-  });
-
-  it("allows https://localhost:3000", () => {
-    expect(isLocalhostOrigin("https://localhost:3000")).toBe(true);
   });
 
   it("accepts http://tauri.localhost origins", () => {
