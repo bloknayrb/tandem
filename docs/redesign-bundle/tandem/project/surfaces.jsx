@@ -136,16 +136,17 @@ function DiffView({ docName = 'partner-update.docx' }) {
 }
 
 // ------------------------------------------------------------
-// 3. Command palette — ⌘K
+// 3. Command palette — ⌘K / Ctrl+K
 // ------------------------------------------------------------
-function CommandPalette({ query = 'read', onClose }) {
+function CommandPalette({ query = 'read', onClose, platform = (typeof window !== 'undefined' && window.detectPlatform ? window.detectPlatform() : 'win') }) {
+  const fmt = (s) => window.formatShortcut ? window.formatShortcut(s, platform) : s;
   const sections = [
     { title: 'Commands', items: [
-      { ic: 'docMd', label: 'New document', kbd: '⌘N' },
-      { ic: 'search', label: 'Find in document', kbd: '⌘F' },
-      { ic: 'docW',  label: 'Open file…', kbd: '⌘O' },
-      { ic: 'sparkle', label: 'Ask Claude about selection', kbd: '⌘⇧A' },
-      { ic: 'settings', label: 'Open Settings', kbd: '⌘,' },
+      { ic: 'docMd',   label: 'New document',                  kbd: fmt('⌘N') },
+      { ic: 'search',  label: 'Find in document',              kbd: fmt('⌘F') },
+      { ic: 'docW',    label: 'Open file…',                    kbd: fmt('⌘O') },
+      { ic: 'sparkle', label: 'Ask Claude about selection',    kbd: fmt('⌘⇧A') },
+      { ic: 'settings',label: 'Open Settings',                 kbd: fmt('⌘,') },
     ]},
     { title: 'Recent files', items: [
       { ic: 'docMd', label: 'q2-dashboard-review.md', meta: '~/work/q2-review · 2m', highlight: true },
@@ -188,7 +189,7 @@ function CommandPalette({ query = 'read', onClose }) {
         <div className="cp-foot mono faint">
           <span><span className="kbd">↑↓</span> navigate</span>
           <span><span className="kbd">↵</span> open</span>
-          <span><span className="kbd">⌘↵</span> open in new tab</span>
+          <span><span className="kbd">{fmt('⌘↵')}</span> open in new tab</span>
           <span className="grow"/>
           <span>Type <code>?</code> for help · <code>&gt;</code> commands · <code>#</code> headings · <code>@</code> annotations</span>
         </div>
@@ -537,103 +538,9 @@ function Onboarding({ step = 2 }) {
   );
 }
 
-// ------------------------------------------------------------
-// 8. Share / export sheet
-// ------------------------------------------------------------
-function ShareSheet({ onClose }) {
-  return (
-    <div className="share-overlay" onClick={onClose}>
-      <div className="share-sheet" onClick={e => e.stopPropagation()}>
-        <header className="share-head">
-          <h3>Share & export</h3>
-          <span className="share-doc mono faint">q2-dashboard-review.md · 318 words</span>
-          <button className="tb-icon-btn" onClick={onClose}><Icon name="x" size={12}/></button>
-        </header>
-
-        <div className="share-section">
-          <div className="share-section-title">Tandem link</div>
-          <div className="share-link-row">
-            <code className="share-link">tandem://bryan.local/q2-dashboard-review?token=k3J…9s</code>
-            <button className="btn-primary">Copy link</button>
-          </div>
-          <div className="share-link-meta mono faint">
-            Live · expires in 24h · invitees see annotations as they're written
-          </div>
-          <div className="share-perms">
-            <label className="share-perm">
-              <input type="radio" name="perm" defaultChecked/>
-              <span><strong>Tandem</strong> · invitee can edit, annotate, and Ask Claude</span>
-            </label>
-            <label className="share-perm">
-              <input type="radio" name="perm"/>
-              <span><strong>Review</strong> · invitee can annotate, not edit</span>
-            </label>
-            <label className="share-perm">
-              <input type="radio" name="perm"/>
-              <span><strong>Read-only</strong> · invitee sees the latest snapshot</span>
-            </label>
-          </div>
-        </div>
-
-        <div className="share-section">
-          <div className="share-section-title">Export</div>
-          <div className="share-grid">
-            <button className="share-tile">
-              <span className="share-tile-ic ext-md">M</span>
-              <strong>Markdown (.md)</strong>
-              <span className="faint">Source — annotations as HTML comments</span>
-            </button>
-            <button className="share-tile">
-              <span className="share-tile-ic ext-pdf">P</span>
-              <strong>PDF</strong>
-              <span className="faint">Print-ready · annotations in margin</span>
-            </button>
-            <button className="share-tile">
-              <span className="share-tile-ic ext-docx">W</span>
-              <strong>Word (.docx)</strong>
-              <span className="faint">Tracked changes for accepted suggestions</span>
-            </button>
-            <button className="share-tile">
-              <span className="share-tile-ic ext-html">&lt;/&gt;</span>
-              <strong>Standalone HTML</strong>
-              <span className="faint">Single file, offline-readable</span>
-            </button>
-            <button className="share-tile">
-              <span className="share-tile-ic ext-png">▦</span>
-              <strong>Snapshot PNG</strong>
-              <span className="faint">Selection or full document</span>
-            </button>
-            <button className="share-tile">
-              <span className="share-tile-ic ext-clip">⌘C</span>
-              <strong>Copy as rich text</strong>
-              <span className="faint">Paste into Slack, Notion, email</span>
-            </button>
-          </div>
-
-          <div className="share-options">
-            <label className="share-option">
-              <input type="checkbox" defaultChecked/> Include resolved annotations
-            </label>
-            <label className="share-option">
-              <input type="checkbox" defaultChecked/> Strip authorship metadata
-            </label>
-            <label className="share-option">
-              <input type="checkbox"/> Include Claude chat transcript
-            </label>
-          </div>
-        </div>
-
-        <footer className="share-foot mono faint">
-          All exports run locally — nothing leaves this machine unless you copy the link above.
-        </footer>
-      </div>
-    </div>
-  );
-}
-
 Object.assign(window, {
   FindReplaceBar, DiffView, CommandPalette, NetworkPanel,
-  AnnotationThread, NarrowLayout, Onboarding, ShareSheet,
+  AnnotationThread, NarrowLayout, Onboarding,
 });
 
 // ============================================================
@@ -707,7 +614,7 @@ function PaletteFrame({ tw }) {
         <EditorBody showMini={false} showCursor={false}/>
         <SideRail mode="annotations" annotations={ANNOS} chat={CHAT}/>
         {paletteOpen
-          ? <CommandPalette onClose={() => setPaletteOpen(false)}/>
+          ? <CommandPalette onClose={() => setPaletteOpen(false)} platform={tw.platform || (window.detectPlatform ? window.detectPlatform() : 'win')}/>
           : <ShortcutTooltip label="Open command palette" keys="⌘K" placement="bottom">
               <button className="btn-primary" onClick={() => setPaletteOpen(true)}
                 style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 5 }} aria-label="Open command palette">Open command palette</button>
@@ -742,42 +649,17 @@ function ThreadFrame({ tw }) {
 
 function OnboardingFrame({ tw }) {
   return (
-    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
+    <div data-theme={tw.theme || 'light'} style={{
       '--accent': tw.accent,
+      width: '100%',
+      height: '100%',
+      background: 'var(--bg)',
+      color: 'var(--ink)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
     }}>
-      <TopToolbar docName="welcome" dirty={false} panelLayout="hidden" theme={tw.theme || 'light'}/>
       <Onboarding step={2}/>
-    </div>
-  );
-}
-
-function ShareFrame({ tw }) {
-  const [open, setOpen] = React.useState(true);
-  return (
-    <div className="app" data-theme={tw.theme || 'light'} data-density={tw.density || 'cozy'} style={{
-      '--accent': tw.accent, '--editor-font': 'var(--font-serif)', '--rail-w': '360px',
-    }}>
-      <TopToolbar docName="q2-dashboard-review.md" dirty={true} panelLayout="right" theme={tw.theme || 'light'}/>
-      <DocTabs
-        docs={[
-          { id: 'd1', name: 'q2-dashboard-review.md', ext: 'M', dirty: true },
-          { id: 'd2', name: 'rfc-007-readlayer.md', ext: 'M' },
-        ]}
-        active="d1"
-      />
-      <div className="main" data-rail="right" style={{ position: 'relative' }}>
-        <EditorBody showMini={false} showCursor={false}/>
-        <SideRail mode="annotations" annotations={ANNOS} chat={CHAT}/>
-        {!open && (
-          <button
-            className="btn-primary"
-            onClick={() => setOpen(true)}
-            style={{ position: 'absolute', top: 16, right: 376, zIndex: 5 }}
-          >Reopen Share & export</button>
-        )}
-      </div>
-      <StatusBar claudeState="idle" docName="q2-dashboard-review.md" dirty={true}/>
-      {open && <ShareSheet onClose={() => setOpen(false)}/>}
     </div>
   );
 }
@@ -796,5 +678,5 @@ function MobileFrame({ tw }) {
 
 Object.assign(window, {
   FindReplaceFrame, DiffFrame, PaletteFrame, ThreadFrame,
-  OnboardingFrame, ShareFrame, SettingsNetworkFrame, MobileFrame,
+  OnboardingFrame, SettingsNetworkFrame, MobileFrame,
 });

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tandem — Calm synthesis</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="calm-aesthetic.css">
+<link rel="stylesheet" href="calm-v1.css">
+<style>
+  html, body { height: 100%; background: oklch(0.94 0.010 75); }
+  body { font-family: 'Inter Tight', sans-serif; }
+  .canvas-bg {
+    min-height: 100vh;
+    padding: 48px 56px 120px;
+    background:
+      radial-gradient(circle at 12% 0%, oklch(0.97 0.014 80) 0, transparent 55%),
+      radial-gradient(circle at 88% 30%, oklch(0.96 0.012 60) 0, transparent 60%),
+      oklch(0.945 0.010 75);
+  }
+  .hero { max-width: 1100px; margin: 0 auto 36px; color: oklch(0.22 0.012 280); }
+  .hero h1 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 44px; font-weight: 500; line-height: 1.08;
+    letter-spacing: -0.02em; margin: 0 0 16px;
+  }
+  .hero h1 em { font-style: italic; color: oklch(0.52 0.16 275); }
+  .hero p { font-size: 15px; line-height: 1.6; color: oklch(0.40 0.010 280); max-width: 740px; margin: 0 0 8px; }
+  .hero .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: oklch(0.55 0.008 280); text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 20px;
+  }
+
+  /* provenance grid — which atomic move came from which direction */
+  .prov {
+    max-width: 1100px; margin: 0 auto 56px;
+    background: oklch(0.99 0.005 80);
+    border-radius: 14px;
+    padding: 22px 24px;
+    box-shadow: 0 1px 2px rgba(20,20,30,0.04), 0 12px 30px -14px rgba(20,20,30,0.10);
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 20px 18px;
+  }
+  .prov-cell h4 {
+    margin: 0 0 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: oklch(0.55 0.008 280);
+    font-weight: 500;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .prov-cell h4 .badge {
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+    color: white;
+  }
+  .prov-cell h4 .badge.A { background: oklch(0.55 0.14 245); }
+  .prov-cell h4 .badge.B { background: oklch(0.55 0.14 30); }
+  .prov-cell h4 .badge.C { background: oklch(0.55 0.14 150); }
+  .prov-cell h4 .badge.D { background: oklch(0.55 0.16 305); }
+  .prov-cell h4 .badge.E { background: oklch(0.55 0.16 65); }
+  .prov-cell p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: oklch(0.30 0.012 280);
+  }
+  .prov-cell .what {
+    font-weight: 600; color: oklch(0.22 0.012 280);
+    display: block; margin-bottom: 2px;
+  }
+  @media (max-width: 980px) { .prov { grid-template-columns: 1fr 1fr; } }
+
+  .frame {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    border-radius: 4px;
+    position: relative;
+  }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" fill="oklch(0.945 0.010 75)"/>
+    <rect x="14" y="22" width="50" height="58" rx="3" fill="oklch(0.998 0.003 80)"/>
+    <rect x="68" y="30" width="18" height="44" rx="3" fill="oklch(0.96 0.014 65)"/>
+    <rect x="18" y="28" width="22" height="3" rx="1" fill="#5B5BD6"/>
+    <rect x="18" y="35" width="38" height="2" rx="1" fill="#222" opacity="0.45"/>
+    <rect x="18" y="40" width="32" height="2" rx="1" fill="#D97757" opacity="0.55"/>
+    <rect x="18" y="45" width="36" height="2" rx="1" fill="#222" opacity="0.35"/>
+    <rect x="68" y="38" width="3" height="10" rx="1" fill="oklch(0.55 0.18 305)"/>
+    <rect x="73" y="38" width="11" height="2" rx="1" fill="#222" opacity="0.4"/>
+    <rect x="73" y="42" width="9" height="2" rx="1" fill="#222" opacity="0.3"/>
+    <text x="14" y="92" fill="#5B5BD6" font-size="5" font-family="monospace">calm · synthesis</text>
+  </svg>
+</template>
+
+<div class="canvas-bg">
+  <div class="hero">
+    <div class="meta">Tandem · calm synthesis · 2026-05-13</div>
+    <h1>One direction.<br/><em>The best move from each.</em></h1>
+    <p>Pulling the strongest atomic move from each of the five explorations. The chrome goes borderless (A), the editor lifts as a paper sheet (B), the rail stays docked but its cards lose borders, gain kind tints, and align vertically to their anchors with a thin tinted leader (C+E), and frost is reserved for things that genuinely float — mini-toolbar, palette, popovers (D).</p>
+    <p>The result has one fewer surface, no hairlines anywhere, and far less visual noise — but the structure of the app is unchanged. Existing affordances are all still there; they just stop fighting for attention.</p>
+  </div>
+
+  <div class="prov">
+    <div class="prov-cell">
+      <h4><span class="badge A">A</span>One Paper</h4>
+      <span class="what">Borderless titlebar, tabs, status</span>
+      <p>All chrome rows sit on the warm canvas. Status bar is plain mono labels — no top border.</p>
+    </div>
+    <div class="prov-cell">
+      <h4><span class="badge B">B</span>Sheet on Desk</h4>
+      <span class="what">Editor as a paper sheet</span>
+      <p>Centered sheet at 0.998 lightness on a 0.945 canvas. Soft shadow only; no border. The doc reads as the primary object.</p>
+    </div>
+    <div class="prov-cell">
+      <h4><span class="badge C">C</span>Margin Notes</h4>
+      <span class="what">Anchor-aligned cards + leader</span>
+      <p>Cards in the docked rail position vertically to their anchor in the editor. A thin tinted leader connects card to anchor on hover or selection.</p>
+    </div>
+    <div class="prov-cell">
+      <h4><span class="badge D">D</span>Frosted Overlays</h4>
+      <span class="what">Frost only for transient floats</span>
+      <p>Mini-toolbar, command palette, popovers — frost glass. Docked surfaces stay opaque so the eye doesn't fight the document.</p>
+    </div>
+    <div class="prov-cell">
+      <h4><span class="badge E">E</span>Tinted Shells</h4>
+      <span class="what">Borderless rail cards, kind tint</span>
+      <p>Annotation cards lose their 1px border entirely. A soft per-kind tint (yellow/violet/red/coral) plus a 3px tinted left rail carries the type.</p>
+    </div>
+  </div>
+
+  <design-canvas></design-canvas>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="calm-v1.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+function Page() {
+  return (
+    <>
+      <DCSection id="synthesis" title="Calm v1 — full app at 1440×900">
+        <DCArtboard id="synthesis-app" label="Synthesis · borderless chrome (A) + editor sheet (B) + anchor-aligned tinted rail cards (C+E) + frosted mini-toolbar (D)" width={1440} height={900}>
+          <div className="frame"><CalmV1Synthesis /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="detail" title="Detail — anchor↔card connection">
+        <DCArtboard id="detail-anchor" label="Closer look at how a selected annotation in the editor and its rail card stay visually linked — shared kind tint, anchor outline, and a thin gradient leader" width={1100} height={520}>
+          <div className="frame"><CalmV1Detail /></div>
+        </DCArtboard>
+      </DCSection>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.querySelector('design-canvas')).render(<Page />);
+</script>
+</body>
+</html>

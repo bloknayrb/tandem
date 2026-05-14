@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tandem — Calm synthesis v2</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="calm-v1.css">
+<link rel="stylesheet" href="calm-v2.css">
+<style>
+  html, body { height: 100%; background: oklch(0.94 0.010 75); }
+  body { font-family: 'Inter Tight', sans-serif; }
+  .canvas-bg {
+    min-height: 100vh;
+    padding: 48px 56px 120px;
+    background:
+      radial-gradient(circle at 10% 0%, oklch(0.97 0.014 80) 0, transparent 55%),
+      radial-gradient(circle at 90% 30%, oklch(0.96 0.012 60) 0, transparent 60%),
+      oklch(0.945 0.010 75);
+  }
+  .hero { max-width: 1100px; margin: 0 auto 44px; color: oklch(0.22 0.012 280); }
+  .hero h1 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 44px; font-weight: 500; line-height: 1.08;
+    letter-spacing: -0.02em; margin: 0 0 16px;
+  }
+  .hero h1 em { font-style: italic; color: oklch(0.52 0.16 275); }
+  .hero p { font-size: 15px; line-height: 1.6; color: oklch(0.40 0.010 280); max-width: 740px; margin: 0 0 8px; }
+  .hero .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: oklch(0.55 0.008 280); text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 20px;
+  }
+
+  .decision-strip {
+    max-width: 1100px; margin: 0 auto 56px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+  }
+  .ds-card {
+    background: oklch(0.99 0.004 80);
+    border-radius: 10px; padding: 16px 18px;
+    box-shadow: 0 1px 1px rgba(20,20,30,0.03), 0 8px 20px -12px rgba(20,20,30,0.10);
+  }
+  .ds-card h4 {
+    margin: 0 0 6px; font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    color: oklch(0.55 0.008 280); font-weight: 500;
+  }
+  .ds-card p { margin: 0; font-size: 13px; line-height: 1.55; color: oklch(0.30 0.012 280); }
+  .ds-card .what { font-weight: 600; color: oklch(0.22 0.012 280); display: block; margin-bottom: 3px; }
+
+  .frame { width: 100%; height: 100%; overflow: hidden; position: relative; }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" fill="oklch(0.945 0.010 75)"/>
+    <rect x="10" y="18" width="52" height="64" rx="3" fill="oklch(0.998 0.003 80)"/>
+    <rect x="66" y="26" width="24" height="56" rx="2" fill="oklch(0.955 0.012 70)"/>
+    <rect x="14" y="10" width="80" height="5" rx="1" fill="oklch(0.945 0.012 70)"/>
+    <rect x="14" y="27" width="20" height="2.5" rx="1" fill="#5B5BD6"/>
+    <rect x="14" y="33" width="36" height="1.8" rx="1" fill="#222" opacity="0.45"/>
+    <rect x="14" y="38" width="30" height="1.8" rx="1" fill="#D97757" opacity="0.55"/>
+    <rect x="14" y="43" width="34" height="1.8" rx="1" fill="#222" opacity="0.35"/>
+    <rect x="66" y="34" width="3" height="10" rx="1" fill="oklch(0.55 0.16 305)"/>
+    <rect x="71" y="34" width="17" height="1.8" rx="1" fill="#222" opacity="0.4"/>
+    <rect x="71" y="38" width="14" height="1.8" rx="1" fill="#222" opacity="0.3"/>
+    <text x="10" y="95" fill="#5B5BD6" font-size="5" font-family="monospace">calm v2</text>
+  </svg>
+</template>
+
+<div class="canvas-bg">
+  <div class="hero">
+    <div class="meta">Tandem · calm synthesis v2 · 2026-05-13</div>
+    <h1>Full functionality.<br/><em>Formatting, paged docs, three panels.</em></h1>
+    <p>Building on the v1 synthesis — the same calm treatment applied to the full set of surfaces that matter. Markdown files stay on the warm canvas. Word documents get their own cooler canvas with floating page sheets. The formatting bar integrates borderlessly above the editor. Three-panel layout shows the outline without new chrome. The annotation creation popup shows the audience-first design decision in context.</p>
+  </div>
+
+  <div class="decision-strip">
+    <div class="ds-card">
+      <h4>Md vs. Docx</h4>
+      <span class="what">Two canvas modes</span>
+      <p>Md: text flows on the warm canvas. Docx: cooler canvas with floating white page sheets. Same chrome, distinct editing contexts.</p>
+    </div>
+    <div class="ds-card">
+      <h4>Formatting bar</h4>
+      <span class="what">Borderless, on canvas</span>
+      <p>The 5th hairline is gone. Buttons float at --ink-faint opacity on the warm canvas, brightening on hover. Comment/Note are primary CTAs.</p>
+    </div>
+    <div class="ds-card">
+      <h4>Three-panel</h4>
+      <span class="what">220px borderless outline</span>
+      <p>Outline rail on the left shares the canvas background. No borders, no container box. Heading items and a word-count block are the only elements.</p>
+    </div>
+    <div class="ds-card">
+      <h4>Status bar (C7)</h4>
+      <span class="what">Annotation summary pills</span>
+      <p>Small kind-tinted pills in the status bar — notes, suggestions, flags. Only non-zero counts shown. Clicking filters the rail.</p>
+    </div>
+  </div>
+
+  <design-canvas></design-canvas>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="calm-v1.jsx"></script>
+<script type="text/babel" src="calm-v2.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+function Page() {
+  return (
+    <>
+      <DCSection id="md" title="Markdown — text on warm canvas">
+        <DCArtboard id="md-app" label="Md canvas · borderless formatting bar · text flows on warm canvas · annotation pills in status · mini-toolbar frost over selection" width={1440} height={900}>
+          <div className="frame"><CalmV2Md /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="docx" title="Word document — paged view with cooler canvas">
+        <DCArtboard id="docx-app" label="Docx paged · cooler canvas under page sheets · running head on continuation · RO badge in tab · read-only info above rail cards (D5)" width={1440} height={900}>
+          <div className="frame"><CalmV2Docx /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="three" title="Three-panel — outline left · editor · annotations right">
+        <DCArtboard id="three-app" label="Three-panel · 220px borderless outline rail · md canvas editor · annotation rail right · left panel toggle active in fmt bar" width={1440} height={900}>
+          <div className="frame"><CalmV2Three /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="detail" title="Annotation creation — selection popup states">
+        <DCArtboard id="detail-strip" label="State 1: simple formatting strip (B/I/highlights + Comment/Note CTA) · State 2: 'Note for Claude' expands to frosted textarea popup — audience locked, just write and send" width={1200} height={480}>
+          <div className="frame"><CalmV2SelectionDetail /></div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="dark" title="Dark mode">
+        <DCArtboard id="dk-md" label="Dark · Markdown — warm dark canvas, lifted sheet, same warm-paper feel inverted" width={1440} height={900}>
+          <div className="frame"><CalmV2MdDark /></div>
+        </DCArtboard>
+        <DCArtboard id="dk-docx" label="Dark · Word doc — cooler dark canvas (more blue-gray) behind the page sheets, RO info block in rail" width={1440} height={900}>
+          <div className="frame"><CalmV2DocxDark /></div>
+        </DCArtboard>
+        <DCArtboard id="dk-three" label="Dark · Three-panel — outline left, md editor center, annotations right" width={1440} height={900}>
+          <div className="frame"><CalmV2ThreeDark /></div>
+        </DCArtboard>
+      </DCSection>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.querySelector('design-canvas')).render(<Page />);
+</script>
+
+<div id="tweaks-root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "warmth": "amber",
+  "density": "tight",
+  "presence": "active"
+}/*EDITMODE-END*/;
+
+function applyTweaks(t) {
+  let el = document.getElementById('tweak-vars');
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'tweak-vars';
+    document.head.appendChild(el);
+  }
+  const parts = [];
+
+  // ── 1. Canvas tone ────────────────────────────────────────────────
+  // Shifts the entire ambient hue: warm amber (default) → cool slate → rose dusk.
+  // Overrides the hardcoded canvas-bg gradient and resets CSS custom props on :root
+  // so every c2-frame / c1-frame picks up the new value automatically.
+  const W = {
+    amber: {
+      canvas: 'oklch(0.945 0.012 70)',  soft: 'oklch(0.960 0.010 75)',
+      deep:   'oklch(0.920 0.014 65)',  body: 'oklch(0.94 0.010 75)',
+      bg1: 'oklch(0.97 0.014 80)',      bg2: 'oklch(0.96 0.012 60)',
+    },
+    slate: {
+      canvas: 'oklch(0.935 0.007 240)', soft: 'oklch(0.950 0.006 245)',
+      deep:   'oklch(0.916 0.008 238)', body: 'oklch(0.935 0.007 240)',
+      bg1: 'oklch(0.955 0.006 245)',    bg2: 'oklch(0.945 0.005 250)',
+    },
+    dusk: {
+      canvas: 'oklch(0.938 0.012 340)', soft: 'oklch(0.952 0.010 345)',
+      deep:   'oklch(0.920 0.013 335)', body: 'oklch(0.938 0.012 340)',
+      bg1: 'oklch(0.958 0.010 350)',    bg2: 'oklch(0.948 0.009 328)',
+    },
+  };
+  const w = W[t.warmth] || W.amber;
+  parts.push(`
+    :root {
+      --c1-canvas:      ${w.canvas};
+      --c1-canvas-soft: ${w.soft};
+      --c1-canvas-deep: ${w.deep};
+    }
+    html, body { background: ${w.body} !important; }
+    .canvas-bg {
+      background:
+        radial-gradient(circle at 10% 0%, ${w.bg1} 0, transparent 55%),
+        radial-gradient(circle at 90% 30%, ${w.bg2} 0, transparent 60%),
+        ${w.canvas} !important;
+    }
+  `);
+
+  // ── 2. Prose rhythm ───────────────────────────────────────────────
+  // Changes type size + line-height together, plus sheet/page padding,
+  // so the whole editorial texture shifts from dense working doc → airy magazine.
+  const D = {
+    tight:    { size: '14.5px', lh: '1.55', h1: '24px', h2: '16px', sheet: '28px 46px 36px', page: '52px 64px 48px' },
+    default:  { size: '17px',   lh: '1.68', h1: '30px', h2: '19px', sheet: '40px 60px 56px', page: '72px 80px 64px' },
+    spacious: { size: '19.5px', lh: '1.84', h1: '38px', h2: '23px', sheet: '56px 72px 72px', page: '88px 96px 80px' },
+  };
+  const d = D[t.density] || D.default;
+  parts.push(`
+    .c1-doc            { font-size: ${d.size} !important; line-height: ${d.lh} !important; }
+    .c1-doc h1         { font-size: ${d.h1}   !important; }
+    .c1-doc h2         { font-size: ${d.h2}   !important; }
+    .c1-sheet          { padding: ${d.sheet}  !important; }
+    .c2-page           { padding: ${d.page}   !important; }
+  `);
+
+  // ── 3. AI presence ────────────────────────────────────────────────
+  // Focus: the collaboration layer goes near-invisible — just you and the text.
+  // Signal (default): balanced, the current calibration.
+  // Active: author gutters bold, annotation tints saturated, cards punchy —
+  //         the AI collaboration is front-and-center.
+  if (t.presence === 'focus') {
+    parts.push(`
+      .c1-para::before                          { opacity: 0.07 !important; }
+      .c1-anno                                  { background: transparent !important; }
+      .c1-anno.comment                          { background: transparent !important;
+                                                  border-bottom: 1px dotted oklch(from var(--author-claude) l c h / 0.20) !important; }
+      .c1-card                                  { opacity: 0.25 !important; transition: opacity 200ms !important; }
+      .c1-card:hover, .c1-card.active           { opacity: 1 !important; }
+      .c1-rail                                  { opacity: 0.6 !important; }
+      .c1-claude-pulse                          { opacity: 0.20 !important; }
+      .c2-pills                                 { opacity: 0.30 !important; }
+    `);
+  } else if (t.presence === 'active') {
+    parts.push(`
+      .c1-para[data-author="user"]::before      { opacity: 0.80 !important; width: 3px !important; }
+      .c1-para[data-author="claude"]::before    { opacity: 0.80 !important; width: 3px !important; }
+      .c1-anno.comment                          { background: oklch(from var(--author-claude) l c h / 0.24) !important;
+                                                  border-bottom: 2px solid oklch(from var(--author-claude) l c h / 0.65) !important; }
+      .c1-card.comment                          { background: oklch(from var(--author-claude) l c h / 0.22) !important; }
+      .c1-card.note                             { background: oklch(from var(--warning) l c h / 0.22) !important; }
+      .c1-card.replacement                      { background: oklch(from var(--suggestion) l c h / 0.22) !important; }
+      .c1-card                                  { box-shadow: inset 4px 0 0 0 var(--c1-leader, oklch(0 0 0 / 0.22)) !important; }
+      .c1-card.active                           { background: var(--c1-sheet) !important;
+                                                  box-shadow: inset 4px 0 0 0 var(--c1-leader, var(--accent)), 0 12px 30px -10px oklch(0 0 0 / 0.16) !important; }
+      .c1-claude-pulse                          { box-shadow: 0 0 0 5px oklch(from var(--author-claude) l c h / 0.28) !important; }
+      .c2-pill.comment                          { background: oklch(from var(--author-claude) l c h / 0.25) !important; }
+      .c2-pill.replacement                      { background: oklch(from var(--suggestion) l c h / 0.25) !important; }
+      .c2-pill.note                             { background: oklch(from var(--warning) l c h / 0.25) !important; }
+    `);
+  } else {
+    // signal — explicit reset so toggling back from focus/active is clean
+    parts.push(`
+      .c1-para::before { opacity: 0.42 !important; width: 2px !important; }
+      .c1-card         { opacity: 1 !important; }
+      .c1-rail         { opacity: 1 !important; }
+      .c1-claude-pulse { opacity: 1 !important;
+                         box-shadow: 0 0 0 3px oklch(from var(--author-claude) l c h / 0.20) !important; }
+      .c2-pills        { opacity: 1 !important; }
+    `);
+  }
+
+  el.textContent = parts.join('\n');
+}
+
+function TweaksApp() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  React.useEffect(() => { applyTweaks(t); }, [t.warmth, t.density, t.presence]);
+
+  return (
+    <TweaksPanel>
+      <TweakSection label="Canvas" />
+      <TweakRadio
+        label="Tone"
+        value={t.warmth}
+        options={[
+          { value: 'amber', label: 'Amber' },
+          { value: 'slate', label: 'Slate' },
+          { value: 'dusk',  label: 'Dusk'  },
+        ]}
+        onChange={(v) => setTweak('warmth', v)}
+      />
+
+      <TweakSection label="Prose" />
+      <TweakRadio
+        label="Rhythm"
+        value={t.density}
+        options={[
+          { value: 'tight',    label: 'Tight'    },
+          { value: 'default',  label: 'Default'  },
+          { value: 'spacious', label: 'Spacious' },
+        ]}
+        onChange={(v) => setTweak('density', v)}
+      />
+
+      <TweakSection label="AI layer" />
+      <TweakRadio
+        label="Presence"
+        value={t.presence}
+        options={[
+          { value: 'focus',  label: 'Focus'  },
+          { value: 'signal', label: 'Signal' },
+          { value: 'active', label: 'Active' },
+        ]}
+        onChange={(v) => setTweak('presence', v)}
+      />
+    </TweaksPanel>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('tweaks-root')).render(<TweaksApp />);
+</script>
+</body>
+</html>

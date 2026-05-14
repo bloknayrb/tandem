@@ -111,6 +111,17 @@
   padding-top: 8px;
   border-top: 1px solid var(--hair);
   margin-top: 4px;
+  overflow: hidden;
+}
+.ar-pop-actions .ar-btn {
+  flex-shrink: 0;
+  padding: 0 9px;
+}
+.ar-pop-actions .ar-btn-comment {
+  gap: 3px;
+}
+.ar-pop-actions .ar-btn-comment .ar-kbd {
+  padding: 1px 3px;
 }
 .ar-pop-swatches {
   display: inline-flex;

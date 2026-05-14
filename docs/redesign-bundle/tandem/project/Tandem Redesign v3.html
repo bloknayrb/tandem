@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tandem — Redesign v3 (post-v0.11.0 revisions)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="settings.css">
+<link rel="stylesheet" href="surfaces.css">
+<link rel="stylesheet" href="annotation-redesign.css">
+<style>
+  html, body { height: 100%; background: #ECECE6; }
+  body { font-family: 'Inter Tight', sans-serif; }
+  .settings-row-control .swatch-row {
+    display: flex !important; flex-direction: row !important;
+    gap: 10px; align-items: center; flex-wrap: nowrap;
+  }
+  .canvas-bg {
+    min-height: 100vh;
+    padding: 48px 56px 120px;
+    background:
+      radial-gradient(circle at 10% 10%, oklch(0.97 0.012 80) 0, transparent 50%),
+      radial-gradient(circle at 90% 30%, oklch(0.96 0.014 30) 0, transparent 55%),
+      oklch(0.95 0.008 80);
+  }
+  .hero { max-width: 1240px; margin: 0 auto 48px; color: oklch(0.22 0.012 280); }
+  .hero h1 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 48px; font-weight: 500; line-height: 1.08;
+    letter-spacing: -0.02em; margin: 0 0 14px;
+  }
+  .hero h1 em { font-style: italic; color: oklch(0.52 0.16 275); }
+  .hero p { font-size: 15px; line-height: 1.55; color: oklch(0.40 0.010 280); max-width: 760px; margin: 0 0 6px; }
+  .hero .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: oklch(0.55 0.008 280); text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 20px;
+  }
+  .cat-legend {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    padding: 16px 20px; background: white;
+    border: 1px solid oklch(0.92 0.005 280);
+    border-radius: 10px; max-width: 1240px; margin: 0 auto 48px;
+  }
+  .cat-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 99px;
+    font-size: 11.5px; font-weight: 500; border: 1px solid;
+    font-family: 'Inter Tight', sans-serif;
+  }
+  .cat-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .frame {
+    width: 100%; height: 100%;
+    background: oklch(0.985 0.004 80);
+    overflow: hidden; position: relative;
+    display: flex; flex-direction: column;
+  }
+  .frame-body { flex: 1; min-height: 0; }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" fill="#ECECE6"/>
+    <rect x="15" y="20" width="42" height="3" rx="1" fill="#5B5BD6"/>
+    <rect x="15" y="27" width="55" height="2" rx="1" fill="#D97757" opacity="0.7"/>
+    <rect x="15" y="33" width="38" height="2" rx="1" fill="#222" opacity="0.5"/>
+    <rect x="15" y="39" width="48" height="2" rx="1" fill="#222" opacity="0.4"/>
+    <rect x="65" y="28" width="22" height="28" rx="2" fill="white" stroke="#ccc" stroke-width="0.5"/>
+    <rect x="68" y="33" width="16" height="1.5" rx="0.5" fill="#aaa"/>
+    <rect x="68" y="37" width="12" height="1.5" rx="0.5" fill="#aaa"/>
+    <rect x="68" y="41" width="14" height="1.5" rx="0.5" fill="#aaa"/>
+    <text x="15" y="68" fill="#5B5BD6" font-size="5" font-family="monospace">v3 · post-v0.11.0</text>
+  </svg>
+</template>
+
+<div class="canvas-bg">
+  <div class="hero">
+    <div class="meta">Tandem · redesign v3 · post v0.11.0 · 2026-05-13</div>
+    <h1>The build taught us things.<br/><em>Here's the design catching up.</em></h1>
+    <p>v0.11.0 shipped May 11. Engineering made three deliberate divergences from the v2 handoff, punted seven design decisions, and surfaced several surfaces that shipped with no artboard. This v3 document addresses all of it — revised artboards, five category-B decisions locked in, and speculative work for the v0.12.0 pipeline.</p>
+    <p style="margin-top:8px;font-size:13px;color:oklch(0.55 0.008 280);">v2 handoff preserved verbatim in <code style="font-family:'JetBrains Mono',monospace;font-size:11.5px">HANDOFF.md</code> &middot; this document supersedes it for all items it touches &middot; v2 artboards preserved in <code style="font-family:'JetBrains Mono',monospace;font-size:11.5px">Tandem Redesign.html</code></p>
+  </div>
+
+  <div class="cat-legend">
+    <span class="cat-badge" style="background:oklch(0.95 0.03 275);border-color:oklch(0.85 0.06 275);color:oklch(0.42 0.18 275)"><span class="cat-dot" style="background:oklch(0.52 0.16 275)"></span>A &mdash; Shipped differently</span>
+    <span class="cat-badge" style="background:oklch(0.97 0.04 75);border-color:oklch(0.84 0.08 65);color:oklch(0.40 0.14 65)"><span class="cat-dot" style="background:oklch(0.62 0.16 65)"></span>B &mdash; Decisions locked</span>
+    <span class="cat-badge" style="background:oklch(0.96 0.03 150);border-color:oklch(0.82 0.07 150);color:oklch(0.40 0.14 150)"><span class="cat-dot" style="background:oklch(0.55 0.14 150)"></span>C &mdash; New surfaces</span>
+    <span class="cat-badge" style="background:oklch(0.95 0.03 245);border-color:oklch(0.85 0.06 245);color:oklch(0.42 0.14 245)"><span class="cat-dot" style="background:oklch(0.55 0.14 245)"></span>D &mdash; Detail specs</span>
+    <span class="cat-badge" style="background:oklch(0.97 0.03 25);border-color:oklch(0.84 0.08 25);color:oklch(0.42 0.16 25)"><span class="cat-dot" style="background:oklch(0.55 0.18 25)"></span>E &mdash; Hazards</span>
+    <span class="cat-badge" style="background:oklch(0.97 0.04 75);border-color:oklch(0.84 0.08 65);color:oklch(0.40 0.14 65)"><span class="cat-dot" style="background:oklch(0.62 0.14 65)"></span>F &mdash; Speculative</span>
+  </div>
+
+  <design-canvas></design-canvas>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel" src="settings.jsx"></script>
+<script type="text/babel" src="surfaces.jsx"></script>
+<script type="text/babel" src="annotation-redesign.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+
+<script type="text/babel" src="v3-chrome.jsx"></script>
+<script type="text/babel" src="v3-surfaces.jsx"></script>
+<script type="text/babel" src="v3-specs.jsx"></script>
+<script type="text/babel" src="v3-speculative.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "#5B5BD6",
+  "theme": "light",
+  "density": "cozy",
+  "panelLayout": "right",
+  "editorFont": "serif",
+  "editorSize": 17,
+  "railWidth": 340
+}/*EDITMODE-END*/;
+
+function Frame({ children }) {
+  return (
+    <div className="frame">
+      <div className="frame-body">{children}</div>
+    </div>
+  );
+}
+
+function Page() {
+  const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  return (
+    <>
+      <DCSection id="a-chrome" title="A — Shipped differently than the design">
+
+        <DCArtboard id="a1-authorship" label="A1 · Character-level authorship — ~28% text tint + hover reveal (shipped: solid color dense at scale)" width={1280} height={820}>
+          <Frame><A1AuthorshipFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="a2-dual-surface" label="A2 · Selection surfaces — formatting strip above + audience popup below, two peers on same selection" width={1280} height={820}>
+          <Frame><A2DualSurface tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="a3-titlebar" label="A3 · Merged titlebar (PR #602) — brand · doc tabs · mode toggle · chrome all in one 44px draggable strip" width={1280} height={820}>
+          <Frame><A3TitlebarFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+      </DCSection>
+
+      <DCSection id="b-decisions" title="B — Design decisions locked in">
+
+        <DCArtboard id="b3-solo-held" label="B3 · heldInSolo — banner states + the actual rail review surface for Solo→Tandem transition" width={1280} height={1040}>
+          <B3SoloHeldSpec tw={tw} />
+        </DCArtboard>
+
+        <DCArtboard id="b5-diff-irrev" label="B5 · Diff irreversibility — inline warning in bottom bar, Option A recommended over staging border" width={1280} height={560}>
+          <B5DiffIrrevSpec tw={tw} />
+        </DCArtboard>
+
+      </DCSection>
+
+      <DCSection id="c-surfaces" title="C — New surfaces: shipped in v0.11.0, no artboard existed">
+
+        <DCArtboard id="c1-changelog" label="C1 · Changelog on upgrade — read-only, version banner, Got it CTA, no annotation rail" width={1280} height={820}>
+          <Frame><C1ChangelogFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="c2-scratchpad" label="C2 · Scratchpad (Ctrl+N) — ephemeral tab indicator, in-memory notice, Save As… affordance" width={1280} height={820}>
+          <Frame><C2ScratchpadFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="c3-store-readonly" label="C3 · store-readonly-banner — warning (recoverable) vs error (action required), Retry/Settings/Logs" width={1280} height={540}>
+          <C3StoreReadonlySpec />
+        </DCArtboard>
+
+        <DCArtboard id="c4-conn-states" label="C4 · Connection banner — 4 states: offline · reconnecting+countdown · lost+manual retry · reconnected toast" width={1280} height={560}>
+          <C4ConnStatesSpec tw={tw} />
+        </DCArtboard>
+
+        <DCArtboard id="c5-narrow-settings" label="C5 · Settings at <860px — hamburger collapses nav sidebar, single-column content panel" width={860} height={660}>
+          <C5NarrowSettingsFrame tw={tw} />
+        </DCArtboard>
+
+        <DCArtboard id="c6-thread-collapsed" label="C6 · Reply thread collapsed — avatar stack + reply count + last-author border + expand chevron" width={1100} height={500}>
+          <C6ThreadCollapsedSpec />
+        </DCArtboard>
+
+        <DCArtboard id="c7-anno-summary" label="C7 · Document annotation summary — Option A (StatusBar pills) recommended over Option B (rail header)" width={1280} height={560}>
+          <C7AnnoSummarySpec />
+        </DCArtboard>
+
+      </DCSection>
+
+      <DCSection id="d-specs" title="D — Partial specifications resolved">
+
+        <DCArtboard id="d1-import-chip" label="D1 · Imported annotation — From: author + file provenance in byline, chip non-interactive" width={1280} height={520}>
+          <D1ImportChipSpec />
+        </DCArtboard>
+
+        <DCArtboard id="d2-legacy-hl" label="D2 · Legacy highlight keys — red→pink, purple→blue (shipped v0.11.0) · unknown→yellow fallback" width={1280} height={500}>
+          <D2LegacyHlSpec />
+        </DCArtboard>
+
+        <DCArtboard id="d3-collision" label="D3 · Mini-toolbar collision — 140ms fade-out when palette/find opens, re-appear on close" width={1280} height={520}>
+          <D3CollisionSpec />
+        </DCArtboard>
+
+        <DCArtboard id="d4-toast" label="D4 · Toast notifications — 4 severities, top-right, newest-on-top stack, per-severity auto-dismiss timing" width={1280} height={500}>
+          <D4ToastSpec />
+        </DCArtboard>
+
+        <DCArtboard id="d5-ro-bar" label="D5 · Read-only info bar — decision: keep both tab badge + rail info bar (each serves a different context)" width={1280} height={540}>
+          <D5ROInfoBarSpec />
+        </DCArtboard>
+
+      </DCSection>
+
+      <DCSection id="e-hazards" title="E — Hazard responses">
+
+        <DCArtboard id="e1-wcag" label="E1 · WCAG AA token audit — suggestion + warning tokens fail for text; split into fill + fg-strong variants" width={1280} height={540}>
+          <E1WCAGSpec />
+        </DCArtboard>
+
+      </DCSection>
+
+      <DCSection id="f-speculative" title="F — Speculative (confidence labeled on each artboard)">
+
+        <DCArtboard id="f1-doc-groups" label="F1 · Document Groups list view — expandable groups in left rail, drag-to-add (confidence: medium)" width={1280} height={820}>
+          <Frame><F1DocGroupsFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="f3-drag-to-add" label="F3 · Document Groups drag — 3-state drag sequence, drop-target highlight (confidence: medium)" width={1280} height={540}>
+          <F3DocGroupsDragSpec />
+        </DCArtboard>
+
+        <DCArtboard id="f4-diff-hunk" label="F4 · Diff hunk staging — focus-trapped keyboard (↵ accept / ⌫ reject) avoids reflexive letter-key mutations (confidence: medium)" width={1280} height={680}>
+          <Frame><F4DiffHunkFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="f5-chat-empty" label="F5 · Chat empty state — Claude ready, suggestion chips, first-open (confidence: high)" width={1280} height={820}>
+          <Frame><F5ChatEmptyFrame tw={tw} /></Frame>
+        </DCArtboard>
+
+        <DCArtboard id="f6-outline-anno" label="F6 · Outline heading annotation — section-level note from outline panel (confidence: low)" width={1280} height={560}>
+          <F6OutlineHeadingAnnoSpec />
+        </DCArtboard>
+
+      </DCSection>
+
+      <TweaksPanel title="Tweaks" defaultPosition={{ right: 24, bottom: 24 }}>
+        <TweakSection title="Theme">
+          <TweakRadio label="Mode" value={tw.theme} options={[
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]} onChange={v => setTweak('theme', v)} />
+          <TweakColor label="Accent" value={tw.accent} options={['#5B5BD6','#D97757','#2A78A4','#2D8A5E']} onChange={v => setTweak('accent', v)} />
+        </TweakSection>
+        <TweakSection title="Layout">
+          <TweakRadio label="Density" value={tw.density} options={[
+            { value: 'compact', label: 'Compact' },
+            { value: 'cozy', label: 'Cozy' },
+            { value: 'spacious', label: 'Spacious' },
+          ]} onChange={v => setTweak('density', v)} />
+          <TweakSlider label="Rail width" min={280} max={480} step={10} value={tw.railWidth} onChange={v => setTweak('railWidth', v)} suffix="px" />
+        </TweakSection>
+        <TweakSection title="Editor">
+          <TweakRadio label="Font" value={tw.editorFont} options={[
+            { value: 'serif', label: 'Serif' },
+            { value: 'sans', label: 'Sans' },
+            { value: 'mono', label: 'Mono' },
+          ]} onChange={v => setTweak('editorFont', v)} />
+          <TweakSlider label="Size" min={14} max={22} step={1} value={tw.editorSize} onChange={v => setTweak('editorSize', v)} suffix="px" />
+        </TweakSection>
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.querySelector('design-canvas')).render(<Page />);
+</script>
+</body>
+</html>

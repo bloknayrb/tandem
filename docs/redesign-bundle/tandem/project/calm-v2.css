@@ -1,0 +1,462 @@
+/* calm-v2.css — extends calm-v1 with:
+   - 5-row frame grid (adds formatting bar row)
+   - formatting bar: borderless, on canvas
+   - md canvas: text flows on warm canvas, no sheet
+   - docx paged: cooler editor area, page sheets
+   - three-panel: outline left rail
+   - annotation summary pills (C7)
+   - read-only info block in rail (D5)
+   - selection → annotation creation popup
+*/
+
+/* ── 5-row frame ───────────────────────────────────────────────── */
+.c2-frame {
+  width: 100%; height: 100%;
+  font-family: var(--font-sans);
+  color: var(--c1-ink);
+  overflow: hidden;
+  position: relative;
+  display: grid;
+  grid-template-rows: 44px 30px 36px 1fr 24px;
+  background: var(--c1-canvas);
+}
+
+/* ── Formatting bar — borderless, sits on canvas ────────────────── */
+.c2-fmtbar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 18px;
+}
+
+.c2-fdiv {
+  width: 1px; height: 16px;
+  background: oklch(0 0 0 / 0.08);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.c2-fbtn {
+  height: 28px; min-width: 28px;
+  padding: 0 6px;
+  border: none; background: transparent;
+  border-radius: 6px;
+  color: var(--c1-ink-faint); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 500; font-family: inherit;
+  transition: color 100ms, background 100ms;
+}
+.c2-fbtn:hover { color: var(--c1-ink); background: oklch(0 0 0 / 0.04); }
+.c2-fbtn.on { color: var(--accent); background: oklch(from var(--accent) l c h / 0.10); }
+
+.c2-fswatches { display: inline-flex; gap: 3px; padding: 0 2px; }
+.c2-fsw {
+  width: 13px; height: 13px;
+  border-radius: 3px; cursor: pointer;
+}
+.c2-fsw:hover { transform: scale(1.12); }
+
+.c2-anno-btn {
+  height: 28px; padding: 0 10px;
+  border: none; background: transparent; border-radius: 6px;
+  font-size: 12px; font-weight: 500; font-family: inherit;
+  color: var(--c1-ink-faint); cursor: pointer;
+  transition: color 100ms, background 100ms;
+}
+.c2-anno-btn:hover { color: var(--c1-ink); background: oklch(0 0 0 / 0.04); }
+.c2-anno-btn.claude { color: var(--author-claude); }
+.c2-anno-btn.claude:hover { background: oklch(from var(--author-claude) l c h / 0.08); }
+
+/* ── Main area — inset shadow signals "editor zone" without a line ─ */
+.c2-main {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: inset 0 7px 18px -16px oklch(0 0 0 / 0.08);
+}
+.c2-main.three { grid-template-columns: 220px 1fr 380px; }
+
+/* ── MD canvas editor — text on warm canvas, no sheet ────────────── */
+.c2-md-area {
+  overflow: auto;
+  padding: 28px 0 80px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+.c2-md-text {
+  max-width: 64ch;
+  width: 100%;
+  padding: 0 32px 0 52px; /* extra left for authorship gutter */
+}
+
+/* ── DOCX paged editor ─────────────────────────────────────────── */
+.c2-docx-area {
+  overflow: auto;
+  padding: 20px 22px 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  background:
+    radial-gradient(ellipse at 50% -5%, oklch(0.925 0.006 260) 0%, transparent 60%),
+    oklch(0.908 0.007 265);
+}
+
+.c2-page {
+  width: 100%; max-width: 760px;
+  background: var(--c1-sheet);
+  border-radius: 6px;
+  padding: 72px 80px 64px;
+  position: relative;
+  box-shadow:
+    0 1px 1px oklch(0 0 0 / 0.02),
+    0 4px 10px -2px oklch(0 0 0 / 0.06),
+    0 26px 52px -22px oklch(0 0 0 / 0.12);
+}
+.c2-page.first { border-radius: 6px 6px 3px 3px; }
+.c2-page.cont { border-radius: 3px; }
+
+.c2-page-head {
+  position: absolute;
+  top: 28px; left: 80px; right: 80px;
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.06em; color: var(--c1-ink-faint);
+  border-bottom: 1px solid oklch(0 0 0 / 0.06);
+  padding-bottom: 8px;
+}
+.c2-page-foot {
+  position: absolute;
+  bottom: 24px; left: 80px; right: 80px;
+  text-align: center;
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--c1-ink-faint);
+}
+
+/* ── Three-panel outline rail ──────────────────────────────────── */
+.c2-outline-rail {
+  overflow: auto;
+  padding: 16px 8px 60px;
+  display: flex; flex-direction: column;
+  gap: 2px;
+}
+.c2-outline-lbl {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c1-ink-faint);
+  padding: 0 10px 10px;
+}
+.c2-outline-item {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px; color: var(--c1-ink-muted);
+  cursor: pointer; line-height: 1.35;
+  transition: background 100ms, color 100ms;
+}
+.c2-outline-item:hover { background: oklch(0 0 0 / 0.04); color: var(--c1-ink); }
+.c2-outline-item.on {
+  background: oklch(from var(--accent) l c h / 0.10);
+  color: var(--accent); font-weight: 500;
+}
+.c2-outline-item.h1 {
+  font-family: var(--font-serif); font-size: 14px; font-weight: 500;
+  color: var(--c1-ink); padding-left: 10px;
+}
+.c2-outline-item.h2 { padding-left: 18px; font-size: 12.5px; }
+.c2-outline-item.h3 { padding-left: 30px; font-size: 12px; color: var(--c1-ink-faint); }
+.c2-outline-count {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--c1-ink-faint); margin-left: auto; flex-shrink: 0;
+}
+.c2-outline-item.on .c2-outline-count { color: oklch(from var(--accent) l c h / 0.65); }
+
+.c2-outline-meta {
+  margin-top: 20px;
+  padding: 14px 10px 0;
+  border-top: 1px solid oklch(0 0 0 / 0.07);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.c2-outline-meta .lbl {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--c1-ink-faint);
+}
+.c2-outline-meta .val { font-size: 12px; color: var(--c1-ink-muted); }
+.c2-outline-meta .sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--c1-ink-faint); }
+
+/* ── Annotation summary pills in status bar (C7) ─────────────── */
+.c2-pills { display: inline-flex; gap: 4px; }
+.c2-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 16px; padding: 0 7px;
+  border-radius: 99px;
+  font-family: var(--font-mono); font-size: 10px;
+  cursor: pointer;
+  background: oklch(0 0 0 / 0.05);
+  color: var(--c1-ink-faint);
+}
+.c2-pill:hover { background: oklch(0 0 0 / 0.09); color: var(--c1-ink-muted); }
+.c2-pill.replacement { background: oklch(from var(--suggestion) l c h / 0.12); color: oklch(from var(--suggestion) calc(l - 0.14) c h); }
+.c2-pill.note { background: oklch(from var(--warning) l c h / 0.12); color: oklch(from var(--warning) calc(l - 0.14) c h); }
+.c2-pill.comment { background: oklch(from var(--author-claude) l c h / 0.12); color: oklch(from var(--author-claude) calc(l - 0.08) c h); }
+.c2-pill.highlight { background: oklch(from var(--warning) l c h / 0.12); color: oklch(from var(--warning) calc(l - 0.14) c h); }
+
+/* ── Read-only info block — top of rail, no border (D5) ─────────── */
+.c2-ro-info {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px 10px;
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--c1-ink-muted);
+}
+.c2-ro-info svg { flex-shrink: 0; margin-top: 1px; color: var(--c1-ink-faint); }
+.c2-ro-info strong { color: var(--c1-ink); font-weight: 600; display: block; margin-bottom: 1px; font-size: 12px; }
+.c2-ro-info a { color: var(--accent); text-decoration: none; font-size: 11.5px; font-weight: 500; }
+.c2-ro-info a:hover { text-decoration: underline; }
+.c2-ro-sep { height: 1px; background: oklch(0 0 0 / 0.07); margin: 0 14px 10px; }
+
+/* ── Windows window controls ─────────────────────────────────────── */
+.c2-win-controls {
+  display: flex;
+  align-self: stretch;
+  margin-right: -18px; /* negate .c1-titlebar right padding to flush to edge */
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+.c2-win-sep {
+  width: 1px;
+  align-self: stretch;
+  background: oklch(0 0 0 / 0.07);
+  margin: 10px 0;
+  flex-shrink: 0;
+}
+.c2-win-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  border: none;
+  background: transparent;
+  color: var(--c1-ink-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 100ms, color 100ms;
+}
+.c2-win-btn:hover {
+  background: oklch(0 0 0 / 0.055);
+  color: var(--c1-ink-muted);
+}
+.c2-win-btn.close:hover {
+  background: oklch(0.52 0.21 15);
+  color: oklch(0.98 0.005 80);
+}
+.c2-dk .c2-win-btn:hover { background: oklch(1 0 0 / 0.06); }
+.c2-dk .c2-win-btn.close:hover { background: oklch(0.52 0.21 15); }
+
+/* ── Tab design — warm ledger ────────────────────────────────────── */
+
+/* C — arch tabs: active dissolves into canvas, inactive faded */
+.c2-tabs-ledger {
+  display: flex; align-items: flex-end;
+  padding: 0 14px;
+  gap: 1px;
+  height: 30px;
+}
+.c2-tab-ledger {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 24px; padding: 0 13px;
+  border-radius: 7px 7px 0 0;
+  font-size: 12px;
+  color: oklch(from var(--c1-ink-faint) l c h / 0.70);
+  cursor: pointer;
+  background: oklch(from var(--c1-canvas) calc(l - 0.030) c h);
+  border: 1px solid oklch(0 0 0 / 0.05);
+  border-bottom: none;
+  transition: background 120ms, color 120ms;
+}
+.c2-tab-ledger:hover {
+  color: var(--c1-ink-muted);
+  background: oklch(from var(--c1-canvas) calc(l - 0.016) c h);
+}
+.c2-tab-ledger.on {
+  background: var(--c1-canvas);
+  color: var(--c1-ink);
+  height: 27px;
+  border-color: oklch(0 0 0 / 0.09);
+  position: relative; z-index: 1;
+}
+
+/* ── Tab ext badge variants ─────────────────────────────────────── */
+.c2-ext {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--c1-ink-faint);
+}
+.c2-ext.w { color: oklch(0.42 0.16 245); }
+.c2-ext.star { color: oklch(0.50 0.14 65); }
+.c2-ext.ephem {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px;
+}
+
+.c2-ro-badge {
+  display: inline-flex; align-items: center;
+  height: 14px; padding: 0 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+  background: oklch(from var(--warning) l c h / 0.15);
+  color: oklch(from var(--warning) calc(l - 0.10) c h);
+  margin-left: 2px;
+}
+
+/* ── Scratchpad ephemeral bar ────────────────────────────────────── */
+.c2-ephemeral {
+  display: flex; align-items: center; gap: 10px;
+  height: 26px; padding: 0 20px;
+  font-size: 11.5px; font-family: var(--font-mono);
+  color: var(--c1-ink-muted);
+  background: oklch(from var(--warning) l c h / 0.07);
+  /* sits between fmtbar and main in the grid — injected by adding a row */
+}
+
+/* ── Selection → annotation creation popup ──────────────────────── */
+.c2-popup {
+  position: absolute;
+  background: oklch(0.998 0.003 80 / 0.85);
+  backdrop-filter: saturate(130%) blur(16px);
+  -webkit-backdrop-filter: saturate(130%) blur(16px);
+  box-shadow: var(--c1-shadow-float);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  min-width: 300px; max-width: 360px;
+  z-index: 30;
+}
+.c2-popup::after {
+  content: '';
+  position: absolute;
+  bottom: -5px; left: 32px;
+  width: 10px; height: 10px;
+  background: oklch(0.998 0.003 80 / 0.85);
+  transform: rotate(45deg);
+  border-radius: 1px;
+  backdrop-filter: inherit;
+  -webkit-backdrop-filter: inherit;
+}
+.c2-popup-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+  color: var(--c1-ink-muted);
+  padding-bottom: 4px;
+  border-bottom: 1px solid oklch(0 0 0 / 0.07);
+}
+.c2-popup-ta {
+  width: 100%; border: none; outline: none;
+  background: transparent; resize: none;
+  font-family: inherit; font-size: 13px;
+  color: var(--c1-ink); line-height: 1.5;
+  min-height: 54px;
+}
+.c2-popup-ta::placeholder { color: var(--c1-ink-faint); }
+.c2-popup-row {
+  display: flex; align-items: center; gap: 6px;
+  justify-content: flex-end;
+}
+.c2-popup-cancel {
+  height: 26px; padding: 0 10px;
+  border: none; background: transparent;
+  border-radius: 6px; font-size: 11.5px;
+  color: var(--c1-ink-muted); cursor: pointer; font-family: inherit;
+}
+.c2-popup-cancel:hover { background: oklch(0 0 0 / 0.05); }
+.c2-popup-submit {
+  height: 26px; padding: 0 12px;
+  border: none; border-radius: 6px;
+  font-size: 11.5px; font-weight: 500; cursor: pointer;
+  font-family: inherit;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.c2-popup-submit.self { background: var(--c1-ink); color: oklch(0.98 0.003 80); }
+.c2-popup-submit.claude { background: var(--author-claude); color: white; }
+
+/* ── Detail artboard outer wrapper ─────────────────────────────── */
+.c2-detail-grid {
+  width: 100%; height: 100%;
+  background: var(--c1-canvas);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.c2-detail-pane {
+  position: relative;
+  padding: 32px 44px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.c2-detail-pane + .c2-detail-pane {
+  border-left: 1px solid oklch(0 0 0 / 0.07);
+}
+.c2-detail-lbl {
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c1-ink-faint);
+}
+.c2-detail-note {
+  font-size: 12.5px; color: var(--c1-ink-muted);
+  line-height: 1.6; max-width: 400px;
+}
+
+/* ── Dark mode wrapper ───────────────────────────────────────────── */
+.c2-dk {
+  --c1-canvas: oklch(0.185 0.012 268);
+  --c1-canvas-soft: oklch(0.205 0.012 268);
+  --c1-canvas-deep: oklch(0.162 0.012 265);
+  --c1-sheet: oklch(0.240 0.013 270);
+  --c1-ink: oklch(0.935 0.005 80);
+  --c1-ink-muted: oklch(0.66 0.008 80);
+  --c1-ink-faint: oklch(0.44 0.008 270);
+  --c1-shadow-sheet:
+    0 1px 1px oklch(0 0 0 / 0.40),
+    0 6px 14px -3px oklch(0 0 0 / 0.48),
+    0 28px 56px -20px oklch(0 0 0 / 0.58);
+  --c1-shadow-float:
+    0 1px 2px oklch(0 0 0 / 0.28),
+    0 10px 28px -8px oklch(0 0 0 / 0.46);
+  --accent: oklch(0.72 0.14 275);
+  --author-user: oklch(0.72 0.13 245);
+  --author-claude: #E89A78;
+  --warning: oklch(0.72 0.14 65);
+  --suggestion: oklch(0.72 0.16 305);
+  --error: oklch(0.72 0.16 25);
+  --success: oklch(0.72 0.13 150);
+  width: 100%; height: 100%;
+}
+
+/* card tints need bumping in dark — the same alpha reads too faint */
+.c2-dk .c1-card { background: oklch(from var(--c1-canvas) calc(l + 0.04) c h); }
+.c2-dk .c1-card.highlight { background: oklch(from var(--warning) l c h / 0.18); }
+.c2-dk .c1-card.note        { background: oklch(from var(--warning) l c h / 0.18); }
+.c2-dk .c1-card.replacement { background: oklch(from var(--suggestion) l c h / 0.17); }
+.c2-dk .c1-card.comment  { background: oklch(from var(--author-claude) l c h / 0.18); }
+
+/* frost surfaces */
+.c2-dk .c1-mini  { background: oklch(0.27 0.012 270 / 0.86); border-color: oklch(0.35 0.012 270 / 0.6); }
+.c2-dk .c2-popup { background: oklch(0.27 0.012 270 / 0.88); }
+.c2-dk .c2-popup::after { background: oklch(0.27 0.012 270 / 0.88); }
+
+/* docx cool canvas in dark */
+.c2-dk .c2-docx-area {
+  background:
+    radial-gradient(ellipse at 50% -5%, oklch(0.17 0.008 258) 0%, transparent 60%),
+    oklch(0.155 0.009 258) !important;
+}
+
+/* active card in dark — lifted sheet */
+.c2-dk .c1-card.active {
+  background: oklch(from var(--c1-sheet) calc(l + 0.02) c h);
+  box-shadow:
+    inset 3px 0 0 0 var(--c1-leader, var(--accent)),
+    0 8px 22px -10px oklch(0 0 0 / 0.5);
+}
+
+/* seg control in dark */
+.c2-dk .c1-seg { background: oklch(from var(--c1-canvas) calc(l - 0.03) c h); }
+.c2-dk .c1-seg button.on { background: var(--c1-sheet); }
