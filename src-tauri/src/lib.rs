@@ -348,7 +348,13 @@ pub fn run() {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let client = app_handle.state::<reqwest::Client>().inner().clone();
-                    let token = token_store::get_or_create_token().ok();
+                    let token = match token_store::get_or_create_token() {
+                        Ok(t) => Some(t),
+                        Err(e) => {
+                            log::warn!("Token retrieval failed for second-instance POST: {e}");
+                            None
+                        }
+                    };
                     if let Err(e) =
                         request_open_file(&client, token.as_deref(), &path).await
                     {
