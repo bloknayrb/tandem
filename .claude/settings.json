@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/sessionstart-prune-state.sh"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
@@ -7,6 +18,10 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/block-sensitive.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/nudge-plan-review.sh"
           }
         ]
       },
@@ -20,11 +35,23 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/block-e2e-port-kill.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/nudge-simplify-before-commit.sh"
           }
         ]
       }
     ],
     "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/track-workflow-events.sh"
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write",
         "hooks": [
@@ -60,6 +87,25 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/related-test.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/nudge-pr-review.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-cycle-check.sh"
           }
         ]
       }

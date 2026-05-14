@@ -25,6 +25,14 @@
 - [Design Decisions](docs/decisions.md) -- ADRs (001-029)
 - [Lessons Learned](docs/lessons-learned.md) -- 68 lessons including E2E testing gotchas
 
+## Development Workflow
+
+Quality over speed. Claude is an AI — time and effort have no cost. Never abbreviate steps. The only goal is the best possible work product.
+
+For every feature or fix: draft a plan (`/plan`), spawn adversarial agents to review the plan from multiple angles before writing any code, implement, run `/simplify`, then verify (`npm run typecheck` + `npm test`; add `npm run test:e2e` for client/integration changes), run whatever manual testing is possible (browser automation via `claude-in-chrome`, MCP probing, etc.), and prompt Bryan to complete any testing that requires human interaction before continuing. Then commit and open the PR with `/commit-commands:commit-push-pr`. After `/pr-review-toolkit:review-pr` surfaces findings, repeat: plan the fixes, adversarial agent review, implement, update PR.
+
+This is a two-person project (Bryan + Claude). Scope gates are minimal — if you encounter something broken while working, fix it rather than filing it for later. For small tangential fixes, bundle them in; for larger detours, note them and finish the current task first.
+
 ## Critical Rules
 
 These WILL break things if violated:
@@ -168,14 +176,22 @@ Generic skills (accessibility, frontend-design, nodejs-backend-patterns, playwri
 
 ### Hooks (`.claude/hooks/`)
 
-Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse hooks exit 0 (warn only).
+Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse hooks exit 0 (warn only). Workflow-nudge hooks emit stderr but never block. Per-session state lives in `.claude/.workflow-state/<session_id>/` (gitignored, pruned at SessionStart after 7 days).
+
+**SessionStart — `startup` matcher:**
+- `sessionstart-prune-state.sh` -- Removes workflow-state dirs older than 7 days
 
 **PreToolUse — `Edit|Write` matcher:**
 - `block-sensitive.sh` -- Blocks edits to `.env`, `package-lock.json`, and other sensitive files
+- `nudge-plan-review.sh` -- Warns when a `.claude/plans/*.md` was written this session but no `Agent` tool has run before a source edit (one-shot per plan)
 
 **PreToolUse — `Bash` matcher:**
 - `block-no-verify.sh` -- Blocks `--no-verify` flag (Husky bypass); fail-closed on parse error
 - `block-e2e-port-kill.sh` -- Blocks E2E test commands that kill dev server ports (:3478/:3479)
+- `nudge-simplify-before-commit.sh` -- Warns on `git commit` when source edits have happened since last `/simplify` (one-shot per edit batch)
+
+**PostToolUse — unmatched (every tool):**
+- `track-workflow-events.sh` -- Records markers used by nudge hooks: `last-plan-write`, `last-source-edit`, `last-agent-call`, `last-simplify`, and `last-commit` (detected from successful `git commit` invocations in `Bash` tool calls). Also clears the `stop-nudged` marker on successful commit so the stop reminder can re-fire after the next edit cycle. Fast-paths uninteresting tools to skip the node spawn.
 
 **PostToolUse — `Edit|Write` matcher:**
 - `typecheck-on-edit.sh` -- Runs `tsc --noEmit` after `.ts`/`.tsx` edits
@@ -186,6 +202,12 @@ Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse 
 - `check-token-violation.sh` -- Runs `scripts/check-semantic-tokens.ts` for raw hex/rgba in `src/client/`
 - `format-on-edit.sh` -- Runs Biome format on edited files
 - `related-test.sh` -- Runs matching vitest after source edits (opt-out: `TANDEM_SKIP_RELATED_TEST=1`)
+
+**PostToolUse — `Bash` matcher:**
+- `nudge-pr-review.sh` -- Reminds to run `/pr-review-toolkit:review-pr` after a successful `gh pr create`
+
+**Stop:**
+- `stop-cycle-check.sh` -- Informational nudge at turn end if session has uncommitted source edits (one-shot per session)
 
 ### Agents (`.claude/agents/`)
 
