@@ -827,7 +827,15 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     if (annotations.length > 0) {
       const refreshed = refreshAllRanges(annotations, doc, annotationMap);
 
-      // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges
+      // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
+      //
+      // Origin tag is intentionally MCP_ORIGIN (NOT FILE_SYNC_ORIGIN) because these
+      // writes update durable annotation state (range + relRange) that must persist
+      // through the durable-annotation sync observer. The sync observer skips
+      // FILE_SYNC_ORIGIN; the channel observer skips both origins, so there's no
+      // phantom channel echo to silence here. Flipping back to FILE_SYNC_ORIGIN
+      // would re-introduce the PR-A1 post-merge blocker (commit 8d9c0ce). See
+      // GH #622 for the related pre-existing two-write crash window.
       doc.transact(() => {
         for (const ann of refreshed) {
           if (!ann.textSnapshot) continue;
