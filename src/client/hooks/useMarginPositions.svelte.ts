@@ -17,6 +17,83 @@ export interface CreateMarginPositionsOpts {
   getEnabled: () => boolean;
 }
 
+export interface ComputeResult {
+  positions: Map<string, number>;
+  /** Annotations whose range resolved (i.e. we tried to read coords). */
+  attempted: number;
+  /** Of those attempted, how many threw from coordsAtPos. */
+  thrown: number;
+}
+
+/**
+ * Pure helper: compute per-annotation top offsets relative to a layer.
+ *
+ * Extracted from `createMarginPositions` so the loop body is unit-testable
+ * without a live Tiptap view or Svelte effect root.
+ *
+ * - Annotations whose range fails to resolve are silently skipped (not counted
+ *   as attempted — they're not anchor-staleness signals).
+ * - `coordsAtPos` throws on stale/mid-transaction positions → counted as
+ *   `thrown` so the caller can detect systemic failure (e.g. detached view).
+ * - Non-finite `coords.top` (NaN/Infinity from degenerate layout, e.g.
+ *   `display: none` ancestor) is skipped — it would render as `top: NaNpx`
+ *   and defeat the `mapsEqual` tolerance check (NaN-vs-anything is always
+ *   "unequal", causing per-frame re-render storms).
+ */
+export function _computeNextPositionsForTesting(
+  annotations: readonly Annotation[],
+  resolveRange: (ann: Annotation) => { from: number; to: number } | null,
+  coordsAtPos: (pos: number) => { top: number },
+  layerTop: number,
+): ComputeResult {
+  const positions = new Map<string, number>();
+  let attempted = 0;
+  let thrown = 0;
+  for (const ann of annotations) {
+    const range = resolveRange(ann);
+    if (!range) continue;
+    attempted++;
+    try {
+      const coords = coordsAtPos(range.from);
+      if (!Number.isFinite(coords.top)) continue;
+      positions.set(ann.id, coords.top - layerTop);
+    } catch {
+      thrown++;
+    }
+  }
+  return { positions, attempted, thrown };
+}
+
+export interface Scheduler {
+  schedule: () => void;
+  cancel: () => void;
+}
+
+/**
+ * rAF-throttled callback runner. One pending frame at a time; `cancel`
+ * aborts the pending frame without running the callback.
+ *
+ * Extracted for unit-testability — `vi.useFakeTimers({ toFake:
+ * ['requestAnimationFrame', 'cancelAnimationFrame'] })` can drive it.
+ */
+export function createScheduler(fn: () => void): Scheduler {
+  let rafId: number | null = null;
+  return {
+    schedule(): void {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        fn();
+      });
+    },
+    cancel(): void {
+      if (rafId === null) return;
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    },
+  };
+}
+
 /**
  * Computes vertical offsets for margin-view annotation bubbles.
  *
@@ -28,15 +105,17 @@ export interface CreateMarginPositionsOpts {
  * Failure modes handled:
  *   - `coordsAtPos` throws on positions inside deleted/mid-transaction nodes →
  *     that annotation is skipped for the frame, others still render.
+ *   - 100% of attempted anchors throwing → systemic (detached view, post-reload
+ *     Y.Doc swap); emit a single warn per recompute.
+ *   - Non-finite coords → skipped before the mapsEqual tolerance can be
+ *     defeated by NaN comparisons.
  *   - Effect depth: the last-value guard (`mapsEqual`) prevents floating-point
  *     jitter from re-triggering `$effect`s downstream.
  */
 export function createMarginPositions(opts: CreateMarginPositionsOpts): MarginPositions {
   let byId = $state<Map<string, number>>(new Map());
-  let scheduled = false;
 
   function recompute(): void {
-    scheduled = false;
     if (!opts.getEnabled()) {
       if (byId.size > 0) byId = new Map();
       return;
@@ -50,28 +129,25 @@ export function createMarginPositions(opts: CreateMarginPositionsOpts): MarginPo
     }
 
     const layerTop = layer.getBoundingClientRect().top;
-    const next = new Map<string, number>();
-    for (const ann of opts.getAnnotations()) {
-      const range = annotationToPmRange(ann, editor.state.doc, ydoc);
-      if (!range) continue;
-      try {
-        const coords = editor.view.coordsAtPos(range.from);
-        next.set(ann.id, coords.top - layerTop);
-      } catch {
-        // Stale or mid-transaction position — skip this annotation for now.
-        // Next transaction or layout change will retry.
-      }
+    const annotations = opts.getAnnotations();
+    const { positions, attempted, thrown } = _computeNextPositionsForTesting(
+      annotations,
+      (ann) => annotationToPmRange(ann, editor.state.doc, ydoc),
+      (pos) => editor.view.coordsAtPos(pos),
+      layerTop,
+    );
+
+    if (attempted > 0 && thrown === attempted) {
+      console.warn(
+        `[margin] coordsAtPos threw for all ${attempted} annotations — view may be detached`,
+      );
     }
 
-    if (mapsEqual(byId, next)) return;
-    byId = next;
+    if (mapsEqual(byId, positions)) return;
+    byId = positions;
   }
 
-  function schedule(): void {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(recompute);
-  }
+  const scheduler = createScheduler(recompute);
 
   // Wire/teardown listeners when editor or layer becomes available (or disabled flips).
   $effect(() => {
@@ -80,25 +156,25 @@ export function createMarginPositions(opts: CreateMarginPositionsOpts): MarginPo
     const layer = opts.getLayerEl();
     if (!editor || !layer) return;
 
-    const onTx = (): void => schedule();
+    const onTx = (): void => scheduler.schedule();
     editor.on("transaction", onTx);
 
-    const ro = new ResizeObserver(() => schedule());
+    const ro = new ResizeObserver(() => scheduler.schedule());
     ro.observe(layer);
 
-    schedule();
+    scheduler.schedule();
 
     return () => {
       editor.off("transaction", onTx);
       ro.disconnect();
+      scheduler.cancel();
     };
   });
 
   // Recompute when the annotation set changes (additions, deletions, edits).
   $effect(() => {
-    // Touch the annotations array so this effect tracks its identity.
     void opts.getAnnotations();
-    schedule();
+    scheduler.schedule();
   });
 
   return {
