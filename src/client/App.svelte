@@ -1040,9 +1040,27 @@ const tutorial = createTutorial(
     <!-- Positioning layer for margin annotation bubbles (#649). The layer
          wraps editor content so its block height matches the editor's, and
          scroll sync between text and bubbles is free (both live inside the
-         same scrolling block). When marginView is off, the layer is a
-         transparent passthrough. -->
-    <div bind:this={marginLayerEl} style="position: relative;">
+         same scrolling block).
+
+         INVARIANT 1 — no re-bind: this <div> must remain mounted across
+         marginView toggles. `marginLayerEl` is a $state ref read inside
+         useMarginPositions's $effect, which subscribes; re-binding via
+         {#if}/{#key} would cause listener teardown/rebuild storms (the
+         feedback_svelte_state_bind_this_loop pattern). Use `display:
+         contents` when off — wrapper is layout-invisible, so default-off
+         users get the master-branch layout with no new containing block,
+         and the bind stays stable.
+
+         INVARIANT 2 — getEnabled() short-circuit ordering: recompute()
+         reads layer.getBoundingClientRect() ONLY after the getEnabled()
+         early-return. `display: contents` elements return a zero-size
+         rect, so bypassing that guard would silently produce
+         layerTop=0 and page-relative bubble offsets. Don't move the
+         guard. -->
+    <div
+      bind:this={marginLayerEl}
+      style={settingsState.settings.marginView ? "position: relative;" : "display: contents;"}
+    >
       <!-- DocxPageContainer wraps Editor for .docx; format is stable per activeTab.id key guard —
            both branches share the same onEditorReady to update the editor ref -->
       {#if activeTab?.format === "docx"}
