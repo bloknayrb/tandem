@@ -6,6 +6,7 @@ import {
   TANDEM_MODE_DEFAULT,
   Y_MAP_AUTHORSHIP,
   Y_MAP_AWARENESS,
+  Y_MAP_CLAUDE,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
@@ -543,7 +544,7 @@ export function registerDocumentTools(server: McpServer): void {
           const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
           doc.transact(
             () =>
-              awarenessMap.set("claude", {
+              awarenessMap.set(Y_MAP_CLAUDE, {
                 status: text,
                 timestamp: Date.now(),
                 active: true,

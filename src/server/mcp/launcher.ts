@@ -83,19 +83,3 @@ export function launchClaude(): { status: string; pid?: number } {
   console.error(`[Launcher] Claude Code launched (pid: ${pid})`);
   return { status: "launched", pid };
 }
-
-/** Kill the Claude Code process (called on server shutdown or doc close). */
-export function killClaude(): void {
-  if (claudeProcess && !claudeProcess.killed) {
-    console.error(`[Launcher] Killing Claude Code (pid: ${claudeProcess.pid})`);
-    try {
-      claudeProcess.kill("SIGTERM");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ESRCH") {
-        console.error("[Launcher] Failed to kill Claude process:", err);
-      }
-    }
-    claudeProcess = null;
-  }
-}

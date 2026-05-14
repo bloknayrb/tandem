@@ -24,7 +24,7 @@ export interface Action {
 }
 
 // $state-backed Map so derived consumers react to add/remove.
-// We expose a plain snapshot array via getActions() to avoid leaking the Map.
+// Consumers read via getActionsMap() (ReadonlyMap) to avoid leaking write access.
 let actionsMap = $state(new Map<string, Action>());
 
 export interface RegisterOptions {
@@ -44,25 +44,6 @@ export function registerAction(action: Action, opts: RegisterOptions = {}): bool
   }
   actionsMap = new Map(actionsMap).set(action.id, action);
   return true;
-}
-
-export function unregisterAction(id: string): void {
-  if (!actionsMap.has(id)) return;
-  const next = new Map(actionsMap);
-  next.delete(id);
-  actionsMap = next;
-}
-
-export function unregisterByPrefix(prefix: string): void {
-  const toRemove = [...actionsMap.keys()].filter((k) => k.startsWith(prefix));
-  if (toRemove.length === 0) return;
-  const next = new Map(actionsMap);
-  for (const id of toRemove) next.delete(id);
-  actionsMap = next;
-}
-
-export function getActions(): Action[] {
-  return [...actionsMap.values()];
 }
 
 export function getActionsMap(): ReadonlyMap<string, Action> {

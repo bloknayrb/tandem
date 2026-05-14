@@ -126,6 +126,7 @@ describe("tandem_editAnnotation", () => {
     });
     const parsed = parseResult(result as any);
     expect(parsed.message).toContain("Cannot edit");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
 
     // Content should be unchanged
     const after = map.get(id) as Annotation;
@@ -140,6 +141,7 @@ describe("tandem_editAnnotation", () => {
     const result = await client.callTool({ name: "tandem_editAnnotation", arguments: { id } });
     const parsed = parseResult(result as any);
     expect(parsed.message).toContain("No editable fields");
+    expect(parsed.code).toBe("INVALID_ARGUMENT");
   });
 
   it("rejects when no editable fields provided for comment with suggestedText", async () => {
@@ -163,6 +165,7 @@ describe("tandem_editAnnotation", () => {
     });
     const parsed = parseResult(result as any);
     expect(parsed.message).toContain("not found");
+    expect(parsed.code).toBe("NOT_FOUND");
   });
 
   it("preserves immutable fields when editing", async () => {
@@ -215,6 +218,7 @@ describe("tandem_editAnnotation", () => {
     });
     const parsed = parseResult(result as any);
     expect(parsed.message).toContain("Only comments support suggestedText");
+    expect(parsed.code).toBe("INVALID_ARGUMENT");
   });
 });
 

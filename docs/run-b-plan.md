@@ -176,7 +176,7 @@ New tokens (violet, distinct from indigo `--tandem-accent`):
 **Rewire:**
 - `src/client/editor/extensions/annotation.ts` lines 63-65: `var(--tandem-accent-bg)` → `var(--tandem-suggestion-bg)`, wavy underline `var(--tandem-accent)` → `var(--tandem-suggestion)`
 - `src/client/panels/AnnotationCard.tsx` `getBorderColor()` line 62: suggestion branch → `return "var(--tandem-suggestion)"`
-- `src/client/utils/colors.ts`: Add `suggestionStateColors` export following the existing `errorStateColors`/`successStateColors`/`warningStateColors` pattern: `{ background: "var(--tandem-suggestion-bg)", border: "var(--tandem-suggestion-border)", color: "var(--tandem-suggestion-fg-strong)" }`
+- `src/client/utils/colors.ts`: Historical — this run-b plan called for adding `suggestionStateColors` alongside `errorStateColors` / `successStateColors` / `warningStateColors`. Audit v2 (PR #621) found those three had zero consumers and deleted them, keeping only `warningStateColors`. If a future surface needs the full set, re-add following the same shape: `{ background: "var(--tandem-{name}-bg)", border: "var(--tandem-{name}-border)", color: "var(--tandem-{name}-fg-strong)" }`.
 
 **Note:** `CLAUDE_PRESENCE_COLOR` does NOT exist in the codebase. Issue description is outdated on this — skip that part entirely.
 

@@ -127,6 +127,18 @@ describe("errorCodeToHttpStatus", () => {
     expect(errorCodeToHttpStatus("EACCES")).toBe(403);
   });
 
+  it("maps NOT_FOUND to 404 (annotation tool codes)", () => {
+    expect(errorCodeToHttpStatus("NOT_FOUND")).toBe(404);
+  });
+
+  it("maps INVALID_ARGUMENT to 400 (annotation tool codes)", () => {
+    expect(errorCodeToHttpStatus("INVALID_ARGUMENT")).toBe(400);
+  });
+
+  it("maps ANNOTATION_RESOLVED to 409 (annotation tool codes)", () => {
+    expect(errorCodeToHttpStatus("ANNOTATION_RESOLVED")).toBe(409);
+  });
+
   it("maps unknown errors to 500", () => {
     expect(errorCodeToHttpStatus(undefined)).toBe(500);
     expect(errorCodeToHttpStatus("UNKNOWN")).toBe(500);

@@ -475,7 +475,7 @@ export function registerAnnotationTools(server: McpServer): void {
       if (!da) return noDocumentError();
 
       const raw = da.map.get(id) as Annotation | undefined;
-      if (!raw) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+      if (!raw) return mcpError("NOT_FOUND", `Annotation ${id} not found`);
 
       const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
       const updated = {
@@ -502,7 +502,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
       const result = removeAnnotationById(da.ydoc, da.map, da.filePath, id);
-      if (!result.ok) return mcpError("INVALID_RANGE", result.error);
+      if (!result.ok) return mcpError("NOT_FOUND", result.error);
       return mcpSuccess({ removed: true, id });
     }),
   );
@@ -527,25 +527,25 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!da) return noDocumentError();
 
         const raw = da.map.get(id) as Annotation | undefined;
-        if (!raw) return mcpError("INVALID_RANGE", `Annotation ${id} not found`);
+        if (!raw) return mcpError("NOT_FOUND", `Annotation ${id} not found`);
 
         // Sanitize legacy shapes before editing
         const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
 
         if (ann.status !== "pending") {
-          return mcpError("INVALID_RANGE", `Cannot edit a ${ann.status} annotation`);
+          return mcpError("ANNOTATION_RESOLVED", `Cannot edit a ${ann.status} annotation`);
         }
 
         if (content === undefined && newText === undefined && reason === undefined) {
           return mcpError(
-            "INVALID_RANGE",
+            "INVALID_ARGUMENT",
             "No editable fields provided. Use content, newText, or reason.",
           );
         }
 
         if (newText !== undefined && ann.type !== "comment") {
           return mcpError(
-            "INVALID_RANGE",
+            "INVALID_ARGUMENT",
             `Cannot set replacement text on a ${ann.type} annotation. Only comments support suggestedText.`,
           );
         }

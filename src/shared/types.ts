@@ -32,6 +32,9 @@ export const ToolErrorCodeSchema = z.enum([
   "FILE_NOT_FOUND",
   "NO_DOCUMENT",
   "INVALID_RANGE",
+  "INVALID_ARGUMENT",
+  "NOT_FOUND",
+  "ANNOTATION_RESOLVED",
   "FORMAT_ERROR",
   "PERMISSION_DENIED",
 ]);
@@ -52,7 +55,6 @@ export const MONITOR_CONNECT_FAILED: ChannelErrorCode = "MONITOR_CONNECT_FAILED"
 export type AnnotationType = z.infer<typeof AnnotationTypeSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
 export type TandemMode = z.infer<typeof TandemModeSchema>;
-export type WidthMode = "reading" | "full";
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 export type ReplyAuthor = z.infer<typeof ReplyAuthorSchema>;
@@ -217,13 +219,6 @@ export interface DocumentInfo {
   readOnly: boolean;
 }
 
-export interface ServerInfo {
-  port: number;
-  url: string;
-  pid: number;
-  startedAt: number;
-}
-
 export interface ToolSuccess<T = unknown> {
   error: false;
   data: T;
@@ -238,15 +233,6 @@ export interface ToolError {
 }
 
 export type ToolResponse<T = unknown> = ToolSuccess<T> | ToolError;
-
-export interface AwarenessState {
-  user: string;
-  color: string;
-  cursor?: { from: number; to: number };
-  status?: string;
-  isTyping?: boolean;
-  lastActivity?: number;
-}
 
 /** Claude's awareness state as stored in Y.Map('awareness') key 'claude' */
 export interface ClaudeAwareness {

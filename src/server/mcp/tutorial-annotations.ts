@@ -82,7 +82,10 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
 
       const annotation = {
         id: def.id,
-        author: "claude" as const,
+        // Notes are user-private (ADR-027); Claude can't author user-private content.
+        // Comments and highlights are seeded as if Claude wrote them so the user
+        // sees the cross-author authorship indicator.
+        author: def.type === "note" ? ("user" as const) : ("claude" as const),
         type: def.type,
         range: result.range,
         relRange: result.relRange,

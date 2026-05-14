@@ -82,11 +82,15 @@ export function createTutorial(
     }
   });
 
-  // Step 1: detect user-authored annotation
+  // Step 1: detect user-authored annotation (excluding the tutorial's own
+  // seeded note, which is author='user' per ADR-027 since notes are private
+  // and Claude can't author user content)
   $effect(() => {
     if (!tutorialActive || currentStep !== 1) return;
     const annotations = getAnnotations();
-    const hasUserAnnotation = annotations.some((a) => a.author === "user");
+    const hasUserAnnotation = annotations.some(
+      (a) => a.author === "user" && !a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX),
+    );
     if (hasUserAnnotation) {
       stepAdvancedAt = Date.now();
       currentStep = 2;

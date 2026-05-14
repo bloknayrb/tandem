@@ -149,7 +149,3 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   }
   return hocuspocusInstance;
 }
-
-export function getHocuspocus(): Hocuspocus | null {
-  return hocuspocusInstance;
-}

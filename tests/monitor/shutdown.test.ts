@@ -31,7 +31,7 @@ describe("graceful shutdown", () => {
       throw new Error("exit");
     }) as never);
     try {
-      await mod.shutdownForTests("SIGINT");
+      await mod.shutdownMonitor("SIGINT");
     } catch {
       // exit thrown is expected
     }
@@ -83,7 +83,7 @@ describe("graceful shutdown", () => {
     }) as never);
 
     let exited = false;
-    const shutdown = mod.shutdownForTests("SIGINT").catch(() => {
+    const shutdown = mod.shutdownMonitor("SIGINT").catch(() => {
       exited = true;
     });
 
