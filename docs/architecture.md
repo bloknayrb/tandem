@@ -747,7 +747,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 
 - `index.ts` -- CLI entrypoint for the `tandem` global command. Handles `--help`, `--version`, `setup`, and default start. Top-level error handler with reinstall guidance.
 - `setup.ts` -- `tandem setup` command. Auto-detects Claude Code (`~/.claude/`) and Claude Desktop (platform-specific paths). Writes MCP config atomically (EXDEV fallback for Windows cross-drive). Exports `buildMcpEntries`, `detectTargets`, `applyConfig`.
-- `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with `TANDEM_OPEN_BROWSER=1`, forwards signals, pre-validates server entry point exists.
+- `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with the user environment, forwards signals, pre-validates server entry point exists.
 
 ### Channel Shim (`src/channel/`)
 

@@ -129,7 +129,7 @@ async function main() {
     ...process.env,
     TANDEM_APP_DATA_DIR: tmpDir,
     TANDEM_NO_SAMPLE: "1",
-    TANDEM_OPEN_BROWSER: "0",
+    TANDEM_TAURI_SIDECAR: "1",
     TANDEM_MCP_PORT: "3479",
     TANDEM_PORT: "3478",
   };

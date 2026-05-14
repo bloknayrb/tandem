@@ -771,7 +771,7 @@ async fn start_sidecar(
             .sidecar("node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
             .args([server_js_str.as_str()])
-            .env("TANDEM_OPEN_BROWSER", "0")
+            .env("TANDEM_TAURI_SIDECAR", "1")
             .env("TANDEM_DATA_DIR", app_data_dir_str.as_str());
 
         if let Some(ref token) = auth_token {

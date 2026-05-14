@@ -68,18 +68,17 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     quiet: true, // stdout is the MCP wire — suppress the startup banner
 
     async onConnect({ request, documentName }) {
-      // Origin validation: reject connections not from localhost (prevents DNS rebinding)
+      // Origin validation: reject connections not from 127.0.0.1 / tauri.localhost (prevents DNS rebinding).
       const origin = request?.headers?.origin;
       if (!origin) {
         console.error("[Hocuspocus] Rejected connection: missing Origin header");
         throw new Error("Connection rejected: missing origin header");
       }
       const url = new URL(origin);
-      if (
-        url.hostname !== "localhost" &&
-        url.hostname !== "127.0.0.1" &&
-        url.hostname !== TAURI_HOSTNAME
-      ) {
+      // Narrowed in #477 PR 2: the `localhost` hostname is no longer accepted on its
+      // own; only the Tauri WebView (`tauri.localhost`) and the sidecar / dev fetch
+      // path (`127.0.0.1`). Mirrors `isHostAllowed` / CORS in api-routes.ts.
+      if (url.hostname !== "127.0.0.1" && url.hostname !== TAURI_HOSTNAME) {
         console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
         throw new Error("Connection rejected: invalid origin");
       }
