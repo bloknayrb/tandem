@@ -131,6 +131,7 @@ function handleTabTrap(e: KeyboardEvent) {
     role="presentation"
     data-testid="reply-thread-overlay"
     onclick={onClose}
+    onkeydown={() => {}}
     style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000;"
   >
     <div
