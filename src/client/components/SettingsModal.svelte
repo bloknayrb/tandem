@@ -177,6 +177,12 @@ let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
 
 const resolvedTabs = $derived(tabs.length > 0 ? tabs : DEFAULT_SETTINGS_TABS);
+// Kept as `$state` (not `$derived`) because user clicks must mutate it
+// (see the nav button's `onclick` below). The default-seed only matters
+// when the caller passes a custom `tabs` prop whose first id differs from
+// "appearance"; the snap-effect below realigns activeTabId on every change
+// to `activeTab.id` so the initial divergence flagged in PR #671 review
+// can't surface — see comment above the $effect.
 let activeTabId = $state<string>(DEFAULT_SETTINGS_TABS[0].id);
 // Always settle on a tab that exists in the current registry — handles the
 // case where a caller passes a tabs prop that omits the previously active id.
@@ -193,11 +199,27 @@ const tabContext = $derived<SettingsTabContext>({
   reconnectAttempts,
 });
 
-// Initial focus on open is handled inside the onMount block below alongside
-// the Escape listener — keeping them in one mount callback avoids duplicate
-// mount hooks. Subsequent opens re-focus via the open-watching $effect that
-// uses untrack() to avoid registering modalEl as a dependency
-// (feedback_svelte_state_bind_this_loop).
+// Keep `activeTabId` in sync with the resolved tab. Two cases matter:
+//   1. Initial mount with a custom `tabs` prop whose first id isn't
+//      "appearance" — without this, `activeTabId` ("appearance") and
+//      `activeTab.id` (first custom tab) diverge until the user clicks.
+//   2. The caller swaps the `tabs` prop and the previously active id is
+//      no longer present — `activeTab` falls back to `resolvedTabs[0]`;
+//      this effect realigns `activeTabId` so `aria-current` matches.
+// Guarded with an inequality check to avoid an infinite reactive loop.
+$effect(() => {
+  if (activeTab && activeTab.id !== activeTabId) {
+    activeTabId = activeTab.id;
+  }
+});
+
+// Focus management lives in the open-watching $effect below: Svelte runs
+// effects on mount and again on every dependency change, so the same effect
+// handles mount-with-open=true, every subsequent false→true transition, and
+// the returnFocusEl?.focus() cleanup. modalEl is read inside untrack() to
+// avoid the $state + bind:this + $effect reactive loop
+// (feedback_svelte_state_bind_this_loop). The onMount block further down
+// only owns the document-level Escape listener.
 
 $effect(() => {
   if (!open) return;
@@ -241,7 +263,6 @@ $effect(() => {
 // pattern (feedback_svelte_prop_in_effect_cleanup) where reading a prop in
 // cleanup gets the CURRENT value, causing null.off() retry storms.
 onMount(() => {
-  if (open) modalEl?.focus();
   const escapeHandler = (e: KeyboardEvent) => {
     if (e.key !== "Escape") return;
     if (!open) return;
@@ -315,9 +336,24 @@ async function handleViewChangelog(): Promise<void> {
 </script>
 
 {#if open}
+  <!--
+    Scrim a11y: role="button" + tabindex="-1" + aria-label gives svelte-check
+    a path it can verify without firing the noninteractive-click rule, while
+    Escape (in the onMount handler above) covers the keyboard dismiss case.
+    tabindex="-1" keeps the scrim out of the tab order so the focus trap
+    inside .settings-modal still works correctly. Per PR #671 review.
+  -->
   <div
-    aria-hidden="true"
+    role="button"
+    tabindex="-1"
+    aria-label="Close settings"
     onclick={onClose}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onClose();
+      }
+    }}
     data-testid="settings-modal-scrim"
     style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 9998;"
   ></div>
