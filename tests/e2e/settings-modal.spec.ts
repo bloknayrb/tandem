@@ -78,7 +78,8 @@ test("scrim click closes the SettingsModal", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await openSettingsModal(page);
 
-  await page.locator(SCRIM).click();
+  // Click a corner of the scrim — the centre is occluded by the modal dialog.
+  await page.locator(SCRIM).click({ position: { x: 10, y: 10 } });
   await expect(page.locator(MODAL)).toHaveCount(0);
 });
 
