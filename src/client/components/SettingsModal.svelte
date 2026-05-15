@@ -35,16 +35,24 @@ export interface SettingsTab {
   id: string;
   label: string;
   icon: string;
-  component: Component<SettingsTabContext>;
+  /**
+   * Widened to `Partial<SettingsTabContext>` so the registry accepts both the
+   * new `SettingsTabContext`-consuming tab bodies (Collaboration, Claude
+   * Code/Cowork, Shortcuts, About) and the legacy narrower settings panels
+   * (`AppearanceSettings`, `EditorSettings`, `NetworkSettings`,
+   * `AccessibilitySettings`) which declare their own Props subsets. The modal
+   * always passes the full context shape at runtime — tabs can rely on every
+   * field being present even though the type says optional.
+   */
+  component: Component<Partial<SettingsTabContext>>;
 }
 </script>
 
 <script lang="ts">
 import { onMount, untrack } from "svelte";
 import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
-import { API_OPEN } from "../../shared/api-paths";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
-import { API_BASE } from "../utils/fileUpload";
+import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
@@ -64,65 +72,70 @@ const FOCUSABLE_SELECTOR =
  * Wave 2 will retire the popover; any Wave 2 additions land here as new
  * entries (or via the `tabs` prop) without touching this default array.
  *
- * **About the `as unknown as Component<SettingsTabContext>` casts:** the
- * existing settings sub-components (`AppearanceSettings`, `EditorSettings`,
+ * **About the `as unknown as Component<Partial<SettingsTabContext>>` casts:**
+ * the legacy settings sub-components (`AppearanceSettings`, `EditorSettings`,
  * `NetworkSettings`, `AccessibilitySettings`) declare narrower `Props`
- * interfaces — they only read a subset of the context fields. Svelte 5
- * silently drops unknown props when a component uses non-rest destructuring
- * in `$props()`, which is the desired runtime behavior: pass the uniform
- * context to every tab and let each component consume what it needs. The
- * casts are load-bearing; do not "fix" them by widening the sub-component
- * Props interfaces — that would force every Wave 2 settings panel to
- * declare fields it doesn't read.
+ * interfaces — they only read a subset of the context fields, and they
+ * declare those fields as non-optional. That structural mismatch makes them
+ * unassignable to `Component<Partial<SettingsTabContext>>` directly. Svelte
+ * 5 silently drops unknown props when a component uses non-rest
+ * destructuring in `$props()`, which is the desired runtime behavior: pass
+ * the uniform context to every tab and let each component consume what it
+ * needs. The casts are load-bearing; do not "fix" them by widening the
+ * sub-component Props interfaces — that would force every Wave 2 settings
+ * panel to declare fields it doesn't read. The new tab bodies
+ * (`SettingsCollaborationTab`, `SettingsClaudeCodeTab`,
+ * `SettingsShortcutsTab`, `SettingsAboutTab`) accept
+ * `Partial<SettingsTabContext>` directly and do not need a cast.
  */
 export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
   {
     id: "appearance",
     label: "Appearance",
     icon: "M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z",
-    component: AppearanceSettings as unknown as Component<SettingsTabContext>,
+    component: AppearanceSettings as unknown as Component<Partial<SettingsTabContext>>,
   },
   {
     id: "editor",
     label: "Editor",
     icon: "M4 4h11M4 9h16M4 14h11M4 19h16",
-    component: EditorSettings as unknown as Component<SettingsTabContext>,
+    component: EditorSettings as unknown as Component<Partial<SettingsTabContext>>,
   },
   {
     id: "network",
     label: "Network",
     icon: "M3 12h18M3 12a9 9 0 0 1 18 0M3 12a9 9 0 0 0 18 0M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18",
-    component: NetworkSettings as unknown as Component<SettingsTabContext>,
+    component: NetworkSettings as unknown as Component<Partial<SettingsTabContext>>,
   },
   {
     id: "accessibility",
     label: "Accessibility",
     icon: "M12 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM4 9h16M9 9v5l-2 7M15 9v5l2 7M9 14h6",
-    component: AccessibilitySettings as unknown as Component<SettingsTabContext>,
+    component: AccessibilitySettings as unknown as Component<Partial<SettingsTabContext>>,
   },
   {
     id: "collaboration",
     label: "Collaboration",
     icon: "M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM21 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11",
-    component: SettingsCollaborationTab as unknown as Component<SettingsTabContext>,
+    component: SettingsCollaborationTab,
   },
   {
     id: "claude-code",
     label: "Claude Code/Cowork",
     icon: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z",
-    component: SettingsClaudeCodeTab as unknown as Component<SettingsTabContext>,
+    component: SettingsClaudeCodeTab,
   },
   {
     id: "shortcuts",
     label: "Shortcuts",
     icon: "M3 7h2v2H3V7Zm0 4h2v2H3v-2Zm0 4h2v2H3v-2Zm4-8h2v2H7V7Zm0 4h2v2H7v-2Zm0 4h10v2H7v-2Zm4-8h10v2H11V7Zm0 4h6v2h-6v-2Zm8 0h2v2h-2v-2Z",
-    component: SettingsShortcutsTab as unknown as Component<SettingsTabContext>,
+    component: SettingsShortcutsTab,
   },
   {
     id: "about",
     label: "About",
     icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v6m0 4h.01",
-    component: SettingsAboutTab as unknown as Component<SettingsTabContext>,
+    component: SettingsAboutTab,
   },
 ];
 
@@ -164,6 +177,12 @@ let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
 
 const resolvedTabs = $derived(tabs.length > 0 ? tabs : DEFAULT_SETTINGS_TABS);
+// Kept as `$state` (not `$derived`) because user clicks must mutate it
+// (see the nav button's `onclick` below). The default-seed only matters
+// when the caller passes a custom `tabs` prop whose first id differs from
+// "appearance"; the snap-effect below realigns activeTabId on every change
+// to `activeTab.id` so the initial divergence flagged in PR #671 review
+// can't surface — see comment above the $effect.
 let activeTabId = $state<string>(DEFAULT_SETTINGS_TABS[0].id);
 // Always settle on a tab that exists in the current registry — handles the
 // case where a caller passes a tabs prop that omits the previously active id.
@@ -180,15 +199,27 @@ const tabContext = $derived<SettingsTabContext>({
   reconnectAttempts,
 });
 
-// Initial focus on open. We deliberately avoid reading the bound modalEl
-// from inside an $effect — that combination produces the
-// $state+bind:this+$effect reactive loop (feedback_svelte_state_bind_this_loop).
-// onMount fires only once after the first DOM commit, so it's safe to read
-// modalEl there; on subsequent opens we re-focus via the open-watching
-// effect that uses untrack() to avoid registering modalEl as a dependency.
-onMount(() => {
-  if (open) modalEl?.focus();
+// Keep `activeTabId` in sync with the resolved tab. Two cases matter:
+//   1. Initial mount with a custom `tabs` prop whose first id isn't
+//      "appearance" — without this, `activeTabId` ("appearance") and
+//      `activeTab.id` (first custom tab) diverge until the user clicks.
+//   2. The caller swaps the `tabs` prop and the previously active id is
+//      no longer present — `activeTab` falls back to `resolvedTabs[0]`;
+//      this effect realigns `activeTabId` so `aria-current` matches.
+// Guarded with an inequality check to avoid an infinite reactive loop.
+$effect(() => {
+  if (activeTab && activeTab.id !== activeTabId) {
+    activeTabId = activeTab.id;
+  }
 });
+
+// Focus management lives in the open-watching $effect below: Svelte runs
+// effects on mount and again on every dependency change, so the same effect
+// handles mount-with-open=true, every subsequent false→true transition, and
+// the returnFocusEl?.focus() cleanup. modalEl is read inside untrack() to
+// avoid the $state + bind:this + $effect reactive loop
+// (feedback_svelte_state_bind_this_loop). The onMount block further down
+// only owns the document-level Escape listener.
 
 $effect(() => {
   if (!open) return;
@@ -223,16 +254,36 @@ $effect(() => {
   };
 });
 
-// Escape + focus trap. Identical wrap-around behavior to SettingsPopover —
-// re-query focusables on every Tab press because the 640px breakpoint
-// reflows the sidebar into a row, which changes the focusable set.
+// Escape close — registered once via onMount with a `document` listener so we
+// stop propagation BEFORE other window-level handlers (e.g. command palette,
+// find/replace bar) react to the same Escape. The handler reads `open`,
+// `modalEl`, and `onClose` through the closure (they're tracked $state /
+// props), so we don't need to re-register on open changes. Specifically NOT
+// wired via `$effect` with prop-reading cleanup — that's the v0.11.2 freeze
+// pattern (feedback_svelte_prop_in_effect_cleanup) where reading a prop in
+// cleanup gets the CURRENT value, causing null.off() retry storms.
+onMount(() => {
+  const escapeHandler = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    if (!open) return;
+    const target = e.target as Node | null;
+    // Only handle when focus is inside the modal — avoids stealing Escape
+    // from unrelated surfaces that share the document.
+    if (!modalEl || !target || !modalEl.contains(target)) return;
+    e.stopPropagation();
+    onClose();
+  };
+  document.addEventListener("keydown", escapeHandler);
+  return () => document.removeEventListener("keydown", escapeHandler);
+});
+
+// Tab focus-trap — open-gated because focus wrap-around only matters while
+// the modal is mounted and visible. Re-queries focusables on every Tab press
+// because the 640px breakpoint reflows the sidebar into a row, which changes
+// the focusable set.
 $effect(() => {
   if (!open) return;
   const handler = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      onClose();
-      return;
-    }
     if (e.key !== "Tab" || !modalEl) return;
     const focusables = modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
     if (focusables.length === 0) return;
@@ -270,38 +321,39 @@ async function handleViewChangelog(): Promise<void> {
   }
   changelogLoading = true;
   changelogError = null;
-  try {
-    const res = await fetch(`${API_BASE}${API_OPEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath, readOnly: true }),
-    });
-    if (!res.ok) {
-      let msg = "Failed to open changelog.";
-      try {
-        const data = (await res.json()) as { message?: string };
-        if (data.message) msg = data.message;
-      } catch {
-        // ignore JSON parse failure
-      }
-      if (res.status === 404) msg = "Changelog file not found.";
-      changelogError = msg;
-      return;
-    }
+  const result = await openServerPath(filePath, {
+    readOnly: true,
+    notFoundMessage: "Changelog file not found.",
+    failureMessage: "Failed to open changelog.",
+  });
+  changelogLoading = false;
+  if (result.ok) {
     onClose();
-  } catch (err) {
-    console.warn("[Tandem] Failed to open changelog:", err);
-    changelogError = "Server unavailable.";
-  } finally {
-    changelogLoading = false;
+  } else {
+    changelogError = result.error;
   }
 }
 </script>
 
 {#if open}
+  <!--
+    Scrim a11y: role="button" + tabindex="-1" + aria-label gives svelte-check
+    a path it can verify without firing the noninteractive-click rule, while
+    Escape (in the onMount handler above) covers the keyboard dismiss case.
+    tabindex="-1" keeps the scrim out of the tab order so the focus trap
+    inside .settings-modal still works correctly. Per PR #671 review.
+  -->
   <div
-    aria-hidden="true"
+    role="button"
+    tabindex="-1"
+    aria-label="Close settings"
     onclick={onClose}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onClose();
+      }
+    }}
     data-testid="settings-modal-scrim"
     style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 9998;"
   ></div>
@@ -659,6 +711,19 @@ async function handleViewChangelog(): Promise<void> {
     flex-direction: column;
     gap: var(--tandem-space-5);
     max-width: 620px;
+  }
+
+  /* Shared section-label style consumed by every tab body
+     (SettingsAboutTab, SettingsClaudeCodeTab, SettingsCollaborationTab,
+     SettingsShortcutsTab). `:global` so the class survives the scoping
+     transform applied to tab body components. */
+  :global(.settings-section-label) {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--tandem-fg);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
   @media (max-width: 640px) {

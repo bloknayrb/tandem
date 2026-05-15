@@ -2,9 +2,15 @@
 import { ACTION_GROUPS, getActionsMap } from "../../actions/registry.svelte.js";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-// Tab body components take the full context for uniformity even when they
-// don't reference settings/onUpdate. Underscore the unused destructure.
-let { settings: _settings, onUpdate: _onUpdate }: SettingsTabContext = $props();
+// Tab body components take the context for uniformity even when they don't
+// reference any fields. Avoid destructuring (freezes getters at mount —
+// feedback_svelte_getter_destructuring). Suppress unused-var lint by reading
+// the binding inside an $effect; this tab consumes no context fields today
+// but exists for future Wave 2 settings.
+let ctx: Partial<SettingsTabContext> = $props();
+$effect(() => {
+  void ctx;
+});
 
 // Static shortcuts not yet in the action registry (modifier-key / nav).
 const STATIC_SHORTCUT_ROWS = [
@@ -32,9 +38,6 @@ const registryShortcutSections = $derived.by(() => {
     rows: byGroup.get(g) ?? [],
   })).filter((s) => s.rows.length > 0);
 });
-
-const sectionLabelStyle =
-  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 <div
@@ -43,7 +46,7 @@ const sectionLabelStyle =
 >
   {#each registryShortcutSections as section (section.title)}
     <section>
-      <div style={sectionLabelStyle}>{section.title}</div>
+      <div class="settings-section-label">{section.title}</div>
       <div
         style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;"
       >
@@ -61,7 +64,7 @@ const sectionLabelStyle =
     </section>
   {/each}
   <section>
-    <div style={sectionLabelStyle}>Other</div>
+    <div class="settings-section-label">Other</div>
     <div
       style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;"
     >

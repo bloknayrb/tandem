@@ -1,12 +1,16 @@
 <script lang="ts">
-import { API_OPEN } from "../../../shared/api-paths";
 import { createAppInfo } from "../../hooks/useAppInfo.svelte";
-import { API_BASE } from "../../utils/fileUpload";
+import { openServerPath } from "../../utils/server-paths";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-let { open, settings: _settings, onUpdate: _onUpdate }: SettingsTabContext = $props();
+// Read context fields via property access (e.g. `ctx.open`) rather than
+// destructuring with `const`/`let { ... } = ctx`. Destructuring freezes the
+// getter at mount in Svelte 5 (feedback_svelte_getter_destructuring), so the
+// open flag would stall on its initial value and `createAppInfo` would never
+// see subsequent open transitions.
+let ctx: Partial<SettingsTabContext> = $props();
 
-const appInfo = createAppInfo(() => open);
+const appInfo = createAppInfo(() => ctx.open ?? false);
 let docsLoading = $state(false);
 let docsError = $state<string | null>(null);
 
@@ -18,30 +22,17 @@ async function handleViewDocumentation(): Promise<void> {
   }
   docsLoading = true;
   docsError = null;
-  try {
-    const res = await fetch(`${API_BASE}${API_OPEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath, readOnly: true }),
-    });
-    if (!res.ok) {
-      let msg = "Failed to open documentation.";
-      try {
-        const data = (await res.json()) as { message?: string };
-        if (data.message) msg = data.message;
-      } catch {
-        // ignore JSON parse failure
-      }
-      if (res.status === 404) msg = "Documentation file not found.";
-      docsError = msg;
-      return;
-    }
-  } catch (err) {
-    console.warn("[Tandem] Failed to open documentation:", err);
-    docsError = "Server unavailable.";
-  } finally {
-    docsLoading = false;
+  const result = await openServerPath(filePath, {
+    readOnly: true,
+    notFoundMessage: "Documentation file not found.",
+    failureMessage: "Failed to open documentation.",
+  });
+  docsLoading = false;
+  if (!result.ok) {
+    docsError = result.error;
   }
+  // Unlike the changelog button in SettingsModal, the documentation button
+  // keeps the modal open after a successful open.
 }
 
 const aboutRows = $derived.by(() => {
@@ -73,9 +64,6 @@ const aboutRows = $derived.by(() => {
 
   return rows;
 });
-
-const sectionLabelStyle =
-  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 <div>
@@ -99,7 +87,7 @@ const sectionLabelStyle =
   data-testid="settings-modal-app-info-footer"
   style="border-top: 1px solid var(--tandem-border); padding-top: 10px;"
 >
-  <div style={sectionLabelStyle}>About</div>
+  <div class="settings-section-label">About</div>
   {#if appInfo.loading}
     <div style="font-size: 11px; color: var(--tandem-fg-subtle);">Loading...</div>
   {:else if appInfo.info}
