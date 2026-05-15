@@ -67,8 +67,6 @@ export interface UseAnnotationReviewReturn {
   getReviewIndex: () => number;
   getReviewTargets: () => Annotation[];
   getActiveReviewAnn: () => Annotation | null;
-  /** Bind a button element here to allow programmatic focus on bulk confirm. */
-  confirmEl: HTMLButtonElement | null;
 }
 
 export function useAnnotationReview({
@@ -84,9 +82,6 @@ export function useAnnotationReview({
   let recentlyResolved = $state(new Set<string>());
   const pendingRemovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastResolvedId: string | null = null;
-
-  // Confirm button DOM binding (caller uses bind:this or sets directly)
-  const confirmEl: HTMLButtonElement | null = $state(null);
 
   // Cleanup timers on component destroy
   onDestroy(() => {
@@ -266,6 +261,5 @@ export function useAnnotationReview({
     getReviewIndex: () => reviewIndex,
     getReviewTargets,
     getActiveReviewAnn,
-    confirmEl,
   };
 }
