@@ -169,12 +169,20 @@ jobs:
       # APPLE_API_KEY_BASE64 so it round-trips cleanly through GitHub Secrets.
       # tauri-action's notarization path wants a filesystem path
       # (APPLE_API_KEY_PATH), so decode here and export the path via $GITHUB_ENV.
-      # secrets.* in `if:` is supported on same-repo workflows; env.* would not
-      # be (step-level env: blocks aren't materialized at if-evaluation time).
+      # NOTE: `secrets.*` is NOT available in step-level `if:` conditionals
+      # (only in `env:` / `with:` / `run:`). Referencing it here causes a
+      # workflow-file validation failure that prevents every job — including
+      # tag-triggered builds — from spawning. The empty-secret check now
+      # happens inside the run script, where the secret has been materialized
+      # via env.
       - name: Decode App Store Connect API key
-        if: matrix.platform == 'macos-latest' && secrets.APPLE_API_KEY_BASE64 != ''
+        if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
+          if [ -z "$APPLE_API_KEY_BASE64" ]; then
+            echo "APPLE_API_KEY_BASE64 unset — skipping notarization key decode."
+            exit 0
+          fi
           umask 077
           mkdir -p "$RUNNER_TEMP/private_keys"
           KEY_PATH="$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
