@@ -1975,13 +1975,24 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     // download+install flow below. Manual checks (tray menu) keep the dialog so
     // the user gets immediate feedback on their explicit action.
     if !manual {
-        if let Err(e) = app.emit(
+        match app.emit(
             "tandem://update-available",
             serde_json::json!({ "version": version }),
         ) {
-            log::warn!("Failed to emit update-available event: {e}");
+            Ok(()) => return,
+            Err(e) => {
+                // Emit failure leaves the banner with no signal to render
+                // against, so the user would see nothing for a known-available
+                // update. Fall through to the native dialog as a visible
+                // fallback — the same one the manual-check path uses below.
+                // Security note: `update.version` is signature-verified by
+                // tauri-plugin-updater before reaching this point, so it's
+                // safe to display.
+                log::warn!(
+                    "Failed to emit update-available event: {e}; falling back to dialog",
+                );
+            }
         }
-        return;
     }
 
     if !show_update_available_dialog(app, &version) {
