@@ -1,4 +1,6 @@
 <script lang="ts">
+import "./tandem-banner.css";
+
 interface Props {
   onDismiss: () => void;
   onRetry: () => void;
@@ -44,120 +46,5 @@ let { onDismiss, onRetry }: Props = $props();
   </button>
 </div>
 
-<style>
-.tandem-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--tandem-space-3);
-  padding: var(--tandem-space-2) var(--tandem-space-4);
-  font-size: var(--tandem-text-sm);
-  line-height: 1.4;
-  text-align: center;
-  border-bottom: 1px solid transparent;
-  /* Subtle slide-in from above on appearance */
-  animation: tandem-banner-slide-in 180ms ease-out;
-}
-
-.tandem-banner--info {
-  background: var(--tandem-info-bg);
-  color: var(--tandem-info-fg-strong);
-  border-bottom-color: var(--tandem-info-border);
-}
-
-.tandem-banner__icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: var(--tandem-info-fg-strong);
-}
-
-.tandem-banner__message {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.tandem-banner__cta {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid var(--tandem-info-border);
-  border-radius: var(--tandem-r-2);
-  color: var(--tandem-info-fg-strong);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--tandem-text-sm);
-  font-weight: 500;
-  padding: 2px var(--tandem-space-3);
-  transition: background-color 120ms ease-out, border-color 120ms ease-out;
-}
-
-.tandem-banner__cta:hover {
-  background: color-mix(in srgb, var(--tandem-info) 14%, transparent);
-}
-
-.tandem-banner__cta:focus-visible {
-  outline: 2px solid var(--tandem-info-fg-strong);
-  outline-offset: 2px;
-}
-
-.tandem-banner__dismiss {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: var(--tandem-r-2);
-  color: var(--tandem-info-fg-strong);
-  cursor: pointer;
-  padding: var(--tandem-space-1);
-  line-height: 0;
-  transition: background-color 120ms ease-out;
-}
-
-.tandem-banner__dismiss:hover {
-  background: color-mix(in srgb, var(--tandem-info) 14%, transparent);
-}
-
-.tandem-banner__dismiss:focus-visible {
-  outline: 2px solid var(--tandem-info-fg-strong);
-  outline-offset: 2px;
-}
-
-@keyframes tandem-banner-slide-in {
-  from {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tandem-banner {
-    animation: none;
-  }
-  .tandem-banner__cta,
-  .tandem-banner__dismiss {
-    transition: none;
-  }
-}
-
-@media (forced-colors: active) {
-  .tandem-banner {
-    border-bottom: 1px solid CanvasText;
-    background: Canvas;
-    color: CanvasText;
-  }
-  .tandem-banner__cta {
-    border-color: CanvasText;
-    color: CanvasText;
-  }
-  .tandem-banner__cta:hover,
-  .tandem-banner__dismiss:hover {
-    background: Highlight;
-    color: HighlightText;
-  }
-}
-</style>
+<!-- Banner styles live in src/client/components/tandem-banner.css and are
+     imported globally from <script> above — shared with UpdaterBanner. -->
