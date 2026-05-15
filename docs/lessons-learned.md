@@ -673,3 +673,24 @@ Mirror the identical step already present in `tauri-release.yml`.
 **Where this lives:** `src/client/hooks/useMarginPositions.svelte.ts` (composable), `src/client/panels/MarginColumn.svelte` (overlay container), `src/client/App.svelte` (positioning-layer wrapper around the editor branch). See PR #657 commit `49ec66f`.
 
 **Key insight:** Whenever a brief sounds like *"X should appear next to Y and follow it as the user scrolls,"* the right move is DOM nesting, not listener plumbing. The "free scroll sync" comes from putting the overlay inside the same scrolling content as its anchor — the browser does the work the listener would have done, and you only need to react to actual layout changes. Reach for this pattern for sticky-position indicators, gutter dots, inline suggestion previews, comment bubbles, and similar content-anchored UI.
+
+## 72. Narrowing CORS / Host Allowlists Requires a Three-Surface Audit
+
+**Problem:** PR #637 narrowed the server's HTTP CORS / Host allowlist and the Hocuspocus WebSocket `onConnect` origin check in lockstep — `localhost` was dropped, only `127.0.0.1` and `tauri.localhost` accepted. Server-side unit tests (`tests/server/api-middleware.test.ts`) were updated to assert the rejection. CI ran and 98 of 106 E2E tests failed.
+
+The change appears to have moved only the validator boundary, but three independent call-site surfaces also hard-coded `localhost`:
+
+1. **Playwright config + E2E tests.** `playwright.config.ts` had `baseURL: "http://localhost:5173"` and the Vite webServer URL pointed at `localhost`; every `page.goto("http://localhost:5173")` in `tests/e2e/*.spec.ts` did too. With the in-browser page origin now `localhost`, the Hocuspocus `onConnect` rejected every WebSocket. Node-side fetches in `helpers.ts` (`MCP_URL`), `scratchpad.spec.ts` (`API_BASE`), and a `page.evaluate`'d `EventSource(...)` in `settings-and-filters.spec.ts` also sent `Host: localhost:3479`, which `isHostAllowed` rejected.
+2. **Vite dev server.** Vite's `server.host` defaults to `localhost`. With Playwright then switched to `127.0.0.1`, the page origin was unambiguous only after pinning `server.host: "127.0.0.1"` so Vite binds and answers under the same hostname the test navigates to.
+3. **Client code itself.** Even after fixing 1 and 2, five tests still failed: `Ctrl+W close tab`, `Ctrl+Alt+T reopen`, `Ctrl+N switch tabs`, relative-link tab-open, scratchpad-via-palette. Cause: `src/client/utils/fileUpload.ts` exported `API_BASE = http://localhost:${DEFAULT_MCP_PORT}`; `yjsSync.svelte.ts` POSTed `/api/close` to `http://localhost:3479`; `useNotifications.svelte.ts` opened an `EventSource` on `localhost`; `ChatPanel.svelte` DELETE'd `/api/chat` on `localhost`. The page origin was now `127.0.0.1`, but the fetch URL was still `localhost`, so the request hit the server with `Host: localhost:3479` and got 403'd silently. The tab-close request was silently dropped, so the test's `toHaveCount(0)` assertion saw the tab still there.
+
+**Solution:** When narrowing a CORS or Host allowlist, before pushing the PR run:
+
+```sh
+rg "http://localhost" src/client tests/e2e playwright.config.ts vite.config.ts
+rg "ws://localhost" src/client
+```
+
+Migrate every match in lockstep with the validator change. WebSocket URLs (`ws://localhost`) can be left alone *only if* the server's WebSocket gate is origin-based (Hocuspocus's is), not Host-based — the Origin header is the page origin, not the WS URL host.
+
+**Key insight:** "Narrow the allowlist" looks like a server-only change, but every client that hard-codes a hostname is implicitly part of the allowlist contract. Server tests passing don't prove the change is safe — they prove the validator works. The validator working is exactly what makes silent client-side regressions appear.

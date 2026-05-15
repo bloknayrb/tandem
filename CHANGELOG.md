@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-<!-- Populated as PRs land. -->
+- **Browser distribution deprecated, CORS allowlist narrowed (PR #637, part of #477)** — Tauri desktop is the primary form factor; the npm-global `tandem start` path is being retired. `src/server/open-browser.ts` deleted and the browser auto-open branch removed from `mcp/server.ts`. `tandem start` now emits a deprecation warning and no longer sets `TANDEM_OPEN_BROWSER=1`. The overloaded env var is renamed to `TANDEM_TAURI_SIDECAR` at the three remaining sites (`src/server/index.ts`, `src-tauri/src/lib.rs`, `scripts/ci/stdio-smoke.mjs`). CORS / DNS-rebinding allowlists were narrowed in lockstep across HTTP (`isHostAllowed`, `LOCALHOST_ORIGIN_RE`) and WebSocket (Hocuspocus `onConnect`): the bare `localhost` hostname is rejected — only `127.0.0.1` and `tauri.localhost` are accepted. Tauri sends `Host: tauri.localhost`; the sidecar uses `127.0.0.1`. **Dev workflow note:** local dev must now be accessed at `http://127.0.0.1:5173`, not `http://localhost:5173`; Vite is pinned to `server.host: "127.0.0.1"` so the page origin is unambiguous. Client fetches (`API_BASE` in `fileUpload.ts`, notify-stream EventSource, `/api/close`, `/api/chat`) and Playwright config + E2E spec gotos / fetch helpers all migrated to `127.0.0.1` so the in-page origin and Node `Host` header both pass the narrowed allowlist.
 
 ### Deferred
 

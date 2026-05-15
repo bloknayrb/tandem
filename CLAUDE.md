@@ -23,7 +23,7 @@
 - [Agent Workflow](.claude/skills/issue-pipeline/SKILL.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-029)
-- [Lessons Learned](docs/lessons-learned.md) -- 71 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, and DOM-nested scroll sync for content-anchored overlays
+- [Lessons Learned](docs/lessons-learned.md) -- 72 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, and DOM-nested scroll sync for content-anchored overlays
 
 ## Development Workflow
 
