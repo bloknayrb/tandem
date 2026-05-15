@@ -3,7 +3,7 @@ import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import CommentThread from "./CommentThread.svelte";
-import { TEXTAREA_STYLE } from "./panel-styles";
+import { SECONDARY_BUTTON_STYLE, TEXTAREA_STYLE } from "./panel-styles";
 
 interface Props {
   open: boolean;
@@ -212,7 +212,7 @@ function handleTabTrap(e: KeyboardEvent) {
                   isReplying = false;
                   replyText = "";
                 }}
-                style="padding: 4px 10px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
+                style={SECONDARY_BUTTON_STYLE}
               >
                 Cancel
               </button>
@@ -222,7 +222,7 @@ function handleTabTrap(e: KeyboardEvent) {
               type="button"
               data-testid="reply-thread-overlay-reply"
               onclick={() => (isReplying = true)}
-              style="padding: 4px 10px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
+              style={SECONDARY_BUTTON_STYLE}
             >
               Reply
             </button>
