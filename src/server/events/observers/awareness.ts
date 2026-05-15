@@ -10,7 +10,7 @@ import {
 } from "../../../shared/constants.js";
 import type { FlatOffset } from "../../../shared/types.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
-import { MCP_ORIGIN } from "../origins.js";
+import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../origins.js";
 import type { BufferedSelection } from "../types.js";
 
 /**
@@ -51,7 +51,12 @@ export function makeAwarenessObserver(deps: {
   let selectionDwellTimer: ReturnType<typeof setTimeout> | null = null;
 
   const awarenessObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    // Skip server-tagged transactions for symmetry with annotations/replies
+    // observers. This observer never calls pushEvent (it only buffers
+    // selections), so the filter is defense-in-depth: if a future selection
+    // write is tagged FILE_SYNC_ORIGIN (e.g. seeded from disk), we must not
+    // buffer it as a user-driven selection event.
+    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
 
     if (event.keysChanged.has(Y_MAP_SELECTION)) {
       const selection = userAwareness.get(Y_MAP_SELECTION) as
