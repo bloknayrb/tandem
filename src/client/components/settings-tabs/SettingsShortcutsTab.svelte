@@ -38,9 +38,6 @@ const registryShortcutSections = $derived.by(() => {
     rows: byGroup.get(g) ?? [],
   })).filter((s) => s.rows.length > 0);
 });
-
-const sectionLabelStyle =
-  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 <div
@@ -49,7 +46,7 @@ const sectionLabelStyle =
 >
   {#each registryShortcutSections as section (section.title)}
     <section>
-      <div style={sectionLabelStyle}>{section.title}</div>
+      <div class="settings-section-label">{section.title}</div>
       <div
         style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;"
       >
@@ -67,7 +64,7 @@ const sectionLabelStyle =
     </section>
   {/each}
   <section>
-    <div style={sectionLabelStyle}>Other</div>
+    <div class="settings-section-label">Other</div>
     <div
       style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;"
     >
