@@ -179,8 +179,9 @@ test("PR2: comment with a reply shows reply count in the bubble", async ({ page 
     to: TITLE_TO,
     text: "Pending reply",
     textSnapshot: TITLE_TEXT,
-  })) as { id?: string; annotationId?: string } & Record<string, unknown>;
-  const commentId = (created.id ?? created.annotationId) as string;
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (created.error !== false) throw new Error("tandem_comment failed");
+  const commentId = created.data.annotationId;
   expect(commentId).toBeTruthy();
 
   await mcp.callTool("tandem_annotationReply", {
