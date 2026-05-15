@@ -70,9 +70,23 @@ export function writeDismissed(version: string): void {
 let version = $state<string | null>(null);
 let acknowledgedFor = $state<string | null>(null);
 
-let refCount = 0;
+let refCount: number = 0;
 let unlisten: (() => void) | null = null;
 let cancelled = false;
+// In-flight token defeats a refcount-flap race: subscribe → unsubscribe →
+// subscribe within one tick attaches two listeners concurrently, and without
+// a token discriminator the first one to resolve `listen()` would win and
+// `unlisten` would leak. Each async subscribe captures `++pending`; when
+// `listen()` resolves the branch bails unless its token still equals the
+// current `pending`. `__resetUpdaterChannelForTests` resets this counter to
+// keep the module-singleton clean across tests.
+let pending = 0;
+
+/** Reads `refCount` through a function indirection so TypeScript does not
+ * narrow its value across the outer `=== 1` check in the closure below. */
+function getRefCount(): number {
+  return refCount;
+}
 
 /** Returns the latest version reported by the updater, or `null` if none. */
 export function getAvailableVersion(): string | null {
@@ -110,10 +124,15 @@ export function subscribeToUpdaterChannel(): () => void {
   refCount += 1;
   if (refCount === 1 && isTauriRuntime()) {
     cancelled = false;
+    const myToken = ++pending;
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        if (cancelled) return;
+        // Pre-listen bail: a later subscribe superseded us, full teardown
+        // cancelled us, or the ref-count dropped to 0 via test reset.
+        // Read through `getRefCount()` to defeat TS narrowing of `refCount`
+        // from the outer `=== 1` check.
+        if (cancelled || myToken !== pending || getRefCount() === 0) return;
         const off = await listen<{ version: string }>(UPDATE_AVAILABLE_EVENT, (event) => {
           const next = event.payload?.version ?? null;
           if (!next) return;
@@ -123,7 +142,10 @@ export function subscribeToUpdaterChannel(): () => void {
           // consumer-side `showDot`/`showBanner` getters.
           if (acknowledgedFor !== next) acknowledgedFor = null;
         });
-        if (cancelled) {
+        // Re-check after listen() resolves: a later subscribe may have
+        // superseded us, or an unsubscribe may have cancelled us. Tear down
+        // immediately to avoid leaking a listener.
+        if (cancelled || myToken !== pending || getRefCount() === 0) {
           off();
           return;
         }
@@ -162,6 +184,10 @@ export function __resetUpdaterChannelForTests(): void {
   acknowledgedFor = null;
   refCount = 0;
   cancelled = true;
+  // Also reset the in-flight token; otherwise an in-progress async
+  // subscribe from a prior test could outlive the reset and bypass the
+  // refCount===0 guard via a stale token comparison.
+  pending = 0;
   const off = unlisten;
   unlisten = null;
   if (off) {
@@ -171,4 +197,12 @@ export function __resetUpdaterChannelForTests(): void {
       /* swallow */
     }
   }
+}
+
+/**
+ * Test-only introspection. Returns whether a persistent listener is
+ * currently attached (i.e. the singleton holds an `unlisten` fn).
+ */
+export function __hasActiveListenerForTests(): boolean {
+  return unlisten !== null;
 }
