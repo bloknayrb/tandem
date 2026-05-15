@@ -192,6 +192,40 @@ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileN
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
 
+// Surface sidecar restart failures (Tauri-only) as a generic toast. The
+// Rust side emits "sidecar-restart-failed" with a stable code; the message
+// is hard-coded here so no path, errno text, env var, or auth token from
+// the underlying failure can ever reach the DOM. See #631.
+if (isTauriRuntime()) {
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+  import("@tauri-apps/api/event")
+    .then(({ listen }) =>
+      listen("sidecar-restart-failed", () => {
+        notifications.push({
+          id: `sidecar-restart-failed-${Date.now()}`,
+          type: "general-error",
+          severity: "error",
+          message: "Sidecar failed to restart — see logs",
+          dedupKey: "sidecar-restart-failed",
+          timestamp: Date.now(),
+          errorCode: "SIDECAR_RESTART_FAILED",
+        });
+      }),
+    )
+    .then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to wire sidecar-restart-failed listener:", err);
+    });
+  onDestroy(() => {
+    cancelled = true;
+    unlisten?.();
+  });
+}
+
 let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
