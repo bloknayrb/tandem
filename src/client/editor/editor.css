@@ -5,8 +5,9 @@
   /* Default min-height so empty/short docs feel substantial. Overridden by
    * `.tandem-paged .tandem-editor` (1056px) for .docx paged layout. Lives in
    * CSS (not inline on the ProseMirror element) so the paged selector can win
-   * via specificity. */
-  min-height: 500px;
+   * via specificity.
+   * Non-paged docs fill the editor vertically — only .tandem-paged constrains to page dimensions. Per Bryan, 2026-05-15. */
+  min-height: max(500px, 100%);
 }
 /* Selection visibility when the editor loses focus.
  * The browser's native ::selection background only paints while its containing
