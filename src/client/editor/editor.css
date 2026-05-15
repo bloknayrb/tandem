@@ -218,6 +218,35 @@
   }
 }
 
+/* -------------------------------------------------------------------------
+ * Paged layout — applied when the editor root carries `.tandem-paged`
+ * (set conditionally for .docx files via `isPaged` $derived in Editor.svelte).
+ *
+ * Layout model: the editor root becomes a gray canvas with vertical/horizontal
+ * padding; the inner `.tandem-editor` (Tiptap's content DOM) renders as a
+ * centered white sheet at 8.5×11in (816×1056px @ 96dpi). No DOM injection —
+ * purely a CSS class on existing Tiptap nodes.
+ *
+ * `position: relative` on the sheet anchors the authorship gutter ::before
+ * pseudo-elements at `left: -14px` (must stay inside the sheet's padding).
+ * ------------------------------------------------------------------------- */
+.tandem-paged {
+  background: var(--tandem-page-bg);
+  padding: var(--tandem-space-6) var(--tandem-space-4);
+  min-height: 100%;
+  box-sizing: border-box;
+}
+.tandem-paged .tandem-editor {
+  position: relative;
+  background: var(--tandem-page-paper);
+  box-shadow: var(--tandem-page-shadow);
+  max-width: 816px; /* US letter ~8.5in at 96dpi */
+  margin: 0 auto;
+  padding: var(--tandem-space-7) var(--tandem-space-6);
+  box-sizing: border-box;
+  min-height: 1056px; /* US letter ~11in at 96dpi */
+}
+
 /* Authorship gutter — 2px colored thread on left margin of paragraph/heading blocks */
 .tandem-editor [data-tandem-author-block]::before {
   content: "";
