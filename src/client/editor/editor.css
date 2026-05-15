@@ -1,3 +1,10 @@
+/* The editor-root wrapper must establish an explicit height so `.tandem-editor`'s
+ * `min-height: 100%` resolves against the flex-sized scroll container rather than
+ * collapsing to content height. Skipped when `.tandem-paged` is applied — the
+ * paged layout owns its own min-height (see `.tandem-paged` block below). */
+[data-testid="editor-root"]:not(.tandem-paged) {
+  height: 100%;
+}
 .tandem-editor {
   color: var(--tandem-fg);
   font-size: var(--tandem-editor-font-size, 17px);
