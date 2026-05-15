@@ -32,10 +32,13 @@ use tauri_plugin_prevent_default::Flags;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
-/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479)
-const HEALTH_URL: &str = "http://localhost:3479/health";
-const SETUP_URL: &str = "http://localhost:3479/api/setup";
-const OPEN_URL: &str = "http://localhost:3479/api/open";
+/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479).
+/// Must use 127.0.0.1, not `localhost` — `isHostAllowed` (api-routes.ts) narrowed
+/// out the bare `localhost` hostname in #477 PR 2, so a `Host: localhost:3479`
+/// request returns 403 Forbidden and the supervisor's health-poll times out.
+const HEALTH_URL: &str = "http://127.0.0.1:3479/health";
+const SETUP_URL: &str = "http://127.0.0.1:3479/api/setup";
+const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
