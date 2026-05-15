@@ -192,6 +192,20 @@ const fileDrop = createFileDrop();
 let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
+
+// Dev-only test hook for E2E specs that need to open the SettingsModal
+// without going through the keyboard shortcut. The `Ctrl+Shift+,` path is
+// covered by other tests but is unreliable to drive from Playwright because
+// Tiptap's default keymap binds `Mod-Shift-,` to subscript and consumes the
+// event before App.svelte's window-level handler sees it. Exposed only in
+// dev/test builds — stripped by `import.meta.env.DEV` in production.
+if (import.meta.env.DEV) {
+  (window as unknown as { __tandemTest?: { openSettingsModal: () => void } }).__tandemTest = {
+    openSettingsModal: () => {
+      settingsModalOpen = true;
+    },
+  };
+}
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
