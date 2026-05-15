@@ -228,59 +228,35 @@ jobs:
         shell: bash
         run: rm -f "$RUNNER_TEMP/private_keys/"*.p8 || true
 
-      # Diagnostic snapshot of every .exe/.msi under src-tauri/target/release
-      # immediately after tauri-action exits. The first v0.12.0 release run
-      # showed `tandem-desktop.exe` (the cargo binary) as unsigned while the
-      # .msi and NSIS .exe wrappers WERE signed by Trusted Signing — meaning
-      # tauri-action's signCommand was invoked on the bundles but skipped or
-      # overwritten on the cargo binary. This step is informational only
-      # (`if: always()`) so the proof lands in the log even when the next
-      # step fails. Remove after the inner-binary signing path is stable.
-      - name: Diagnostic — dump signature state of every Windows artifact
-        if: always() && matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $roots = @(
-            'src-tauri/target/release',
-            'src-tauri/target/release/bundle/nsis',
-            'src-tauri/target/release/bundle/msi'
-          )
-          foreach ($root in $roots) {
-            if (-not (Test-Path $root)) {
-              Write-Host "(missing) $root"
-              continue
-            }
-            Write-Host "=== $root ==="
-            Get-ChildItem -Path $root -File -Recurse -Include '*.exe', '*.msi' -ErrorAction SilentlyContinue | ForEach-Object {
-              $sig = Get-AuthenticodeSignature -FilePath $_.FullName
-              $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '(none)' }
-              $stamper = if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { '(none)' }
-              Write-Host ("  {0}`n    Status: {1}`n    Signer: {2}`n    Stamper: {3}" -f $_.FullName, $sig.Status, $signer, $stamper)
-            }
-          }
-
       # tauri-action (observed 2026-05, no upstream issue found) does not
       # always surface signCommand non-zero exits as job failure. Verify
-      # every produced artifact is signed and timestamped; fail the job
+      # every produced bundle is signed and timestamped; fail the job
       # loudly if anything is unsigned or stale. To safely remove this step:
       # force-fail signCommand (e.g. break the cert profile name) and confirm
       # the tauri-action build step fails with non-zero exit before deletion.
+      #
+      # We deliberately verify ONLY the user-facing bundles (.msi + NSIS .exe),
+      # NOT `target/release/tandem-desktop.exe`. tauri-bundler patches +
+      # signs the cargo binary IN PLACE for each bundle type (it must, so
+      # the binary embedded inside the .msi/.exe carries a signature), then
+      # at end-of-bundle restores the pre-patch unsigned snapshot. See
+      # `tauri-bundler/src/bundle.rs` (`main_binary_copy` / `main_binary_orignal`
+      # restore loop). The standalone `tandem-desktop.exe` on disk after the
+      # build is intentionally unsigned — what the user installs and runs
+      # comes from the bundle's embedded copy.
       - name: Verify Windows signatures
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          # Three signed artifacts per Windows build (empirical, v0.11.2 log):
-          #   1. src-tauri/target/release/tandem-desktop.exe (cargo binary, signed in place by tauri-action)
-          #   2. src-tauri/target/release/bundle/nsis/Tandem_*-setup.exe
-          #   3. src-tauri/target/release/bundle/msi/Tandem_*_x64_en-US.msi
-          # The cargo binary keeps its Cargo.toml name (tandem-desktop.exe) --
-          # Tauri does NOT rename to productName before signing. signCommand
-          # is invoked on each path in turn (cargo binary actually signed
-          # twice: once after MSI bundling-patch, once after NSIS patch).
+          # Two user-facing artifacts per Windows build:
+          #   1. src-tauri/target/release/bundle/nsis/Tandem_*-setup.exe
+          #   2. src-tauri/target/release/bundle/msi/Tandem_*_x64_en-US.msi
+          # Each contains an embedded signed `tandem-desktop.exe` extracted
+          # at install time. The standalone exe at target/release is a
+          # leftover unsigned build artifact and is NOT verified here.
           $bundleFiles = @()
           $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -ErrorAction SilentlyContinue
           $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter '*.msi' -ErrorAction SilentlyContinue
-          $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release' -Filter 'tandem-desktop.exe' -ErrorAction SilentlyContinue
           if ($bundleFiles.Count -eq 0) {
             Write-Host '::error::Verify Windows signatures: no .exe/.msi artifacts found under src-tauri/target/release/'
             exit 1
