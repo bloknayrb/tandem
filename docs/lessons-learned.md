@@ -694,3 +694,16 @@ rg "ws://localhost" src/client
 Migrate every match in lockstep with the validator change. WebSocket URLs (`ws://localhost`) can be left alone *only if* the server's WebSocket gate is origin-based (Hocuspocus's is), not Host-based — the Origin header is the page origin, not the WS URL host.
 
 **Key insight:** "Narrow the allowlist" looks like a server-only change, but every client that hard-codes a hostname is implicitly part of the allowlist contract. Server tests passing don't prove the change is safe — they prove the validator works. The validator working is exactly what makes silent client-side regressions appear.
+
+## 73. Schema-Backed Enums Make Palette Migrations Self-Sanitizing
+
+**Problem:** When a UI palette changes (e.g. highlight colors `{red, yellow, green, blue, purple}` → `{yellow, green, blue, pink}`), old persisted annotations and stale clients can still produce legacy values. Naive renderers either crash, render an unstyled fallback, or leak the legacy color into the new UI.
+
+**Solution:** Two layers, both already in place for highlights as of v0.11.0 (verified during v1.0 §1H audit on master):
+
+1. **Zod schema as the boundary gate.** `HighlightColorSchema = z.enum(["yellow", "green", "blue", "pink"])` in `src/shared/types.ts`. Every MCP tool input is parsed through this schema, so a `tandem_addHighlight({ color: "red" })` call fails validation at the tool boundary with a clear error — it never reaches the Y.Map.
+2. **`normalizeHighlightColor()` as the read-time sanitizer.** `src/shared/constants.ts` exports `normalizeHighlightColor(color)` that returns `color as HighlightColor` if it's a key of `HIGHLIGHT_COLORS`, else falls back to `"yellow"`. Used by the renderer and toolbar so a legacy `"red"` highlight loaded from disk renders as yellow without throwing.
+
+**Verification (v1.0 §1H, 2026-05-14):** Grepping `src/client` for `"red"` / `"purple"` in highlight contexts returns zero matches. `HIGHLIGHT_COLORS` / `HIGHLIGHT_COLOR_VARS` / `HighlightColorSchema` all agree on `{yellow, green, blue, pink}`. The `showAuthorship` default is `true` in `useTandemSettings.ts`, and the loader preserves an explicit `false` while defaulting missing/legacy values to `true` (`parsed.showAuthorship === false ? false : DEFAULTS.showAuthorship`) — same self-sanitizing pattern, applied to a boolean default flip instead of an enum.
+
+**Key insight:** A palette or default-value migration doesn't need a one-shot migration script if both write paths (schema validation) and read paths (normalize-on-read) are owned. The schema rejects new bad data, the normalizer absorbs old bad data, and the system converges without a flag day. Worth checking both layers exist whenever someone proposes "let's change the default of X" — if only one is in place, you'll get either crashes (no normalizer) or silent persistence of the old default (no schema gate).
