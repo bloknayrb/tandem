@@ -7,9 +7,6 @@
 }
 .tandem-editor {
   color: var(--tandem-fg);
-  /* D11: editor body uses serif token (Source Serif 4). UI chrome stays sans
-   * (Inter Tight) via the `body` rule in index.html. */
-  font-family: var(--tandem-editor-font-family);
   font-size: var(--tandem-editor-font-size, 17px);
   line-height: 1.65;
   /* Default min-height so empty/short docs feel substantial. Overridden by

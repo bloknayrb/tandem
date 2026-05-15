@@ -288,3 +288,10 @@ async function handleEditorClick(e: MouseEvent) {
   data-testid="editor-root"
   class:tandem-paged={isPaged}
 ></div>
+
+<style>
+  /* Apply editor font to the Tiptap content DOM (inside Tiptap's own element tree). */
+  :global(.tandem-editor) {
+    font-family: var(--tandem-editor-font-family);
+  }
+</style>
