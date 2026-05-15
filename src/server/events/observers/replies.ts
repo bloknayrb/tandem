@@ -24,7 +24,13 @@ export function makeRepliesObserver(deps: {
 
       // Look up the parent annotation for the text snippet
       const parentAnn = annotationsMap.get(reply.annotationId) as Annotation | undefined;
-      const textSnippet = parentAnn?.textSnapshot ?? "";
+      // ADR-027: notes are user-private; highlights are user-only UI markup.
+      // Only replies on comments surface to the channel (Claude). The early-
+      // continue makes this privacy invariant structurally explicit — a future
+      // refactor that drops the type check breaks visibly here, not by
+      // silently leaking note/highlight reply text + textSnapshot via SSE.
+      if (!parentAnn || parentAnn.type !== "comment") continue;
+      const textSnippet = parentAnn.textSnapshot ?? "";
 
       pushEvent({
         id: generateEventId(),
