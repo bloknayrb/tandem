@@ -22,7 +22,7 @@ import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
-import { SlashCommandExtension } from "./extensions/slash-command";
+import { SlashCommandExtension } from "./slash-menu";
 import "./editor.css";
 
 import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";

@@ -7,7 +7,7 @@ import {
   SLASH_COMMANDS,
   SlashCommandExtension,
   slashCommandPluginKey,
-} from "../../src/client/editor/extensions/slash-command";
+} from "../../src/client/editor/slash-menu";
 
 function makeEditor() {
   const container = document.createElement("div");
@@ -94,7 +94,8 @@ describe("slash command plugin state", () => {
     editor.chain().focus().insertContent("/h").run();
     const state = slashCommandPluginKey.getState(editor.state);
     expect(state?.active?.query).toBe("h");
-    expect(filterSlashCommands("h")).toHaveLength(2);
+    // h1, h2, h3, horizontal-rule (matched via "horizontal")
+    expect(filterSlashCommands("h")).toHaveLength(4);
     expect(state?.active?.selectedIndex).toBeLessThan(filterSlashCommands("h").length);
   });
 });

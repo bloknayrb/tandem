@@ -1,25 +1,7 @@
 import { Extension, type Editor as TiptapEditor } from "@tiptap/core";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
-
-export type SlashCommandId =
-  | "heading-1"
-  | "heading-2"
-  | "bullet-list"
-  | "numbered-list"
-  | "quote"
-  | "code-block";
-
-export interface SlashCommandItem {
-  id: SlashCommandId;
-  label: string;
-  keywords: string[];
-  run: (editor: TiptapEditor) => void;
-}
-
-export interface SlashCommandMatch {
-  fromOffset: number;
-  query: string;
-}
+import { filterSlashCommands, findSlashCommandMatch, type SlashCommandItem } from "./commands";
+import { isSlashMenuSuppressed } from "./suppression";
 
 interface ActiveSlashCommand {
   from: number;
@@ -33,14 +15,6 @@ interface SlashCommandPluginState {
   dismissedKey: string | null;
 }
 
-type SlashCommandChain = ReturnType<TiptapEditor["chain"]> & {
-  toggleHeading: (attributes: { level: 1 | 2 }) => SlashCommandChain;
-  toggleBulletList: () => SlashCommandChain;
-  toggleOrderedList: () => SlashCommandChain;
-  toggleBlockquote: () => SlashCommandChain;
-  toggleCodeBlock: () => SlashCommandChain;
-};
-
 interface SlashCommandMeta {
   type: "select" | "close";
   selectedIndex?: number;
@@ -52,68 +26,6 @@ export interface SlashCommandOptions {
 
 export const slashCommandPluginKey = new PluginKey<SlashCommandPluginState>("tandemSlashCommand");
 
-function slashCommandChain(editor: TiptapEditor): SlashCommandChain {
-  return editor.chain().focus() as SlashCommandChain;
-}
-
-export const SLASH_COMMANDS: SlashCommandItem[] = [
-  {
-    id: "heading-1",
-    label: "Heading 1",
-    keywords: ["h1", "heading", "title"],
-    run: (editor) => slashCommandChain(editor).toggleHeading({ level: 1 }).run(),
-  },
-  {
-    id: "heading-2",
-    label: "Heading 2",
-    keywords: ["h2", "heading", "subtitle"],
-    run: (editor) => slashCommandChain(editor).toggleHeading({ level: 2 }).run(),
-  },
-  {
-    id: "bullet-list",
-    label: "Bullet list",
-    keywords: ["bullet", "ul", "list"],
-    run: (editor) => slashCommandChain(editor).toggleBulletList().run(),
-  },
-  {
-    id: "numbered-list",
-    label: "Numbered list",
-    keywords: ["numbered", "ordered", "ol", "list"],
-    run: (editor) => slashCommandChain(editor).toggleOrderedList().run(),
-  },
-  {
-    id: "quote",
-    label: "Quote",
-    keywords: ["blockquote", "quote"],
-    run: (editor) => slashCommandChain(editor).toggleBlockquote().run(),
-  },
-  {
-    id: "code-block",
-    label: "Code block",
-    keywords: ["code", "pre"],
-    run: (editor) => slashCommandChain(editor).toggleCodeBlock().run(),
-  },
-];
-
-export function findSlashCommandMatch(textBeforeCursor: string): SlashCommandMatch | null {
-  const match = /(?:^|\s)\/([A-Za-z0-9 -]*)$/.exec(textBeforeCursor);
-  if (!match) return null;
-
-  const query = match[1] ?? "";
-  const slashOffset = textBeforeCursor.length - query.length - 1;
-  return { fromOffset: slashOffset, query };
-}
-
-export function filterSlashCommands(query: string): SlashCommandItem[] {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return SLASH_COMMANDS;
-
-  return SLASH_COMMANDS.filter((command) => {
-    const haystack = [command.label, ...command.keywords].join(" ").toLowerCase();
-    return haystack.includes(normalized);
-  });
-}
-
 function activeKey(active: ActiveSlashCommand): string {
   return `${active.from}:${active.to}:${active.query}`;
 }
@@ -122,6 +34,11 @@ function resolveActiveSlashCommand(
   state: EditorState,
   selectedIndex = 0,
 ): ActiveSlashCommand | null {
+  // D10 suppression: never activate while a competing UI surface is mounted.
+  // Probing the DOM here keeps the rule centralized -- both initial activation
+  // and every subsequent keystroke pass through this function.
+  if (isSlashMenuSuppressed()) return null;
+
   const { selection } = state;
   if (!selection.empty) return null;
 
@@ -170,6 +87,10 @@ function applySlashCommandMeta(
   return previous;
 }
 
+function clearChildren(element: HTMLDivElement) {
+  while (element.firstChild) element.removeChild(element.firstChild);
+}
+
 function renderSlashCommandMenu(
   element: HTMLDivElement,
   active: ActiveSlashCommand,
@@ -178,7 +99,7 @@ function renderSlashCommandMenu(
   executeCommand: (command: SlashCommandItem) => void,
 ) {
   const commands = filterSlashCommands(active.query);
-  element.innerHTML = "";
+  clearChildren(element);
   element.setAttribute("role", "listbox");
   element.setAttribute("aria-label", "Slash commands");
 
@@ -332,7 +253,7 @@ export const SlashCommandExtension = Extension.create<SlashCommandOptions>({
 
           const hide = () => {
             menu.style.display = "none";
-            menu.innerHTML = "";
+            clearChildren(menu);
             setOpen(false);
           };
 
