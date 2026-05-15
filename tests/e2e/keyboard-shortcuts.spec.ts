@@ -79,17 +79,19 @@ test("Ctrl+N switches to the Nth tab", async ({ page }) => {
   // Tabs are role="tab" with aria-selected.
   const tabs = page.locator("[role='tab']");
 
-  // Press Ctrl+1 — first tab becomes active.
+  // Press Ctrl+1 — first tab becomes active. Generous timeout because the
+  // store update + Svelte effect + Tiptap re-render can exceed the default 5s
+  // on cold-start CI runners.
   await page.keyboard.press("Control+1");
-  await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
 
   // Press Ctrl+2 — second tab.
   await page.keyboard.press("Control+2");
-  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
 
   // Press Ctrl+9 — clamps to last (3rd) tab.
   await page.keyboard.press("Control+9");
-  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
 });
 
 test("Ctrl+W is ignored while a form input has focus", async ({ page }) => {
@@ -365,8 +367,11 @@ test("Ctrl+Alt+M opens the comment popup focused on its textarea", async ({ page
   await expect(page.locator("[data-testid='popup-comment-submit']")).toBeVisible({
     timeout: 3_000,
   });
-  // The popup's textarea should have focus.
-  await expect(page.evaluate(() => document.activeElement?.tagName)).resolves.toBe("TEXTAREA");
+  // The popup's textarea should have focus. Poll because Svelte's focus effect
+  // settles after the popup mounts — a one-shot evaluate flakes intermittently.
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.tagName), { timeout: 3_000 })
+    .toBe("TEXTAREA");
 });
 
 test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", async ({ page }) => {
