@@ -9,7 +9,7 @@ import Editor from "../editor/Editor.svelte";
 // the CollaborationCursor extension constructs without throwing.
 const ydoc = new Y.Doc();
 const provider = new HocuspocusProvider({
-  url: "ws://localhost:3478",
+  url: "ws://127.0.0.1:3478",
   name: "harness-doc",
   document: ydoc,
 });

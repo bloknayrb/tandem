@@ -58,8 +58,8 @@ describe("Invariant 6 — OAuth metadata uses literal localhost, not req.host", 
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    // resource must use literal "localhost", not the Host header value
-    expect(body.resource).toBe(`http://localhost:${port}/mcp`);
+    // resource must use literal "127.0.0.1", not the Host header value
+    expect(body.resource).toBe(`http://127.0.0.1:${port}/mcp`);
     expect(body.bearer_methods_supported).toEqual(["header"]);
     expect(Array.isArray(body.authorization_servers)).toBe(true);
   });
@@ -70,12 +70,12 @@ describe("Invariant 6 — OAuth metadata uses literal localhost, not req.host", 
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body.resource).toBe(`http://localhost:${port}/mcp`);
+    expect(body.resource).toBe(`http://127.0.0.1:${port}/mcp`);
     expect(body.bearer_methods_supported).toEqual(["header"]);
     expect(Array.isArray(body.authorization_servers)).toBe(true);
   });
 
-  it("resource field stays literal localhost even if Host header differs (spoof check)", async () => {
+  it("resource field stays literal 127.0.0.1 even if Host header differs (spoof check)", async () => {
     // If a caller sends Host: 10.0.0.1:1234 the resource field must still say localhost.
     const res = await fetch(`http://127.0.0.1:${port}/.well-known/oauth-protected-resource`, {
       headers: { Host: `10.0.0.1:${port}` },
@@ -87,7 +87,7 @@ describe("Invariant 6 — OAuth metadata uses literal localhost, not req.host", 
     expect([200, 403]).toContain(res.status);
     if (res.status === 200) {
       const body = (await res.json()) as Record<string, unknown>;
-      expect(body.resource).toBe(`http://localhost:${port}/mcp`);
+      expect(body.resource).toBe(`http://127.0.0.1:${port}/mcp`);
       expect(body.resource).not.toMatch(/10\.0\.0\.1/);
     }
   });

@@ -212,7 +212,7 @@ async function checkServerReachable(url: string, timeoutMs = 2000): Promise<bool
     parsed = new URL(url);
   } catch {
     console.error(
-      `[Channel] Invalid TANDEM_URL: "${url}" — expected format: http://localhost:3479`,
+      `[Channel] Invalid TANDEM_URL: "${url}" — expected format: http://127.0.0.1:3479`,
     );
     return false;
   }

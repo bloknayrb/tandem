@@ -408,7 +408,7 @@ async function main() {
     const [srv] = await Promise.all([
       startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP),
       startHocuspocus(wsPort).then(() => {
-        console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
+        console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
       }),
     ]);
     httpServer = srv;
@@ -416,9 +416,9 @@ async function main() {
     console.error("");
     console.error(`  Tandem v${APP_VERSION}`);
     console.error("");
-    console.error(`  MCP HTTP:    http://localhost:${mcpPort}/mcp`);
-    console.error(`  WebSocket:   ws://localhost:${wsPort}`);
-    console.error(`  Health:      http://localhost:${mcpPort}/health`);
+    console.error(`  MCP HTTP:    http://127.0.0.1:${mcpPort}/mcp`);
+    console.error(`  WebSocket:   ws://127.0.0.1:${wsPort}`);
+    console.error(`  Health:      http://127.0.0.1:${mcpPort}/health`);
     console.error("");
     console.error("  Open Claude Code and ask Claude to review a document.");
     console.error("");
@@ -432,7 +432,7 @@ async function main() {
         console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
       }
       await startHocuspocus(wsPort);
-      console.error(`[Tandem] Hocuspocus WebSocket server running on ws://localhost:${wsPort}`);
+      console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
     })().catch((err) => {
       console.error("[Tandem] Hocuspocus startup error:", err);
     });
