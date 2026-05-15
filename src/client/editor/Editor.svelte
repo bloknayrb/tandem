@@ -169,8 +169,11 @@ $effect(() => {
     editorProps: {
       attributes: {
         class: "tandem-editor",
-        style:
-          "outline: none; min-height: 500px; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
+        // `min-height` lives in editor.css (`.tandem-editor` = 500px,
+        // `.tandem-paged .tandem-editor` = 1056px). Inline `min-height` here
+        // would beat the paged-layout selector via specificity and silently
+        // lose the 11in sheet height for .docx.
+        style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
       },
     },
     editable: untrack(() => !readOnly),

@@ -2,6 +2,11 @@
   color: var(--tandem-fg);
   font-size: var(--tandem-editor-font-size, 17px);
   line-height: 1.65;
+  /* Default min-height so empty/short docs feel substantial. Overridden by
+   * `.tandem-paged .tandem-editor` (1056px) for .docx paged layout. Lives in
+   * CSS (not inline on the ProseMirror element) so the paged selector can win
+   * via specificity. */
+  min-height: 500px;
 }
 /* Selection visibility when the editor loses focus.
  * The browser's native ::selection background only paints while its containing
