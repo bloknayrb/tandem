@@ -275,10 +275,3 @@ async function handleEditorClick(e: MouseEvent) {
   role="presentation"
   data-testid="editor-root"
 ></div>
-
-<style>
-  /* Apply editor font to the Tiptap content DOM (inside Tiptap's own element tree). */
-  :global(.tandem-editor) {
-    font-family: var(--tandem-editor-font-family);
-  }
-</style>
