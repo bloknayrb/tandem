@@ -327,3 +327,29 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 **Collision policy:** `registerAction` with a duplicate id warns in production and throws in dev (surfacing the bug at the source). Pass `{ replace: true }` to update an existing entry intentionally (e.g., OutlinePanel re-registering heading-jump actions).
 **Non-goals:** This ADR does not define a binding-from-string mechanism (shortcut strings are display-only in Wave 2). Full migration of all ad-hoc keydown listeners is deferred; only Save and Settings migrate in this PR. Heading-jump actions (one per H1-H3) will be registered by OutlinePanel when PR 569 merges and the action registry is available.
 **Consequences:** All future shortcuts should register via the registry before adding a hardcoded `SHORTCUT_SECTIONS` entry. The Settings → Shortcuts tab now reflects the live registry state; an empty registry on first paint is a dev bug (builtins are registered at import, so this should not occur in practice).
+
+## ADR-030: Windows Code Signing via Azure Trusted Signing + OIDC
+
+**Status:** Accepted (#428, PR #685, 2026-05-15)
+
+**Context:** Pre-v0.12.0 Windows builds shipped self-signed (CHANGELOG entry from the v0.7.x era). SmartScreen flagged every download until reputation accrued; users saw "Windows protected your PC" on first launch. Reputation never accrues because the cert changes per machine. Three options were weighed:
+
+- **EV cert from a commercial CA (DigiCert, etc.):** ~$300–500/yr + hardware token. Reputation accrues against the certificate identity. Friction: hardware token must be present at sign time → either an always-on signing service or manual CI gating.
+- **Azure Trusted Signing (Basic tier, Public Trust):** ~$10/month. Microsoft-managed signing service. Reputation accrues against the Trusted Signing identity. Certs are short-lived (~3 days) and minted on demand; no hardware token. Requires an Azure account + Identity Validation step.
+- **Status quo (self-signed):** zero cost, persistent SmartScreen friction.
+
+**Decision:** Azure Trusted Signing, Basic tier, Public Trust → Individual Validation. CI authenticates via OpenID Connect federation (`azure/login` action) using a service principal bound to a GitHub Actions environment as the OIDC subject anchor — **no long-lived `AZURE_CLIENT_SECRET` lives in repository secrets**. The `dotnet/sign` CLI does the signing via Tauri's `bundle.windows.signCommand` (object form, absolute path to `sign.exe` — Tauri spawns signCommand as a subprocess that doesn't reliably inherit `$env:GITHUB_PATH`).
+
+**Defense in depth:** Two independent gates restrict signing to `refs/tags/v*` builds: (a) a GitHub UI "deployment branch and tag rule" on the `release` environment (`Tag: v*`), and (b) a workflow-level pwsh step that exits 1 if `github.ref` doesn't start with `refs/tags/v`. Either alone is sufficient; both together survive UI misconfiguration or workflow-edit accidents independently.
+
+**Verification:** A post-sign step runs `Get-AuthenticodeSignature` on `tandem-desktop.exe` plus every artifact under `bundle/nsis` and `bundle/msi`, failing the job if any artifact is unsigned or has a stale timestamp. The signer-subject check is logged only (not pattern-matched) until the first signed rc captures the actual Trusted Signing Individual cert subject DN — a TODO comment at that branch tracks the follow-up. Trusted Signing Individual validation issues certs with `CN=<verified legal name>`, not `CN=Tandem`, so a naive `-match 'Tandem'` would fail every legit signature.
+
+**Operational note (`dotnet/sign` version):** Pinned to `0.9.1-beta.26127.1` for the `code artifact-signing` subcommand. Stable `sign` 1.1.x exists but renames this subcommand surface; do not bump silently. The version pin lives in `.github/workflows/tauri-release.yml` with a "why-beta" comment.
+
+**Operator setup (one-time, pre-first-signed-tag):** Before the first `v*` tag build, an operator must (a) create the `release` GitHub Actions environment (`Settings → Environments → New environment → "release"`), and (b) add a deployment-tag rule (`Deployment branches and tags → Selected branches and tags → Add rule → Ref type: Tag → Name pattern: v* → Add rule`). The workflow-level pwsh guard refuses to run the signing path off non-tag refs as belt-and-suspenders, but the deployment-tag rule prevents the `release` environment's OIDC token from being minted in the first place for non-tag builds. Both gates must be intentionally bypassed for a signing path to execute off a non-tag ref.
+
+**Rollback procedure:** If Trusted Signing rejects an artifact mid-tag-build (cert profile mis-named, OIDC federation broken, account quota hit), the operator has two escape hatches: (a) **abort the tag build** — delete the tag, fix root cause, re-tag; the workflow refuses to sign without a `v*` ref so partial failure leaves no signed artifact on the GitHub Release. (b) **Emergency unsigned rc** — temporarily comment out the `signCommand` block in `tauri.conf.json`, retag as `vX.Y.Z-rc.unsigned` (NOT a final `vX.Y.Z`), publish as a pre-release with a SmartScreen-warning note in the release body. Final tags MUST be signed; pre-releases MAY be unsigned for diagnostic purposes only.
+
+**Cost / quota ceiling:** Basic tier includes 5,000 signing operations / month at ~$10. One full release across all platforms uses ~6 operations (NSIS + MSI primary + sidecar). Monthly signing volume even with weekly rc tags is far below ceiling. If volume grows (e.g. nightly builds), upgrade to Premium or add throttling. Cost is per-signing-operation, not per-artifact-size; large NSIS bundles are not penalized.
+
+**Out of scope / follow-ups:** Tightening `id-token: write` permission scope to the Windows job only (low risk, deferred); hardening the cert-subject regex after the first signed rc captures the real DN; Dependabot config for the pinned `azure/login` SHA (accepting the freeze).
