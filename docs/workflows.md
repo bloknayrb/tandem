@@ -39,7 +39,7 @@ Start Tandem from any directory:
 tandem
 ```
 
-The server starts and the editor opens at `http://localhost:3479`. `sample/welcome.md` loads on first run with the onboarding tutorial.
+The server starts and the editor opens (Tauri WebView in desktop, or `http://127.0.0.1:5173` in dev). `sample/welcome.md` loads on first run with the onboarding tutorial.
 
 In a separate terminal, open Claude Code with the channel flag for real-time push notifications:
 ```bash

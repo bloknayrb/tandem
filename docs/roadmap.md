@@ -310,7 +310,7 @@ Closing a tab in the editor now actually closes the document on the server. Prev
 
 `npm install -g tandem-editor` makes Tandem available as a global CLI command:
 
-- **`tandem`** — Starts the server and opens the editor at `http://localhost:3479`
+- **`tandem`** — Starts the server and opens the editor (Tauri WebView in desktop, or `http://127.0.0.1:5173` in dev)
 - **`tandem setup`** — Auto-detects Claude Code and Claude Desktop, writes MCP config entries with absolute paths to `~/.claude/mcp_settings.json` and/or `claude_desktop_config.json`
 - **`tandem setup --force`** — Writes config to default paths regardless of auto-detection
 - **Static file serving** — Express serves the Vite-built client from `dist/client/` on `:3479`, eliminating the need for a separate Vite dev server in production

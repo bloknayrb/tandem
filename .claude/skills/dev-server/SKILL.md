@@ -37,7 +37,7 @@ Start the Tandem development servers and verify everything is connected.
 
 4. Verify MCP connection works by running `/mcp` in Claude Code if needed.
 
-5. Open the editor at `http://localhost:5173` in the browser.
+5. Open the editor at `http://127.0.0.1:5173` in the browser.
 
 ## Restarting After Server Code Changes
 If you changed server code, restart just the server:

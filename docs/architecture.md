@@ -188,9 +188,9 @@ tandem_open("report.docx")
 
 ```
 Playwright (test runner)
-    → Chromium browser: navigates to http://localhost:5173
+    → Chromium browser: navigates to http://127.0.0.1:5173
     → McpTestClient (SDK Client + StreamableHTTPClientTransport)
-        → Connects to http://localhost:3479/mcp
+        → Connects to http://127.0.0.1:3479/mcp
         → Calls tandem_open, tandem_comment, etc. to set up state
     → Browser assertions: locator queries for [data-testid], .ProseMirror content
     → Cleanup: tandem_close all docs, rm temp fixture dir
@@ -605,7 +605,7 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 
 ## Tauri Desktop Layer
 
-Tandem ships primarily as a Tauri desktop app. The WebView renders the same Tiptap/Svelte 5 editor used in development; in production builds it loads from `tauri://localhost` (bundled `dist/client/`), while dev mode points to `http://localhost:5173` (Vite hot-reload). The Node.js server runs on `:3478`/`:3479` in both modes. When installed via npm instead of the desktop app, the same editor opens in the default browser — the underlying web stack is identical.
+Tandem ships primarily as a Tauri desktop app. The WebView renders the same Tiptap/Svelte 5 editor used in development; in production builds it loads from `tauri://localhost` (bundled `dist/client/`), while dev mode points to `http://127.0.0.1:5173` (Vite hot-reload, bound to loopback only). The Node.js server runs on `:3478`/`:3479` in both modes. When installed via npm instead of the desktop app, the same editor opens in the default browser — the underlying web stack is identical.
 
 ```mermaid
 graph TB
@@ -617,7 +617,7 @@ graph TB
     end
 
     subgraph "Sidecar (bundled Node.js)"
-        Server["Tandem Server\nlocalhost:3478 / :3479"]
+        Server["Tandem Server\n127.0.0.1:3478 / :3479"]
     end
 
     WebView <-->|HTTP/WebSocket localhost| Server
@@ -634,7 +634,7 @@ On launch, the Rust core:
 1. Copies `sample/` files to the writable app-data dir (first run only — skips if destination exists)
 2. In **debug builds only** (`cfg!(debug_assertions)`), checks whether a server is already healthy (`GET /health`) and skips spawn if so — supports the `cargo tauri dev` + `npm run dev:standalone` workflow. Release builds always spawn their own sidecar (the early-return was gated after a stale `tsx watch` dev session was found answering `/health` for the installed app, producing a silent "Disconnected" state with mismatched auth/session). `freePort()` in the sidecar handles any port conflict on bind.
 3. Spawns `node-sidecar` (bundled Node.js binary named with target triple) with `dist/server/index.js` as the entry point and `TANDEM_DATA_DIR` set to the platform app-data dir
-4. Polls `GET http://localhost:3479/health` every 200ms with a 15s timeout
+4. Polls `GET http://127.0.0.1:3479/health` every 200ms with a 15s timeout
 5. On crash, retries up to `MAX_RESTARTS = 3` times with exponential backoff (1s, 2s, 4s)
 6. On all retries exhausted: shows an error dialog and exits
 7. On clean exit (`RunEvent::Exit`): kills the sidecar process to avoid orphan processes
@@ -691,7 +691,7 @@ The sidecar kill before restart is required to prevent a port conflict when the 
 
 ### Origin Handling
 
-Production WebView requests use the `tauri://localhost` origin (Windows: `https://tauri.localhost`). The Tandem server's CORS and DNS-rebinding middleware accept this origin alongside `http://localhost:*` and `http://127.0.0.1:*`. This is handled in `createMcpExpressApp` and `apiMiddleware`.
+Production WebView requests use the `tauri://localhost` origin (Windows: `https://tauri.localhost`). The Tandem server's CORS and DNS-rebinding middleware accept this origin alongside `http://127.0.0.1:*` only — bare `http://localhost:*` was narrowed out in PR #637 to harden against DNS-rebinding. This is handled in `createMcpExpressApp` and `apiMiddleware`.
 
 ### Windows Path Prefix
 

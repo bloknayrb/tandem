@@ -90,7 +90,7 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 
 **Notes:**
 - Supported formats: `.md`, `.txt`, `.html`, `.docx` (review-only).
-- Editor opens automatically to `http://localhost:3479` on the first call.
+- Editor opens automatically in the Tauri WebView (desktop) or at `http://127.0.0.1:5173` (development) on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
 - Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
@@ -847,7 +847,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 | `storagePath` | string | yes | Absolute path to session storage directory |
 | `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable |
 
-**Errors:** `403 FORBIDDEN` (Host header not localhost — DNS rebinding protection)
+**Errors:** `403 FORBIDDEN` (Host header is not `127.0.0.1` or `tauri.localhost` — DNS-rebinding protection, narrowed in PR #637)
 
 ---
 
@@ -927,7 +927,7 @@ Uploaded files are always read-only — there is no disk path to save to. The sy
 
 ### CORS
 
-Both `/api/*` endpoints include CORS headers reflecting any `http://localhost:*` origin (dynamic, not hardcoded port). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
+Both `/api/*` endpoints include CORS headers reflecting any `http://127.0.0.1:*` origin (dynamic port; bare `localhost` was narrowed out in PR #637). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
 
 ---
 

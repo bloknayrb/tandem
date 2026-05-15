@@ -150,7 +150,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 ## Security
 - Server binds to 127.0.0.1 by default. LAN binding (`TANDEM_BIND_HOST`) requires an auth token; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is an explicit insecure opt-in for development only
 - DNS rebinding protection on all routes (`apiMiddleware` Host-header validation + `createMcpExpressApp`)
-- CORS reflects `http://localhost:*` origins. Rejects UNC paths (Windows NTLM). Extension + 50MB size limits. Atomic saves
+- CORS allowlist is `http://127.0.0.1:*` and `http://tauri.localhost` only — bare `localhost` was narrowed out in PR #637 (DNS-rebinding hardening). Rejects UNC paths (Windows NTLM). Extension + 50MB size limits. Atomic saves
 
 ## Status
 
