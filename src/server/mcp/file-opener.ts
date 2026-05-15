@@ -155,7 +155,7 @@ export async function openFileByPath(
   const doc = getOrCreateDocument(id);
   const restoredFromSession = await maybeRestoreSession(resolved, doc, fileName);
   if (!restoredFromSession) {
-    await loadContentIntoDoc(doc, format, resolved);
+    await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
 
@@ -205,7 +205,7 @@ export async function openFileFromContent(
   const doc = getOrCreateDocument(id);
   // Display name is the uploaded filename, not the synthetic upload path, so
   // notifications don't leak the internal path shape to the user.
-  await populateDocFromContent(doc, format, content, {
+  await populateDocFromContent(doc, format, content, id, {
     displayName: fileName,
     dedupSource: syntheticPath,
   });
@@ -518,9 +518,14 @@ function applyPreparedContent(doc: Y.Doc, prepared: PreparedContent, ctx: Popula
  * allowlist, UNC rejection) and delegates the parse + transact + cleanup logic
  * to the shared helper used by openFileFromContent.
  */
-async function loadContentIntoDoc(doc: Y.Doc, format: string, resolved: string): Promise<void> {
+async function loadContentIntoDoc(
+  doc: Y.Doc,
+  format: string,
+  resolved: string,
+  docId: string,
+): Promise<void> {
   const buffer = await fs.readFile(resolved);
-  await populateDocFromContent(doc, format, buffer, {
+  await populateDocFromContent(doc, format, buffer, docId, {
     displayName: path.basename(resolved),
     dedupSource: resolved,
   });
@@ -540,6 +545,7 @@ async function populateDocFromContent(
   doc: Y.Doc,
   format: string,
   source: string | Buffer,
+  docId: string | undefined,
   ctx: PopulateContext,
 ): Promise<void> {
   const prepared = await prepareContent(format, source, ctx);
@@ -552,6 +558,7 @@ async function populateDocFromContent(
     // transact's _transaction by the time the catch fires, so this is not
     // nested. MCP_ORIGIN is correct here for the same reason it's correct
     // above — Critical Rule #2 and observer attach order.
+    let cleanupOk = true;
     try {
       doc.transact(() => {
         const fragment = doc.getXmlFragment("default");
@@ -562,21 +569,91 @@ async function populateDocFromContent(
         for (const k of [...annotations.keys()]) annotations.delete(k);
       }, MCP_ORIGIN);
     } catch (cleanupErr) {
+      cleanupOk = false;
       console.error(
         "[Tandem] populateDocFromContent: cleanup after populate failure also failed:",
         cleanupErr,
       );
+      // Evict the cached Y.Doc state in-place (#616). If the targeted
+      // cleanup-on-failure pass above threw, the Y.Doc is in an
+      // indeterminate state — a partial XmlFragment plus possibly partial
+      // annotations / reply / awareness entries. Re-opening the same
+      // documentId would then merge fresh content on top of poisoned state.
+      // Evict by clearing every CRDT map + the content fragment in a single
+      // FILE_SYNC_ORIGIN transact so durable-annotation sync skips it (no
+      // re-persist of the half-cleared snapshot) and the channel event
+      // queue skips it (no SSE flood). Also drops the file-sync context
+      // with phase "close" so any tombstone ledger keyed to the prior
+      // docHash is released (eviction = fresh-start semantics, not a swap).
+      // Failures here are logged and swallowed; we still want to rethrow
+      // the ORIGINAL populate error, not eviction noise.
+      try {
+        evictPartialDocState(doc, docId);
+      } catch (evictErr) {
+        console.error(
+          "[Tandem] populateDocFromContent: eviction after cleanup failure also failed:",
+          evictErr,
+        );
+      }
     }
     // Static-literal first arg; user-controlled values arrive as trailing args
     // so util.format doesn't treat them as a format string.
     console.error(
       "[Tandem] populateDocFromContent: populate failed; partial state cleared before rethrow.",
-      { format, displayName: ctx.displayName },
+      { format, displayName: ctx.displayName, cleanupOk },
       err,
     );
     throw err;
   }
 }
+
+/**
+ * Evict a cached Y.Doc's content + annotation state in-place (#616).
+ *
+ * Called only from the cleanup-after-populate-failure path when the targeted
+ * cleanup pass itself throws — at that point the Y.Doc is in an indeterminate
+ * partial state and a subsequent open of the same `documentId` would merge
+ * fresh content on top of poisoned CRDT state. Eviction restores the doc to
+ * the same fresh-instance shape `getOrCreateDocument(id)` would have produced.
+ *
+ * Single-transaction in-place clear (per `feedback_inplace_clear_over_destroy`
+ * and Critical Rule #2). The transaction is tagged `FILE_SYNC_ORIGIN`:
+ *   - the durable-annotation sync observer skips it (no re-persist of the
+ *     half-cleared state),
+ *   - the channel event queue skips it (no SSE flood of phantom deletions).
+ *
+ * Also drops the per-doc file-sync context with phase `"close"` (not `"swap"`)
+ * because eviction is fresh-start semantics: the tombstone ledger keyed to
+ * the prior docHash belongs to a superseded state and must be released.
+ */
+function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
+  if (docId) {
+    // Drop the per-doc file-sync context with phase "close" (the registry's
+    // clearFileSyncContext path). A no-op if no context was ever registered
+    // for this docId — common during open, since wireAnnotationStore runs
+    // AFTER populate.
+    clearFileSyncContext(docId);
+  }
+
+  doc.transact(() => {
+    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
+    annotations.forEach((_, k) => annotations.delete(k));
+
+    const annotationReplies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    annotationReplies.forEach((_, k) => annotationReplies.delete(k));
+
+    const awareness = doc.getMap(Y_MAP_AWARENESS);
+    awareness.forEach((_, k) => awareness.delete(k));
+
+    const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+    userAwareness.forEach((_, k) => userAwareness.delete(k));
+
+    const fragment = doc.getXmlFragment("default");
+    fragment.delete(0, fragment.length);
+  }, FILE_SYNC_ORIGIN);
+}
+
+export { evictPartialDocState as __testEvictPartialDocState };
 
 /**
  * Finalize a normal (non-force) document open: register in open-docs map,
