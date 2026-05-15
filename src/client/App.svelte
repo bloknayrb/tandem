@@ -23,6 +23,7 @@ import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
+import UpdaterBanner from "./components/UpdaterBanner.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
 import DocxPageContainer from "./editor/DocxPageContainer.svelte";
 import Editor from "./editor/Editor.svelte";
@@ -56,6 +57,7 @@ import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte
 import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
+import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
@@ -181,6 +183,7 @@ const connectionBanner = createConnectionBanner(
   () => yjsSync.disconnectedSince,
   () => settingsState.settings.degradedBannerDelayMs,
 );
+const updaterBanner = createUpdaterBanner();
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
@@ -775,6 +778,15 @@ const tutorial = createTutorial(
       >
         Server restarted — refreshing documents
       </div>
+    {/if}
+
+    {#if isTauriRuntime() && updaterBanner.showBanner && updaterBanner.availableVersion}
+      <UpdaterBanner
+        version={updaterBanner.availableVersion}
+        installing={updaterBanner.installing}
+        onInstall={() => { updaterBanner.install(); }}
+        onDismiss={updaterBanner.dismiss}
+      />
     {/if}
 
     {#if connectionBanner.showBanner}
