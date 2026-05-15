@@ -38,6 +38,7 @@ import {
   sortAnnotationsByPosition,
 } from "./hooks/useAnnotationOrder.js";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
+import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
@@ -817,6 +818,12 @@ const marginPositions = createMarginPositions({
   getLayerEl: () => marginLayerEl,
   getEnabled: () => settingsState.settings.marginView,
 });
+// Replies feed the bubble reply count + thread preview. We observe the raw
+// Y.Map here; MarginColumn applies the `getVisibleReplies()` ADR-027 filter
+// at the lookup site so note / highlight bubbles never expose replies.
+const marginReplies = createAnnotationReplies({
+  getYdoc: () => activeTab?.ydoc ?? null,
+});
 
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
@@ -1191,7 +1198,7 @@ const tutorial = createTutorial(
           width={240}
           edgeInset={8}
           {activeAnnotationId}
-          repliesById={new Map()}
+          repliesById={marginReplies.byId}
           onClick={(ann) => {
             activeAnnotationId = ann.id;
             review.scrollToAnnotation(ann);
@@ -1204,7 +1211,7 @@ const tutorial = createTutorial(
           width={240}
           edgeInset={8}
           {activeAnnotationId}
-          repliesById={new Map()}
+          repliesById={marginReplies.byId}
           onClick={(ann) => {
             activeAnnotationId = ann.id;
             review.scrollToAnnotation(ann);
