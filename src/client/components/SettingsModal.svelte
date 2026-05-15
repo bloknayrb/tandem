@@ -51,9 +51,8 @@ export interface SettingsTab {
 <script lang="ts">
 import { onMount, untrack } from "svelte";
 import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
-import { API_OPEN } from "../../shared/api-paths";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
-import { API_BASE } from "../utils/fileUpload";
+import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
@@ -301,30 +300,16 @@ async function handleViewChangelog(): Promise<void> {
   }
   changelogLoading = true;
   changelogError = null;
-  try {
-    const res = await fetch(`${API_BASE}${API_OPEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath, readOnly: true }),
-    });
-    if (!res.ok) {
-      let msg = "Failed to open changelog.";
-      try {
-        const data = (await res.json()) as { message?: string };
-        if (data.message) msg = data.message;
-      } catch {
-        // ignore JSON parse failure
-      }
-      if (res.status === 404) msg = "Changelog file not found.";
-      changelogError = msg;
-      return;
-    }
+  const result = await openServerPath(filePath, {
+    readOnly: true,
+    notFoundMessage: "Changelog file not found.",
+    failureMessage: "Failed to open changelog.",
+  });
+  changelogLoading = false;
+  if (result.ok) {
     onClose();
-  } catch (err) {
-    console.warn("[Tandem] Failed to open changelog:", err);
-    changelogError = "Server unavailable.";
-  } finally {
-    changelogLoading = false;
+  } else {
+    changelogError = result.error;
   }
 }
 </script>
@@ -690,6 +675,19 @@ async function handleViewChangelog(): Promise<void> {
     flex-direction: column;
     gap: var(--tandem-space-5);
     max-width: 620px;
+  }
+
+  /* Shared section-label style consumed by every tab body
+     (SettingsAboutTab, SettingsClaudeCodeTab, SettingsCollaborationTab,
+     SettingsShortcutsTab). `:global` so the class survives the scoping
+     transform applied to tab body components. */
+  :global(.settings-section-label) {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--tandem-fg);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
   @media (max-width: 640px) {

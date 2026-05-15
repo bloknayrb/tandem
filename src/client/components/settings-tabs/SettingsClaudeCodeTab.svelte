@@ -9,13 +9,10 @@ import type { SettingsTabContext } from "../SettingsModal.svelte";
 // to settings. The modal always passes the full context shape at runtime, so
 // the non-null assertions below are safe even though the type is `Partial<>`.
 let ctx: Partial<SettingsTabContext> = $props();
-
-const sectionLabelStyle =
-  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 <div>
-  <div style={sectionLabelStyle}>
+  <div class="settings-section-label">
     Selection Sensitivity:
     <span style="font-weight: 400; text-transform: none;">
       {(ctx.settings!.selectionDwellMs / 1000).toFixed(1)}s

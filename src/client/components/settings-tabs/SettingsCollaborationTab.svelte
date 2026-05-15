@@ -23,13 +23,10 @@ $effect(() => {
     nameInput = currentUserName;
   }
 });
-
-const sectionLabelStyle =
-  "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 </script>
 
 <div>
-  <label for="settings-modal-display-name" style={sectionLabelStyle}>Display Name</label>
+  <label for="settings-modal-display-name" class="settings-section-label">Display Name</label>
   <input
     bind:this={inputEl}
     id="settings-modal-display-name"
@@ -53,7 +50,7 @@ const sectionLabelStyle =
 </div>
 
 <div>
-  <div id="settings-modal-default-mode-label" style={sectionLabelStyle}>Default Mode</div>
+  <div id="settings-modal-default-mode-label" class="settings-section-label">Default Mode</div>
   <div
     role="radiogroup"
     aria-labelledby="settings-modal-default-mode-label"
