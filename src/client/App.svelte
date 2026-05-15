@@ -21,6 +21,7 @@ import HelpModal from "./components/HelpModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
+import SettingsModal from "./components/SettingsModal.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
@@ -48,7 +49,7 @@ import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
-import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
+import { isSettingsModalShortcut, isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
@@ -189,6 +190,7 @@ const notifications = createNotifications();
 const fileDrop = createFileDrop();
 
 let settingsOpen = $state(false);
+let settingsModalOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
@@ -206,6 +208,7 @@ function cycleTheme() {
 wireActionDeps({
   getActiveTabId: () => yjsSync.activeTabId,
   openSettings: () => (settingsOpen = true),
+  openSettingsModal: () => (settingsModalOpen = true),
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
   openFindBar: () => {
@@ -493,6 +496,13 @@ $effect(() => {
       } else if (e.code === "KeyS") {
         e.preventDefault();
         void triggerSave(yjsSync.activeTabId);
+      } else if (isSettingsModalShortcut(e)) {
+        // Wave 1: Ctrl+Shift+, opens the new SettingsModal sibling component
+        // (see `components/SettingsModal.svelte`). Must be tested before
+        // `isSettingsShortcut` even though that predicate also rejects shift —
+        // shielding the order against future predicate edits.
+        e.preventDefault();
+        settingsModalOpen = true;
       } else if (isSettingsShortcut(e)) {
         e.preventDefault();
         settingsOpen = true;
@@ -760,6 +770,7 @@ const tutorial = createTutorial(
     onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
     onOpenSettings={toggleSettings}
+    onOpenSettingsModal={() => (settingsModalOpen = true)}
     bind:settingsBtn={settingsBtnEl}
   />
   {#if !yjsSync.ready}
@@ -930,6 +941,17 @@ const tutorial = createTutorial(
       onUpdate={settingsState.updateSettings}
       returnFocusEl={settingsBtnEl}
       anchorEl={settingsBtnEl}
+      connected={yjsSync.connected}
+      reconnectAttempts={yjsSync.reconnectAttempts}
+    />
+
+    <SettingsModal
+      open={settingsModalOpen}
+      onClose={() => (settingsModalOpen = false)}
+      settings={settingsState.settings}
+      onUpdate={settingsState.updateSettings}
+      returnFocusEl={settingsBtnEl}
+      triggerEl={settingsBtnEl}
       connected={yjsSync.connected}
       reconnectAttempts={yjsSync.reconnectAttempts}
     />
