@@ -4,9 +4,14 @@ import { createAppInfo } from "../../hooks/useAppInfo.svelte";
 import { API_BASE } from "../../utils/fileUpload";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-let { open, settings: _settings, onUpdate: _onUpdate }: SettingsTabContext = $props();
+// Read context fields via property access (e.g. `ctx.open`) rather than
+// destructuring with `const`/`let { ... } = ctx`. Destructuring freezes the
+// getter at mount in Svelte 5 (feedback_svelte_getter_destructuring), so the
+// open flag would stall on its initial value and `createAppInfo` would never
+// see subsequent open transitions.
+let ctx: Partial<SettingsTabContext> = $props();
 
-const appInfo = createAppInfo(() => open);
+const appInfo = createAppInfo(() => ctx.open ?? false);
 let docsLoading = $state(false);
 let docsError = $state<string | null>(null);
 

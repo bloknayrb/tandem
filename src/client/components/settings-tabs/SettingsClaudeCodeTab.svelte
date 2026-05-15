@@ -3,7 +3,12 @@ import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-let { settings, onUpdate }: SettingsTabContext = $props();
+// Read fields via `ctx.foo` instead of destructuring with `let { ... } = ctx`:
+// destructuring freezes the getter at mount in Svelte 5
+// (feedback_svelte_getter_destructuring), which would stall reactive updates
+// to settings. The modal always passes the full context shape at runtime, so
+// the non-null assertions below are safe even though the type is `Partial<>`.
+let ctx: Partial<SettingsTabContext> = $props();
 
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
@@ -13,7 +18,7 @@ const sectionLabelStyle =
   <div style={sectionLabelStyle}>
     Selection Sensitivity:
     <span style="font-weight: 400; text-transform: none;">
-      {(settings.selectionDwellMs / 1000).toFixed(1)}s
+      {(ctx.settings!.selectionDwellMs / 1000).toFixed(1)}s
     </span>
   </div>
   <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-bottom: 6px;">
@@ -25,9 +30,9 @@ const sectionLabelStyle =
     min={SELECTION_DWELL_MIN_MS}
     max={SELECTION_DWELL_MAX_MS}
     step={100}
-    value={settings.selectionDwellMs}
+    value={ctx.settings!.selectionDwellMs}
     oninput={(e) =>
-      onUpdate({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
+      ctx.onUpdate!({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
     style="width: 100%; accent-color: var(--tandem-accent);"
     aria-label="Selection dwell time"
   />
@@ -45,9 +50,9 @@ const sectionLabelStyle =
 >
   <input
     type="checkbox"
-    checked={settings.selectionToolbar}
+    checked={ctx.settings!.selectionToolbar}
     onchange={(e) =>
-      onUpdate({ selectionToolbar: (e.target as HTMLInputElement).checked })}
+      ctx.onUpdate!({ selectionToolbar: (e.target as HTMLInputElement).checked })}
     style="accent-color: var(--tandem-accent);"
   />
   <span>Show floating selection toolbar</span>
@@ -59,8 +64,8 @@ const sectionLabelStyle =
 >
   <input
     type="checkbox"
-    checked={settings.marginView}
-    onchange={(e) => onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
+    checked={ctx.settings!.marginView}
+    onchange={(e) => ctx.onUpdate!({ marginView: (e.target as HTMLInputElement).checked })}
     style="accent-color: var(--tandem-accent);"
   />
   <span>Margin annotation view (Word-style)</span>
