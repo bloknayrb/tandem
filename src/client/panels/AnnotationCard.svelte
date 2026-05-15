@@ -191,8 +191,8 @@ function handleKeyDown(e: KeyboardEvent) {
     {onSendToClaude}
   />
   <ReplyThread
-    annotationId={annotation.id}
-    {replies}
+    {annotation}
+    replies={visibleReplies}
     {isPending}
     {isEditing}
     {onReply}
@@ -211,10 +211,17 @@ function handleKeyDown(e: KeyboardEvent) {
     </button>
   {/if}
 </div>
-<ReplyThreadOverlay
-  open={isThreadOverlayOpen}
-  {annotation}
-  {replies}
-  {onReply}
-  onClose={() => (isThreadOverlayOpen = false)}
-/>
+<!-- Conditional mount: only instantiate the overlay when there's something
+     to show OR it's currently open. The `|| isThreadOverlayOpen` clause
+     keeps the overlay mounted across the open→close transition even if
+     visibleReplies drops to zero (last reply deleted) so the close
+     animation / focus restoration completes cleanly. -->
+{#if canExpandThread || isThreadOverlayOpen}
+  <ReplyThreadOverlay
+    open={isThreadOverlayOpen}
+    {annotation}
+    replies={visibleReplies}
+    {onReply}
+    onClose={() => (isThreadOverlayOpen = false)}
+  />
+{/if}

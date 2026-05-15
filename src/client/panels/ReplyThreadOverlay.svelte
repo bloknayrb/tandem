@@ -49,14 +49,10 @@ $effect(() => {
   };
 });
 
-$effect(() => {
-  if (!open) return;
-  const handler = (e: KeyboardEvent) => {
-    if (e.key === "Escape") onClose();
-  };
-  window.addEventListener("keydown", handler);
-  return () => window.removeEventListener("keydown", handler);
-});
+// ESC handling is dialog-scoped via `handleTabTrap` on the dialog element.
+// A second window-level listener fired twice on ESC and caused noisy
+// behavior in nested dialogs; the dialog has focus while open (focus trap
+// above) so dialog-scoped capture is sufficient.
 
 // Reset internal reply-composer state on close so a stale draft doesn't
 // reappear next time the overlay opens.
