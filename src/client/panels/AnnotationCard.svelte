@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Annotation, AnnotationReply } from "../../shared/types";
+import { getVisibleReplies } from "../annotations/replies";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
 import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
@@ -8,6 +9,7 @@ import HighlightCard from "./HighlightCard.svelte";
 import ImportedCard from "./ImportedCard.svelte";
 import NoteCard from "./NoteCard.svelte";
 import ReplyThread from "./ReplyThread.svelte";
+import ReplyThreadOverlay from "./ReplyThreadOverlay.svelte";
 import SuggestionCard from "./SuggestionCard.svelte";
 
 interface Props {
@@ -52,6 +54,11 @@ const isPending = $derived(annotation.status === "pending");
 const hasSuggestedText = $derived(annotation.suggestedText !== undefined);
 const canEdit = $derived(onEdit !== undefined);
 const cardLabel = $derived(getCardLabel(annotation));
+// Privacy: getVisibleReplies returns [] for non-comment annotations,
+// so note/highlight cards never surface the expand affordance.
+const visibleReplies = $derived(getVisibleReplies(annotation, replies));
+const canExpandThread = $derived(visibleReplies.length >= 1);
+let isThreadOverlayOpen = $state(false);
 
 const borderColor = $derived.by(() => {
   if (annotation.type === "highlight") return getHighlightBorder(annotation);
@@ -190,4 +197,24 @@ function handleKeyDown(e: KeyboardEvent) {
     {isEditing}
     {onReply}
   />
+  {#if canExpandThread}
+    <button
+      type="button"
+      data-testid="reply-thread-expand-{annotation.id}"
+      onclick={(e) => {
+        e.stopPropagation();
+        isThreadOverlayOpen = true;
+      }}
+      style="margin-top: 4px; padding: 1px 4px; font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
+    >
+      Expand thread
+    </button>
+  {/if}
 </div>
+<ReplyThreadOverlay
+  open={isThreadOverlayOpen}
+  {annotation}
+  {replies}
+  {onReply}
+  onClose={() => (isThreadOverlayOpen = false)}
+/>
