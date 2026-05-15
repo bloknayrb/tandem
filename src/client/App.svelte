@@ -21,6 +21,7 @@ import HelpModal from "./components/HelpModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
+import SettingsModal from "./components/SettingsModal.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
@@ -49,7 +50,7 @@ import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
-import { isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
+import { isSettingsModalShortcut, isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
@@ -57,6 +58,7 @@ import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte
 import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
+import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
 import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
@@ -192,12 +194,32 @@ const notifications = createNotifications();
 const fileDrop = createFileDrop();
 
 let settingsOpen = $state(false);
+let settingsModalOpen = $state(false);
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
+// Issue #660 — titlebar settings-icon update-available dot. Acknowledged
+// whenever the user opens settings (popover OR modal — any tab counts). Do
+// NOT destructure: the `showDot` getter loses reactivity when pulled out.
+const updateAvailable = createUpdateAvailable();
+
 function toggleSettings() {
+  // Acknowledge on the false→true transition only (closing settings via the
+  // gear shouldn't re-clear an already-acknowledged dot, but acknowledge() is
+  // idempotent so this is defence-in-depth).
+  if (!settingsOpen) updateAvailable.acknowledge();
   settingsOpen = !settingsOpen;
+}
+
+function openSettingsModalWithAck() {
+  updateAvailable.acknowledge();
+  settingsModalOpen = true;
+}
+
+function openSettingsPopoverWithAck() {
+  updateAvailable.acknowledge();
+  settingsOpen = true;
 }
 
 function cycleTheme() {
@@ -208,7 +230,8 @@ function cycleTheme() {
 // after the reactive state they depend on is available.
 wireActionDeps({
   getActiveTabId: () => yjsSync.activeTabId,
-  openSettings: () => (settingsOpen = true),
+  openSettings: openSettingsPopoverWithAck,
+  openSettingsModal: openSettingsModalWithAck,
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
   openFindBar: () => {
@@ -496,9 +519,16 @@ $effect(() => {
       } else if (e.code === "KeyS") {
         e.preventDefault();
         void triggerSave(yjsSync.activeTabId);
+      } else if (isSettingsModalShortcut(e)) {
+        // Wave 1: Ctrl+Shift+, opens the new SettingsModal sibling component
+        // (see `components/SettingsModal.svelte`). Must be tested before
+        // `isSettingsShortcut` even though that predicate also rejects shift —
+        // shielding the order against future predicate edits.
+        e.preventDefault();
+        openSettingsModalWithAck();
       } else if (isSettingsShortcut(e)) {
         e.preventDefault();
-        settingsOpen = true;
+        openSettingsPopoverWithAck();
       } else if (e.shiftKey && e.code === "KeyP") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
@@ -763,6 +793,8 @@ const tutorial = createTutorial(
     onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
     onOpenSettings={toggleSettings}
+    onOpenSettingsModal={openSettingsModalWithAck}
+    updateAvailable={updateAvailable.showDot}
     bind:settingsBtn={settingsBtnEl}
   />
   {#if !yjsSync.ready}
@@ -942,6 +974,17 @@ const tutorial = createTutorial(
       onUpdate={settingsState.updateSettings}
       returnFocusEl={settingsBtnEl}
       anchorEl={settingsBtnEl}
+      connected={yjsSync.connected}
+      reconnectAttempts={yjsSync.reconnectAttempts}
+    />
+
+    <SettingsModal
+      open={settingsModalOpen}
+      onClose={() => (settingsModalOpen = false)}
+      settings={settingsState.settings}
+      onUpdate={settingsState.updateSettings}
+      returnFocusEl={settingsBtnEl}
+      triggerEl={settingsBtnEl}
       connected={yjsSync.connected}
       reconnectAttempts={yjsSync.reconnectAttempts}
     />

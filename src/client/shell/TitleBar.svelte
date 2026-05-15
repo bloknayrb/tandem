@@ -28,8 +28,23 @@ interface Props {
   onOpenHelp?: () => void;
   /** Open Settings popover. */
   onOpenSettings?: () => void;
+  /**
+   * Open the new SettingsModal (Wave 1 sibling component). Wired separately
+   * from `onOpenSettings` so the existing gear keeps invoking the popover
+   * until Wave 2 retires it. Triggered today via the command palette /
+   * `Ctrl+Shift+,` shortcut registered in `actions/builtin.svelte.ts`.
+   */
+  onOpenSettingsModal?: () => void;
   /** Bindable settings button reference (used for keyboard shortcut anchoring). */
   settingsBtn?: HTMLButtonElement | null;
+  /**
+   * Whether a Tauri updater event has fired and not yet been acknowledged
+   * (issue #660, D6 sub-piece). Renders a small dot on the gear icon. Driven
+   * by `createUpdateAvailable()`; non-Tauri builds never render the dot
+   * regardless of this prop (the hook returns `false` outside Tauri AND the
+   * dot is wrapped in an `{#if isTauriRuntime()}` guard below).
+   */
+  updateAvailable?: boolean;
 }
 
 let {
@@ -46,7 +61,9 @@ let {
   onAuthorshipChange,
   onOpenHelp,
   onOpenSettings,
+  onOpenSettingsModal,
   settingsBtn = $bindable(null),
+  updateAvailable = false,
 }: Props = $props();
 
 let win = $state<TauriWindow | null>(null);
@@ -141,6 +158,23 @@ async function closeWindow() {
 }
 
 const themeLabel = $derived(THEME_LABEL[theme]);
+
+/**
+ * `onOpenSettingsModal` is a Wave 1 stable prop slot, declared so Wave 2 can
+ * retire `SettingsPopover` by replacing the gear's `onOpenSettings` wiring
+ * with this prop without re-touching `TitleBar.svelte`. Today the trigger is
+ * the `settings-modal` action (Ctrl+Shift+,) wired in
+ * `actions/builtin.svelte.ts`, so the prop is intentionally unused inside
+ * this component. Read it inside `$effect` (not a top-level expression) so
+ * svelte-check sees a live reference and stays quiet about both the
+ * "declared but never read" error and the `state_referenced_locally`
+ * warning. Intentionally NOT exposed via `aria-keyshortcuts` on the gear
+ * button — that attribute describes shortcuts that activate the labelled
+ * element, and Ctrl+Shift+, opens a different surface.
+ */
+$effect(() => {
+  void onOpenSettingsModal;
+});
 </script>
 
 <div class="title-bar" data-testid="title-bar">
@@ -261,12 +295,13 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     {/if}
 
     {#if onOpenSettings}
+      <span class="settings-btn-wrap">
       <button
         bind:this={settingsBtn}
         type="button"
         class="icon-btn"
         data-testid="settings-btn"
-        aria-label="Settings"
+        aria-label={updateAvailable ? "Settings (update available)" : "Settings"}
         aria-keyshortcuts="Control+Comma"
         title="Settings (Ctrl+,)"
         onclick={onOpenSettings}
@@ -282,6 +317,14 @@ const themeLabel = $derived(THEME_LABEL[theme]);
           <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3" fill="none" />
         </svg>
       </button>
+      {#if isTauriRuntime() && updateAvailable}
+        <span
+          class="titlebar-settings-dot"
+          data-testid="titlebar-update-available-dot"
+          aria-hidden="true"
+        ></span>
+      {/if}
+      </span>
     {/if}
   </div>
 
@@ -496,6 +539,40 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .icon-btn.active {
     background: var(--tandem-accent-bg);
     color: var(--tandem-accent);
+  }
+
+  /* Wraps the gear button so the update-available dot can position absolute
+     against it without restructuring the button. The wrap is otherwise
+     transparent (inherits inline-flex from .title-bar-actions). */
+  .settings-btn-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+
+  /* Issue #660 — small colored dot at top-right of the gear icon when an
+     updater event has fired and not yet been acknowledged. WCAG AA against
+     --tandem-surface-muted in both themes; 2px contrasting ring matches the
+     existing .status-dot pattern. No animation: spec calls for
+     reduced-motion-aware design and a static dot is the simplest path that
+     satisfies both reduced-motion users and the WCAG AA contrast bar. */
+  .titlebar-settings-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--tandem-r-circle);
+    background: var(--tandem-info);
+    box-shadow: 0 0 0 2px var(--tandem-surface-muted);
+    pointer-events: none;
+  }
+
+  @media (forced-colors: active) {
+    .titlebar-settings-dot {
+      background: Highlight;
+      box-shadow: 0 0 0 2px Canvas;
+    }
   }
 
   .title-bar-controls {
