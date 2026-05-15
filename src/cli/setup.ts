@@ -13,7 +13,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(__dirname, "../..");
 const CHANNEL_DIST = resolve(PACKAGE_ROOT, "dist/channel/index.js");
 
-const MCP_URL = `http://localhost:${DEFAULT_MCP_PORT}`;
+const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
 
 export interface McpEntry {
   type?: "http";
