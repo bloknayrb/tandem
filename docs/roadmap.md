@@ -18,14 +18,13 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 | Wave | Focus | Notes |
 |------|-------|-------|
 | 0 | Apple Developer cert procurement (Bryan-led calendar gate); §1H verification audit (done, zero hits) | In flight |
-| 1 | Stability bug-bash | #428 macOS install, #631 sidecar restart, #616 Y.Doc evict, #244 E2E deadlock |
-| 2 | Redesign chrome (parallel, sibling-component pattern) | Editor body fonts (D11 bundle locally), `SettingsModal.svelte` sibling, status-bar held-count badge, connection-banner polish, shortcuts modal (⌘/), settings-icon update-dot (D6 sub-piece) |
-| 3 | Redesign editor surfaces (parallel) | Selection mini-toolbar (#653 — BubbleMenu in PR #656 awaiting review), slash command menu, paged .docx layout, reply thread expansion (reactions cut per D5) |
-| 4 | Settings → Network panel + multi-provider models registry (D4) | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
-| 5 | Annotation migration (single coordinated release) | #313 content-hash identity + AR5 Word-import batch-promote + AR6 tutorial annotations. One upgrade-toast cycle. |
-| 6 | #477 + #576 | #477 PRs 1/3/4/5 (PR-4 quartet #642–#645 hardens; ≥2-week feature-flag soak). #576 docx body export (kill date 2026-05-28; LibreOffice fallback ready) |
-| 7 | Cross-platform install + #316 Cowork macOS/Linux + #428 cert | Notarization, install matrix, observer soak, accessibility gate |
-| 8 | Final | Version bump, CHANGELOG `[1.0.0]`, npm publish, Tauri release |
+| 1 | Stability bug-bash + redesign chrome + editor surfaces (shipped 2026-05-15) | #631 #616 #244 done; SettingsModal, status-bar held-count, ConnectionBanner polish, updater banner+dot, slash menu, paged docx, ReplyThreadOverlay, margin view PR1+PR2 shipped via #662–#674, #679. D11 bundled fonts reverted (#678) — see #680 |
+| 1b | Wave-1 follow-ups | **#680** re-land D11 fonts with BubbleMenu positioning fix; **#681** retrofit `/api/open` callers to `openServerPath`; **#682** strict `SettingsTabContext` registry typing; **#683** #649 margin view PR 3 of 3 (rail-collapse + narrow viewport) |
+| 2 | Settings → Network panel + multi-provider models registry (D4) | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
+| 3 | Annotation migration (single coordinated release) | #313 content-hash identity + AR5 Word-import batch-promote + AR6 tutorial annotations. One upgrade-toast cycle. |
+| 4 | #477 + #576 | #477 PRs 1/3/4/5 (PR-4 quartet #642–#645 hardens; ≥2-week feature-flag soak). #576 docx body export (kill date 2026-05-28; LibreOffice fallback ready) |
+| 5 | Cross-platform install + #316 Cowork macOS/Linux + #428 cert | Notarization, install matrix, observer soak, accessibility gate |
+| 6 | Final | Version bump, CHANGELOG `[1.0.0]`, npm publish, Tauri release |
 
 **v1.0 Core scope** (full table in §"v1.0 Release Plan" below): #477 + #576 + #316 are all Core (was Defer); #313 + #244 + #616 promoted; new surfaces from D-decisions: full-screen first-run modal (D4), multi-provider models registry (D4), settings-icon update-dot (D6).
 
