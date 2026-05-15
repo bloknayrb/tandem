@@ -57,6 +57,11 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
+      // tsx internal entry path — bypasses both `tsx watch` parent-process
+      // stdout-pipe deadlock on Windows AND `npx`/`.bin` shim buffering issues
+      // (see rationale block above). If tsx restructures this path, fall back
+      // to `npm exec tsx -- src/server/index.ts` or update the path here.
+      // See PR #672 investigation notes.
       command: "node node_modules/tsx/dist/cli.mjs src/server/index.ts",
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: !process.env.CI,
