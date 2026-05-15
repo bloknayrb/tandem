@@ -16,6 +16,10 @@ jobs:
     # credential on the tandem-ci-trusted-signing service principal. No
     # protection rules attached -- the environment exists solely as the
     # subject anchor.
+    # CAUTION: renaming or deleting this environment silently breaks the
+    # federated-credential subject match -- the Azure OIDC login fails
+    # with a confusing token-validation error rather than a clear "no such
+    # environment" message.
     environment:
       name: release
     strategy:
@@ -39,6 +43,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Enforce that Windows signing only runs on v* tag builds. The
+      # `release` environment's UI deployment-branch rule is defense in
+      # depth, but enforcement lives here so the workflow refuses to mint
+      # an OIDC token off a feature branch or workflow_dispatch.
+      - name: Refuse to sign outside tag builds
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (-not ('${{ github.ref }}'.StartsWith('refs/tags/v'))) {
+            Write-Host "::error::Windows signing is restricted to v* tag builds; got ref '${{ github.ref }}'"
+            exit 1
+          }
+          Write-Host "Tag ref OK: ${{ github.ref }}"
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -75,20 +93,31 @@ jobs:
       # `sign` tool picks it up via DefaultAzureCredential -> AzureCliCredential.
       - name: Azure OIDC login
         if: matrix.platform == 'windows-latest'
-        uses: azure/login@v2
+        # SHA-pinned to the commit v2 (moving tag) resolves to at plan time.
+        # Re-resolve and re-pin deliberately when bumping major versions.
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          # allow-no-subscriptions is REQUIRED for Trusted Signing -- the SP
+          # has no subscription role assignment, only the signer role on the
+          # cert profile. Standard azure/login refuses to proceed without
+          # subscriptions; do NOT remove this.
           allow-no-subscriptions: true
 
       - name: Install dotnet sign CLI
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          dotnet tool install --global sign --prerelease
-          # Tauri runs signCommand as a raw subprocess that does NOT inherit
-          # PATH updates from $env:GITHUB_PATH reliably (KeyQ blog 2026). Resolve
-          # to the absolute install path and pin it into tauri.conf.json below.
+          # Pin to a known-good prerelease. Stable `sign` 1.1.x exists but
+          # uses a different subcommand surface (the `trusted-signing` ->
+          # `artifact-signing` rename landed in this beta). Do NOT silently
+          # bump to 1.1.x without adjusting the subcommand below.
+          dotnet tool install --global sign --version 0.9.1-beta.26127.1
+          # Tauri runs signCommand as a raw subprocess that does NOT reliably
+          # inherit PATH updates from $env:GITHUB_PATH within the same job --
+          # `sign` resolves at job time but fails when Tauri spawns it later
+          # unless we pin to the absolute path.
           $signExe = Join-Path $env:USERPROFILE '.dotnet\tools\sign.exe'
           if (-not (Test-Path $signExe)) {
             throw "sign.exe not found at $signExe after dotnet tool install"
@@ -191,21 +220,28 @@ jobs:
         shell: bash
         run: rm -f "$RUNNER_TEMP/private_keys/"*.p8 || true
 
-      # tauri-action does not always fail when bundle.windows.signCommand
-      # exits non-zero. Verify every produced artifact is signed and
-      # timestamped; fail the job loudly if anything is unsigned or stale.
+      # tauri-action (observed 2026-05, no upstream issue found) does not
+      # always surface signCommand non-zero exits as job failure. Verify
+      # every produced artifact is signed and timestamped; fail the job
+      # loudly if anything is unsigned or stale. To safely remove this step:
+      # force-fail signCommand (e.g. break the cert profile name) and confirm
+      # the tauri-action build step fails with non-zero exit before deletion.
       - name: Verify Windows signatures
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          # Cargo binary name is `tandem-desktop` but Tauri renames the inner
-          # exe to `Tandem.exe` (productName) before bundling. Glob both.
-          # Wrap in -Force to follow file-association-handler files too if any.
+          # Three signed artifacts per Windows build (empirical, v0.11.2 log):
+          #   1. src-tauri/target/release/tandem-desktop.exe (cargo binary, signed in place by tauri-action)
+          #   2. src-tauri/target/release/bundle/nsis/Tandem_*-setup.exe
+          #   3. src-tauri/target/release/bundle/msi/Tandem_*_x64_en-US.msi
+          # The cargo binary keeps its Cargo.toml name (tandem-desktop.exe) --
+          # Tauri does NOT rename to productName before signing. signCommand
+          # is invoked on each path in turn (cargo binary actually signed
+          # twice: once after MSI bundling-patch, once after NSIS patch).
           $bundleFiles = @()
           $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -ErrorAction SilentlyContinue
           $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter '*.msi' -ErrorAction SilentlyContinue
-          $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release' -Filter '*.exe' -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -in @('Tandem.exe', 'tandem-desktop.exe') }
+          $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release' -Filter 'tandem-desktop.exe' -ErrorAction SilentlyContinue
           if ($bundleFiles.Count -eq 0) {
             Write-Host '::error::Verify Windows signatures: no .exe/.msi artifacts found under src-tauri/target/release/'
             exit 1
@@ -218,7 +254,14 @@ jobs:
             } elseif (-not $sig.TimeStamperCertificate) {
               $errors += "$($f.FullName): signature missing RFC 3161 timestamp"
             } else {
-              Write-Host "ok: $($f.Name) signed by $($sig.SignerCertificate.Subject); timestamped"
+              # TODO(#428): after first signed rc, harden this by asserting
+              # the cert subject matches the expected Trusted Signing DN.
+              # With Individual validation, the CN reflects the validated
+              # legal name (e.g. CN=Bryan Kolb), NOT the Trusted Signing
+              # account name 'Tandem'. Capture the actual subject from the
+              # first green build log below and pin it via -match here.
+              $tsSubject = if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { '(none)' }
+              Write-Host "ok: $($f.Name) signed by '$($sig.SignerCertificate.Subject)'; timestamped by '$tsSubject'"
             }
           }
           if ($errors.Count -gt 0) {
