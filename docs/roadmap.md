@@ -11,7 +11,7 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 **Triage source of truth:**
 
 - `docs/v10-triage.md` — every row marked Core / Defer / Cut
-- `~/.claude/plans/it-occurs-to-rustling-newt.md` — wave structure, exit criteria, verification gates, risk register
+- `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo) — wave structure, exit criteria, verification gates, risk register
 
 **Working wave plan** (each ~2–5 days; one Bryan-review pass at end of each wave; max 2 CRITICAL/HIGH PRs per wave):
 
@@ -20,7 +20,7 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 | 0 | Apple Developer cert procurement (Bryan-led calendar gate); §1H verification audit (done, zero hits) | In flight |
 | 1 | Stability bug-bash | #428 macOS install, #631 sidecar restart, #616 Y.Doc evict, #244 E2E deadlock |
 | 2 | Redesign chrome (parallel, sibling-component pattern) | Editor body fonts (D11 bundle locally), `SettingsModal.svelte` sibling, status-bar held-count badge, connection-banner polish, shortcuts modal (⌘/), settings-icon update-dot (D6 sub-piece) |
-| 3 | Redesign editor surfaces (parallel) | Selection mini-toolbar (#653 BubbleMenu landed via PR #656), slash command menu, paged .docx layout, reply thread expansion (D5 no reactions) |
+| 3 | Redesign editor surfaces (parallel) | Selection mini-toolbar (#653 — BubbleMenu in PR #656 awaiting review), slash command menu, paged .docx layout, reply thread expansion (reactions cut per D5) |
 | 4 | Settings → Network panel + multi-provider models registry (D4) | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
 | 5 | Annotation migration (single coordinated release) | #313 content-hash identity + AR5 Word-import batch-promote + AR6 tutorial annotations. One upgrade-toast cycle. |
 | 6 | #477 + #576 | #477 PRs 1/3/4/5 (PR-4 quartet #642–#645 hardens; ≥2-week feature-flag soak). #576 docx body export (kill date 2026-05-28; LibreOffice fallback ready) |
@@ -367,7 +367,7 @@ Future hardening (not blocking release):
 - **Deep link / open-with**: Pass file path from second-instance launch into the running server via `POST /api/open`
 - **Linux tray fallback**: Improve UX when `libappindicator3-dev` is absent (currently logs and continues)
 - **Linux/KDE title bar button placement** (#552): `tauri-plugin-decorum` positions window controls on the right (GNOME convention); KDE Plasma users with left-side decoration preference will see a mismatch. No per-platform config knob in decorum — fix requires a CSS-only `[data-platform="linux"]` mirror or a KDE-specific adjustment. Needs a KDE tester to confirm the issue and validate any fix. Tagged `needs-tester`.
-- **Updater dialog theming** (#561): dialogs now parented to main window (`MessageDialogBuilder::parent()`) so they center over the app and inherit Windows 11 dark-mode chrome from decorum; full in-app Svelte modal deferred to v0.12.0 alongside #477 if the parent attachment isn't sufficient after visual verification
+- **Updater dialog theming** (#561): dialogs now parented to main window (`MessageDialogBuilder::parent()`) so they center over the app and inherit Windows 11 dark-mode chrome from decorum. v1.0 direction (D6, locked 2026-05-14) is an in-app banner + small dot badge on the titlebar settings gear (filed as #660), not a full modal.
 
 ---
 
@@ -416,13 +416,13 @@ First-run wizard that lets users choose their AI integration, plus dropping the 
 
 **Motivation:** Claude's continuity features (CLAUDE.md, hooks, skills, memory) require spawning the real Claude Code CLI — an Agent SDK connection can't replicate them. The first-run wizard makes that explicit and exposes additional integration slots (Claude Desktop, local LLM, OpenAI, Gemini). The browser distribution path also added ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches, npm global install) without serving the primary Tauri user base.
 
-### Phase 0: Required Spikes — DONE
+### Phase 0: Required Spikes
 
-Both spikes shipped in the v0.12.0 prep batch.
+Sidecar launcher spike shipped 2026-05-14; the two CLI integration spikes from the original plan are still pending and gate PR 4.
 
-- **Spike A** — `--session-id` + `--resume` round-trip in interactive mode. Reference: anthropics/claude-code#44607. **Resolved.**
-- **Spike B** — Plugin monitor delivers the same events as `--dangerously-load-development-channels`. **Resolved**; launcher drops the dev-channels flag.
-- **Spike C (sidecar launcher validation)** — PR #640 (merged). Validates the sidecar launcher path before PR 4. Review findings addressed in commit cfb154d; #642–#646 filed as PR-4 forcing function.
+- **Spike A (pending)** — `--session-id` + `--resume` round-trip in interactive mode. Reference: anthropics/claude-code#44607. Gates PR 4.
+- **Spike B (pending)** — Plugin monitor delivers the same events as `--dangerously-load-development-channels`. Determines whether the launcher can drop the dev-channels flag. Gates PR 4.
+- **Spike C — sidecar launcher validation: SHIPPED.** PR #640 (merged 2026-05-14). Validates the sidecar launcher path. Review findings addressed in commit cfb154d; #642–#645 filed as the PR-4 hardening quartet (atomic write, mandatory backup, schema validation, backup-or-prompt UX). #646 (`TANDEM_TAURI_SIDECAR` migration cleanup) is a separate Defer per triage.
 
 ### PR Sequence (5 PRs)
 
@@ -451,14 +451,14 @@ Both spikes shipped in the v0.12.0 prep batch.
 
 **Thesis (Bryan, 2026-05-14):** every core feature rock-solid + redesign complete + pending decisions finalized. Quality > speed. Date is soft (~2026-06-10 target floats).
 
-Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave plan: see "Active — Toward v1.0" section at the top of this doc, and `~/.claude/plans/it-occurs-to-rustling-newt.md`.
+Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave plan: see "Active — Toward v1.0" section at the top of this doc, and `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo).
 
 ### Locked Design Decisions (2026-05-14)
 
 | #   | Decision                                       | Locked outcome                                                                                                                            |
 | --- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | Density × textSize collision                   | Density controls **interface chrome only**; font-size controls **editor body only**. Verify current code matches.                         |
-| D2  | Authorship visual                              | **Per-character only**. Gutter and hybrid rejected. Defers the §1G gutter row.                                                            |
+| D1  | Density × textSize collision                   | Density controls **interface chrome only**; font-size controls **editor body only**. Verified 2026-05-14 — `useDensity.ts` writes only `[data-density]` (→ `--tandem-space-*`); `App.svelte` writes only `--tandem-editor-font-size`. No collision. |
+| D2  | Authorship visual                              | **Per-character only**. Gutter and hybrid rejected. Defers the §1G gutter row in `docs/v10-triage.md`.                                    |
 | D3  | Diff/Apply-edit hunk staging                   | Option **B (modal-based)** locked for the v1.1 revisit; the surface itself defers from v1.0.                                              |
 | D4  | First-run wizard                               | Option **(a) full-screen modal** + **multi-provider model registry** (Anthropic + #477 local + OpenAI/Gemini/etc.). Settings → Models page beyond the wizard. |
 | D5  | Annotation reply thread                        | **Expanded thread, no reactions.**                                                                                                        |
@@ -483,9 +483,9 @@ Full per-row table is in `docs/v10-triage.md`. Highlights:
 
 **Polish promoted to Core:** #539 (custom keyboard shortcut UI), #596 (toggle text decorations), #597 (document statistics in status bar), #265 (welcome tutorial update — bundle into AR6), #313 (content-hash annotation identity — sequence with AR5).
 
-**Redesign Core surfaces (§1G):** selection mini-toolbar (#653 BubbleMenu shipped via PR #656), slash command menu, editor body fonts (D11 bundle locally), paged .docx layout, annotation reply thread expansion, solo-mode held-count badge → status bar, `SettingsModal.svelte` sibling (sibling-component pattern), Settings → Network panel (two-tier: Connection visible + Advanced collapsed), Settings → Models registry (D4 multi-provider), AR5 Word-import batch-promote, AR6 tutorial annotations, connection-degradation banner polish, first-run wizard (D4), shortcuts modal (⌘/), settings-icon update-dot (D6 sub-piece), empty-state with slash menu.
+**Redesign Core surfaces (§1G in `docs/v10-triage.md`):** selection mini-toolbar (#653 — BubbleMenu in PR #656 awaiting review), slash command menu, editor body fonts (D11 bundle locally), paged .docx layout, annotation reply thread expansion, solo-mode held-count badge → status bar, `SettingsModal.svelte` sibling (sibling-component pattern), Settings → Network panel (two-tier: Connection visible + Advanced collapsed), Settings → Models registry (D4 multi-provider), AR5 Word-import batch-promote, AR6 tutorial annotations, connection-degradation banner polish, first-run wizard (D4), shortcuts modal (⌘/), settings-icon update-dot (D6 sub-piece), empty-state with slash menu.
 
-**Cross-platform Core:** Apple Developer cert + macOS notarization (calendar gate; start NOW), full-parity install matrix (D12), updater banner (#561 — PR #647 already aligns).
+**Cross-platform Core:** Apple Developer cert + macOS notarization (calendar gate; start NOW), full-parity install matrix (D12), updater banner (#561 — D6 banner direction locked; supersedes PR #647).
 
 ### Release Cadence
 
@@ -511,10 +511,10 @@ v1.0 series (concrete waves; see "Active — Toward v1.0" for the wave map):
 | v0.13.0    | Stability bug-bash + redesign chrome (sibling-component pattern)                       | Waves 1, 2    |
 | v0.14.0    | Redesign editor surfaces + Settings (Network + Models registry)                        | Waves 3, 4    |
 | v0.15.0    | Annotation migration (#313 + AR5 + AR6) + #477 PRs 1/3/4/5 hidden behind feature flag | Wave 5, wave 6 (hidden) |
-| v1.0-rc.1  | #477 feature flag exposed + #576 docx body export + #316 Cowork macOS/Linux + #428 cert | Wave 6 (exposed), wave 7 |
+| v0.16.0    | #477 feature flag exposed + #576 docx body export + #316 Cowork macOS/Linux + #428 cert | Wave 6 (exposed), wave 7 |
 | v1.0.0     | Final verification, observer soak, accessibility gate, version bump                    | Wave 8        |
 
-Wave-to-version mapping is approximate; waves can split/recombine across versions based on review bandwidth and merge cadence. Source of truth for wave membership is the wave plan in `~/.claude/plans/it-occurs-to-rustling-newt.md`.
+Wave-to-version mapping is approximate; waves can split/recombine across versions based on review bandwidth and merge cadence. Source of truth for wave membership is the wave plan in `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo).
 
 ### v1.0.0 Exit Criteria
 
@@ -564,7 +564,6 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 | Item | Reason |
 |------|--------|
 | ~~#260 Coordinate system refactoring~~ | **Completed v0.8.0** (PR #423). Residual #425, #426 stay non-blocking. |
-| ~~#622 reloadFromDisk two-write crash~~ | **Deferred from v0.12.0**; documented `skipTransact` fix shape exists. v1.1 timing — Bryan not yet pulled into v1.0. |
 | #24 Tailwind CSS 4 | Token system is correct. Tailwind is a code-style question. |
 | #153 Inline images | Nice-to-have. |
 | #299 "Show in file explorer" | Bryan triage Defer. |

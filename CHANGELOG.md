@@ -40,12 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `useNotifications` now exposes a `push()` method so client-originated UI feedback (the toasts above) can be surfaced through the same toast container as server-pushed notifications, instead of `console.warn`-ing into devtools the user never opens.
 
-### Known Issues
-
-- **`reloadFromDisk` two-write crash window (#622, v0.12.0 fix)** — when the file watcher detects an external edit, `reloadFromDisk` runs `refreshAllRanges` (own `MCP_ORIGIN` transact) and then a relocation pass (separate `MCP_ORIGIN` transact). Both flow through the durable-annotation sync observer. If the server is killed between the two transactions, durable annotation state can be left at partially-refreshed ranges. Pre-existing in master (not introduced by PR #621; surfaced by audit v2). Bounded by the narrow synchronous window between the two transactions. Tracked for fix in v0.12.0 via a `skipTransact` parameter on `refreshAllRanges` so reload can merge both passes into a single transaction.
-
 ### Fixed
 
+- **`reloadFromDisk` two-write crash window (#622, PR #635)** — when the file watcher detects an external edit, `reloadFromDisk` previously ran `refreshAllRanges` and the relocation pass as two separate `MCP_ORIGIN` transactions; if the server was killed between them, durable annotation state could be left at partially-refreshed ranges. Both passes now merge into a single transaction via a new `skipTransact` parameter on `refreshAllRanges`, closing the crash window. Pre-existing in master; surfaced by audit v2.
 - **Codebase leanness audit v2 (PR #621)** — eight-step audit (`docs/audit-v2.md`) covering dead code, dependency bloat, over-engineering, wrong-tool-for-the-job, and stale docs. Validated by four domain reviewers (annotation-model, crdt, security, svelte-migration) before any deletion. Outcomes:
   - **A1:** `reloadFromDisk` (file-watcher reload path in `mcp/file-opener.ts`) — first transaction (content repopulate + awareness clear) tagged `FILE_SYNC_ORIGIN` so the durable-annotation sync observer skips re-persisting state just loaded from disk. The second transaction (textSnapshot-driven relocation pass) stays `MCP_ORIGIN` so its writes persist (caught during the post-merge CRDT review).
   - **A2 + A2b:** Tutorial note now uses `author: "user"` (per ADR-027 — notes are user-private). `useTutorial.svelte.ts` updated to exclude tutorial-seeded annotations from its user-action detection so the step-1 → step-2 advance still gates on a real user-created annotation.
