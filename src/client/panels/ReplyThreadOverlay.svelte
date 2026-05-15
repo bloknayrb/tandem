@@ -184,9 +184,8 @@ function handleTabTrap(e: KeyboardEvent) {
           {#if isReplying}
             <textarea
               bind:this={replyTextareaEl}
+              bind:value={replyText}
               data-testid="reply-thread-overlay-input"
-              value={replyText}
-              oninput={(e) => (replyText = (e.target as HTMLTextAreaElement).value)}
               onkeydown={handleReplyKeyDown}
               placeholder="Write a reply..."
               style={TEXTAREA_STYLE}
