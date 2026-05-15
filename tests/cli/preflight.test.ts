@@ -28,11 +28,11 @@ describe("ensureTandemServer", () => {
 
   it("resolves silently when /health returns 200", async () => {
     fetchSpy.mockResolvedValue(new Response("ok", { status: 200 }));
-    await expect(ensureTandemServer({ url: "http://localhost:3479" })).resolves.toBeUndefined();
+    await expect(ensureTandemServer({ url: "http://127.0.0.1:3479" })).resolves.toBeUndefined();
     expect(exitSpy).not.toHaveBeenCalled();
     expect(stderrSpy).not.toHaveBeenCalled();
     // Verify we actually hit /health, not / or /mcp.
-    expect(fetchSpy).toHaveBeenCalledWith("http://localhost:3479/health", expect.any(Object));
+    expect(fetchSpy).toHaveBeenCalledWith("http://127.0.0.1:3479/health", expect.any(Object));
   });
 
   it("exits 1 with a single clear message when fetch rejects (server down)", async () => {
@@ -49,7 +49,7 @@ describe("ensureTandemServer", () => {
 
   it("exits 1 when /health returns a non-OK status", async () => {
     fetchSpy.mockResolvedValue(new Response("boom", { status: 500 }));
-    await expect(ensureTandemServer({ url: "http://localhost:3479" })).rejects.toBeInstanceOf(
+    await expect(ensureTandemServer({ url: "http://127.0.0.1:3479" })).rejects.toBeInstanceOf(
       ExitSignal,
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -70,7 +70,7 @@ describe("ensureTandemServer", () => {
       });
     });
     await expect(
-      ensureTandemServer({ url: "http://localhost:3479", timeoutMs: 10 }),
+      ensureTandemServer({ url: "http://127.0.0.1:3479", timeoutMs: 10 }),
     ).rejects.toBeInstanceOf(ExitSignal);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
