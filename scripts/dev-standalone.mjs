@@ -14,7 +14,7 @@ function binCommand(command) {
 }
 
 function resolveStandaloneUrl(env = process.env) {
-  const raw = env.TANDEM_URL ?? `http://localhost:${env.TANDEM_MCP_PORT ?? DEFAULT_MCP_PORT}`;
+  const raw = env.TANDEM_URL ?? `http://127.0.0.1:${env.TANDEM_MCP_PORT ?? DEFAULT_MCP_PORT}`;
   return raw.replace(/\/$/, "");
 }
 

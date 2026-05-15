@@ -32,10 +32,13 @@ use tauri_plugin_prevent_default::Flags;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
-/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479)
-const HEALTH_URL: &str = "http://localhost:3479/health";
-const SETUP_URL: &str = "http://localhost:3479/api/setup";
-const OPEN_URL: &str = "http://localhost:3479/api/open";
+/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479).
+/// Must use 127.0.0.1, not `localhost` — `isHostAllowed` (api-routes.ts) narrowed
+/// out the bare `localhost` hostname in #477 PR 2, so a `Host: localhost:3479`
+/// request returns 403 Forbidden and the supervisor's health-poll times out.
+const HEALTH_URL: &str = "http://127.0.0.1:3479/health";
+const SETUP_URL: &str = "http://127.0.0.1:3479/api/setup";
+const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -2243,5 +2246,29 @@ mod pending_opens_tests {
         assert!(state.0.lock().unwrap().is_empty());
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod url_constants_tests {
+    use super::*;
+
+    // Regression guard for #477 PR 2 + #637 + #686. The server's isHostAllowed
+    // gate (api-routes.ts) rejects bare `localhost` Host headers; if these
+    // constants drift back to `http://localhost:…`, the supervisor's
+    // health-poll 403's for 15s and `npm run dev:tauri` reports
+    // "Server failed to start after 3 restart attempts".
+    #[test]
+    fn supervisor_urls_use_loopback_ip_not_localhost() {
+        for (name, url) in [
+            ("HEALTH_URL", HEALTH_URL),
+            ("SETUP_URL", SETUP_URL),
+            ("OPEN_URL", OPEN_URL),
+        ] {
+            assert!(
+                url.starts_with("http://127.0.0.1:"),
+                "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
+            );
+        }
     }
 }

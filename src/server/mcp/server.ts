@@ -325,16 +325,16 @@ export async function startMcpServerHttp(
 
   // RFC 9728 Protected Resource Metadata — declares Bearer auth via header.
   // Newer Claude Code versions probe this before connecting to MCP.
-  // resource uses literal "localhost" (invariant 6 — never req.host or a detected LAN IP).
+  // resource uses literal "127.0.0.1" (invariant 6 — never req.host or a detected LAN IP).
   // Auth-exempt: these endpoints must be reachable before auth is established.
   app.get(
     "/.well-known/oauth-protected-resource/mcp",
     (_req: import("express").Request, res: import("express").Response) => {
       res.header("Access-Control-Allow-Origin", "*");
       res.json({
-        resource: `http://localhost:${port}/mcp`,
+        resource: `http://127.0.0.1:${port}/mcp`,
         bearer_methods_supported: ["header"],
-        authorization_servers: [`http://localhost:${port}`],
+        authorization_servers: [`http://127.0.0.1:${port}`],
       });
     },
   );
@@ -343,9 +343,9 @@ export async function startMcpServerHttp(
     (_req: import("express").Request, res: import("express").Response) => {
       res.header("Access-Control-Allow-Origin", "*");
       res.json({
-        resource: `http://localhost:${port}/mcp`,
+        resource: `http://127.0.0.1:${port}/mcp`,
         bearer_methods_supported: ["header"],
-        authorization_servers: [`http://localhost:${port}`],
+        authorization_servers: [`http://127.0.0.1:${port}`],
       });
     },
   );

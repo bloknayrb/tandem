@@ -25,7 +25,7 @@ export function launchClaude(): { status: string; pid?: number } {
   }
 
   const claudeCmd = process.env.TANDEM_CLAUDE_CMD || "claude";
-  const tandemUrl = `http://localhost:${process.env.TANDEM_MCP_PORT || DEFAULT_MCP_PORT}`;
+  const tandemUrl = `http://127.0.0.1:${process.env.TANDEM_MCP_PORT || DEFAULT_MCP_PORT}`;
 
   const args = [
     "--dangerously-load-development-channels",

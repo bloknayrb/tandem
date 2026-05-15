@@ -194,7 +194,7 @@ export function createYjsSync(): YjsSyncState {
 
       const ydoc = new Y.Doc();
       const provider = new HocuspocusProvider({
-        url: `ws://localhost:${DEFAULT_WS_PORT}`,
+        url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
         name: doc.id,
         document: ydoc,
       });
@@ -263,7 +263,7 @@ export function createYjsSync(): YjsSyncState {
   {
     const ydoc = new Y.Doc();
     const provider = new HocuspocusProvider({
-      url: `ws://localhost:${DEFAULT_WS_PORT}`,
+      url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
       name: CTRL_ROOM,
       document: ydoc,
     });

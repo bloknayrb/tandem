@@ -24,7 +24,7 @@ describe("buildMcpEntries", () => {
     const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js");
     expect(entries.tandem).toEqual({
       type: "http",
-      url: `http://localhost:${DEFAULT_MCP_PORT}/mcp`,
+      url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`,
     });
     expect(entries["tandem-channel"]).toBeUndefined();
   });
@@ -50,7 +50,7 @@ describe("buildMcpEntries", () => {
     const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", { token });
     expect(entries.tandem.headers?.["Authorization"]).toBe(`Bearer ${token}`);
     expect(entries.tandem.type).toBe("http");
-    expect(entries.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
+    expect(entries.tandem.url).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
   });
 
   it("omits headers from HTTP entry when no token (backward compat)", () => {
@@ -65,7 +65,7 @@ describe("buildMcpEntries", () => {
       token,
     });
     expect(entries["tandem-channel"]?.env?.TANDEM_AUTH_TOKEN).toBe(token);
-    expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
+    expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
   });
 
   it("omits TANDEM_AUTH_TOKEN from shim env when no token", () => {
@@ -73,7 +73,7 @@ describe("buildMcpEntries", () => {
       withChannelShim: true,
     });
     expect(entries["tandem-channel"]?.env?.TANDEM_AUTH_TOKEN).toBeUndefined();
-    expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
+    expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
   });
 
   it("generates stdio entry for claude-desktop targets", () => {
@@ -82,7 +82,7 @@ describe("buildMcpEntries", () => {
     });
     expect(entries.tandem.command).toBe("npx");
     expect(entries.tandem.args).toEqual(["-y", "tandem-editor", "mcp-stdio"]);
-    expect(entries.tandem.env?.TANDEM_URL).toBe(`http://localhost:${DEFAULT_MCP_PORT}`);
+    expect(entries.tandem.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
     expect(entries.tandem.type).toBeUndefined();
     expect(entries.tandem.url).toBeUndefined();
   });
@@ -102,7 +102,7 @@ describe("buildMcpEntries", () => {
       targetKind: "claude-code",
     });
     expect(entries.tandem.type).toBe("http");
-    expect(entries.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
+    expect(entries.tandem.url).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
     expect(entries.tandem.command).toBeUndefined();
   });
 });
@@ -146,7 +146,7 @@ describe("applyConfig", () => {
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toEqual({
       type: "http",
-      url: `http://localhost:${DEFAULT_MCP_PORT}/mcp`,
+      url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`,
     });
     expect(written.mcpServers["tandem-channel"]).toBeUndefined();
   });
@@ -193,7 +193,7 @@ describe("applyConfig", () => {
     const entries = buildMcpEntries("/fake/channel/index.js");
     await applyConfig(configPath, entries);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(written.mcpServers.tandem.url).toBe(`http://localhost:${DEFAULT_MCP_PORT}/mcp`);
+    expect(written.mcpServers.tandem.url).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
   });
 
   it("removes stale tandem-channel entry left by older installers", async () => {

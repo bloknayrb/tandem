@@ -126,7 +126,7 @@ function checkMcpJson() {
     if (!channel.env?.TANDEM_URL) {
       warn(
         "tandem-channel missing TANDEM_URL env var",
-        'Add "env": {"TANDEM_URL": "http://localhost:3479"}',
+        'Add "env": {"TANDEM_URL": "http://127.0.0.1:3479"}',
       );
     }
   }
@@ -238,13 +238,13 @@ async function checkHealth() {
   const result = await httpGet(`http://127.0.0.1:${MCP_PORT}/health`);
 
   if (!result) {
-    fail(`Server not responding on localhost:${MCP_PORT}`, "npm run dev:standalone");
+    fail(`Server not responding on 127.0.0.1:${MCP_PORT}`, "npm run dev:standalone");
     return false;
   }
 
   if (result.error) {
     fail(
-      `Server not responding on localhost:${MCP_PORT} (${result.error})`,
+      `Server not responding on 127.0.0.1:${MCP_PORT} (${result.error})`,
       "npm run dev:standalone",
     );
     return false;
