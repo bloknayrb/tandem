@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
+import type * as Y from "yjs";
 import { groupReplies } from "../../src/client/hooks/useAnnotationReplies.svelte";
 import type { AnnotationReply } from "../../src/shared/types";
 
-function makeSource(values: unknown[]) {
+// `groupReplies` accepts `Pick<Y.Map<AnnotationReply>, "forEach">`, whose
+// callback carries Y.Map's full `(value, key, map)` signature. Bare object
+// literals don't structurally match that, so cast the test double through
+// `unknown` — the unit test only exercises the iteration contract, not the
+// real Y.Map shape.
+function makeSource(values: unknown[]): Pick<Y.Map<AnnotationReply>, "forEach"> {
   return {
     forEach(cb: (value: unknown) => void): void {
       for (const v of values) cb(v);
     },
-  };
+  } as unknown as Pick<Y.Map<AnnotationReply>, "forEach">;
 }
 
 const r = (overrides: Partial<AnnotationReply>): AnnotationReply => ({

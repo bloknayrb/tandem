@@ -34,7 +34,9 @@ export function createAnnotationReplies(opts: CreateAnnotationRepliesOpts): Anno
       if (byId.size > 0) byId = new Map();
       return;
     }
-    const ymap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    // `ydoc.getMap` returns `Y.Map<unknown>` — narrow to the typed shape
+    // `groupReplies` expects. Values are sanitized inside the helper.
+    const ymap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES) as unknown as Y.Map<AnnotationReply>;
     const rebuild = (): void => {
       byId = groupReplies(ymap);
     };
@@ -55,9 +57,9 @@ export function createAnnotationReplies(opts: CreateAnnotationRepliesOpts): Anno
  * `annotationId`, and sort each list by ascending `timestamp`. Defensive
  * against malformed entries (non-objects, missing `annotationId`).
  */
-export function groupReplies(source: {
-  forEach: (cb: (value: unknown) => void) => void;
-}): Map<string, AnnotationReply[]> {
+export function groupReplies(
+  source: Pick<Y.Map<AnnotationReply>, "forEach">,
+): Map<string, AnnotationReply[]> {
   const grouped = new Map<string, AnnotationReply[]>();
   source.forEach((value) => {
     const reply = value as AnnotationReply | null | undefined;
