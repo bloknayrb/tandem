@@ -57,6 +57,7 @@ import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte
 import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
+import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
@@ -195,8 +196,27 @@ let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
+// Issue #660 — titlebar settings-icon update-available dot. Acknowledged
+// whenever the user opens settings (popover OR modal — any tab counts). Do
+// NOT destructure: the `showDot` getter loses reactivity when pulled out.
+const updateAvailable = createUpdateAvailable();
+
 function toggleSettings() {
+  // Acknowledge on the false→true transition only (closing settings via the
+  // gear shouldn't re-clear an already-acknowledged dot, but acknowledge() is
+  // idempotent so this is defence-in-depth).
+  if (!settingsOpen) updateAvailable.acknowledge();
   settingsOpen = !settingsOpen;
+}
+
+function openSettingsModalWithAck() {
+  updateAvailable.acknowledge();
+  settingsModalOpen = true;
+}
+
+function openSettingsPopoverWithAck() {
+  updateAvailable.acknowledge();
+  settingsOpen = true;
 }
 
 function cycleTheme() {
@@ -207,8 +227,8 @@ function cycleTheme() {
 // after the reactive state they depend on is available.
 wireActionDeps({
   getActiveTabId: () => yjsSync.activeTabId,
-  openSettings: () => (settingsOpen = true),
-  openSettingsModal: () => (settingsModalOpen = true),
+  openSettings: openSettingsPopoverWithAck,
+  openSettingsModal: openSettingsModalWithAck,
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
   openFindBar: () => {
@@ -502,10 +522,10 @@ $effect(() => {
         // `isSettingsShortcut` even though that predicate also rejects shift —
         // shielding the order against future predicate edits.
         e.preventDefault();
-        settingsModalOpen = true;
+        openSettingsModalWithAck();
       } else if (isSettingsShortcut(e)) {
         e.preventDefault();
-        settingsOpen = true;
+        openSettingsPopoverWithAck();
       } else if (e.shiftKey && e.code === "KeyP") {
         e.preventDefault();
         paletteOpen = !untrack(() => paletteOpen);
@@ -770,7 +790,8 @@ const tutorial = createTutorial(
     onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
     onOpenSettings={toggleSettings}
-    onOpenSettingsModal={() => (settingsModalOpen = true)}
+    onOpenSettingsModal={openSettingsModalWithAck}
+    updateAvailable={updateAvailable.showDot}
     bind:settingsBtn={settingsBtnEl}
   />
   {#if !yjsSync.ready}
