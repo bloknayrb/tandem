@@ -191,10 +191,21 @@ $effect(() => {
 });
 
 // -- readOnly toggling without recreating the editor -----------------------
+// Tiptap's `setEditable` synchronously emits an "update" event every call.
+// FindReplaceBar's bumpTick listener writes `tick++` on every update, which
+// re-flushes Svelte effects; a redundant readOnly re-delivery cascading
+// through Tiptap update emits can trip Svelte's effect_update_depth_exceeded
+// guard on doc open (observed when opening docs/roadmap.md). Guard with a
+// last-value check so no-op re-runs short-circuit before reaching Tiptap.
+// See: feedback_svelte_effect_depth_guard.
+let _lastReadOnly: boolean | undefined;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  ed.setEditable(!readOnly);
+  const ro = readOnly;
+  if (_lastReadOnly === ro) return;
+  _lastReadOnly = ro;
+  ed.setEditable(!ro);
 });
 
 // -- Keep CollaborationCursor name synced with stored display name --------
