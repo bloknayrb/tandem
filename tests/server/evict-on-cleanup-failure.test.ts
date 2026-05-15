@@ -25,10 +25,13 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   };
 });
 
+import type { DocStore } from "../../src/server/annotations/store.js";
 import {
   getTombstones,
   recordTombstone,
+  registerAnnotationObserver,
   resetForTesting as resetSyncForTesting,
+  type SyncContext,
 } from "../../src/server/annotations/sync.js";
 import {
   attachObservers,
@@ -119,50 +122,54 @@ describe("evictPartialDocState (#616)", () => {
     expect(received).toEqual([]);
   });
 
-  it("drops the per-doc file-sync context with phase 'close' (tombstone ledger empty)", async () => {
+  it("drops the per-doc file-sync context with phase 'close' (tombstone ledger empty)", () => {
     const doc = makePoisonedDoc();
 
-    // Seed a tombstone ledger keyed to the docHash, then register a sync
-    // context disposer so clearFileSyncContext (called via "close") fires
-    // the close-phase branch in registerAnnotationObserver — which is what
-    // drops `tombstonesByDoc[docHash]`.
+    // Minimal DocStore: only `queueWrite` is reachable from this test (and the
+    // FILE_SYNC_ORIGIN filter should prevent even that). The other methods are
+    // wired to throw if surprised so the test fails loud on unexpected use.
+    const queueWrite = vi.fn();
+    const store = {
+      load: async () => {
+        throw new Error("store.load should not be called");
+      },
+      queueWrite,
+      flush: async () => undefined,
+      clear: async () => undefined,
+      isReadOnly: () => false,
+      isDisabled: () => false,
+    } satisfies DocStore;
+
+    const ctx: SyncContext = {
+      ydoc: doc,
+      store,
+      docHash: DOC_HASH,
+      meta: { filePath: "/tmp/x" },
+    };
+
+    // Register the REAL observer. Its close-phase disposer is what drops
+    // `tombstonesByDoc[docHash]`; we want to exercise that contract end-to-end,
+    // not a comment-only stand-in.
+    const cleanup = registerAnnotationObserver(ctx);
+
+    // Seed the ledger AFTER registration so the observer is in place when
+    // eviction fires.
     recordTombstone(DOC_HASH, "ann-1", 0);
     expect(getTombstones(DOC_HASH)).toHaveLength(1);
 
-    // Minimal SyncContext + a cleanup that matches the
-    // registerAnnotationObserver disposer contract: phase "close" should
-    // drop the ledger. We simulate that contract directly so the test
-    // doesn't depend on the file-sync registry's internals — it asserts
-    // that eviction invokes the cleanup with phase "close".
-    const cleanup = vi.fn((phase?: "swap" | "close") => {
-      if (phase === "close") {
-        // Mirror the real disposer's close-phase behavior.
-        // (See registerAnnotationObserver in src/server/annotations/sync.ts)
-        // We can't import the private map; instead we use the public reset
-        // hook below to assert the ledger is empty post-eviction.
-      }
-    });
-    setFileSyncContext(
-      DOC_ID,
-      // Cast: this is a structural stand-in; only `store`/`docHash`/`meta`
-      // are read by the registry when it forwards to the cleanup.
-      {
-        ydoc: doc,
-        store: { clear: async () => undefined } as never,
-        docHash: DOC_HASH,
-        meta: { filePath: "/tmp/x" },
-      },
-      cleanup,
-    );
+    setFileSyncContext(DOC_ID, ctx, cleanup);
 
     __testEvictPartialDocState(doc, DOC_ID);
 
-    // Eviction MUST have called the disposer with phase "close" (not "swap").
-    expect(cleanup).toHaveBeenCalledWith("close");
+    // Real assertion: the close-phase disposer ran and dropped the ledger.
+    expect(getTombstones(DOC_HASH)).toHaveLength(0);
 
-    // And calling it a second time is a no-op (registry deleted the entry).
-    __testEvictPartialDocState(doc, DOC_ID);
-    expect(cleanup).toHaveBeenCalledTimes(1);
+    // The FILE_SYNC_ORIGIN eviction transact must not have queued any
+    // user-intent writes back to the store.
+    expect(queueWrite).not.toHaveBeenCalled();
+
+    // Second eviction is a no-op against the registry (entry deleted).
+    expect(() => __testEvictPartialDocState(doc, DOC_ID)).not.toThrow();
   });
 
   it("is a no-op against the file-sync registry when docId has no context (open-path case)", () => {
