@@ -89,6 +89,8 @@ interface Props {
   readOnly: boolean;
   /** Absolute path of the currently open file — used to resolve relative links. */
   currentFilePath?: string | null;
+  /** Active document's file format (e.g. "docx", "md"). Drives the paged white-sheet layout for .docx. */
+  format?: string | null;
   activeAnnotationId?: string | null;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onAnnotationClick?: (annotationId: string) => void;
@@ -100,6 +102,7 @@ const {
   provider,
   readOnly,
   currentFilePath,
+  format,
   activeAnnotationId,
   onEditorReady,
   onAnnotationClick,
@@ -108,6 +111,12 @@ const {
 
 let editor = $state<TiptapEditor | null>(null);
 let editorRoot: HTMLDivElement | null = null;
+
+// Paged white-sheet-on-gray-canvas layout for .docx files. Must be `$derived`
+// (not `const`) so it updates when the active document changes — see
+// feedback_svelte_const_vs_derived. CSS-driven: applies `.tandem-paged` to the
+// editor root; styles live in editor.css. No DOM injection.
+const isPaged = $derived(format === "docx");
 
 // -------------------------------------------------------------------------
 // Editor lifecycle: re-create when (ydoc, provider) identity changes.
@@ -160,8 +169,11 @@ $effect(() => {
     editorProps: {
       attributes: {
         class: "tandem-editor",
-        style:
-          "outline: none; min-height: 500px; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
+        // `min-height` lives in editor.css (`.tandem-editor` = 500px,
+        // `.tandem-paged .tandem-editor` = 1056px). Inline `min-height` here
+        // would beat the paged-layout selector via specificity and silently
+        // lose the 11in sheet height for .docx.
+        style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
       },
     },
     editable: untrack(() => !readOnly),
@@ -274,4 +286,5 @@ async function handleEditorClick(e: MouseEvent) {
   onclick={handleEditorClick}
   role="presentation"
   data-testid="editor-root"
+  class:tandem-paged={isPaged}
 ></div>

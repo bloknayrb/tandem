@@ -24,7 +24,6 @@ import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
-import DocxPageContainer from "./editor/DocxPageContainer.svelte";
 import Editor from "./editor/Editor.svelte";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
@@ -1028,6 +1027,7 @@ const tutorial = createTutorial(
         provider={activeTab!.provider}
         readOnly={yjsSync.readOnly}
         currentFilePath={activeTab!.filePath}
+        format={activeTab!.format}
         {activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
@@ -1061,14 +1061,14 @@ const tutorial = createTutorial(
       bind:this={marginLayerEl}
       style={settingsState.settings.marginView ? "position: relative;" : "display: contents;"}
     >
-      <!-- DocxPageContainer wraps Editor for .docx; format is stable per activeTab.id key guard —
-           both branches share the same onEditorReady to update the editor ref -->
+      <!-- Editor renders paged white-sheet layout for .docx via the `.tandem-paged`
+           class (driven by the `format` prop / `isPaged` $derived inside Editor.svelte).
+           For .docx we skip the max-width wrapper so the gray canvas can paint full-width;
+           the inner white sheet is centered by editor.css. -->
       {#if activeTab?.format === "docx"}
-        <DocxPageContainer>
-          {#key activeTab.id}
-            {@render editorContent()}
-          {/key}
-        </DocxPageContainer>
+        {#key activeTab.id}
+          {@render editorContent()}
+        {/key}
       {:else}
         <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
           {#if activeTab}
