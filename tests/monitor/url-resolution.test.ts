@@ -47,13 +47,13 @@ describe("resolveTandemUrl precedence", () => {
   });
 
   it("falls back to localhost default when all env vars absent", () => {
-    expect(resolveTandemUrl()).toBe("http://localhost:3479");
+    expect(resolveTandemUrl()).toBe("http://127.0.0.1:3479");
   });
 
   it("falls back to localhost default when URL env vars are blank", () => {
     process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "   ";
     process.env.TANDEM_URL = "";
-    expect(resolveTandemUrl()).toBe("http://localhost:3479");
+    expect(resolveTandemUrl()).toBe("http://127.0.0.1:3479");
   });
 
   it("skips blank explicit override before plugin URL", () => {
@@ -70,7 +70,7 @@ describe("resolveTandemUrl precedence", () => {
   it("falls back to localhost default when explicit override and env vars are blank", () => {
     process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL = "   ";
     process.env.TANDEM_URL = "";
-    expect(resolveTandemUrl("\t")).toBe("http://localhost:3479");
+    expect(resolveTandemUrl("\t")).toBe("http://127.0.0.1:3479");
   });
 
   it("trims surrounding whitespace and strips trailing slashes", () => {
@@ -118,7 +118,7 @@ describe("authFetch uses resolveAuthToken (integration)", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     const { authFetch } = await import("../../src/shared/cli-runtime.js");
-    await authFetch("http://localhost:3479/test");
+    await authFetch("http://127.0.0.1:3479/test");
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     const calledHeaders = new Headers(fetchSpy.mock.calls[0][1]?.headers);
@@ -132,7 +132,7 @@ describe("authFetch uses resolveAuthToken (integration)", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     const { authFetch } = await import("../../src/shared/cli-runtime.js");
-    await authFetch("http://localhost:3479/test");
+    await authFetch("http://127.0.0.1:3479/test");
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     const calledHeaders = new Headers(fetchSpy.mock.calls[0][1]?.headers);

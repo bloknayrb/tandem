@@ -22,9 +22,9 @@ export function redirectConsoleToStderr(): void {
  * (1) explicit override (programmatic, e.g. from tests)
  * (2) CLAUDE_PLUGIN_OPTION_SERVER_URL — injected by plugin host from userConfig
  * (3) TANDEM_URL — explicit env override
- * (4) localhost default
+ * (4) 127.0.0.1 default (apiMiddleware narrowed out bare 'localhost' in PR #477 PR 2)
  * Blank values are treated as absent so a blank plugin option does not mask an
- * explicit TANDEM_URL or the localhost default.
+ * explicit TANDEM_URL or the 127.0.0.1 default.
  * The returned string has no trailing slash so callers can concatenate
  * `/health`, `/mcp`, etc. without double-slash. One or more trailing slashes
  * are stripped, so both `http://x/` and `http://x//` resolve to `http://x`.
@@ -42,7 +42,7 @@ function resolveTandemUrlCandidate(override?: string): string {
   for (const url of candidates) {
     if (url !== undefined && url.trim() !== "") return url.trim();
   }
-  return `http://localhost:${DEFAULT_MCP_PORT}`;
+  return `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
 }
 
 /**
