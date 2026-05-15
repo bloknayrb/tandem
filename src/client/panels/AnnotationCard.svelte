@@ -205,7 +205,7 @@ function handleKeyDown(e: KeyboardEvent) {
         e.stopPropagation();
         isThreadOverlayOpen = true;
       }}
-      style="margin-top: 4px; padding: 1px 4px; font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
+      style="margin-top: var(--tandem-space-1); padding: var(--tandem-space-1) var(--tandem-space-2); font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
     >
       Expand thread
     </button>
