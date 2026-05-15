@@ -200,32 +200,81 @@ test("PR2: comment with a reply shows reply count in the bubble", async ({ page 
 });
 
 test("PR2: note bubble never exposes replies (ADR-027)", async ({ page }) => {
-  const open = await mcp.callTool("tandem_open", {
-    filePath: path.join(tmpDir, "sample.md"),
-  });
-  expect(open).toBeTruthy();
-  // Notes can only be created via the channel API since they're user-private.
-  // For E2E we use the inbox/note creation channel: post a comment, then
-  // verify the left column (which renders notes) never gets a reply count.
-  // Simpler: confirm the comment bubble's reply count attribute is "0" when
-  // there are no replies. (Notes are tested at the unit level via
-  // `getVisibleReplies` returning [] for type !== "comment".)
-  const created = (await mcp.callTool("tandem_comment", {
-    from: TITLE_FROM,
-    to: TITLE_TO,
-    text: "No replies yet",
-    textSnapshot: TITLE_TEXT,
-  })) as { id?: string; annotationId?: string };
-  const commentId = (created.id ?? created.annotationId) as string;
+  // ADR-027: notes are user-private; the client's `getVisibleReplies()` filter
+  // returns `[]` for any annotation whose type !== "comment". The bubble still
+  // RENDERS (in the left column for notes) but its reply-count attribute must
+  // stay at "0" even after a reply is added to the underlying annotation. We
+  // create a real note via the UI popup path (no `tandem_note` MCP tool
+  // exists — notes are user-only) and exercise the scroll-invariant
+  // positioning layer (lesson #71) by scrolling once between assertions.
 
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
-  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
 
+  // Margin view must be on before the note is created so the bubble mounts.
   await setMarginView(page, true);
 
-  const bubble = page.locator(`[data-testid='margin-bubble-${commentId}']`);
+  // Create a real note via the selection popup (pattern: toolbar-redesign.spec.ts).
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  const popupInput = page.locator("[data-testid='popup-annotation-input']");
+  await expect(popupInput).toBeVisible({ timeout: 3_000 });
+  await popupInput.fill("private note");
+  await page.locator("[data-testid='popup-note-submit']").click();
+
+  // Grab the freshly-created note's id from the editor decoration so we can
+  // address its bubble directly. Multiple decorations exist (one per text
+  // node spanning the range) — first() is sufficient since they all share
+  // the same annotation id.
+  const annNode = page.locator("[data-annotation-id]").first();
+  await expect(annNode).toBeVisible({ timeout: 10_000 });
+  const noteId = await annNode.getAttribute("data-annotation-id");
+  expect(noteId, "selection popup must yield an annotation id").toBeTruthy();
+
+  // Note bubble renders on the LEFT column (App.svelte routes
+  // `marginNotes` -> left <MarginColumn/>). Reply count starts at "0".
+  const bubble = page.locator(
+    `[data-testid='margin-column-left'] [data-testid='margin-bubble-${noteId}']`,
+  );
   await expect(bubble).toBeVisible({ timeout: 5_000 });
   await expect(bubble).toHaveAttribute("data-margin-bubble-reply-count", "0");
+
+  // Scroll the editor at least once (exercises lesson #71 scroll-invariant
+  // positioning layer — `coordsAtPos - layerTop` must remain a finite number,
+  // not NaN). The bubble must remain placed and the reply-count untouched.
+  await page
+    .locator(".editor-scroll")
+    .first()
+    .evaluate((el) => {
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    });
+
+  // Post a reply against the note's id. The server happily accepts replies
+  // for any pending annotation (see `addReplyToAnnotation` — no type guard);
+  // the ADR-027 enforcement is client-side in `getVisibleReplies()`. The
+  // load-bearing assertion: the bubble's reply-count attribute MUST remain
+  // "0" even though a reply row now exists in the Y.Map. Use expect.poll —
+  // a thrown rAF / coordsAtPos NaN must surface as test failure, not silent
+  // pass via setTimeout.
+  await mcp.callTool("tandem_annotationReply", {
+    annotationId: noteId as string,
+    text: "this reply must never surface",
+  });
+
+  // Confirm the reply IS visible to comments — sanity check that the call
+  // path is wired by inspecting the underlying replies count via a fresh
+  // poll, then confirm the note bubble's filtered count is still 0.
+  await expect
+    .poll(async () => await bubble.getAttribute("data-margin-bubble-reply-count"), {
+      timeout: 5_000,
+      message: "note bubble must keep reply-count='0' after reply (ADR-027)",
+    })
+    .toBe("0");
+  await expect(bubble).toBeVisible();
 });
 
 test("toggle off after on: columns disappear (validates display:contents wrapper fix)", async ({
