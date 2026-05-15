@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_prevent_default::Flags;
@@ -689,7 +689,17 @@ fn restart_sidecar(app: tauri::AppHandle) {
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
         if let Err(e) = start_sidecar(&handle, &client, None).await {
+            // Detailed error stays in the log sink only — never user-visible.
+            // The emitted event carries a stable code, no error detail, so the
+            // WebView can surface a generic toast without leaking paths, env
+            // vars, errno text, or the auth token.
+            log::error!("[restart_sidecar] failed to restart sidecar: {e}");
             eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
+            if let Err(emit_err) =
+                handle.emit("sidecar-restart-failed", "SIDECAR_RESTART_FAILED")
+            {
+                log::error!("[restart_sidecar] failed to emit failure event: {emit_err}");
+            }
         }
     });
 }
