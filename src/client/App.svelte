@@ -770,7 +770,6 @@ const tutorial = createTutorial(
     onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
     onOpenSettings={toggleSettings}
-    onOpenSettingsModal={() => (settingsModalOpen = true)}
     bind:settingsBtn={settingsBtnEl}
   />
   {#if !yjsSync.ready}
