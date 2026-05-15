@@ -228,6 +228,37 @@ jobs:
         shell: bash
         run: rm -f "$RUNNER_TEMP/private_keys/"*.p8 || true
 
+      # Diagnostic snapshot of every .exe/.msi under src-tauri/target/release
+      # immediately after tauri-action exits. The first v0.12.0 release run
+      # showed `tandem-desktop.exe` (the cargo binary) as unsigned while the
+      # .msi and NSIS .exe wrappers WERE signed by Trusted Signing — meaning
+      # tauri-action's signCommand was invoked on the bundles but skipped or
+      # overwritten on the cargo binary. This step is informational only
+      # (`if: always()`) so the proof lands in the log even when the next
+      # step fails. Remove after the inner-binary signing path is stable.
+      - name: Diagnostic — dump signature state of every Windows artifact
+        if: always() && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $roots = @(
+            'src-tauri/target/release',
+            'src-tauri/target/release/bundle/nsis',
+            'src-tauri/target/release/bundle/msi'
+          )
+          foreach ($root in $roots) {
+            if (-not (Test-Path $root)) {
+              Write-Host "(missing) $root"
+              continue
+            }
+            Write-Host "=== $root ==="
+            Get-ChildItem -Path $root -File -Recurse -Include '*.exe', '*.msi' -ErrorAction SilentlyContinue | ForEach-Object {
+              $sig = Get-AuthenticodeSignature -FilePath $_.FullName
+              $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '(none)' }
+              $stamper = if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { '(none)' }
+              Write-Host ("  {0}`n    Status: {1}`n    Signer: {2}`n    Stamper: {3}" -f $_.FullName, $sig.Status, $signer, $stamper)
+            }
+          }
+
       # tauri-action (observed 2026-05, no upstream issue found) does not
       # always surface signCommand non-zero exits as job failure. Verify
       # every produced artifact is signed and timestamped; fail the job
