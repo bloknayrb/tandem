@@ -635,6 +635,11 @@ function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
     clearFileSyncContext(docId);
   }
 
+  // `clearFileSyncContext` MUST run before the `doc.transact` clear. It detaches
+  // the durable-sync observer first; otherwise clearing the maps would fire the
+  // observer with empty-map delete events and persist an empty snapshot to the
+  // on-disk annotation file — destroying durable annotations for the docId we
+  // intended to evict-and-reopen.
   doc.transact(() => {
     const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
     annotations.forEach((_, k) => annotations.delete(k));
