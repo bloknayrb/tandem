@@ -182,10 +182,35 @@ $effect(() => {
   requestAnimationFrame(() => textareaEl?.focus());
 });
 
+// Selection-popup focus policy (#653): do NOT auto-focus the textarea on popup
+// mount. Auto-focus stole focus from the editor, which (a) cleared the browser's
+// native ::selection visual and (b) made it impossible for the user to extend the
+// selection by mouse drag (the editor was no longer the focus owner). Users now
+// click the textarea explicitly to type — the popup itself stays out of the way.
+//
+// Selection visibility while focus is elsewhere is handled by
+// SelectionDecorationExtension (#652).
+//
+// requestCommentFocus (Ctrl+Alt+M shortcut, lines 175–183) still focuses the
+// textarea — that's an explicit "give me a comment input now" intent, not a
+// passive selection.
+
+// Re-capture the selection range whenever it changes while the popup is open,
+// so a user who drag-extends past the initial selection ends up annotating the
+// extended range. Skip when the textarea has focus — the editor's selection
+// won't be moving in that case (the textarea owns the cursor), and re-capturing
+// would race the submit handlers.
 $effect(() => {
-  if (showPopup) {
-    untrack(() => textareaEl?.focus());
-  }
+  if (!editor || !showPopup) return;
+  const ed = editor;
+  const onSelChange = () => {
+    if (document.activeElement === textareaEl) return;
+    captureSelectionRange();
+  };
+  ed.on("selectionUpdate", onSelChange);
+  return () => {
+    if (!ed.isDestroyed) ed.off("selectionUpdate", onSelChange);
+  };
 });
 
 $effect(() => {
