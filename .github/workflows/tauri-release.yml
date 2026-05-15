@@ -9,6 +9,15 @@ jobs:
   build-tauri:
     permissions:
       contents: write
+      # OIDC token write for azure/login@v2 (Windows signing).
+      id-token: write
+    # `release` environment binds the OIDC token subject to
+    # `repo:bloknayrb/tandem:environment:release`, matching the federated
+    # credential on the tandem-ci-trusted-signing service principal. No
+    # protection rules attached -- the environment exists solely as the
+    # subject anchor.
+    environment:
+      name: release
     strategy:
       fail-fast: false
       matrix:
@@ -59,30 +68,65 @@ jobs:
       - name: Download Node.js sidecar
         run: node scripts/download-node-sidecar.mjs --target ${{ matrix.node-target }}
 
-      - name: Create self-signed code signing certificate
+      # Windows signing uses Azure Trusted Signing via the Microsoft-maintained
+      # dotnet/sign CLI. Authentication is OIDC -> federated credential on the
+      # tandem-ci-trusted-signing service principal -- no AZURE_CLIENT_SECRET
+      # needed. azure/login@v2 caches the auth session in the Azure CLI; the
+      # `sign` tool picks it up via DefaultAzureCredential -> AzureCliCredential.
+      - name: Azure OIDC login
         if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $cert = New-SelfSignedCertificate `
-            -Type CodeSigningCert `
-            -Subject "CN=Tandem Editor, O=Tandem" `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -NotAfter (Get-Date).AddYears(5)
-          if (-not $cert) { throw "Failed to create code signing certificate" }
-          echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
 
-      - name: Configure Windows code signing
+      - name: Install dotnet sign CLI
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
+          dotnet tool install --global sign --prerelease
+          # Tauri runs signCommand as a raw subprocess that does NOT inherit
+          # PATH updates from $env:GITHUB_PATH reliably (KeyQ blog 2026). Resolve
+          # to the absolute install path and pin it into tauri.conf.json below.
+          $signExe = Join-Path $env:USERPROFILE '.dotnet\tools\sign.exe'
+          if (-not (Test-Path $signExe)) {
+            throw "sign.exe not found at $signExe after dotnet tool install"
+          }
+          echo "SIGN_EXE_PATH=$signExe" >> $env:GITHUB_ENV
+
+      - name: Inject bundle.windows.signCommand
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # signCommand object form `{cmd, args}` avoids shell-quoting issues
+          # for the runner home path (which contains a backslash on Windows).
+          # Tauri replaces '%1' in args with the absolute path of each artifact
+          # being signed (inner tandem.exe before bundling; .msi and NSIS .exe
+          # after bundling).
+          # The Artifact Signing service (formerly Trusted Signing) handles
+          # RFC 3161 timestamping internally; no --timestamp-url flag is
+          # accepted on the `code artifact-signing` subcommand.
+          # --azure-credential-type=azure-cli pins the auth flow to the
+          # session cached by azure/login@v2 (deterministic; avoids
+          # DefaultAzureCredential trying managed identity / env first).
+          $signCommand = [ordered]@{
+            cmd  = $env:SIGN_EXE_PATH
+            args = @(
+              'code', 'artifact-signing',
+              '--artifact-signing-endpoint', 'https://eus.codesigning.azure.net/',
+              '--artifact-signing-account', 'Tandem',
+              '--artifact-signing-certificate-profile', 'tandem-prod',
+              '--azure-credential-type', 'azure-cli',
+              '--description', 'Tandem',
+              '--description-url', 'https://github.com/bloknayrb/tandem',
+              '%1'
+            )
+          }
           $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json -Depth 20
-          $config.bundle | Add-Member -NotePropertyName windows -NotePropertyValue @{
-            certificateThumbprint = $env:CERT_THUMBPRINT
-            digestAlgorithm = "sha256"
-            timestampUrl = "http://timestamp.digicert.com"
-          } -Force
-          $config | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json
+          # bundle.windows already exists (nsis.installerHooks); merge in signCommand.
+          $config.bundle.windows | Add-Member -NotePropertyName signCommand -NotePropertyValue $signCommand -Force
+          $config | ConvertTo-Json -Depth 20 | Set-Content src-tauri/tauri.conf.json -Encoding utf8
 
       - name: Validate updater signing key
         if: env.TAURI_SIGNING_PRIVATE_KEY == ''
@@ -146,6 +190,41 @@ jobs:
         if: always() && matrix.platform == 'macos-latest'
         shell: bash
         run: rm -f "$RUNNER_TEMP/private_keys/"*.p8 || true
+
+      # tauri-action does not always fail when bundle.windows.signCommand
+      # exits non-zero. Verify every produced artifact is signed and
+      # timestamped; fail the job loudly if anything is unsigned or stale.
+      - name: Verify Windows signatures
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Cargo binary name is `tandem-desktop` but Tauri renames the inner
+          # exe to `Tandem.exe` (productName) before bundling. Glob both.
+          # Wrap in -Force to follow file-association-handler files too if any.
+          $bundleFiles = @()
+          $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -ErrorAction SilentlyContinue
+          $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter '*.msi' -ErrorAction SilentlyContinue
+          $bundleFiles += Get-ChildItem -Path 'src-tauri/target/release' -Filter '*.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @('Tandem.exe', 'tandem-desktop.exe') }
+          if ($bundleFiles.Count -eq 0) {
+            Write-Host '::error::Verify Windows signatures: no .exe/.msi artifacts found under src-tauri/target/release/'
+            exit 1
+          }
+          $errors = @()
+          foreach ($f in $bundleFiles) {
+            $sig = Get-AuthenticodeSignature -FilePath $f.FullName
+            if ($sig.Status -ne 'Valid') {
+              $errors += "$($f.FullName): Status=$($sig.Status) StatusMessage=$($sig.StatusMessage)"
+            } elseif (-not $sig.TimeStamperCertificate) {
+              $errors += "$($f.FullName): signature missing RFC 3161 timestamp"
+            } else {
+              Write-Host "ok: $($f.Name) signed by $($sig.SignerCertificate.Subject); timestamped"
+            }
+          }
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
 
   release-check:
     permissions: {}
