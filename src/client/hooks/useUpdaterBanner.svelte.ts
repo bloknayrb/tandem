@@ -1,14 +1,14 @@
-import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
+import {
+  acknowledgeVersion,
+  getAcknowledgedFor,
+  getAvailableVersion,
+  readDismissed,
+  subscribeToUpdaterChannel,
+  UPDATE_AVAILABLE_EVENT,
+} from "@client/hooks/useUpdaterChannel.svelte.js";
 
-/**
- * Event emitted from `src-tauri/src/lib.rs` when the periodic auto-update check
- * detects an available release. Payload is `{ version: string }`. The manual
- * "Check for Updates" tray menu still surfaces a native dialog — the banner is
- * only driven by the background event channel (D6 locked decision).
- */
-export const UPDATE_AVAILABLE_EVENT = "tandem://update-available";
-
-const DISMISS_KEY_PREFIX = "tandem:updater-dismissed-v";
+// Re-exported for back-compat with any direct imports of the event name.
+export { UPDATE_AVAILABLE_EVENT };
 
 export interface UpdaterBannerState {
   /** Latest version reported by the updater, or `null` if none / dismissed. */
@@ -21,86 +21,26 @@ export interface UpdaterBannerState {
   install: () => Promise<void>;
 }
 
-function dismissKey(version: string): string {
-  return `${DISMISS_KEY_PREFIX}${version}`;
-}
-
-function readDismissed(version: string): boolean {
-  try {
-    return window.localStorage.getItem(dismissKey(version)) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeDismissed(version: string): void {
-  try {
-    window.localStorage.setItem(dismissKey(version), "1");
-  } catch {
-    /* localStorage may be disabled (incognito, strict modes); silently skip */
-  }
-}
-
 /**
- * Subscribes to the Tauri updater event channel and exposes a banner state.
+ * Subscribes to the shared updater channel (see useUpdaterChannel.svelte.ts)
+ * and exposes a banner state. Acknowledgements are cross-surface synced with
+ * `createUpdateAvailable` (the titlebar dot): dismissing the banner also
+ * clears the dot live, and opening settings clears the banner live.
  *
- * Svelte 5 guardrail (feedback_svelte_prop_in_effect_cleanup): the `unlisten`
- * fn is captured into a `const` that the cleanup closes over; we never
- * re-read `$state` from inside the cleanup.
- *
- * Non-Tauri environments early-return a static no-op state.
+ * Non-Tauri environments still subscribe (the channel is a no-op there) so
+ * the consumer surface is identical across runtimes; `showBanner` simply
+ * stays `false` because no event ever fires.
  */
 export function createUpdaterBanner(): UpdaterBannerState {
-  let version = $state<string | null>(null);
   let installing = $state(false);
-  // Re-readable in render via getter; updated when dismiss() or new version fires.
-  let dismissedFor = $state<string | null>(null);
 
-  if (isTauriRuntime()) {
-    $effect(() => {
-      // `unlistenRef` holds the unsubscribe fn captured at attach time. The
-      // cleanup closes over this const — it never re-reads any $state.
-      const unlistenRef: { fn: (() => void) | null } = { fn: null };
-      let cancelled = false;
-
-      (async () => {
-        try {
-          const { listen } = await import("@tauri-apps/api/event");
-          if (cancelled) return;
-          const off = await listen<{ version: string }>(UPDATE_AVAILABLE_EVENT, (event) => {
-            const next = event.payload?.version ?? null;
-            if (!next) return;
-            version = next;
-            // A new version supersedes any previous dismissal record.
-            if (dismissedFor !== next) dismissedFor = null;
-          });
-          if (cancelled) {
-            off();
-            return;
-          }
-          unlistenRef.fn = off;
-        } catch (err) {
-          console.warn("[useUpdaterBanner] listen() failed:", err);
-        }
-      })();
-
-      return () => {
-        cancelled = true;
-        const off = unlistenRef.fn;
-        unlistenRef.fn = null;
-        if (off) {
-          try {
-            off();
-          } catch (err) {
-            console.warn("[useUpdaterBanner] unlisten threw:", err);
-          }
-        }
-      };
-    });
-  }
+  $effect(() => {
+    const unsubscribe = subscribeToUpdaterChannel();
+    return unsubscribe;
+  });
 
   async function install(): Promise<void> {
-    const v = version;
+    const v = getAvailableVersion();
     if (!v || installing) return;
     installing = true;
     try {
@@ -117,23 +57,20 @@ export function createUpdaterBanner(): UpdaterBannerState {
 
   return {
     get availableVersion() {
-      return version;
+      return getAvailableVersion();
     },
     get installing() {
       return installing;
     },
     get showBanner() {
-      const v = version;
+      const v = getAvailableVersion();
       if (!v) return false;
-      if (dismissedFor === v) return false;
+      if (getAcknowledgedFor() === v) return false;
       if (readDismissed(v)) return false;
       return true;
     },
     dismiss() {
-      const v = version;
-      if (!v) return;
-      writeDismissed(v);
-      dismissedFor = v;
+      acknowledgeVersion(getAvailableVersion());
     },
     install,
   };

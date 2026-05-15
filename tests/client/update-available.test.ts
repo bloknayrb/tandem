@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
+import { __resetUpdaterChannelForTests } from "../../src/client/hooks/useUpdaterChannel.svelte";
 import UpdateAvailableHarness from "../../src/client/svelte-harness/UpdateAvailableHarness.svelte";
 
 const DISMISS_KEY_PREFIX = "tandem:updater-dismissed-v";
@@ -26,6 +27,8 @@ describe("createUpdateAvailable", () => {
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
     emit = null;
     unlistenSpy.mockClear();
+    // Reset the module-singleton channel state so each test starts clean.
+    __resetUpdaterChannelForTests();
   });
 
   afterEach(() => {
