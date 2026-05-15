@@ -41,6 +41,11 @@ function anyPresent(testids: readonly string[]): boolean {
   return false;
 }
 
+// Asymmetry: find-input is checked via focus equality (the find bar can stay
+// visible while the user clicks back into the editor -- `/` must still open
+// the slash menu there), whereas the command palette and selection popups are
+// checked via presence-only (they are modal-ish overlays that must suppress
+// the slash menu whenever they are mounted, regardless of focus location).
 export function isSlashMenuSuppressed(): boolean {
   if (typeof document === "undefined") return false;
   if (findFocused("find-input")) return true;
