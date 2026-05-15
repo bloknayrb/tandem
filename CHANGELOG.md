@@ -5,10 +5,14 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v0.12.0
+## [Unreleased]
+
+## [0.12.0] - 2026-05-15
 
 ### Fixed
 
+- **Editor width slider was non-monotonic and overlapped margin annotations (PR #690)** — the slider claimed 40–100% but at 100% the wrapper returned `undefined`, falling back to a fixed `68ch` reading column; dropping to 95% jumped the wrapper wider than 68ch and collided with the absolutely-positioned `MarginColumn` cards (240px column + 8px edge inset per side). The derived now always returns a concrete percentage so 100% genuinely means 100%, and when margin view is enabled the wrapper subtracts `2 × (240 + 8)px` via `calc()` so editor text never sits underneath the margin cards.
+- **`setEditable` no longer re-fires on spurious `readOnly` re-emits** — guarded the editor against redundant `setEditable` calls when the `readOnly` prop re-emits with an unchanged value, eliminating a class of cursor-position resets during rapid Y.Doc swaps.
 - **OS file-association review fixes round 2 (#628 follow-up)** — three additional findings from a multi-PR review pass:
   - `restart_sidecar` now clears `SIDECAR_HEALTHY` via a new `clear_healthy_under_lock` helper that takes the `PendingOpens` mutex, mirroring `promote_healthy_and_drain`'s consumer-side flip. A bare atomic store outside the lock re-opened the same TOCTOU window the lock was introduced to close: a macOS `RunEvent::Opened` reading flag=true after `kill_sidecar` but before the clear could POST to a dying server. New `pending_opens_tests::restart_clears_flag_under_lock_so_late_producer_queues` materializes the proof.
   - `handle_opened_urls` hoists `token_store::get_or_create_token` out of the per-URL loop. An "Open With Tandem" multi-file batch now hits the keyring once instead of N times. Mirrors `post_drained_paths`.
