@@ -41,7 +41,7 @@ node scripts/take-screenshots.mjs
 ```
 
 The script:
-- Connects to the MCP server at `http://localhost:3479/mcp`
+- Connects to the MCP server at `http://127.0.0.1:3479/mcp`
 - Opens `sample/welcome.md` and creates demo annotations (highlight, comment, suggestion, flag)
 - Opens extra temp documents for the multi-tab screenshot
 - Captures 8 screenshots with specific viewport clips

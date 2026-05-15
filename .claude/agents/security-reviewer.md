@@ -15,7 +15,7 @@ You are a security reviewer for Tandem, a collaborative AI-human document editor
 ## Existing Mitigations (verify these still work)
 - DNS rebinding protection on `/mcp` routes (via `createMcpExpressApp({ host })`)
 - DNS rebinding protection on `/api` routes (Host-header validation in `apiMiddleware`)
-- CORS on `/api` reflects `http://localhost:*` origins only
+- CORS on `/api` reflects `http://127.0.0.1:*` origins only (bare `localhost` was narrowed out in PR #637)
 - UNC path rejection on Windows (prevents NTLM hash leakage)
 - File extension allowlist: `.md`, `.txt`, `.html`, `.htm`, `.docx`
 - File size limit: 50MB

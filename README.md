@@ -41,7 +41,7 @@ claude plugin marketplace add bloknayrb/tandem
 claude plugin install tandem@tandem-editor
 ```
 
-**Tandem must be running on the host before the plugin can do anything.** The plugin spawns two stdio MCP processes (`tandem mcp-stdio` and `tandem channel`) that proxy to `http://localhost:3479`. If the server isn't up they fail fast and log "Tandem server not reachable at …". Start the Tauri desktop app or run `tandem start` on the host first, then open Claude.
+**Tandem must be running on the host before the plugin can do anything.** The plugin spawns two stdio MCP processes (`tandem mcp-stdio` and `tandem channel`) that proxy to `http://127.0.0.1:3479`. If the server isn't up they fail fast and log "Tandem server not reachable at …". Start the Tauri desktop app or run `tandem start` on the host first, then open Claude.
 
 ### Legacy stdio channel shim
 
@@ -116,7 +116,7 @@ npm run doctor    # checks Node.js, MCP config, server health, ports
 Or check the raw health endpoint:
 
 ```bash
-curl http://localhost:3479/health
+curl http://127.0.0.1:3479/health
 # → {"status":"ok","version":"0.8.0","transport":"http","hasSession":false}
 ```
 
@@ -132,7 +132,7 @@ npm install
 npm run dev:standalone   # starts backend (:3478/:3479), editor client (:5173), and monitor
 ```
 
-Open <http://localhost:5173> — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
+Open <http://127.0.0.1:5173> — you'll see `sample/welcome.md` loaded automatically on first run. The `.mcp.json` in the repo configures Claude Code automatically when run from this directory.
 
 </details>
 
@@ -231,12 +231,12 @@ Tandem registers two MCP connections: **HTTP** for document tools (28 tools incl
   "mcpServers": {
     "tandem": {
       "type": "http",
-      "url": "http://localhost:3479/mcp"
+      "url": "http://127.0.0.1:3479/mcp"
     },
     "tandem-channel": {
       "command": "npx",
       "args": ["tsx", "src/channel/index.ts"],
-      "env": { "TANDEM_URL": "http://localhost:3479" }
+      "env": { "TANDEM_URL": "http://127.0.0.1:3479" }
     }
   }
 }
@@ -252,7 +252,7 @@ All optional — defaults work out of the box.
 | ---------------------------------- | ----------------------- | --------------------------------------------------------------- |
 | `TANDEM_PORT`                      | `3478`                  | Hocuspocus WebSocket port                                       |
 | `TANDEM_MCP_PORT`                  | `3479`                  | MCP HTTP + REST API port                                        |
-| `TANDEM_URL`                       | `http://localhost:3479` | Channel shim server URL                                         |
+| `TANDEM_URL`                       | `http://127.0.0.1:3479` | Channel shim server URL                                         |
 | `TANDEM_TRANSPORT`                 | `http`                  | Transport mode (`http` or `stdio`)                              |
 | `TANDEM_NO_SAMPLE`                 | unset                   | Set to `1` to skip auto-opening `sample/welcome.md`             |
 | `TANDEM_CLAUDE_CMD`                | `claude`                | Claude Code executable name (for `tandem setup` auto-detection) |
