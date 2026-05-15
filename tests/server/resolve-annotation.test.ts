@@ -11,7 +11,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
-import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
+import { MCP_ORIGIN } from "../../src/server/events/queue.js";
+import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
   addDoc,
@@ -20,6 +21,9 @@ import {
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import type { Annotation } from "../../src/shared/types.js";
+import { rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
 
@@ -76,5 +80,75 @@ describe("tandem_resolveAnnotation NOT_FOUND error code", () => {
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
     expect(parsed.message).toContain("not found");
     expect(parsed.code).toBe("NOT_FOUND");
+  });
+});
+
+describe("tandem_resolveAnnotation precondition (issue #694)", () => {
+  it("rejects re-accept on an already-accepted annotation without bumping rev", async () => {
+    const ydoc = setupDoc("resolve-pre-1", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+
+    await client.callTool({
+      name: "tandem_resolveAnnotation",
+      arguments: { id, action: "accept" },
+    });
+
+    const accepted = map.get(id) as Annotation;
+    expect(accepted.status).toBe("accepted");
+    const revAfterFirst = accepted.rev;
+
+    const result = await client.callTool({
+      name: "tandem_resolveAnnotation",
+      arguments: { id, action: "accept" },
+    });
+    const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
+    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.message).toContain("already accepted");
+
+    const after = map.get(id) as Annotation;
+    expect(after.status).toBe("accepted");
+    expect(after.rev).toBe(revAfterFirst);
+  });
+
+  it("rejects re-dismiss on an already-dismissed annotation without bumping rev", async () => {
+    const ydoc = setupDoc("resolve-pre-2", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+
+    const ann = map.get(id) as Annotation;
+    ydoc.transact(() => map.set(id, { ...ann, status: "dismissed" as const }), MCP_ORIGIN);
+    const revBefore = (map.get(id) as Annotation).rev;
+
+    const result = await client.callTool({
+      name: "tandem_resolveAnnotation",
+      arguments: { id, action: "dismiss" },
+    });
+    const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
+    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.message).toContain("already dismissed");
+
+    const after = map.get(id) as Annotation;
+    expect(after.status).toBe("dismissed");
+    expect(after.rev).toBe(revBefore);
+  });
+
+  it("rejects accept on an already-dismissed annotation (cross-action)", async () => {
+    const ydoc = setupDoc("resolve-pre-3", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+
+    const ann = map.get(id) as Annotation;
+    ydoc.transact(() => map.set(id, { ...ann, status: "dismissed" as const }), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_resolveAnnotation",
+      arguments: { id, action: "accept" },
+    });
+    const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
+    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+
+    const after = map.get(id) as Annotation;
+    expect(after.status).toBe("dismissed");
   });
 });

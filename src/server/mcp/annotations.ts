@@ -496,6 +496,9 @@ export function registerAnnotationTools(server: McpServer): void {
       if (!raw) return mcpError("NOT_FOUND", `Annotation ${id} not found`);
 
       const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
+      if (ann.status !== "pending") {
+        return mcpError("ANNOTATION_NOT_PENDING", `Annotation ${id} is already ${ann.status}`);
+      }
       const updated = {
         ...ann,
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
