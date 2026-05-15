@@ -106,6 +106,8 @@ const connLabel = $derived(
         : "Disconnected — check that the server is running",
 );
 
+const showHeld = $derived((heldCount ?? 0) > 0 && mode === "solo");
+
 function commitName() {
   userNameState.setUserName(nameInput);
 }
@@ -158,15 +160,15 @@ function commitName() {
     />
   </div>
 
-  {#if (heldCount ?? 0) > 0 && mode === "solo"}
+  {#if showHeld}
     <button
+      class="sb-held"
       data-testid="sb-held"
       onclick={onShowHeld}
       title="Show held annotations — switches to Tandem"
-      style="display: inline-flex; align-items: center; gap: var(--tandem-space-1); padding: 1px 8px; font-size: var(--tandem-text-xs); font-weight: 600; border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-pill); background: var(--tandem-warning-bg); color: var(--tandem-warning-fg-strong); cursor: pointer;"
     >
-      <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--tandem-warning-fg-strong); display: inline-block;"></span>
-      {heldCount} held
+      <span class="held-dot"></span>
+      <strong>{heldCount}</strong> held
     </button>
   {/if}
 
@@ -195,9 +197,46 @@ function commitName() {
     @keyframes tandem-reconnect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   }
 
+  /* Solo-mode held-count badge. Lives next to the user-name input in the
+     status bar so the held queue stays visible when the rail is hidden
+     (see HANDOFF.v1.md item 6). SidePanel keeps its own banner for the
+     rail-visible case. */
+  .sb-held {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--tandem-space-1);
+    height: 18px;
+    padding: 0 8px;
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+    font-size: var(--tandem-text-xs);
+    font-family: inherit;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+  .sb-held strong { font-weight: 600; }
+  .sb-held:hover { filter: brightness(1.04); }
+  .sb-held:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+  .sb-held .held-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--tandem-warning-fg-strong);
+    display: inline-block;
+  }
+
   @media (forced-colors: active) {
     .status-dot,
     .claude-dot {
+      outline: 1px solid ButtonText;
+      outline-offset: 1px;
+    }
+    .sb-held .held-dot {
       outline: 1px solid ButtonText;
       outline-offset: 1px;
     }
