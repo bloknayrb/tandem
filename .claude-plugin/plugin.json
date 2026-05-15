@@ -13,14 +13,14 @@
       "command": "npx",
       "args": ["-y", "tandem-editor", "mcp-stdio"],
       "env": {
-        "TANDEM_URL": "http://localhost:3479"
+        "TANDEM_URL": "http://127.0.0.1:3479"
       }
     },
     "tandem-channel": {
       "command": "npx",
       "args": ["-y", "tandem-editor", "channel"],
       "env": {
-        "TANDEM_URL": "http://localhost:3479"
+        "TANDEM_URL": "http://127.0.0.1:3479"
       }
     }
   },

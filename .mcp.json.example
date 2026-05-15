@@ -6,13 +6,13 @@
     },
     "tandem": {
       "type": "http",
-      "url": "http://localhost:3479/mcp"
+      "url": "http://127.0.0.1:3479/mcp"
     },
     "tandem-channel": {
       "command": "npx",
       "args": ["tsx", "src/channel/index.ts"],
       "env": {
-        "TANDEM_URL": "http://localhost:3479"
+        "TANDEM_URL": "http://127.0.0.1:3479"
       }
     }
   }
