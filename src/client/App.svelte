@@ -520,14 +520,15 @@ function handleFilterChange(
   activeAnnotationFilter = { type, author, status };
 }
 
-const editorMaxWidth = $derived(
-  settingsState.settings.editorWidthPercent < 100
-    ? `${settingsState.settings.editorWidthPercent}%`
-    : undefined,
-);
-const editorMargin = $derived(
-  settingsState.settings.editorWidthPercent < 100 ? "0 auto" : undefined,
-);
+// Margin annotation view reserves 240px column + 8px edge inset per side.
+// Subtract from available width so the editor text never sits underneath the
+// absolutely-positioned MarginColumn cards.
+const MARGIN_VIEW_RESERVE_PX = 2 * (240 + 8);
+const editorMaxWidth = $derived.by(() => {
+  const pct = settingsState.settings.editorWidthPercent;
+  const reserve = settingsState.settings.marginView ? MARGIN_VIEW_RESERVE_PX : 0;
+  return reserve > 0 ? `calc(${pct}% - ${reserve}px)` : `${pct}%`;
+});
 
 function captureSelectionForChat() {
   if (activeRailTab === "chat") return;
@@ -1180,7 +1181,7 @@ const tutorial = createTutorial(
           {@render editorContent()}
         {/key}
       {:else}
-        <div style={`max-width: ${editorMaxWidth ?? "68ch"}; margin: ${editorMargin ?? "0 auto"};`}>
+        <div style={`max-width: ${editorMaxWidth}; margin: 0 auto;`}>
           {#if activeTab}
             {#key activeTab.id}
               {@render editorContent()}
