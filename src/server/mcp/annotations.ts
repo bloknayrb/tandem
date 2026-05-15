@@ -124,6 +124,19 @@ export function addReplyToAnnotation(
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
 
   const ann = sanitizeAnnotation(raw, makeOnLossy(undefined));
+  // ADR-027: notes are user-private and highlights are user-only UI markup.
+  // Only comment threads support replies — reject early with INVALID_ARGUMENT.
+  // Mirrors the read-path filter in `tandem_getAnnotations` and the channel
+  // observer in `src/server/events/observers/replies.ts`. Without this guard
+  // the write path silently accepts replies that the read path then strips,
+  // producing orphaned reply rows in the underlying Y.Map.
+  if (ann.type !== "comment") {
+    return {
+      ok: false,
+      error: `Cannot reply to a ${ann.type} annotation; only comments support replies`,
+      code: "INVALID_ARGUMENT",
+    };
+  }
   if (ann.status !== "pending") {
     return {
       ok: false,
@@ -446,9 +459,14 @@ export function registerAnnotationTools(server: McpServer): void {
       results = results.filter((a) => a.type !== "note");
 
       const repliesMap = getRepliesMap(da.ydoc);
+      // ADR-027: only comments support replies. Even if rogue rows exist in the
+      // replies Y.Map for highlight/note parents (write-path is now also
+      // guarded), strip them on read so the asymmetry is impossible to observe.
+      // Mirrors `src/server/events/observers/replies.ts` and the write-path
+      // check in `addReplyToAnnotation`.
       const annotationsWithReplies = results.map((ann) => ({
         ...ann,
-        replies: collectRepliesForAnnotation(repliesMap, ann.id),
+        replies: ann.type === "comment" ? collectRepliesForAnnotation(repliesMap, ann.id) : [],
       }));
 
       return mcpSuccess({
@@ -595,7 +613,8 @@ export function registerAnnotationTools(server: McpServer): void {
         const fullText = extractText(ydoc);
         const enriched = exportable.map((ann) => ({
           ...ann,
-          replies: collectRepliesForAnnotation(repliesMap, ann.id),
+          // ADR-027: only comments surface replies (see tandem_getAnnotations).
+          replies: ann.type === "comment" ? collectRepliesForAnnotation(repliesMap, ann.id) : [],
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
             Math.min(fullText.length, ann.range.to),
@@ -638,7 +657,9 @@ export function registerAnnotationTools(server: McpServer): void {
             ? "NOT_FOUND"
             : result.code === "ANNOTATION_RESOLVED"
               ? "ANNOTATION_RESOLVED"
-              : "INVALID_RANGE";
+              : result.code === "INVALID_ARGUMENT"
+                ? "INVALID_ARGUMENT"
+                : "INVALID_RANGE";
         return mcpError(code, result.error);
       }
       return mcpSuccess({ replyId: result.replyId, annotationId });

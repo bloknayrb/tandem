@@ -28,7 +28,8 @@ export function handleAnnotationReply(req: Request, res: Response): void {
   // No origin tag — allows event emission so Claude sees user replies
   const result = addReplyToAnnotation(ydoc, annotationsMap, annotationId, text, "user");
   if (!result.ok) {
-    const status = result.code === "ANNOTATION_RESOLVED" ? 409 : 404;
+    const status =
+      result.code === "ANNOTATION_RESOLVED" ? 409 : result.code === "INVALID_ARGUMENT" ? 400 : 404;
     console.warn(`[Tandem] API error (${status}): annotation reply failed: ${result.error}`);
     pushNotification({
       id: generateNotificationId(),
