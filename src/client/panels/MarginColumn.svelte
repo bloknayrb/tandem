@@ -98,6 +98,10 @@ function recordHeight(id: string, h: number): void {
   {#each placeable as ann (ann.id)}
     {@const top = adjustedPositions.get(ann.id) ?? positions.get(ann.id) ?? 0}
     {@const visibleReplies = getVisibleReplies(ann, repliesById.get(ann.id))}
+    <!-- Svelte 5 getter/setter bind form on `bind:clientHeight` below —
+         do not refactor to plain `bind:clientHeight={varName}` without
+         verifying state shape: heights is a Map keyed by ann.id, not a
+         scalar variable. -->
     <div
       data-testid="margin-bubble-{ann.id}"
       data-margin-bubble-reply-count={visibleReplies.length}
