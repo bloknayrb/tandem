@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCollisions } from "../../src/client/panels/marginCollision";
+import { prunePlaceableHeights, resolveCollisions } from "../../src/client/panels/marginCollision";
 
 describe("resolveCollisions", () => {
   it("returns an empty map for empty input", () => {
@@ -127,5 +127,46 @@ describe("resolveCollisions", () => {
     ]);
     expect(result.get("a")).toBe(0);
     expect(result.get("b")).toBe(5);
+  });
+});
+
+describe("prunePlaceableHeights", () => {
+  it("removes entries not in placeableIds", () => {
+    const heights = new Map([
+      ["a", 10],
+      ["b", 20],
+      ["c", 30],
+    ]);
+    const removed = prunePlaceableHeights(heights, new Set(["a", "c"]));
+    expect(removed).toBe(1);
+    expect(heights.has("b")).toBe(false);
+    expect(heights.get("a")).toBe(10);
+    expect(heights.get("c")).toBe(30);
+  });
+
+  it("returns 0 when nothing to prune", () => {
+    const heights = new Map([["a", 10]]);
+    expect(prunePlaceableHeights(heights, new Set(["a", "b"]))).toBe(0);
+    expect(heights.size).toBe(1);
+  });
+
+  it("keeps heights bounded across 1000 add-then-remove cycles", () => {
+    // Simulate long-session churn: each cycle adds a new annotation id and
+    // measurement, then the prior annotations leave the `placeable` set
+    // (accepted/dismissed/removed). After pruning each cycle, `heights.size`
+    // should stay at the steady-state size of the placeable set — never grow
+    // unboundedly.
+    const heights = new Map<string, number>();
+    const STEADY_STATE = 3;
+    const ids: string[] = [];
+    for (let i = 0; i < 1000; i++) {
+      const id = `ann-${i}`;
+      ids.push(id);
+      heights.set(id, 42);
+      const placeableIds = new Set(ids.slice(-STEADY_STATE));
+      prunePlaceableHeights(heights, placeableIds);
+      expect(heights.size).toBeLessThanOrEqual(STEADY_STATE);
+    }
+    expect(heights.size).toBe(STEADY_STATE);
   });
 });

@@ -3,17 +3,25 @@ import type * as Y from "yjs";
 import { groupReplies } from "../../src/client/hooks/useAnnotationReplies.svelte";
 import type { AnnotationReply } from "../../src/shared/types";
 
-// `groupReplies` accepts `Pick<Y.Map<AnnotationReply>, "forEach">`, whose
-// callback carries Y.Map's full `(value, key, map)` signature. Bare object
-// literals don't structurally match that, so cast the test double through
-// `unknown` — the unit test only exercises the iteration contract, not the
-// real Y.Map shape.
-function makeSource(values: unknown[]): Pick<Y.Map<AnnotationReply>, "forEach"> {
-  return {
-    forEach(cb: (value: unknown) => void): void {
-      for (const v of values) cb(v);
-    },
-  } as unknown as Pick<Y.Map<AnnotationReply>, "forEach">;
+// `groupReplies` accepts `Pick<Y.Map<AnnotationReply>, "forEach">`. We type the
+// double's `forEach` property as `Y.Map<AnnotationReply>["forEach"]` directly,
+// so any future Y.js signature change to `forEach` becomes a compile error
+// here instead of silently passing through an `unknown` cast.
+function makeSource(values: readonly unknown[]): Pick<Y.Map<AnnotationReply>, "forEach"> {
+  const forEach: Y.Map<AnnotationReply>["forEach"] = (cb) => {
+    // The `skips malformed entries` test feeds non-AnnotationReply items; cast
+    // each value through the declared MapType so the structural contract is
+    // exercised even though the runtime guards in `groupReplies` filter them.
+    // Cast the third arg through `unknown` because we don't construct a real
+    // YMap in tests; future signature changes to `forEach` itself still break
+    // here because `forEach` is typed as `Y.Map<AnnotationReply>["forEach"]`.
+    const map = undefined as unknown as Y.Map<AnnotationReply>;
+    for (const v of values) {
+      const key = (v as { id?: string } | null)?.id ?? "";
+      cb(v as AnnotationReply, key, map);
+    }
+  };
+  return { forEach };
 }
 
 const r = (overrides: Partial<AnnotationReply>): AnnotationReply => ({

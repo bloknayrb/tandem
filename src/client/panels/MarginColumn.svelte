@@ -1,8 +1,9 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import AnnotationCard from "./AnnotationCard.svelte";
-import { resolveCollisions } from "./marginCollision";
+import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
 
 interface Props {
   /** Annotations destined for this side. Caller filters by type/author. */
@@ -73,6 +74,28 @@ const adjustedPositions = $derived.by(() => {
   return resolveCollisions(input);
 });
 
+// Prune entries from `heights` whose annotation is no longer in `placeable`.
+// Without this, every accepted/dismissed/removed annotation leaves a stale
+// height entry behind — the Map grows unboundedly across a long session.
+//
+// The effect's TRACKED dependency is `placeable` only. We read `heights.keys()`
+// and mutate `heights` inside `untrack(...)` so the prune step never re-enters
+// itself when we reassign `heights = new Map(heights)` (which would otherwise
+// risk an effect-depth loop documented in `feedback_svelte_effect_depth_guard`).
+// Pruning safety: we only delete ids NOT in `placeable`, so a concurrent
+// `recordHeight` write for a still-placeable id cannot be stranded.
+$effect(() => {
+  const placeableIds = new Set(placeable.map((a) => a.id));
+  untrack(() => {
+    const removed = prunePlaceableHeights(heights, placeableIds);
+    if (removed > 0) {
+      // Reassign to a fresh Map so $state identity tracking matches the
+      // contract established by `recordHeight`.
+      heights = new Map(heights);
+    }
+  });
+});
+
 /**
  * Record a measured height for `id`. Skips writes that would only move the
  * value by < 0.5px (subpixel jitter from layout reflow), mirroring the
@@ -98,10 +121,16 @@ function recordHeight(id: string, h: number): void {
   {#each placeable as ann (ann.id)}
     {@const top = adjustedPositions.get(ann.id) ?? positions.get(ann.id) ?? 0}
     {@const visibleReplies = getVisibleReplies(ann, repliesById.get(ann.id))}
-    <!-- Svelte 5 getter/setter bind form on `bind:clientHeight` below —
-         do not refactor to plain `bind:clientHeight={varName}` without
-         verifying state shape: heights is a Map keyed by ann.id, not a
-         scalar variable. -->
+    <!-- Svelte 5 function-binding form on `bind:clientHeight` below
+         (`bind:prop={getter, setter}`) — the only form that supports
+         per-key dispatch into a Map. A plain `bind:clientHeight={x}`
+         requires a scalar L-value; we have a Map<id, height>, so the
+         setter routes each measurement through `recordHeight(ann.id, ...)`.
+         We use Svelte's built-in `bind:clientHeight` instead of an ad-hoc
+         ResizeObserver to avoid wiring one observer per bubble; Svelte
+         already shares a single ResizeObserver internally.
+         Docs: https://svelte.dev/docs/svelte/bind#Function-bindings
+         and https://svelte.dev/docs/svelte/bind#dimensions -->
     <div
       data-testid="margin-bubble-{ann.id}"
       data-margin-bubble-reply-count={visibleReplies.length}

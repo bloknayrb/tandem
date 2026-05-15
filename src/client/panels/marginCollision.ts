@@ -63,3 +63,25 @@ export function resolveCollisions(
 
   return adjusted;
 }
+
+/**
+ * Remove keys from a `heights` map that are no longer in the `placeable` set.
+ * Pure helper extracted so the prune step is independently unit-testable
+ * without dragging Svelte's scheduler into vitest.
+ *
+ * Mutates `heights` in place and returns the number of keys removed so
+ * callers / tests can assert behavior. Safe by construction: only deletes
+ * keys that are NOT in `placeableIds`, so a concurrent `recordHeight` write
+ * for an id still in `placeable` cannot be stranded.
+ */
+export function prunePlaceableHeights(
+  heights: Map<string, number>,
+  placeableIds: ReadonlySet<string>,
+): number {
+  const toDelete: string[] = [];
+  for (const key of heights.keys()) {
+    if (!placeableIds.has(key)) toDelete.push(key);
+  }
+  for (const key of toDelete) heights.delete(key);
+  return toDelete.length;
+}
