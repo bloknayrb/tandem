@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_prevent_default::Flags;
@@ -653,6 +653,7 @@ pub fn run() {
             cowork_set_lan_ip_override,
             cowork_retry_admin_elevation,
             restart_sidecar,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
@@ -1968,11 +1969,66 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     let version = update.version.clone();
     log::info!("Update available: v{version}");
 
+    // Auto-check path (D6 locked decision): surface as an in-app banner via the
+    // updater event channel rather than blocking the user with a native dialog.
+    // The "Restart to install" CTA invokes `install_update` to kick off the
+    // download+install flow below. Manual checks (tray menu) keep the dialog so
+    // the user gets immediate feedback on their explicit action.
+    if !manual {
+        match app.emit(
+            "tandem://update-available",
+            serde_json::json!({ "version": version }),
+        ) {
+            Ok(()) => return,
+            Err(e) => {
+                // Emit failure leaves the banner with no signal to render
+                // against, so the user would see nothing for a known-available
+                // update. Fall through to the native dialog as a visible
+                // fallback — the same one the manual-check path uses below.
+                // Security note: `update.version` is signature-verified by
+                // tauri-plugin-updater before reaching this point, so it's
+                // safe to display.
+                log::warn!(
+                    "Failed to emit update-available event: {e}; falling back to dialog",
+                );
+            }
+        }
+    }
+
     if !show_update_available_dialog(app, &version) {
         log::info!("User declined update to v{version}");
         return;
     }
 
+    perform_install(app, update, &version).await;
+}
+
+/// Tauri command — invoked by the in-app updater banner's "Restart to install"
+/// CTA. Re-runs `updater.check()` (so we always operate on the most recent
+/// release the server advertises) and dispatches the install flow.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app
+        .updater()
+        .map_err(|e| format!("Updater not configured: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("Update check failed: {e}"))?
+        .ok_or_else(|| "No update available".to_string())?;
+    let version = update.version.clone();
+    perform_install(&app, update, &version).await;
+    Ok(())
+}
+
+/// Shared install flow: kill sidecar, await port + file-lock release, then
+/// download+install via the Tauri updater plugin. On success the application
+/// is restarted; on failure a native dialog surfaces the error.
+async fn perform_install(
+    app: &tauri::AppHandle,
+    update: tauri_plugin_updater::Update,
+    version: &str,
+) {
     // Kill sidecar BEFORE install — on Windows, the NSIS installer runs during
     // download_and_install() and needs to replace node-sidecar.exe on disk.
     // If the process is still running, the file is locked and install fails.

@@ -20,6 +20,12 @@ import { type Action, registerAction } from "./registry.svelte.js";
 interface ActionDeps {
   getActiveTabId: () => string | null;
   openSettings: () => void;
+  /**
+   * Open the new SettingsModal (Wave 1 sibling component). Separate from
+   * `openSettings`, which targets the legacy SettingsPopover until Wave 2
+   * retires it.
+   */
+  openSettingsModal: () => void;
   toggleSoloMode: () => void;
   openFindBar: () => void;
   openFindBarTabs: () => void;
@@ -131,6 +137,15 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+,",
     run() {
       guardedRun("settings", (d) => d.openSettings());
+    },
+  },
+  {
+    id: "settings-modal",
+    label: "Open settings (new)",
+    group: "view",
+    shortcut: "Ctrl+Shift+,",
+    run() {
+      guardedRun("settings-modal", (d) => d.openSettingsModal());
     },
   },
   {
