@@ -19,7 +19,7 @@ const REPO_ROOT = path.join(__dirname, "..");
 const SCREENSHOTS_DIR = path.join(REPO_ROOT, "docs", "screenshots");
 const MCP_URL = "http://127.0.0.1:3479/mcp";
 const SAMPLE_PATH = path.resolve(REPO_ROOT, "sample", "welcome.md");
-const CLIENT_URL = process.env.TANDEM_CLIENT_URL || "http://localhost:5173";
+const CLIENT_URL = process.env.TANDEM_CLIENT_URL || "http://127.0.0.1:5173";
 
 // ── MCP helper ────────────────────────────────────────────────────────────────
 

@@ -2248,3 +2248,27 @@ mod pending_opens_tests {
         SIDECAR_HEALTHY.store(false, Ordering::Release);
     }
 }
+
+#[cfg(test)]
+mod url_constants_tests {
+    use super::*;
+
+    // Regression guard for #477 PR 2 + #637 + #686. The server's isHostAllowed
+    // gate (api-routes.ts) rejects bare `localhost` Host headers; if these
+    // constants drift back to `http://localhost:…`, the supervisor's
+    // health-poll 403's for 15s and `npm run dev:tauri` reports
+    // "Server failed to start after 3 restart attempts".
+    #[test]
+    fn supervisor_urls_use_loopback_ip_not_localhost() {
+        for (name, url) in [
+            ("HEALTH_URL", HEALTH_URL),
+            ("SETUP_URL", SETUP_URL),
+            ("OPEN_URL", OPEN_URL),
+        ] {
+            assert!(
+                url.starts_with("http://127.0.0.1:"),
+                "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
+            );
+        }
+    }
+}
