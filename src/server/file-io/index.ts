@@ -1,7 +1,9 @@
 import * as crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
+import { generateNotificationId } from "../../shared/utils.js";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
+import { pushNotification } from "../notifications.js";
 import { htmlToYDoc, loadDocx } from "./docx.js";
 import {
   type DocxComment,
@@ -41,6 +43,18 @@ const plaintextAdapter: FormatAdapter = {
   },
 };
 
+/**
+ * The production .docx open path goes through `populateDocFromContent` →
+ * `prepareContent` in `mcp/file-opener.ts`, which has its own dedup'd
+ * notification on comment-extraction failure. This adapter is a public API
+ * (`getAdapter("docx").load(doc, buffer)`) and any future caller — or a
+ * regression that routes through here — must not silently swallow comment
+ * loss. We surface the same user-visible notification here.
+ *
+ * ADR-036 will replace this with a `LoadResult.partial` containing a
+ * `LoadIssue` — see #696. The notification stays as a defensive fallback
+ * until the structural fix lands.
+ */
 const docxAdapter: FormatAdapter = {
   canSave: false,
   async load(doc, content) {
@@ -52,6 +66,14 @@ const docxAdapter: FormatAdapter = {
           "[docx-comments] Comment extraction failed; document will load without imported comments:",
           err,
         );
+        pushNotification({
+          id: generateNotificationId(),
+          type: "annotation-error",
+          severity: "warning",
+          message: "Failed to import Word comments. Document opened without comments.",
+          dedupKey: "docx-comments:format-adapter",
+          timestamp: Date.now(),
+        });
         return [] as DocxComment[];
       }),
     ]);
