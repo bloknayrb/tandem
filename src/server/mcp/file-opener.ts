@@ -962,7 +962,9 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // passes previously left annotations durably stored at partially
       // refreshed ranges.
       doc.transact(() => {
-        const refreshed = refreshAllRanges(annotations, doc, annotationMap, { skipTransact: true });
+        const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
+          skipTransact: true,
+        }).map((r) => r.annotation);
 
         // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
         for (const ann of refreshed) {

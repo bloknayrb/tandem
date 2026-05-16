@@ -344,12 +344,13 @@ describe("Phase 1b: Stale relRange after content replacement", () => {
 
     const refreshed = refreshRange(ann, doc);
 
-    // refreshRange should strip the dead relRange (deleted Y.items → null resolution)
-    // and attempt re-anchor from flat offsets. Both the strip and the fallback
-    // re-anchor will succeed or fail depending on CRDT tombstone state.
-    // Annotation should not crash
-    expect(refreshed).toBeDefined();
-    expect(refreshed.id).toBe("ann_test_stale");
+    // refreshRange should strip the dead relRange (deleted Y.items → null
+    // resolution) and attempt re-anchor from flat offsets. Both outcomes
+    // surface as a RefreshResult — kind 'repaired' (re-anchor succeeded) or
+    // 'degraded' (relRange stripped, flat range preserved).
+    expect(refreshed.annotation).toBeDefined();
+    expect(refreshed.annotation.id).toBe("ann_test_stale");
+    expect(["repaired", "degraded"]).toContain(refreshed.kind);
   });
 
   it("stale flat offsets from before content replacement point to wrong text in new doc", () => {
