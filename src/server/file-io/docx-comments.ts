@@ -10,10 +10,10 @@ import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { withInternal } from "../../shared/origins.js";
 import type { Annotation, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { nextRev } from "../annotations/schema.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
 import { findAllByName, getAttr, getTextContent, walkDocumentBody } from "./docx-walker.js";
 
@@ -182,7 +182,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
   let injected = 0;
 
-  doc.transact(() => {
+  withInternal(doc, () => {
     for (const comment of comments) {
       const result = anchoredRange(doc, toFlatOffset(comment.from), toFlatOffset(comment.to));
       if (!result.ok) {
@@ -231,7 +231,7 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
       map.set(id, annotation);
       injected++;
     }
-  }, MCP_ORIGIN); // origin tag prevents channel event echo
+  });
 
   if (injected > 0 || comments.length > 0) {
     console.error(`[docx-comments] Imported ${injected}/${comments.length} Word comments`);

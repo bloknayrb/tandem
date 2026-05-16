@@ -2,10 +2,10 @@ import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
 import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
+import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { SessionData } from "../../shared/types.js";
 import { getAnnotationsDir } from "../annotations/store.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { atomicWrite } from "../file-io/index.js";
 import { SESSION_DIR } from "../platform.js";
 
@@ -125,11 +125,11 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
   if (entries.length > 200) {
     entries.sort((a, b) => a.timestamp - b.timestamp);
     const toDelete = entries.slice(0, entries.length - 200);
-    doc.transact(() => {
+    withInternal(doc, () => {
       for (const entry of toDelete) {
         chatMap.delete(entry.id);
       }
-    }, MCP_ORIGIN);
+    });
   }
 
   const state = Y.encodeStateAsUpdate(doc);
