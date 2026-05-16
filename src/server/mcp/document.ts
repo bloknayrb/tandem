@@ -11,11 +11,11 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
+import { withMcp } from "../../shared/origins.js";
 import type { AuthorshipRange } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 // Position system
 import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
@@ -378,7 +378,7 @@ export function registerDocumentTools(server: McpServer): void {
         }
 
         if (startPos.elementIndex !== endPos.elementIndex) {
-          r.doc.transact(() => {
+          withMcp(r.doc, () => {
             const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
             const startText = getOrCreateXmlText(startNode);
             const startLen = startText.length;
@@ -400,9 +400,9 @@ export function registerDocumentTools(server: McpServer): void {
             fragment.delete(startPos.elementIndex + 1, 1);
 
             startText.insert(startPos.textOffset, newText);
-          }, MCP_ORIGIN);
+          });
         } else {
-          r.doc.transact(() => {
+          withMcp(r.doc, () => {
             const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
             const textNode = getOrCreateXmlText(node);
             const deleteLen = endPos.textOffset - startPos.textOffset;
@@ -412,7 +412,7 @@ export function registerDocumentTools(server: McpServer): void {
             if (newText.length > 0) {
               textNode.insert(startPos.textOffset, newText);
             }
-          }, MCP_ORIGIN);
+          });
         }
 
         // Record authorship for the inserted text (Y.Map overlay strategy).
@@ -435,9 +435,9 @@ export function registerDocumentTools(server: McpServer): void {
               relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
               timestamp: Date.now(),
             };
-            r.doc.transact(() => {
+            withMcp(r.doc, () => {
               authorshipMap.set(rangeId, entry);
-            }, MCP_ORIGIN);
+            });
           }
         }
 
@@ -542,16 +542,14 @@ export function registerDocumentTools(server: McpServer): void {
           }
           const doc = getOrCreateDocument(current.docName);
           const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-          doc.transact(
-            () =>
-              awarenessMap.set(Y_MAP_CLAUDE, {
-                status: text,
-                timestamp: Date.now(),
-                active: true,
-                focusParagraph: focusParagraph ?? null,
-                focusOffset: focusOffset ?? null,
-              }),
-            MCP_ORIGIN,
+          withMcp(doc, () =>
+            awarenessMap.set(Y_MAP_CLAUDE, {
+              status: text,
+              timestamp: Date.now(),
+              active: true,
+              focusParagraph: focusParagraph ?? null,
+              focusOffset: focusOffset ?? null,
+            }),
           );
           return mcpSuccess({ status: text });
         }

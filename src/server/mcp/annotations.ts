@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { withBrowser, withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
@@ -28,7 +29,6 @@ import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { recordTombstone } from "../annotations/sync.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
@@ -77,7 +77,7 @@ export function removeAnnotationById(
   // carries the entry (order is load-bearing — see sync.ts `recordTombstone`).
   recordTombstone(docHash(filePath), annotationId, existing.rev ?? 0);
 
-  ydoc.transact(() => {
+  withMcp(ydoc, () => {
     annotationsMap.delete(annotationId);
     const repliesMap = getRepliesMap(ydoc);
     const toDelete: string[] = [];
@@ -86,7 +86,7 @@ export function removeAnnotationById(
       if (reply && reply.annotationId === annotationId) toDelete.push(key);
     });
     for (const key of toDelete) repliesMap.delete(key);
-  }, MCP_ORIGIN);
+  });
 
   return { ok: true, id: annotationId };
 }
@@ -118,7 +118,12 @@ export function addReplyToAnnotation(
   annotationId: string,
   text: string,
   author: ReplyAuthor,
-  origin?: string,
+  /**
+   * ADR-031 transact wrapper: `withMcp` for Claude-initiated replies via the
+   * MCP tool; `withBrowser` for user replies via the HTTP route. Defaults to
+   * `withBrowser` so the lone HTTP caller doesn't need to pass it explicitly.
+   */
+  wrap: (doc: Y.Doc, fn: () => void) => void = withBrowser,
 ): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
   const raw = annotationsMap.get(annotationId) as Annotation | undefined;
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
@@ -156,11 +161,7 @@ export function addReplyToAnnotation(
   };
 
   const repliesMap = getRepliesMap(ydoc);
-  if (origin) {
-    ydoc.transact(() => repliesMap.set(replyId, reply), origin);
-  } else {
-    ydoc.transact(() => repliesMap.set(replyId, reply));
-  }
+  wrap(ydoc, () => repliesMap.set(replyId, reply));
 
   return { ok: true, replyId };
 }
@@ -260,7 +261,7 @@ export function createAnnotation(
     rev: nextRev(),
     ...extras,
   } as Annotation;
-  ydoc.transact(() => map.set(id, annotation), MCP_ORIGIN);
+  withMcp(ydoc, () => map.set(id, annotation));
 
   const snippet = annotation.textSnapshot
     ? `: "${annotation.textSnapshot.slice(0, 60)}${annotation.textSnapshot.length > 60 ? "…" : ""}"`
@@ -504,7 +505,7 @@ export function registerAnnotationTools(server: McpServer): void {
         status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
         rev: nextRev(ann),
       };
-      da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
+      withMcp(da.ydoc, () => da.map.set(id, updated));
       return mcpSuccess({ id, status: updated.status });
     }),
   );
@@ -580,7 +581,7 @@ export function registerAnnotationTools(server: McpServer): void {
           rev: nextRev(ann),
         } as Annotation;
 
-        da.ydoc.transact(() => da.map.set(id, updated), MCP_ORIGIN);
+        withMcp(da.ydoc, () => da.map.set(id, updated));
         return mcpSuccess({
           id,
           content: updated.content,
@@ -646,14 +647,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      const result = addReplyToAnnotation(
-        da.ydoc,
-        da.map,
-        annotationId,
-        text,
-        "claude",
-        MCP_ORIGIN,
-      );
+      const result = addReplyToAnnotation(da.ydoc, da.map, annotationId, text, "claude", withMcp);
       if (!result.ok) {
         const code =
           result.code === "NOT_FOUND"
