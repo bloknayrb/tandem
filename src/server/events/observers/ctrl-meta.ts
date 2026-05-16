@@ -6,9 +6,9 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_OPEN_DOCUMENTS,
 } from "../../../shared/constants.js";
+import { shouldSkipChannel } from "../../../shared/origins.js";
 import { isUploadPath } from "../../../shared/paths.js";
 import { getOpenDocs } from "../../mcp/document-service.js";
-import { MCP_ORIGIN } from "../origins.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 
@@ -25,7 +25,7 @@ export function makeCtrlMetaObserver(deps: {
   const uploadDocIds = new Set<string>();
 
   const metaObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    if (shouldSkipChannel(txn.origin)) return;
 
     // Check for activeDocumentId change (tab switch)
     if (event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)) {

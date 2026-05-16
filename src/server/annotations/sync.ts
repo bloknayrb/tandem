@@ -56,9 +56,9 @@
 
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { shouldSkipDurableSync, withFileSync } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
-import { FILE_SYNC_ORIGIN } from "../events/origins.js";
 import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
 import {
   type AnnotationDocV1,
@@ -237,14 +237,13 @@ export function registerAnnotationObserver(
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
   const onMutation = (_ev: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
-    // The file-sync path writes into the Y.Map; echoing that back into the
-    // file would be wasted I/O and — under contention — could race.
-    if (txn.origin === FILE_SYNC_ORIGIN) return;
+    // ADR-031 durable-sync skip set: file-sync (echo) + internal (setup
+    // writes are not user-meaningful state to persist).
+    if (shouldSkipDurableSync(txn.origin)) return;
 
-    // Everything else is user intent: MCP_ORIGIN (Claude via an MCP tool),
-    // null/undefined (browser), or any future origin tag we haven't named
-    // yet. Queue a LAZY snapshot — the thunk only runs when the debounce
-    // timer fires, so a burst of N mutations produces one serialization.
+    // Everything else (mcp / reload / browser per ADR-031) is durable-meaningful.
+    // Queue a LAZY snapshot — the thunk only runs when the debounce timer fires,
+    // so a burst of N mutations produces one serialization.
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
   };
 
@@ -465,7 +464,7 @@ export async function loadAndMerge(
   // those additions land durably without waiting for the next mutation.
   let needsWrite = false;
 
-  ydoc.transact(() => {
+  withFileSync(ydoc, () => {
     // Apply tombstones first so a later merge step can't overwrite a winning
     // delete.
     for (const stone of file.tombstones) {
@@ -500,7 +499,7 @@ export async function loadAndMerge(
     const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
     const repResult = mergeMap(repMap, fileReplies, normalizeReply);
     if (repResult.needsWrite) needsWrite = true;
-  }, FILE_SYNC_ORIGIN);
+  });
 
   if (needsWrite) {
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
