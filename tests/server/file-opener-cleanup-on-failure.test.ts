@@ -77,13 +77,13 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
 import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 
 let tmpDir: string;
@@ -148,13 +148,13 @@ describe("populateDocFromContent — cleanup on populate failure", () => {
 
     // The fragment was touched at least twice: once when the partial write
     // landed (Yjs flushes via afterTransaction in the failed transact's
-    // finally), and once by the cleanup transact. Both must be MCP_ORIGIN
-    // (Critical Rule #2 across the failure path).
+    // finally), and once by the cleanup transact. Both must be INTERNAL_ORIGIN
+    // post-ADR-031 (populate + cleanup-after-failure are both withInternal).
     const fragment = doc.getXmlFragment("default");
     const fragmentTouches = updates.filter((u) => u.changedTypes.has(fragment));
     expect(fragmentTouches.length).toBeGreaterThanOrEqual(2);
     for (const u of fragmentTouches) {
-      expect(u.origin).toBe(MCP_ORIGIN);
+      expect(u.origin).toBe(INTERNAL_ORIGIN);
     }
 
     // Structured-log shape fired with the static-literal first arg.
