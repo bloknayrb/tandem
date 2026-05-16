@@ -9,7 +9,7 @@ import {
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
-import type { FormatAdapter } from "./types.js";
+import type { FormatAdapter, LoadIssue } from "./types.js";
 
 export {
   type AcceptedSuggestion,
@@ -17,14 +17,14 @@ export {
   type ApplyOutput,
   applyTrackedChanges,
 } from "./docx-apply.js";
-export type { FormatAdapter } from "./types.js";
+export type { FormatAdapter, LoadIssue, LoadResult } from "./types.js";
 
 // -- Adapter implementations --
 
 const markdownAdapter: FormatAdapter = {
-  canSave: true,
   load(doc, content) {
     loadMarkdown(doc, content as string);
+    return { issues: [] };
   },
   save(doc) {
     return saveMarkdown(doc);
@@ -32,19 +32,27 @@ const markdownAdapter: FormatAdapter = {
 };
 
 const plaintextAdapter: FormatAdapter = {
-  canSave: true,
   load(doc, content) {
     populateYDoc(doc, content as string);
+    return { issues: [] };
   },
   save(doc) {
     return extractText(doc);
   },
 };
 
+/**
+ * The .docx adapter omits `save` — .docx is read-only by ADR-004. Callers
+ * check `adapter.save` (truthy) before attempting to serialize.
+ *
+ * `load` returns a `LoadResult` whose `issues` array surfaces partial-
+ * load failures (e.g. comment extraction). The caller decides whether to
+ * push a user-visible notification — see #696.
+ */
 const docxAdapter: FormatAdapter = {
-  canSave: false,
   async load(doc, content) {
     const buffer = content as Buffer;
+    const issues: LoadIssue[] = [];
     const [html, comments] = await Promise.all([
       loadDocx(buffer),
       extractDocxComments(buffer).catch((err) => {
@@ -52,6 +60,7 @@ const docxAdapter: FormatAdapter = {
           "[docx-comments] Comment extraction failed; document will load without imported comments:",
           err,
         );
+        issues.push({ kind: "comments-failed", error: err });
         return [] as DocxComment[];
       }),
     ]);
@@ -59,9 +68,7 @@ const docxAdapter: FormatAdapter = {
     if (comments.length > 0) {
       injectCommentsAsAnnotations(doc, comments);
     }
-  },
-  save() {
-    return null;
+    return { issues };
   },
 };
 
