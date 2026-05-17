@@ -22,14 +22,21 @@
 
 import type { Express, Request, Response } from "express";
 
+import {
+  API_INTEGRATIONS,
+  API_INTEGRATIONS_EXISTING,
+  ERROR_CODE_INVALID_INTEGRATIONS_FILE,
+  ERROR_CODE_INVALID_SECRET,
+  ERROR_CODE_KEYCHAIN_UNAVAILABLE,
+} from "../../shared/integrations/contract.js";
 import type { Handler } from "../mcp/routes/_shared.js";
 import type { readExistingTandemEntries } from "./existing-config.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { IntegrationsFileSchema } from "./schema.js";
 import type { IntegrationsStore } from "./storage.js";
 
-export const API_INTEGRATIONS_EXISTING = "/api/integrations/existing";
-export const API_INTEGRATIONS = "/api/integrations";
+export { API_INTEGRATIONS, API_INTEGRATIONS_EXISTING } from "../../shared/integrations/contract.js";
+/** Express route pattern — `:ref` is filled in by the client via {@link apiIntegrationsSecretPath}. */
 export const API_INTEGRATIONS_SECRET = "/api/integrations/secrets/:ref";
 
 export interface IntegrationsRoutesDeps {
@@ -85,7 +92,7 @@ function makePostIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
     if (!parsed.success) {
       res.status(400).json({
         error: "BAD_REQUEST",
-        code: "INVALID_INTEGRATIONS_FILE",
+        code: ERROR_CODE_INVALID_INTEGRATIONS_FILE,
         message: parsed.error.message,
         issues: parsed.error.issues,
       });
@@ -111,7 +118,7 @@ function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
     if (typeof secret !== "string" || secret.length === 0) {
       res.status(400).json({
         error: "BAD_REQUEST",
-        code: "INVALID_SECRET",
+        code: ERROR_CODE_INVALID_SECRET,
         message: "Body must include { secret: <non-empty string> }",
       });
       return;
@@ -157,7 +164,7 @@ function sendKeychainError(res: Response, err: unknown, label: string): void {
   if (err instanceof KeychainUnavailableError) {
     res.status(503).json({
       error: "SERVICE_UNAVAILABLE",
-      code: "KEYCHAIN_UNAVAILABLE",
+      code: ERROR_CODE_KEYCHAIN_UNAVAILABLE,
       message: err.message,
     });
     return;

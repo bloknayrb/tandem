@@ -58,6 +58,10 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
+  // #477 PR 3c-i: opt-in integration setup wizard (preview). Hidden by default
+  // until ≥2-week soak completes; enables the full-screen modal on next launch
+  // when no integration is configured yet.
+  showIntegrationWizard: boolean;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -99,6 +103,7 @@ const DEFAULTS: TandemSettings = {
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
   marginView: false,
+  showIntegrationWizard: false,
 };
 
 const VALID_RAIL_TABS: RailTab[] = ["annotations", "chat", "outline"];
@@ -247,6 +252,7 @@ export function loadSettings(): TandemSettings {
         leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
         rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
         marginView: parsed.marginView === true,
+        showIntegrationWizard: parsed.showIntegrationWizard === true,
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
