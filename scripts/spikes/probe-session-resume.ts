@@ -106,11 +106,16 @@ process.on("uncaughtException", (e) => {
 });
 
 // ─── Run a single claude -p invocation, capture JSON result ───────────────
+interface ClaudePrintJson {
+  session_id?: string;
+  result?: string;
+  [k: string]: unknown;
+}
 interface RunResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
-  parsed: any | null;
+  parsed: ClaudePrintJson | null;
 }
 async function runClaudePrint(
   args: string[],
@@ -166,9 +171,9 @@ async function runClaudePrint(
     stderr += `\n[probe-error] ${e.message}`;
     return null;
   });
-  let parsed: any = null;
+  let parsed: ClaudePrintJson | null = null;
   try {
-    parsed = JSON.parse(stdout);
+    parsed = JSON.parse(stdout) as ClaudePrintJson;
   } catch {
     /* not JSON, leave null */
   }
@@ -285,23 +290,27 @@ async function scenarioResumeOfNonexistentBehavior(): Promise<Scenario> {
     ["--resume", sid],
     "Reply with the literal text PROBE-OK and nothing else.",
   );
-  const observed =
-    r.exitCode === 0 && r.parsed?.session_id === sid
-      ? "fresh-session-created-silently"
-      : r.exitCode !== 0
-        ? "rejected-non-zero-exit"
-        : "indeterminate";
+  let observed: "fresh-session-created-silently" | "rejected-non-zero-exit" | "indeterminate";
+  if (r.exitCode === 0 && r.parsed?.session_id === sid) {
+    observed = "fresh-session-created-silently";
+  } else if (r.exitCode !== 0) {
+    observed = "rejected-non-zero-exit";
+  } else {
+    observed = "indeterminate";
+  }
+  const PR4_IMPLICATION: Record<typeof observed, string> = {
+    "fresh-session-created-silently":
+      "PR 4 must pre-validate the UUID exists before --resume; otherwise the supervisor will silently create new sessions on every restart.",
+    "rejected-non-zero-exit":
+      "PR 4 must catch the non-zero exit, parse stderr for the error class, and fall back to fresh-spawn.",
+    indeterminate: "PR 4 needs additional probing to handle this behavior.",
+  };
   return {
     name: "resume-nonexistent-behavior",
     pass: observed !== "indeterminate",
     evidence: {
       observedBehavior: observed,
-      pr4Implication:
-        observed === "fresh-session-created-silently"
-          ? "PR 4 must pre-validate the UUID exists before --resume; otherwise the supervisor will silently create new sessions on every restart."
-          : observed === "rejected-non-zero-exit"
-            ? "PR 4 must catch the non-zero exit, parse stderr for the error class, and fall back to fresh-spawn."
-            : "PR 4 needs additional probing to handle this behavior.",
+      pr4Implication: PR4_IMPLICATION[observed],
       requestedSessionId: sid,
       returnedSessionId: r.parsed?.session_id ?? null,
       result: r.parsed?.result ?? null,

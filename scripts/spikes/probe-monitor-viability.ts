@@ -132,21 +132,28 @@ interface CheckResult {
   pass: boolean;
   evidence: Record<string, unknown>;
 }
+interface ClaudePrintJson {
+  session_id?: string;
+  result?: string;
+  [k: string]: unknown;
+}
+
+// Read the two source files once; the three B1 checks all grep over them.
+const REPO_ROOT = resolvePath(__dirname, "..", "..");
+const MONITOR_SRC = readFileSync(joinPath(REPO_ROOT, "src/monitor/index.ts"), "utf8");
+const CHANNEL_SRC = readFileSync(joinPath(REPO_ROOT, "src/channel/event-bridge.ts"), "utf8");
 
 // ─── B1: code-reading parity ───────────────────────────────────────────────
 function checkSharedFormatters(): CheckResult {
   // Both consumers must import parseTandemEvent + formatEventContent from
   // shared/events/types.ts. If either consumer reimplements either function,
   // payload parity is no longer free.
-  const repoRoot = resolvePath(__dirname, "..", "..");
-  const monitorSrc = readFileSync(joinPath(repoRoot, "src/monitor/index.ts"), "utf8");
-  const channelSrc = readFileSync(joinPath(repoRoot, "src/channel/event-bridge.ts"), "utf8");
   const sharedImports = (src: string) =>
     /import\s*\{[^}]*\b(parseTandemEvent|formatEventContent)\b[^}]*\}\s*from\s*["']\.\.\/shared\/events\/types\.js["']/m.test(
       src,
     );
-  const monitorOK = sharedImports(monitorSrc);
-  const channelOK = sharedImports(channelSrc);
+  const monitorOK = sharedImports(MONITOR_SRC);
+  const channelOK = sharedImports(CHANNEL_SRC);
   return {
     name: "shared-formatters-imported-by-both-consumers",
     pass: monitorOK && channelOK,
@@ -159,12 +166,9 @@ function checkSharedFormatters(): CheckResult {
 }
 
 function checkSseEndpointParity(): CheckResult {
-  const repoRoot = resolvePath(__dirname, "..", "..");
-  const monitorSrc = readFileSync(joinPath(repoRoot, "src/monitor/index.ts"), "utf8");
-  const channelSrc = readFileSync(joinPath(repoRoot, "src/channel/event-bridge.ts"), "utf8");
   // Both connect to API_EVENTS with Last-Event-ID-aware reconnection.
-  const monitorOK = monitorSrc.includes("API_EVENTS") && monitorSrc.includes("Last-Event-ID");
-  const channelOK = channelSrc.includes("API_EVENTS") && channelSrc.includes("Last-Event-ID");
+  const monitorOK = MONITOR_SRC.includes("API_EVENTS") && MONITOR_SRC.includes("Last-Event-ID");
+  const channelOK = CHANNEL_SRC.includes("API_EVENTS") && CHANNEL_SRC.includes("Last-Event-ID");
   return {
     name: "both-consume-same-sse-endpoint-with-last-event-id",
     pass: monitorOK && channelOK,
@@ -182,16 +186,14 @@ function checkSideEffectAsymmetry(): CheckResult {
   // Original plan v1 said monitor "does not" — that was wrong; both POST.
   // The real asymmetries: transport (MCP notification vs stdout line) and
   // the channel shim takes an MCP `Server` handle while the monitor doesn't.
-  const repoRoot = resolvePath(__dirname, "..", "..");
-  const monitorSrc = readFileSync(joinPath(repoRoot, "src/monitor/index.ts"), "utf8");
-  const channelSrc = readFileSync(joinPath(repoRoot, "src/channel/event-bridge.ts"), "utf8");
-  const monitorAwareness = monitorSrc.includes("API_CHANNEL_AWARENESS");
-  const monitorError = monitorSrc.includes("API_CHANNEL_ERROR");
-  const channelAwareness = channelSrc.includes("API_CHANNEL_AWARENESS");
-  const channelError = channelSrc.includes("API_CHANNEL_ERROR");
-  const monitorUsesStdout = /process\.stdout\.write\(/.test(monitorSrc);
+  const monitorAwareness = MONITOR_SRC.includes("API_CHANNEL_AWARENESS");
+  const monitorError = MONITOR_SRC.includes("API_CHANNEL_ERROR");
+  const channelAwareness = CHANNEL_SRC.includes("API_CHANNEL_AWARENESS");
+  const channelError = CHANNEL_SRC.includes("API_CHANNEL_ERROR");
+  const monitorUsesStdout = /process\.stdout\.write\(/.test(MONITOR_SRC);
   const channelUsesMcpNotification =
-    channelSrc.includes("mcp.notification") || channelSrc.includes("notifications/claude/channel");
+    CHANNEL_SRC.includes("mcp.notification") ||
+    CHANNEL_SRC.includes("notifications/claude/channel");
   return {
     name: "side-effect-asymmetry-cataloged",
     pass:
@@ -219,11 +221,7 @@ async function checkPluginDirDoesNotActivateMonitor(): Promise<CheckResult> {
   // experimental.monitors[].command fires, marker file appears within the
   // probe window. v2.1.143 does NOT fire monitors in --print mode.
   const claudeCmd = process.env.TANDEM_CLAUDE_CMD || "claude";
-  try {
-    rmSync(MARKER_PATH, { force: true });
-  } catch {
-    /* missing OK */
-  }
+  rmSync(MARKER_PATH, { force: true });
   const child = track(
     spawn(
       claudeCmd,
@@ -305,9 +303,9 @@ async function checkDevChannelsStillFunctionalInV21143(): Promise<CheckResult> {
     ],
     { cwd: PROBE_CWD, env: minimalEnv(), encoding: "utf8", timeout: 30_000 },
   );
-  const parsed: any = (() => {
+  const parsed: ClaudePrintJson | null = (() => {
     try {
-      return JSON.parse(result.stdout ?? "");
+      return JSON.parse(result.stdout ?? "") as ClaudePrintJson;
     } catch {
       return null;
     }
@@ -355,6 +353,17 @@ async function main() {
   checks.push(fallback);
   console.error(`[probe] ${fallback.pass ? "PASS" : "FAIL"}  ${fallback.name}`);
 
+  let verdict: string;
+  if (b2.evidence.observedBehavior === "monitor-NOT-activated" && fallback.pass) {
+    verdict =
+      "NO-GO on dropping --dangerously-load-development-channels in v1.0; fallback (the flag itself) is intact.";
+  } else if (b2.evidence.observedBehavior === "monitor-WAS-activated") {
+    verdict =
+      "GO — plugin monitor activates via --plugin-dir. PR 4 may drop --dangerously-load-development-channels.";
+  } else {
+    verdict = "BLOCKED — neither path verified; investigate before PR 4.";
+  }
+
   console.log("\n========== SPIKE B RESULTS (JSON, redacted) ==========");
   console.log(
     redact(
@@ -365,12 +374,7 @@ async function main() {
           checks,
           passed: checks.filter((c) => c.pass).length,
           failed: checks.filter((c) => !c.pass).length,
-          verdict:
-            b2.evidence.observedBehavior === "monitor-NOT-activated" && fallback.pass
-              ? "NO-GO on dropping --dangerously-load-development-channels in v1.0; fallback (the flag itself) is intact."
-              : b2.evidence.observedBehavior === "monitor-WAS-activated"
-                ? "GO — plugin monitor activates via --plugin-dir. PR 4 may drop --dangerously-load-development-channels."
-                : "BLOCKED — neither path verified; investigate before PR 4.",
+          verdict,
         },
         null,
         2,
