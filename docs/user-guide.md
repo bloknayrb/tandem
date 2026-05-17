@@ -2,13 +2,15 @@
 
 A complete guide to using Tandem — from first launch to advanced workflows.
 
-> **Using Claude Code?** If you're setting up Claude Code integration rather than learning the editor, skip to [Working with Claude Code](#working-with-claude-code).
+> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 26 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
+
+> **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → Connecting other MCP clients](../README.md#connecting-other-mcp-clients) for the generic MCP path.
 
 ## Overview
 
-Tandem lets you work on documents with an LLM without the constant copy-paste. You open a document — a progress report, RFP response, compliance filing, or any prose — highlight the text you want to discuss, and Claude sees it directly. Claude can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because Claude connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — a progress report, RFP response, compliance filing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
 
-Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and **Claude Code** where Claude connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
+Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
 Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`). The desktop app manages the server automatically; the npm install requires starting it from the terminal. Once running, the editor experience is identical either way.
 

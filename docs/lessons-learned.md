@@ -1,5 +1,7 @@
 # Lessons Learned
 
+> **Scope note:** Many lessons below reference Claude-specific behavior (channel push, plugin monitor, cowork, Claude Code skill, etc.). Tandem's default integration is Claude per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration), so lessons learned working ON that path are the deepest documented; lessons that generalize to any MCP client are noted as such inline. Other MCP clients are best-effort and not validated today.
+
 ## 1. Y.Doc Identity Mismatch
 
 **Problem:** When both MCP tools and Hocuspocus create Y.Docs, they must share the same instance. If each creates its own Y.Doc for the same room, edits on one don't appear in the other.
