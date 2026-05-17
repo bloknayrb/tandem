@@ -1,3 +1,9 @@
+export {
+  type ExistingConfigReadStatus,
+  type ExistingMcpInstall,
+  hasExistingTandemEntry,
+  readExistingTandemEntries,
+} from "./existing-config.js";
 export { type MigrationFn, migrateUp } from "./migrations.js";
 export {
   emptyIntegrationsFile,
