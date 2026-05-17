@@ -254,6 +254,106 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  */
 const CURRENT_SCHEMA_VERSION = 3;
 
+/**
+ * Validate + clamp every known field on a parsed settings blob.
+ *
+ * Single source of clamp truth for `loadSettings`. Used by:
+ *   1. The standard return path (post-migration, schemaVersion ≤ v3).
+ *   2. The forward-compat read-only branch (schemaVersion > v3).
+ *
+ * Both call sites must produce identical normalization of known fields
+ * — otherwise a forward-compat load could leak garbage values
+ * (`editorWidthPercent: -999`, `theme: "neon"`) into the running UI.
+ *
+ * Owns the `leftSlot.kind → leftRailTabs` derivation so both paths
+ * preserve outline-first ordering when the user had it selected.
+ */
+function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
+  let leftRailTabsFallback = DEFAULTS.leftRailTabs;
+  if (!Array.isArray(parsed.leftRailTabs)) {
+    const ls = parsed.leftSlot as { kind?: unknown } | undefined;
+    if (ls?.kind === "outline") {
+      console.warn("[tandem] migrating legacy leftSlot.kind=outline → leftRailTabs");
+      leftRailTabsFallback = ["outline", "annotations"];
+    } else if (ls?.kind === "side") {
+      console.warn("[tandem] migrating legacy leftSlot.kind=side → leftRailTabs");
+    }
+  }
+  return {
+    leftPanelVisible: parsed.leftPanelVisible === true,
+    rightPanelVisible: parsed.rightPanelVisible !== false,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
+    panelOrder:
+      parsed.panelOrder === "annotations-editor-chat"
+        ? "annotations-editor-chat"
+        : "chat-editor-annotations",
+    editorWidthPercent: Math.max(
+      40,
+      Math.min(100, Number(parsed.editorWidthPercent) || DEFAULTS.editorWidthPercent),
+    ),
+    selectionDwellMs: Math.max(
+      SELECTION_DWELL_MIN_MS,
+      Math.min(
+        SELECTION_DWELL_MAX_MS,
+        Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
+      ),
+    ),
+    showAuthorship: parsed.showAuthorship === false ? false : DEFAULTS.showAuthorship,
+    reduceMotion:
+      typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
+    textSize:
+      parsed.textSize === "s" || parsed.textSize === "m" || parsed.textSize === "l"
+        ? parsed.textSize
+        : DEFAULTS.textSize,
+    theme:
+      parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
+        ? parsed.theme
+        : DEFAULTS.theme,
+    accentHue:
+      typeof parsed.accentHue === "number" && parsed.accentHue >= 0 && parsed.accentHue <= 360
+        ? parsed.accentHue
+        : DEFAULTS.accentHue,
+    editorFont:
+      parsed.editorFont === "serif" || parsed.editorFont === "sans" || parsed.editorFont === "mono"
+        ? parsed.editorFont
+        : DEFAULTS.editorFont,
+    density:
+      parsed.density === "compact" || parsed.density === "cozy" || parsed.density === "spacious"
+        ? parsed.density
+        : DEFAULTS.density,
+    defaultMode:
+      parsed.defaultMode === "solo" || parsed.defaultMode === "tandem"
+        ? parsed.defaultMode
+        : DEFAULTS.defaultMode,
+    highContrast: parsed.highContrast === true,
+    annotationPatterns: parsed.annotationPatterns === true,
+    selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+    soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
+    degradedBannerDelayMs:
+      typeof parsed.degradedBannerDelayMs === "number" &&
+      parsed.degradedBannerDelayMs >= 5000 &&
+      parsed.degradedBannerDelayMs <= 120000
+        ? parsed.degradedBannerDelayMs
+        : DEFAULTS.degradedBannerDelayMs,
+    sidecarRetryStrategy:
+      parsed.sidecarRetryStrategy === "exponential" ||
+      parsed.sidecarRetryStrategy === "constant-2s" ||
+      parsed.sidecarRetryStrategy === "manual"
+        ? parsed.sidecarRetryStrategy
+        : DEFAULTS.sidecarRetryStrategy,
+    holdAnnotationsWhileOffline:
+      typeof parsed.holdAnnotationsWhileOffline === "boolean"
+        ? parsed.holdAnnotationsWhileOffline
+        : DEFAULTS.holdAnnotationsWhileOffline,
+    leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
+    rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
+    marginView: parsed.marginView === true,
+    showIntegrationWizard: parsed.showIntegrationWizard === true,
+    models: parseModels(parsed.models),
+  };
+}
+
 export function loadSettings(): TandemSettings {
   let saved: string | null;
   try {
@@ -309,103 +409,23 @@ export function loadSettings(): TandemSettings {
         console.warn(
           `[tandem] settings schemaVersion=${parsed.schemaVersion} is newer than v${CURRENT_SCHEMA_VERSION}; loading defensively without writing.`,
         );
-        return {
-          ...DEFAULTS,
-          reduceMotion: prefersReducedMotion(),
-          // Preserve fields a future schema may have added so the user
-          // doesn't perceive a regression when they go back to the newer
-          // client. We strip the type only, not the value.
-          ...(parsed as Partial<TandemSettings>),
-          _readOnly: true,
-        };
-      }
-      // v2 in-place migration: leftSlot.kind → leftRailTabs ordering.
-      // Preserve outline-first if the user had selected outline as their left panel.
-      let leftRailTabsFallback = DEFAULTS.leftRailTabs;
-      if (!Array.isArray(parsed.leftRailTabs)) {
-        const ls = parsed.leftSlot as { kind?: unknown } | undefined;
-        if (ls?.kind === "outline") {
-          console.warn("[tandem] migrating legacy leftSlot.kind=outline → leftRailTabs");
-          leftRailTabsFallback = ["outline", "annotations"];
-        } else if (ls?.kind === "side") {
-          console.warn("[tandem] migrating legacy leftSlot.kind=side → leftRailTabs");
+        const normalized = normalizeKnownFields(parsed);
+        // Preserve unknown future fields verbatim so a user bouncing back
+        // to the newer client doesn't perceive a regression. `knownKeys`
+        // is runtime-derived from the helper output (NOT the type), so
+        // any field the current code doesn't actively normalize passes
+        // through unmodified — exactly the contract `_readOnly: true`
+        // advertises. Known fields are sanitized via the helper so
+        // garbage like `editorWidthPercent: -999` doesn't leak into the
+        // running UI.
+        const knownKeys = new Set(Object.keys(normalized));
+        const futureFields: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (!knownKeys.has(k) && k !== "_readOnly") futureFields[k] = v;
         }
+        return { ...normalized, ...futureFields, _readOnly: true };
       }
-      return {
-        leftPanelVisible: parsed.leftPanelVisible === true,
-        rightPanelVisible: parsed.rightPanelVisible !== false,
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-        primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
-        panelOrder:
-          parsed.panelOrder === "annotations-editor-chat"
-            ? "annotations-editor-chat"
-            : "chat-editor-annotations",
-        editorWidthPercent: Math.max(
-          40,
-          Math.min(100, Number(parsed.editorWidthPercent) || DEFAULTS.editorWidthPercent),
-        ),
-        selectionDwellMs: Math.max(
-          SELECTION_DWELL_MIN_MS,
-          Math.min(
-            SELECTION_DWELL_MAX_MS,
-            Number(parsed.selectionDwellMs) || SELECTION_DWELL_DEFAULT_MS,
-          ),
-        ),
-        showAuthorship: parsed.showAuthorship === false ? false : DEFAULTS.showAuthorship,
-        reduceMotion:
-          typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : prefersReducedMotion(),
-        textSize:
-          parsed.textSize === "s" || parsed.textSize === "m" || parsed.textSize === "l"
-            ? parsed.textSize
-            : DEFAULTS.textSize,
-        theme:
-          parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
-            ? parsed.theme
-            : DEFAULTS.theme,
-        accentHue:
-          typeof parsed.accentHue === "number" && parsed.accentHue >= 0 && parsed.accentHue <= 360
-            ? parsed.accentHue
-            : DEFAULTS.accentHue,
-        editorFont:
-          parsed.editorFont === "serif" ||
-          parsed.editorFont === "sans" ||
-          parsed.editorFont === "mono"
-            ? parsed.editorFont
-            : DEFAULTS.editorFont,
-        density:
-          parsed.density === "compact" || parsed.density === "cozy" || parsed.density === "spacious"
-            ? parsed.density
-            : DEFAULTS.density,
-        defaultMode:
-          parsed.defaultMode === "solo" || parsed.defaultMode === "tandem"
-            ? parsed.defaultMode
-            : DEFAULTS.defaultMode,
-        highContrast: parsed.highContrast === true,
-        annotationPatterns: parsed.annotationPatterns === true,
-        selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
-        soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
-        degradedBannerDelayMs:
-          typeof parsed.degradedBannerDelayMs === "number" &&
-          parsed.degradedBannerDelayMs >= 5000 &&
-          parsed.degradedBannerDelayMs <= 120000
-            ? parsed.degradedBannerDelayMs
-            : DEFAULTS.degradedBannerDelayMs,
-        sidecarRetryStrategy:
-          parsed.sidecarRetryStrategy === "exponential" ||
-          parsed.sidecarRetryStrategy === "constant-2s" ||
-          parsed.sidecarRetryStrategy === "manual"
-            ? parsed.sidecarRetryStrategy
-            : DEFAULTS.sidecarRetryStrategy,
-        holdAnnotationsWhileOffline:
-          typeof parsed.holdAnnotationsWhileOffline === "boolean"
-            ? parsed.holdAnnotationsWhileOffline
-            : DEFAULTS.holdAnnotationsWhileOffline,
-        leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
-        rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
-        marginView: parsed.marginView === true,
-        showIntegrationWizard: parsed.showIntegrationWizard === true,
-        models: parseModels(parsed.models),
-      };
+      return normalizeKnownFields(parsed);
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
       // of silently clobbered on the next write.

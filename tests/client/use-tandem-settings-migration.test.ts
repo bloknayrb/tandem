@@ -126,6 +126,51 @@ describe("loadSettings — migration chain", () => {
     expect(s.models[0].displayName).toBe("Future model");
   });
 
+  // Forward-compat sanitization (#735 review finding).
+  //
+  // Prior implementation spread `...(parsed as Partial<TandemSettings>)`
+  // over DEFAULTS, bypassing every clamp. A future-blob with
+  // `editorWidthPercent: -999` propagated raw garbage to the running UI.
+  // The fix routes both paths through `normalizeKnownFields`.
+  it("forward-compat clamps editorWidthPercent=-999 to 40", () => {
+    writeRaw({ schemaVersion: 99, editorWidthPercent: -999 });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.editorWidthPercent).toBe(40);
+  });
+
+  it("forward-compat clamps accentHue=9999 to default", () => {
+    writeRaw({ schemaVersion: 99, accentHue: 9999 });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.accentHue).toBe(275); // DEFAULTS.accentHue
+  });
+
+  it("forward-compat rejects invalid theme enum", () => {
+    writeRaw({ schemaVersion: 99, theme: "neon" });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.theme).toBe("system"); // DEFAULTS.theme
+  });
+
+  it("forward-compat clamps selectionDwellMs=-50 to floor", () => {
+    writeRaw({ schemaVersion: 99, selectionDwellMs: -50 });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    // Number(-50) || DEFAULT → -50 is truthy → clamped to SELECTION_DWELL_MIN_MS (200).
+    expect(s.selectionDwellMs).toBeGreaterThanOrEqual(200);
+  });
+
+  it("forward-compat preserves legacy leftSlot.kind=outline → leftRailTabs", () => {
+    // Regression for the helper-extraction bug: leftSlot derivation
+    // MUST live inside `normalizeKnownFields` so forward-compat blobs
+    // don't silently lose outline-first ordering.
+    writeRaw({ schemaVersion: 99, leftSlot: { kind: "outline" } });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.leftRailTabs).toEqual(["outline", "annotations"]);
+  });
+
   it("v3 round-trips models[] through load with shape filter", () => {
     writeRaw({
       schemaVersion: 3,
