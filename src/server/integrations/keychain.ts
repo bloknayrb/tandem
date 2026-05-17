@@ -20,6 +20,21 @@
  * **Dependency injection.** Tests pass a fake backend to `createKeychain()`;
  * production callers use the default which lazy-loads `@napi-rs/keyring`.
  * No vitest mock state to manage across files.
+ *
+ * **Tauri sidecar packaging — known limitation (tracked in roadmap).**
+ * `@napi-rs/keyring` is marked external in `tsup.config.ts` because the
+ * native dispatcher cannot be bundled — it dynamic-`require`s a
+ * platform-specific subpackage (`@napi-rs/keyring-linux-x64-gnu`,
+ * etc.) at runtime. The npm CLI install path resolves these via
+ * `node_modules`. The Tauri sidecar ships only the bundled `dist/`
+ * tree (no `node_modules`), so calls into the default backend WILL
+ * throw `KeychainUnavailableError` in the Tauri build. PR 3c (wizard)
+ * is the first production consumer and MUST address this before
+ * exposing keychain features in Tauri — either by adding
+ * `node_modules/@napi-rs/keyring/**` to Tauri resources, or by wiring
+ * a Tauri Rust keychain bridge command and injecting a custom
+ * `KeychainBackend` that delegates to it (mirroring
+ * `src-tauri/src/token_store.rs`).
  */
 
 import { randomBytes } from "node:crypto";
@@ -104,6 +119,13 @@ export function createKeychain(backend?: KeychainBackend): Keychain {
   };
 }
 
+/**
+ * Memoize a synchronous factory. Throws are NOT memoized — if `fn()` throws,
+ * the cache stays empty and the next call retries. This matters for the
+ * keychain backend resolver: transient unavailability (Linux dbus not yet
+ * up, libsecret service restart) should not permanently poison the
+ * keychain for the rest of the process lifetime.
+ */
 function memoize<T>(fn: () => T): () => T {
   let cached: { v: T } | undefined;
   return () => {
@@ -112,26 +134,36 @@ function memoize<T>(fn: () => T): () => T {
   };
 }
 
+type NativeEntryCtor = new (
+  service: string,
+  account: string,
+) => {
+  getPassword(): string | null;
+  setPassword(secret: string): void;
+  deletePassword(): boolean;
+};
+
+/** Module loader signature — pass a custom one to `loadNativeBackend` for tests. */
+export type NativeKeyringLoader = () => { Entry: NativeEntryCtor };
+
+const defaultNativeKeyringLoader: NativeKeyringLoader = () =>
+  // Lazy CJS require via createRequire — defers native module load until
+  // first keychain call. Import-time failures (missing dbus, no libsecret)
+  // never crash the server; only direct keychain callers see the error.
+  esmRequire("@napi-rs/keyring") as { Entry: NativeEntryCtor };
+
 /**
  * Lazy-load `@napi-rs/keyring`. Wrapped in a function so import-time
  * failures never crash the server — only direct keychain callers fail.
+ * The `loader` parameter is a test seam — production callers use the
+ * default which calls `esmRequire("@napi-rs/keyring")`.
  */
-function loadNativeBackend(): KeychainBackend {
-  type NativeEntryCtor = new (
-    service: string,
-    account: string,
-  ) => {
-    getPassword(): string | null;
-    setPassword(secret: string): void;
-    deletePassword(): boolean;
-  };
+export function loadNativeBackend(
+  loader: NativeKeyringLoader = defaultNativeKeyringLoader,
+): KeychainBackend {
   let nativeEntry: NativeEntryCtor;
   try {
-    // Lazy CJS require via createRequire — defers native module load until
-    // first keychain call. Import-time failures (missing dbus, no libsecret)
-    // never crash the server; only direct keychain callers see the error.
-    const mod = esmRequire("@napi-rs/keyring") as { Entry: NativeEntryCtor };
-    nativeEntry = mod.Entry;
+    nativeEntry = loader().Entry;
   } catch (err) {
     throw new KeychainUnavailableError(err);
   }

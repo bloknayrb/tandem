@@ -67,11 +67,32 @@ const OtherMcpIntegration = z.object({
   tokenSecretRef: z.string().min(1).optional(),
 });
 
-export const IntegrationConfigSchema = z.discriminatedUnion("kind", [
-  ClaudeCodeIntegration,
-  ClaudeDesktopIntegration,
-  OtherMcpIntegration,
-]);
+/**
+ * `discriminatedUnion` members must be plain `ZodObject`s, so the
+ * cross-field invariant ("`transport: http` requires `url`") is applied
+ * via `superRefine` on the union itself. The wizard (PR 3c) could in
+ * principle default `url` to `http://127.0.0.1:3479` for `other-mcp`,
+ * but enforcing at the schema boundary prevents every downstream
+ * consumer from having to defend against a missing `url` on an
+ * http-transport integration.
+ */
+export const IntegrationConfigSchema = z
+  .discriminatedUnion("kind", [
+    ClaudeCodeIntegration,
+    ClaudeDesktopIntegration,
+    OtherMcpIntegration,
+  ])
+  .superRefine((val, ctx) => {
+    if (val.kind === "other-mcp" && val.transport === "http") {
+      if (val.url === undefined || val.url.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["url"],
+          message: "url is required when transport is http",
+        });
+      }
+    }
+  });
 
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 
@@ -96,37 +117,45 @@ export function emptyIntegrationsFile(): IntegrationsFile {
  * v1 input shape for the v1→v2 migration. Exported solely so `migrations.ts`
  * can validate untrusted on-disk v1 input. v1 differs from v2 only in:
  * - `INTEGRATIONS_SCHEMA_VERSION === 1`
- * - No `tokenSecretRef` on any kind (silently ignored if present)
+ * - No `tokenSecretRef` on any kind
  * - No `other-mcp` variant in the union
  *
- * The migration is a passthrough on the `integrations` array — all v1
- * records are valid v2 records — so the migration only rewrites
- * `schemaVersion`. We still validate the v1 shape strictly to catch
- * corruption that the v2 schema (which is laxer for `other-mcp`) would
- * accept.
+ * **`.strict()` on every record:** a hand-edited v1 file containing a
+ * field that does not exist in v1's union (most notably `tokenSecretRef`,
+ * which only exists in v2) is rejected outright rather than silently
+ * stripped. This keeps the migration's "v1 records are valid v2 records"
+ * invariant honest — if extra v2-only data appears on a v1 record, the
+ * file is corrupt and should fail loudly rather than propagate truncated
+ * records into v2.
  */
-const ClaudeCodeIntegrationV1 = z.object({
-  kind: z.literal("claude-code"),
-  id: z.string().min(1),
-  label: z.string().min(1),
-  configPath: AbsolutePath,
-  transport: z.literal("http"),
-  url: z.string().url(),
-});
+const ClaudeCodeIntegrationV1 = z
+  .object({
+    kind: z.literal("claude-code"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    configPath: AbsolutePath,
+    transport: z.literal("http"),
+    url: z.string().url(),
+  })
+  .strict();
 
-const ClaudeDesktopIntegrationV1 = z.object({
-  kind: z.literal("claude-desktop"),
-  id: z.string().min(1),
-  label: z.string().min(1),
-  configPath: AbsolutePath,
-  transport: z.literal("stdio"),
-  nodeBinary: z.string().min(1).optional(),
-});
+const ClaudeDesktopIntegrationV1 = z
+  .object({
+    kind: z.literal("claude-desktop"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    configPath: AbsolutePath,
+    transport: z.literal("stdio"),
+    nodeBinary: z.string().min(1).optional(),
+  })
+  .strict();
 
-export const IntegrationsFileV1Schema = z.object({
-  schemaVersion: z.literal(1),
-  integrations: z.array(
-    z.discriminatedUnion("kind", [ClaudeCodeIntegrationV1, ClaudeDesktopIntegrationV1]),
-  ),
-  defaultIntegrationId: z.string().min(1).optional(),
-});
+export const IntegrationsFileV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    integrations: z.array(
+      z.discriminatedUnion("kind", [ClaudeCodeIntegrationV1, ClaudeDesktopIntegrationV1]),
+    ),
+    defaultIntegrationId: z.string().min(1).optional(),
+  })
+  .strict();

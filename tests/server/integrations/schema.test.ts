@@ -135,6 +135,22 @@ describe("IntegrationConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects an other-mcp with transport http but no url", () => {
+    // Cross-field invariant: http transport requires url. Without this
+    // guard, downstream consumers would have to defend against a missing
+    // url on an http-transport integration.
+    const result = IntegrationConfigSchema.safeParse({
+      kind: "other-mcp",
+      id: "x",
+      label: "X",
+      transport: "http",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.join(".") === "url")).toBe(true);
+    }
+  });
+
   it("rejects an other-mcp with a relative configPath", () => {
     const result = IntegrationConfigSchema.safeParse({
       kind: "other-mcp",
@@ -276,6 +292,37 @@ describe("IntegrationsFileV1Schema", () => {
     const result = IntegrationsFileV1Schema.safeParse({
       schemaVersion: 1,
       integrations: [{ kind: "other-mcp", id: "x", label: "X", transport: "http" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a v1 record carrying a v2-only field (tokenSecretRef) via .strict()", () => {
+    // A hand-edited v1 file that smuggled `tokenSecretRef` (v2-only) onto a
+    // record must fail loudly rather than silently strip the field during
+    // migration. The migration's "v1 records are valid v2 records"
+    // invariant only holds if v1 strictly forbids v2-exclusive fields.
+    const result = IntegrationsFileV1Schema.safeParse({
+      schemaVersion: 1,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/home/user/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          tokenSecretRef: "smuggled-from-v2",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a v1 file with an extra top-level field via .strict()", () => {
+    const result = IntegrationsFileV1Schema.safeParse({
+      schemaVersion: 1,
+      integrations: [],
+      futureField: "v3-only",
     });
     expect(result.success).toBe(false);
   });
