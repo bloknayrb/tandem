@@ -44,10 +44,28 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
   await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
 }
 
+/**
+ * #683 PR3 — Per-side rail-replaces-margin gates margin columns on rail
+ * visibility. The product default has `rightPanelVisible=true`, which would
+ * hide the right margin column out of the box. Toggle each rail off only if
+ * currently visible (read via `aria-pressed` on the titlebar toggles) so we
+ * exercise the on-state of margin view, not the rail-default.
+ */
+async function closeBothRails(page: import("@playwright/test").Page): Promise<void> {
+  for (const side of ["left", "right"] as const) {
+    const btn = page.locator(`[data-testid='titlebar-toggle-${side}']`);
+    if ((await btn.getAttribute("aria-pressed")) === "true") {
+      await btn.click();
+      await expect(btn).toHaveAttribute("aria-pressed", "false");
+    }
+  }
+}
+
 async function setMarginView(
   page: import("@playwright/test").Page,
   enabled: boolean,
 ): Promise<void> {
+  if (enabled) await closeBothRails(page);
   await openSettingsAndGotoCowork(page);
   const popover = page.locator("[data-testid='settings-popover']");
   const toggleInput = popover.locator("[data-testid='margin-view-toggle'] input");
@@ -372,4 +390,184 @@ test("toggle off after on: columns disappear (validates display:contents wrapper
   await setMarginView(page, false);
   await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
   await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
+});
+
+/**
+ * #683 PR3 — Per-side rail-replaces-margin behavior. Opening the LEFT rail
+ * hides only the left margin column; the right column remains. Opening the
+ * RIGHT rail hides the right column. Default is per-side so margin
+ * annotations on the un-collapsed side stay visible — reasoning lives in
+ * App.svelte's `marginLeftVisible` / `marginRightVisible` derived blocks.
+ */
+test("PR3: opening a rail hides only that side's margin column", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+  const leftCol = page.locator("[data-testid='margin-column-left']");
+  const rightCol = page.locator("[data-testid='margin-column-right']");
+  await expect(leftCol).toHaveCount(1);
+  await expect(rightCol).toHaveCount(1);
+
+  // Open the LEFT rail → left column hides, right stays. The titlebar toggle
+  // is the same control surfaced to the user.
+  await page.locator("[data-testid='titlebar-toggle-left']").click();
+  await expect(leftCol).toHaveCount(0);
+  await expect(rightCol).toHaveCount(1);
+
+  // Close left, open right → right column hides, left returns.
+  await page.locator("[data-testid='titlebar-toggle-left']").click();
+  await expect(leftCol).toHaveCount(1);
+  await page.locator("[data-testid='titlebar-toggle-right']").click();
+  await expect(leftCol).toHaveCount(1);
+  await expect(rightCol).toHaveCount(0);
+});
+
+/**
+ * #683 PR3 — Narrow-viewport auto-hide. Below a computed threshold (margin
+ * reserve + open rails + minimum readable editor width), BOTH columns hide
+ * regardless of rail state, so the editor never gets crushed.
+ */
+test("PR3: narrow viewport hides both margin columns", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+
+  // Shrink to a width well below threshold (reserve ≈ 544 + min 480 = 1024).
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
+
+  // Grow back to a wide viewport → columns return.
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+});
+
+/**
+ * #683 PR3 — Hysteresis. The narrowSticky entry/exit bands are offset by
+ * MARGIN_VIEW_HYSTERESIS_PX (32) so a viewport drag through the threshold
+ * doesn't flip columns on/off at 60fps. We resize across the boundary three
+ * times (narrow → just-over → narrow) and confirm the columns end up in the
+ * narrow state without thrashing back to visible on the brief overshoot.
+ */
+test("PR3: boundary resize does not flicker (hysteresis)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  // Estimated threshold with no rails open: 544 reserve + 480 min editor = 1024.
+  // Drive narrow first, then a 20px overshoot (still inside the 32px deadband
+  // → must remain narrow), then back below. End state: narrow (both hidden).
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1044, height: 900 });
+  // Inside the hysteresis band → must NOT flip back to visible.
+  await page.waitForTimeout(80);
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+});
+
+/**
+ * #683 PR3 — Auto-hide must not write user-intent state. The narrow-collapse
+ * flag is local to App.svelte; sweeping the viewport through and back across
+ * the threshold must leave `rightPanelVisible`/`leftPanelVisible` in
+ * `tandem:settings` untouched. Without this guarantee, a window resize would
+ * silently overwrite the user's persisted panel preferences.
+ */
+test("PR3: narrow-collapse does not overwrite persisted rail visibility", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  // `setMarginView` closes both rails as a setup side effect (so existing
+  // tests don't trip on the default-right-rail visible behaviour). Run it
+  // first, THEN snapshot the rail state — this test is checking that the
+  // viewport sweep doesn't write to settings, not that the setup helper
+  // leaves them untouched.
+  await setMarginView(page, true);
+
+  const before = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw
+      ? (JSON.parse(raw) as { rightPanelVisible?: unknown; leftPanelVisible?: unknown })
+      : null;
+  }, TANDEM_SETTINGS_KEY);
+
+  // Sweep through the narrow boundary and back. Wait between transitions so
+  // the $effect that drives narrowSticky actually runs — if it were ever to
+  // touch settings, this is when it would.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.waitForTimeout(120);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.waitForTimeout(120);
+
+  // Settings must reflect the pre-sweep snapshot exactly.
+  const after = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw
+      ? (JSON.parse(raw) as { rightPanelVisible?: unknown; leftPanelVisible?: unknown })
+      : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(after?.rightPanelVisible).toBe(before?.rightPanelVisible);
+  expect(after?.leftPanelVisible).toBe(before?.leftPanelVisible);
+});
+
+/**
+ * #683 PR3 — Disabling margin view restores the unreserved editor max-width.
+ * Without the reserve, the editor wrapper's `max-width` style is just the
+ * raw percent (no `max(0px, calc(…))` wrapping).
+ */
+test("PR3: disabling margin view restores editor max-width", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  // The editor wrapper is the immediate parent of `.tandem-editor` (when not paged).
+  const wrapper = page
+    .locator(".tandem-editor")
+    .locator("xpath=ancestor::div[contains(@style,'max-width')][1]");
+
+  await setMarginView(page, true);
+  await expect.poll(async () => (await wrapper.getAttribute("style")) ?? "").toContain("max(");
+
+  await setMarginView(page, false);
+  await expect.poll(async () => (await wrapper.getAttribute("style")) ?? "").not.toContain("max(");
 });

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Margin view auto-collapses on rail open or narrow viewport (#683)** — opening the left rail now hides only the left margin column; opening the right rail hides only the right column. When the viewport gets narrow enough that margin reserve + open rails + readable editor would crowd, both columns hide together. A 32px hysteresis band on the viewport threshold prevents flicker when a user drags through the boundary. New `useViewportWidth` rune store provides the rAF-debounced subscription.
+
 ## [0.12.0] - 2026-05-15
 
 ### Fixed
