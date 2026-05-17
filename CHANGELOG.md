@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Models registry data model + `useModels` hook (Wave 2 PR 8a, #659)** — `TandemSettings` now carries a `models: ModelRegistryEntry[]` array tracking AI providers Tandem can call out to (Anthropic, OpenAI, Gemini, local Ollama, local llama.cpp). The data layer ships in this PR; the Settings → Models UI ships in PR 8b. Orthogonal to `IntegrationConfig` (#477) — that schema tracks MCP clients connecting INTO Tandem, while this tracks providers Tandem talks OUT to.
+- **Schema v2 → v3 migration with forward-compat read-only mode** — `loadSettings` now walks an explicit migration chain (v1→v2→v3). An on-disk `schemaVersion` greater than v3 loads defensively with `_readOnly: true`, and `createTandemSettings.updateSettings` short-circuits writes on read-only settings. This is the load-bearing defence against a downgraded client clobbering a newer client's Models registry / future fields on first save.
+
 ### Security
 
 - **CI guard: harness components must not leak into production client bundle (Wave 2 PR 7)** — new `scripts/ci/verify-harness-stripped.mjs` runs after `npm run build` and greps `dist/client/` for known harness symbols (`UpdateAvailableHarness`, `harness-acknowledge`, etc.). Defends against a future commit accidentally importing a harness component from a production-shipping module, which would expose internal state (e.g. acknowledge buttons, version accessors) to end users. Pairs with the #660 audit confirming every settings-open path routes through the ack-clearing wrapper.
