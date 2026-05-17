@@ -495,9 +495,14 @@ const viewport = createViewportWidth();
 // preserves margin annotations on the un-collapsed side and matches the user
 // mental model that "rail replaces margin." Both columns hide together when
 // `narrowSticky === true`.
+//
+// The threshold reads the persisted-at-mount rail widths (not the live
+// `dragResizeLeft/Right.width`) so it stays stable while a user is mid-drag.
+// Without this, the boundary slides under the drag and margin columns flip
+// on/off as the cursor moves — the 32px hysteresis below only absorbs
+// viewport-axis jitter, not threshold drift.
 const railsWidthPx = $derived(
-  (effectiveLeftVisible ? dragResizeLeft.width : 0) +
-    (effectiveRightVisible ? dragResizeRight.width : 0),
+  (effectiveLeftVisible ? leftPanelWidth : 0) + (effectiveRightVisible ? rightPanelWidth : 0),
 );
 const marginNarrowThresholdPx = $derived(
   MARGIN_VIEW_RESERVE_PX + railsWidthPx + MIN_EDITOR_WIDTH_PX,

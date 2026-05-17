@@ -504,6 +504,51 @@ test("PR3: boundary resize does not flicker (hysteresis)", async ({ page }) => {
 });
 
 /**
+ * #683 PR3 — Auto-hide must not write user-intent state. The narrow-collapse
+ * flag is local to App.svelte; sweeping the viewport through and back across
+ * the threshold must leave `rightPanelVisible`/`leftPanelVisible` in
+ * `tandem:settings` untouched. Without this guarantee, a window resize would
+ * silently overwrite the user's persisted panel preferences.
+ */
+test("PR3: narrow-collapse does not overwrite persisted rail visibility", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  // Seed a known panel-visibility state directly in settings so the assertion
+  // doesn't depend on product defaults that may drift.
+  await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : {};
+    parsed.rightPanelVisible = true;
+    parsed.leftPanelVisible = false;
+    localStorage.setItem(key, JSON.stringify(parsed));
+  }, TANDEM_SETTINGS_KEY);
+  await page.reload();
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await setMarginView(page, true);
+
+  // Sweep through the narrow boundary and back. Wait between transitions so
+  // the $effect that drives narrowSticky actually runs — if it were ever to
+  // touch settings, this is when it would.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.waitForTimeout(120);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.waitForTimeout(120);
+
+  // Settings must reflect the seeded values exactly.
+  const persisted = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw
+      ? (JSON.parse(raw) as { rightPanelVisible?: unknown; leftPanelVisible?: unknown })
+      : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(persisted?.rightPanelVisible).toBe(true);
+  expect(persisted?.leftPanelVisible).toBe(false);
+});
+
+/**
  * #683 PR3 — Disabling margin view restores the unreserved editor max-width.
  * Without the reserve, the editor wrapper's `max-width` style is just the
  * raw percent (no `max(0px, calc(…))` wrapping).
