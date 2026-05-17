@@ -1,10 +1,10 @@
 import * as Y from "yjs";
 
 import { TUTORIAL_ANNOTATION_PREFIX, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { withInternal } from "../../shared/origins.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { nextRev } from "../annotations/schema.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { anchoredRange } from "../positions.js";
 import { extractText } from "./document-model.js";
 
@@ -58,7 +58,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
   }
 
   let injected = 0;
-  doc.transact(() => {
+  withInternal(doc, () => {
     for (const def of TUTORIAL_ANNOTATIONS) {
       if (map.has(def.id)) continue;
       const idx = fullText.indexOf(def.targetText);
@@ -105,7 +105,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
       map.set(def.id, annotation);
       injected++;
     }
-  }, MCP_ORIGIN);
+  });
 
   console.error(
     `[tutorial] Injected ${injected}/${TUTORIAL_ANNOTATIONS.length} tutorial annotations`,

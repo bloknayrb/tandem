@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
+import { shouldSkipChannel } from "../../../shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../../shared/types.js";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../origins.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 
@@ -15,7 +15,7 @@ export function makeRepliesObserver(deps: {
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
   const repliesObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN || txn.origin === FILE_SYNC_ORIGIN) return;
+    if (shouldSkipChannel(txn.origin)) return;
 
     for (const [key, change] of event.changes.keys) {
       if (change.action !== "add") continue;

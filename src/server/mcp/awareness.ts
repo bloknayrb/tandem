@@ -10,16 +10,13 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { withMcp } from "../../shared/origins.js";
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import {
-  getAnnotationEditedChannelKey,
-  MCP_ORIGIN,
-  wasEmittedViaChannel,
-} from "../events/queue.js";
+import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
 import { extractText, getCurrentDoc } from "./document.js";
@@ -100,7 +97,7 @@ export function registerAwarenessTools(server: McpServer): void {
 
       // Refresh only unsurfaced annotations; batch Y.Map writes
       const unsurfaced: Annotation[] = [];
-      doc.transact(() => {
+      withMcp(doc, () => {
         for (const raw of allAnnotations) {
           const lastSurfacedEditedAt = surfacedIds.get(raw.id);
           // Not yet surfaced
@@ -113,7 +110,7 @@ export function registerAwarenessTools(server: McpServer): void {
             unsurfaced.push(refreshRange(raw, doc, annotationsMap));
           }
         }
-      }, MCP_ORIGIN);
+      });
 
       const { userActions, userResponses } = processUnsurfacedInboxAnnotations(
         unsurfaced,
@@ -139,7 +136,7 @@ export function registerAwarenessTools(server: McpServer): void {
             ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
           });
           // Mark as read
-          ctrlDoc.transact(() => chatMap.set(msg.id, { ...msg, read: true }), MCP_ORIGIN);
+          withMcp(ctrlDoc, () => chatMap.set(msg.id, { ...msg, read: true }));
         }
       });
 
@@ -239,7 +236,7 @@ export function registerAwarenessTools(server: McpServer): void {
         read: true,
       };
 
-      ctrlDoc.transact(() => chatMap.set(id, msg), MCP_ORIGIN);
+      withMcp(ctrlDoc, () => chatMap.set(id, msg));
 
       return mcpSuccess({ sent: true, messageId: id });
     }),

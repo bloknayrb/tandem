@@ -1,18 +1,17 @@
 /**
- * Y.Map transaction origin constants for the Tandem event queue.
+ * Y.Doc transaction origin constants — re-exported from `src/shared/origins.ts`.
  *
- * Kept in a standalone file so that `src/server/annotations/sync.ts` can
- * import `FILE_SYNC_ORIGIN` without creating a circular dependency through
- * `queue.ts`.
+ * Kept as a thin re-export for backward compatibility during the ADR-031
+ * migration. PR 9 (shim cleanup) removes this file once every callsite
+ * imports from `shared/origins` directly. New code should import from
+ * `src/shared/origins.ts`.
  */
 
-/** Origin tag for all MCP-initiated Y.Map writes. */
-export const MCP_ORIGIN = "mcp";
-
-/**
- * Origin tag for Y.Map writes that originated from the annotation file-writer
- * (app-data JSON → Y.Map sync). Observers that emit channel events to external
- * consumers MUST skip transactions with this origin so a file-reload doesn't
- * fire spurious `annotation:*` SSE events.
- */
-export const FILE_SYNC_ORIGIN = "file-sync";
+export {
+  BROWSER_ORIGIN,
+  FILE_SYNC_ORIGIN,
+  INTERNAL_ORIGIN,
+  MCP_ORIGIN,
+  RELOAD_ORIGIN,
+  type TandemOrigin,
+} from "../../shared/origins.js";

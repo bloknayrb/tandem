@@ -10,9 +10,9 @@ import {
   API_LAUNCH_CLAUDE,
 } from "../../shared/api-paths.js";
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT, Y_MAP_CLAUDE } from "../../shared/constants.js";
+import { withMcp } from "../../shared/origins.js";
 import { ChannelErrorCodeSchema, type ClaudeAwareness } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { sseHandler } from "../events/sse.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
@@ -57,7 +57,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
         focusParagraph: typeof focusParagraph === "number" ? focusParagraph : null,
         focusOffset: typeof focusOffset === "number" ? focusOffset : null,
       };
-      doc.transact(() => awarenessMap.set(Y_MAP_CLAUDE, state), MCP_ORIGIN);
+      withMcp(doc, () => awarenessMap.set(Y_MAP_CLAUDE, state));
     }
     res.json({ ok: true, written: !!docId });
   });
@@ -102,7 +102,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       ...(typeof replyTo === "string" ? { replyTo } : {}),
       read: true,
     };
-    ctrlDoc.transact(() => chatMap.set(id, msg), MCP_ORIGIN);
+    withMcp(ctrlDoc, () => chatMap.set(id, msg));
     res.json({ sent: true, messageId: id });
   });
 
@@ -159,11 +159,11 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
     const count = chatMap.size;
-    ctrlDoc.transact(() => {
+    withMcp(ctrlDoc, () => {
       for (const key of Array.from(chatMap.keys())) {
         chatMap.delete(key);
       }
-    }, MCP_ORIGIN);
+    });
     res.json({ ok: true, cleared: count });
   });
 
