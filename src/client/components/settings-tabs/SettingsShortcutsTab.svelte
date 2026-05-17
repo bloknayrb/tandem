@@ -3,11 +3,9 @@ import { ACTION_GROUPS, getActionsMap } from "../../actions/registry.svelte.js";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
 // Tab body components take the context for uniformity even when they don't
-// reference any fields. Avoid destructuring (freezes getters at mount —
-// feedback_svelte_getter_destructuring). Suppress unused-var lint by reading
-// the binding inside an $effect; this tab consumes no context fields today
-// but exists for future Wave 2 settings.
-let ctx: Partial<SettingsTabContext> = $props();
+// reference any fields. Keep `$props()` as a single proxy variable; suppress
+// unused-var lint by reading the binding inside an $effect.
+let ctx: SettingsTabContext = $props();
 $effect(() => {
   void ctx;
 });

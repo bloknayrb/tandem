@@ -4,18 +4,14 @@ import type {
   Density,
   EditorFont,
   PrimaryTab,
-  TandemSettings,
   TextSize,
   ThemePreference,
 } from "../hooks/useTandemSettings.svelte";
+import type { SettingsTabContext } from "./SettingsModal.svelte";
 
-interface Props {
-  open: boolean;
-  settings: TandemSettings;
-  onUpdate: (partial: Partial<TandemSettings>) => void;
-}
+type Props = SettingsTabContext;
 
-let { open: _open, settings, onUpdate }: Props = $props();
+let { settings, onUpdate }: Props = $props();
 
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";

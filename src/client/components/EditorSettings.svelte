@@ -1,10 +1,7 @@
 <script lang="ts">
-import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
+import type { SettingsTabContext } from "./SettingsModal.svelte";
 
-interface Props {
-  settings: TandemSettings;
-  onUpdate: (partial: Partial<TandemSettings>) => void;
-}
+type Props = SettingsTabContext;
 
 let { settings, onUpdate }: Props = $props();
 

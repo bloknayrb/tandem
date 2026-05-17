@@ -3,13 +3,10 @@ import { USER_NAME_MAX_LEN } from "../../../shared/constants";
 import { createUserName } from "../../hooks/useUserName.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-// Read fields via `ctx.foo` instead of destructuring with `let { ... } = ctx`:
-// destructuring freezes the getter at mount in Svelte 5
-// (feedback_svelte_getter_destructuring). The modal always passes the full
-// context shape at runtime, so the non-null assertions below are safe even
-// though the type is `Partial<>` (widened so the registry can also hold
-// narrower legacy panels like AppearanceSettings).
-let ctx: Partial<SettingsTabContext> = $props();
+// Keep `$props()` as a single proxy variable and read fields via `ctx.foo`.
+// Capturing into a local and then destructuring (`let c = $props(); let { settings } = c`)
+// would freeze the inner getters at mount (feedback_svelte_getter_destructuring).
+let ctx: SettingsTabContext = $props();
 
 const userNameState = createUserName();
 let nameInput = $state(userNameState.userName);
@@ -60,9 +57,9 @@ $effect(() => {
       type="button"
       data-testid="settings-modal-default-mode-tandem-btn"
       role="radio"
-      aria-checked={ctx.settings!.defaultMode === "tandem"}
-      onclick={() => ctx.onUpdate!({ defaultMode: "tandem" })}
-      style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {ctx.settings!.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {ctx.settings!.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {ctx.settings!.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {ctx.settings!.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
+      aria-checked={ctx.settings.defaultMode === "tandem"}
+      onclick={() => ctx.onUpdate({ defaultMode: "tandem" })}
+      style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {ctx.settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {ctx.settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {ctx.settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {ctx.settings.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
     >
       Tandem
     </button>
@@ -70,9 +67,9 @@ $effect(() => {
       type="button"
       data-testid="settings-modal-default-mode-solo-btn"
       role="radio"
-      aria-checked={ctx.settings!.defaultMode === "solo"}
-      onclick={() => ctx.onUpdate!({ defaultMode: "solo" })}
-      style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {ctx.settings!.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {ctx.settings!.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {ctx.settings!.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {ctx.settings!.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
+      aria-checked={ctx.settings.defaultMode === "solo"}
+      onclick={() => ctx.onUpdate({ defaultMode: "solo" })}
+      style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {ctx.settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {ctx.settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {ctx.settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {ctx.settings.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
     >
       Solo
     </button>
@@ -88,8 +85,8 @@ $effect(() => {
 >
   <input
     type="checkbox"
-    checked={ctx.settings!.soloRailHidden}
-    onchange={(e) => ctx.onUpdate!({ soloRailHidden: (e.target as HTMLInputElement).checked })}
+    checked={ctx.settings.soloRailHidden}
+    onchange={(e) => ctx.onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
     style="accent-color: var(--tandem-accent);"
   />
   <span>Hide side panel in Solo mode</span>
