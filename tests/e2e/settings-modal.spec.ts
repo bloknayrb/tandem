@@ -155,3 +155,60 @@ test("clicks inside the modal do NOT close it", async ({ page }) => {
 test.skip("Ctrl+Shift+, keypress opens the SettingsModal (manual path)", async () => {
   // Intentionally empty — left as a documentation anchor for the gap.
 });
+
+// PR 6 — Network two-tier refactor.
+// Advanced controls live under a `<CollapsibleSection>` that ships collapsed
+// each time the modal opens (no persisted disclosure state). These tests pin
+// down: (a) collapsed-on-open, (b) toggle expands, (c) toggle collapses again,
+// (d) controls are operable once expanded.
+
+test("PR6: Network Advanced section ships collapsed and toggles open", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-network']").click();
+
+  const advanced = page.locator("[data-testid='network-advanced']");
+  await expect(advanced).toBeVisible();
+  // <details> exposes its open state as a boolean attribute. Collapsed-by-default.
+  await expect(advanced).not.toHaveAttribute("open", /.*/);
+
+  // Children are not visible while collapsed (a control inside the section
+  // still exists in the DOM under <details>, but `toBeVisible()` returns
+  // false because the user-agent hides closed-details children).
+  const delaySlider = page.locator("[data-testid='network-degraded-delay-slider']");
+  await expect(delaySlider).not.toBeVisible();
+
+  // Toggle expands.
+  await page.locator("[data-testid='network-advanced-toggle']").click();
+  await expect(advanced).toHaveAttribute("open", /.*/);
+  await expect(delaySlider).toBeVisible();
+
+  // Toggle collapses again.
+  await page.locator("[data-testid='network-advanced-toggle']").click();
+  await expect(advanced).not.toHaveAttribute("open", /.*/);
+  await expect(delaySlider).not.toBeVisible();
+});
+
+test("PR6: Network Advanced disclosure resets across modal close/open", async ({ page }) => {
+  // Ephemeral disclosure: re-opening the modal must show Advanced collapsed
+  // again, even if the user expanded it in the prior session. Documents the
+  // explicit decision recorded in the PR description.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-network']").click();
+  await page.locator("[data-testid='network-advanced-toggle']").click();
+  await expect(page.locator("[data-testid='network-advanced']")).toHaveAttribute("open", /.*/);
+
+  await page.locator("[data-testid='settings-modal-close-btn']").click();
+  await expect(page.locator(MODAL)).toHaveCount(0);
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-network']").click();
+  await expect(page.locator("[data-testid='network-advanced']")).not.toHaveAttribute("open", /.*/);
+});

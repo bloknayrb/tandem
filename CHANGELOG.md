@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Network settings split into Connection / Advanced (Wave 2 PR 6)** — connection status, transport, and the restart-sidecar button stay always-visible; loopback port, degraded-banner delay, reconnect strategy, hold-while-offline, and token rotation collapsed under a new "Advanced" disclosure. Disclosure state is ephemeral (resets each time the modal opens). New `CollapsibleSection.svelte` primitive uses native `<details>/<summary>` for free keyboard a11y.
+
 ### Added
 
 - **Re-landed D11 bundled fonts (#680)** — re-applied the fontsource Latin variable-axis builds of Source Serif 4, Inter Tight, and JetBrains Mono originally shipped in PR #663 then reverted via #678. The SIL OFL 1.1 license texts (`public/fonts/OFL-*.txt`) ship alongside the binaries per §4. Editor body text renders in Source Serif 4 via the existing `--tandem-editor-font-family` token.
