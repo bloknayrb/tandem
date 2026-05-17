@@ -18,10 +18,19 @@ const mcpSdkPkg = JSON.parse(readFileSync(join(sdkRoot, "package.json"), "utf8")
 // fail with "Dynamic require not supported" if bundled into ESM.
 const nodeBuiltins = builtinModules.flatMap((m) => [m, `node:${m}`]);
 
+// Native modules must stay external — they dispatch to platform-specific
+// `.node` binaries at runtime via dynamic require, which esbuild cannot trace
+// into a single-file bundle. Bundling the JS dispatcher without its native
+// counterpart causes a runtime "Cannot find module" inside @napi-rs/keyring.
+// The keychain module guards the require behind try/catch and surfaces a
+// typed KeychainUnavailableError, so the production install ships the package
+// directly from node_modules.
+const nativeExternals = [/^@napi-rs\/keyring/];
+
 // Shared config for self-contained bundles (Tauri ships these without node_modules)
 const selfContained = {
   noExternal: [/.*/],
-  external: nodeBuiltins,
+  external: [...nodeBuiltins, ...nativeExternals],
   banner: {
     js: 'import { createRequire as __cjsRequireCreator } from "module"; const require = __cjsRequireCreator(import.meta.url);',
   },
