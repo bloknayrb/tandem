@@ -64,6 +64,12 @@ import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
+import {
+  editAnnotation as marginEditAnnotation,
+  removeAnnotation as marginRemoveAnnotation,
+  replyToAnnotation as marginReplyToAnnotation,
+  sendNoteToClaude as marginSendNoteToClaude,
+} from "./panels/annotation-actions";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
@@ -828,6 +834,22 @@ const marginReplies = createAnnotationReplies({
   getYdoc: () => activeTab?.ydoc ?? null,
 });
 
+// All six handlers + ydoc/docId in one $derived so closures capture the same
+// activeTab snapshot. Per-property access at call sites preserves reactivity
+// (destructuring would freeze the values at template-instantiation time).
+const marginHandlers = $derived.by(() => {
+  const ydoc = activeTab?.ydoc ?? null;
+  const docId = activeTab?.id;
+  return {
+    ydoc,
+    docId,
+    onEdit: (id: string, c: string) => marginEditAnnotation(ydoc, id, c),
+    onReply: (id: string, t: string) => marginReplyToAnnotation(id, t, docId),
+    onRemove: (id: string) => marginRemoveAnnotation(id, docId),
+    onSendToClaude: (id: string) => marginSendNoteToClaude(ydoc, id),
+  };
+});
+
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
   () => editor,
@@ -1207,6 +1229,12 @@ const tutorial = createTutorial(
             activeAnnotationId = ann.id;
             review.scrollToAnnotation(ann);
           }}
+          onAccept={review.handleAccept}
+          onDismiss={review.handleDismiss}
+          onRemove={marginHandlers.onRemove}
+          onEdit={marginHandlers.onEdit}
+          onReply={marginHandlers.onReply}
+          onSendToClaude={marginHandlers.onSendToClaude}
         />
       {/if}
       {#if marginRightVisible && activeTab}
@@ -1225,6 +1253,10 @@ const tutorial = createTutorial(
           }}
           onAccept={review.handleAccept}
           onDismiss={review.handleDismiss}
+          onRemove={marginHandlers.onRemove}
+          onEdit={marginHandlers.onEdit}
+          onReply={marginHandlers.onReply}
+          onSendToClaude={marginHandlers.onSendToClaude}
         />
       {/if}
     </div>

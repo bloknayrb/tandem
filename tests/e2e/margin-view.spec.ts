@@ -366,6 +366,73 @@ test("PR2: note bubble never exposes replies (ADR-027)", async ({ page }) => {
   await expect(bubble).toBeVisible();
 });
 
+test("tab switch: bubbles rebind to the active doc's annotations", async ({ page }) => {
+  // Regression guard for PR #720's hoist of margin handlers into a single
+  // `$derived`. If the handlers were ever destructured at the call site (or
+  // captured into a non-reactive const), they would freeze on the first tab's
+  // ydoc/docId and the second tab's bubbles would render against stale state.
+  // The visible bubble set switching after a tab swap proves the $derived
+  // re-runs against the new `activeTab`.
+  const dirB = createFixtureDir("sample2.md");
+  try {
+    const fileA = path.join(tmpDir, "sample.md");
+    const fileB = path.join(dirB, "sample2.md");
+
+    // sample.md has "# Test Document" (title 2..15 = "Test Document").
+    // sample2.md has "# Second Document" (title 2..17 = "Second Document").
+    // tandem_comment validates textSnapshot against the actual range text and
+    // silently drops the annotation on mismatch, so each file gets its own
+    // range tuple.
+    await mcp.callTool("tandem_open", { filePath: fileA });
+    await mcp.callTool("tandem_comment", {
+      from: TITLE_FROM,
+      to: TITLE_TO,
+      text: "doc A comment",
+      textSnapshot: TITLE_TEXT,
+    });
+    await mcp.callTool("tandem_open", { filePath: fileB });
+    await mcp.callTool("tandem_comment", {
+      from: 2,
+      to: 17,
+      text: "doc B comment",
+      textSnapshot: "Second Document",
+    });
+
+    await page.goto("/");
+    await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+    await setMarginView(page, true);
+
+    // Doc B is active (most recent open). Exactly one comment bubble on the right.
+    const rightBubbles = page.locator(
+      "[data-testid='margin-column-right'] [data-testid^='margin-bubble-']",
+    );
+    await expect(rightBubbles).toHaveCount(1, { timeout: 5_000 });
+    const bIds = await rightBubbles.evaluateAll((els) =>
+      els.map((el) => el.getAttribute("data-testid")),
+    );
+
+    // Switch to doc A. The bubble set must change — proving the column annotation
+    // input (and, by extension, the $derived that produces the handlers reading
+    // `activeTab.ydoc`/`activeTab.id`) re-evaluated against the new tab.
+    // Address tabs by exact aria-label so "sample.md" doesn't collide with
+    // "sample2.md" via substring matching.
+    const tabA = page.locator("[role='tab'][aria-label='sample.md']");
+    await expect(tabA).toBeVisible({ timeout: 5_000 });
+    await tabA.click();
+
+    await expect(rightBubbles).toHaveCount(1, { timeout: 5_000 });
+    await expect
+      .poll(
+        async () =>
+          await rightBubbles.evaluateAll((els) => els.map((el) => el.getAttribute("data-testid"))),
+        { timeout: 5_000, message: "bubble id must change on tab switch" },
+      )
+      .not.toEqual(bIds);
+  } finally {
+    cleanupFixtureDir(dirB);
+  }
+});
+
 test("toggle off after on: columns disappear (validates display:contents wrapper fix)", async ({
   page,
 }) => {
