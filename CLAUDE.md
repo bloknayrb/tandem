@@ -1,5 +1,7 @@
 # Tandem -- Collaborative AI-Human Document Editor
 
+> **Scope of this file:** Claude Code project memory for contributors working on Tandem. Read by Claude when collaborating on this codebase. User-facing positioning and the MCP-first integration policy live in `README.md`, `docs/positioning.md`, and [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). Tandem's integration contract is MCP; Claude is the default integration. This file is intentionally Claude-Code-specific because it IS Claude project memory — that's by design, not the product's positioning.
+
 ## Quick Reference
 - `npm run dev:server` -- Backend: Hocuspocus on :3478 + MCP HTTP on :3479
 - `npm run dev:client` -- Frontend: Vite on :5173
@@ -22,7 +24,7 @@
 - [Workflows](docs/workflows.md) -- Real-world usage patterns
 - [Agent Workflow](.claude/skills/issue-pipeline/SKILL.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
-- [Design Decisions](docs/decisions.md) -- ADRs (001-029)
+- [Design Decisions](docs/decisions.md) -- ADRs (001-038)
 - [Lessons Learned](docs/lessons-learned.md) -- 73 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, DOM-nested scroll sync for content-anchored overlays, and schema-backed palette migrations
 
 ## Development Workflow

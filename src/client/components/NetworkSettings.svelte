@@ -61,7 +61,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       aria-hidden="true"
     ></span>
     <span style="font-size: 12px; color: var(--tandem-fg); flex: 1;">
-      {connected ? "Connected to claude-sidecar" : "Disconnected"}
+      {connected ? "Connected to Tandem server" : "Disconnected"}
       {#if reconnectAttempts > 0}
         <span style="color: var(--tandem-fg-subtle);">· {reconnectAttempts} retry attempt{reconnectAttempts === 1 ? "" : "s"}</span>
       {/if}

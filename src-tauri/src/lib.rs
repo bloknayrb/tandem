@@ -496,7 +496,7 @@ pub fn run() {
             });
 
             let open_i = MenuItem::with_id(app, MENU_OPEN, "Open Editor", true, None::<&str>)?;
-            let setup_i = MenuItem::with_id(app, MENU_SETUP, "Setup Claude", true, None::<&str>)?;
+            let setup_i = MenuItem::with_id(app, MENU_SETUP, "Setup AI Assistant", true, None::<&str>)?;
             let update_i = MenuItem::with_id(app, MENU_UPDATE, "Check for Updates", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let about_i = MenuItem::with_id(app, MENU_ABOUT, "About Tandem", true, None::<&str>)?;
@@ -1864,19 +1864,20 @@ fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// Show a non-blocking dialog informing the user that Claude is not installed.
+/// Show a non-blocking dialog informing the user that no AI client was detected.
 fn show_no_claude_dialog(handle: &tauri::AppHandle) {
     use tauri_plugin_dialog::DialogExt;
 
     handle
         .dialog()
         .message(format!(
-            "No Claude installation found.\n\n\
-             Tandem works as a standalone editor, but AI collaboration \
-             features require Claude Desktop or Claude Code.\n\n\
+            "No AI client detected.\n\n\
+             Tandem works as a standalone editor. To collaborate with an AI, install \
+             an MCP-capable client. Claude (Claude Code or Claude Desktop) is the \
+             default and best-supported choice today.\n\n\
              Download Claude at: {CLAUDE_DOWNLOAD_URL}"
         ))
-        .title("Claude Not Found")
+        .title("No AI Client Detected")
         .show(|_| {});
 }
 

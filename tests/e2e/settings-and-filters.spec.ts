@@ -65,7 +65,7 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
     "page",
   );
 
-  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
+  await popover.getByRole("button", { name: "AI Assistant" }).click();
   // Dwell slider is present and adjustable — proves the new slider and its
   // testid are wired up. The actual broadcast into CTRL_ROOM is covered by
   // the event-queue-dwell unit test; here we just verify the UI surface.
@@ -142,7 +142,7 @@ test("settings dialog sections and About panel reflect the redesign closeout", a
     "Editor",
     "Accessibility",
     "Collaboration",
-    "Claude Code/Cowork",
+    "AI Assistant",
     "Shortcuts",
     "About",
   ]) {
@@ -184,7 +184,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
-  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
+  await popover.getByRole("button", { name: "AI Assistant" }).click();
 
   const toggle = popover.locator("[data-testid='selection-toolbar-toggle'] input");
   if (await toggle.isChecked()) {
@@ -209,7 +209,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
 
   await page.locator("[data-testid='settings-btn']").click();
   const reopenedPopover = page.locator("[data-testid='settings-popover']");
-  await reopenedPopover.getByRole("button", { name: "Claude Code/Cowork" }).click();
+  await reopenedPopover.getByRole("button", { name: "AI Assistant" }).click();
   const reopenedToggle = reopenedPopover.locator("[data-testid='selection-toolbar-toggle'] input");
   if (!(await reopenedToggle.isChecked())) {
     await reopenedToggle.check();
@@ -519,7 +519,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible();
-  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
+  await popover.getByRole("button", { name: "AI Assistant" }).click();
   const slider = popover.locator("[data-testid='dwell-time-slider']");
   await expect(slider).toBeVisible({ timeout: 2_000 });
 
@@ -549,7 +549,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await page.locator("[data-testid='settings-btn']").click();
   const reloadedPopover = page.locator("[data-testid='settings-popover']");
-  await reloadedPopover.getByRole("button", { name: "Claude Code/Cowork" }).click();
+  await reloadedPopover.getByRole("button", { name: "AI Assistant" }).click();
   const reloadedSlider = reloadedPopover.locator("[data-testid='dwell-time-slider']");
   await expect(reloadedSlider).toHaveValue("2000");
 });

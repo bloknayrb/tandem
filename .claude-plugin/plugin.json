@@ -1,7 +1,7 @@
 {
   "name": "tandem",
   "version": "0.8.0",
-  "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor",
+  "description": "Edit and iterate on documents with any MCP-capable AI. Claude is the default and best-supported client today.",
   "author": {
     "name": "Tandem"
   },

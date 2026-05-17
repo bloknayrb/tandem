@@ -21,7 +21,7 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}highlight-1`,
     type: "highlight",
-    targetText: "highlight text and Claude sees it",
+    targetText: "highlight text and your AI sees it",
     content: "This is a highlight \u2014 it marks text for attention without suggesting changes.",
     color: "yellow",
   },
@@ -29,7 +29,7 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
     id: `${TUTORIAL_ANNOTATION_PREFIX}comment-1`,
     type: "comment",
     targetText: "edit this document at the same time",
-    content: "Comments let you or Claude leave notes on specific text passages.",
+    content: "Comments let you or your AI leave notes on specific text passages.",
   },
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}suggest-1`,
@@ -43,7 +43,7 @@ const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
     type: "note",
     targetText: "accept or dismiss",
     content:
-      "Notes are personal \u2014 Claude won\u2019t act on them unless you convert them to comments.",
+      "Notes are personal \u2014 your AI won\u2019t act on them unless you convert them to comments.",
   },
 ];
 

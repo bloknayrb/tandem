@@ -207,7 +207,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
 
     {#if s.vethernetCidr !== null}
       <div data-testid="cowork-vethernet-cidr" style="font-size: 12px;">
-        Detected VM subnet: <code>{s.vethernetCidr}</code>
+        Detected Cowork environment: <code>{s.vethernetCidr}</code>
       </div>
     {/if}
 

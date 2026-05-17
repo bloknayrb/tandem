@@ -4,7 +4,7 @@
     "name": "Tandem"
   },
   "metadata": {
-    "description": "Tandem — collaborative AI-human document editor"
+    "description": "Tandem — collaborative AI-human document editor (MCP-first; Claude is the default integration)"
   },
   "plugins": [
     {
@@ -13,7 +13,7 @@
         "source": "github",
         "repo": "bloknayrb/tandem"
       },
-      "description": "Edit and iterate on documents with Claude — no copy-paste, real-time push via plugin monitor"
+      "description": "Edit and iterate on documents with any MCP-capable AI. Claude is the default and best-supported client today."
     }
   ]
 }

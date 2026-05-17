@@ -9,6 +9,15 @@ import type { SettingsTabContext } from "../SettingsModal.svelte";
 let ctx: SettingsTabContext = $props();
 </script>
 
+<p
+  style="font-size: 12px; line-height: 1.5; color: var(--tandem-fg-muted); margin: 0 0 var(--tandem-space-3);"
+>
+  Tandem connects to any MCP-capable AI client over its MCP endpoint. Claude (Claude Code and
+  Claude Desktop) is the default integration — auto-configured, tested, and the only client whose
+  channel-push, cowork, and auto-launch extras are validated today. Other clients can connect
+  manually using the MCP endpoint on the Network tab.
+</p>
+
 <div>
   <div class="settings-section-label">
     Selection Sensitivity:
@@ -17,7 +26,7 @@ let ctx: SettingsTabContext = $props();
     </span>
   </div>
   <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-bottom: 6px;">
-    How long you must hold a selection before Claude notices it
+    How long you must hold a selection before your AI notices it
   </div>
   <input
     data-testid="settings-modal-dwell-time-slider"
