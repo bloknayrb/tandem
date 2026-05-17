@@ -41,7 +41,8 @@ export async function openServerPath(
       return { ok: false, error: msg };
     }
     return { ok: true };
-  } catch {
+  } catch (err) {
+    console.warn("[tandem] openServerPath failed:", err);
     return { ok: false, error: "Server unavailable." };
   }
 }
