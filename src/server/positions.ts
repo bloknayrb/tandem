@@ -24,6 +24,7 @@ import type {
   ElementPosition,
   FlatOffset,
   RangeValidation,
+  RefreshResult,
   RelativeRange,
   SerializedRelPos,
 } from "../shared/positions/index.js";
@@ -295,18 +296,20 @@ export function anchoredRange(
 
 /**
  * Refresh an annotation's flat offsets from its relRange, or lazily attach
- * relRange if missing. Returns the (possibly updated) annotation.
+ * relRange if missing. Returns a tagged `RefreshResult` (ADR-032) so
+ * callers can distinguish healthy / updated / attached / repaired /
+ * degraded / failed paths instead of treating every outcome as success.
  * If `map` is provided, persists changes back to the Y.Map.
  */
-export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>): Annotation {
+export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>): RefreshResult {
   if (!ann.relRange) {
     // Lazy attachment: compute relRange from current flat offsets
     const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
     const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
-    if (!fromRel || !toRel) return ann;
+    if (!fromRel || !toRel) return { kind: "degraded", annotation: ann };
     const updated = { ...ann, relRange: { fromRel, toRel } };
     if (map) map.set(ann.id, updated);
-    return updated;
+    return { kind: "attached", annotation: updated };
   }
 
   // Resolve relRange to current flat offsets
@@ -326,26 +329,28 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
     if (fromRel && toRel) {
       const updated: Annotation = { ...ann, relRange: { fromRel, toRel } };
       if (map) map.set(ann.id, updated);
-      return updated;
+      return { kind: "repaired", annotation: updated };
     }
     // Can't re-anchor — strip dead relRange so lazy path works next time
     const stripped: Annotation = { ...ann };
     delete stripped.relRange;
     if (map) map.set(ann.id, stripped);
-    return stripped;
+    return { kind: "degraded", annotation: stripped };
   }
   if (newFrom > newTo) {
     console.error(
       `[positions] refreshRange: inverted CRDT range for annotation ${ann.id}: ` +
         `resolved [${newFrom}, ${newTo}] from flat [${ann.range.from}, ${ann.range.to}]`,
     );
-    return ann;
+    return { kind: "failed", annotation: ann };
   }
-  if (newFrom === ann.range.from && newTo === ann.range.to) return ann; // unchanged
+  if (newFrom === ann.range.from && newTo === ann.range.to) {
+    return { kind: "ok", annotation: ann };
+  }
 
   const updated = { ...ann, range: { from: newFrom, to: newTo } };
   if (map) map.set(ann.id, updated);
-  return updated;
+  return { kind: "updated", annotation: updated };
 }
 
 /**
@@ -362,8 +367,8 @@ export function refreshAllRanges(
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
   opts?: { skipTransact?: boolean },
-): Annotation[] {
-  const results: Annotation[] = [];
+): RefreshResult[] {
+  const results: RefreshResult[] = [];
   const run = () => {
     for (const ann of annotations) {
       results.push(refreshRange(ann, ydoc, map));
@@ -374,5 +379,29 @@ export function refreshAllRanges(
   } else {
     withMcp(ydoc, run);
   }
+
+  // PR #705 review observability: surface CRDT corruption (`failed` kind —
+  // inverted CRDT range) at the aggregator boundary. The individual
+  // refreshRange already logs via console.error; this lifts a count + IDs
+  // above the per-annotation noise so a batched reload makes the corruption
+  // visible without log-scraping.
+  const failed = results.filter((r) => r.kind === "failed");
+  if (failed.length > 0) {
+    console.warn(
+      `[positions] refreshAllRanges: ${failed.length} annotation(s) failed CRDT refresh: ${failed
+        .map((r) => r.annotation.id)
+        .join(", ")}`,
+    );
+  }
+
   return results;
+}
+
+/**
+ * Exhaustive-match helper. Use in `switch (result.kind)` defaults so future
+ * additions to the `RefreshResult` discriminator produce a compile error
+ * at every call site that should branch on the new kind.
+ */
+export function assertNeverRefreshResult(value: never): never {
+  throw new Error(`Unexpected RefreshResult kind: ${JSON.stringify(value)}`);
 }

@@ -268,7 +268,8 @@ describe("refreshRange (via positions module)", () => {
 
     expect(ann.relRange).toBeUndefined();
     const refreshed = refreshRange(ann, doc, map);
-    expect(refreshed.relRange).toBeDefined();
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.relRange).toBeDefined();
   });
 
   it("updates stale flat offsets after edit", () => {
@@ -282,10 +283,11 @@ describe("refreshRange (via positions module)", () => {
     getOrCreateXmlText(el).insert(0, "XXX");
 
     const refreshed = refreshRange(ann, doc, map);
-    expect(refreshed.range).toEqual({ from: 9, to: 14 });
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 9, to: 14 });
   });
 
-  it("returns original annotation when CRDT resolves to inverted range", () => {
+  it("returns the original annotation when CRDT resolves to inverted range", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
     const ann = makeAnchoredAnnotation(map, 0, 5, doc); // "hello"
@@ -300,8 +302,10 @@ describe("refreshRange (via positions module)", () => {
     map.set(invertedAnn.id, invertedAnn);
 
     const refreshed = refreshRange(invertedAnn, doc, map);
-    // Should return original (unchanged) since resolved range is inverted
-    expect(refreshed.range).toEqual(invertedAnn.range);
+    // Inverted ranges surface as kind: "failed" (ADR-032) with the annotation
+    // returned unchanged so callers can decide how to handle the degradation.
+    expect(refreshed.kind).toBe("failed");
+    expect(refreshed.annotation.range).toEqual(invertedAnn.range);
   });
 });
 
@@ -344,8 +348,10 @@ describe("refreshAllRanges", () => {
     getOrCreateXmlText(el).insert(0, "XX");
 
     const refreshed = refreshAllRanges([ann1, ann2], doc, map);
-    expect(refreshed[0].range).toEqual({ from: 2, to: 7 });
-    expect(refreshed[1].range).toEqual({ from: 8, to: 13 });
+    expect(refreshed[0].annotation.range).toEqual({ from: 2, to: 7 });
+    expect(refreshed[1].annotation.range).toEqual({ from: 8, to: 13 });
+    expect(refreshed[0].kind).toBe("updated");
+    expect(refreshed[1].kind).toBe("updated");
   });
 });
 

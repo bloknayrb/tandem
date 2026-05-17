@@ -317,8 +317,8 @@ describe("annotation CRDT-anchored positions", () => {
 
     // Refresh should update flat offsets
     const refreshed = refreshRange(ann, ydoc, map);
-    expect(refreshed.range.from).toBe(9);
-    expect(refreshed.range.to).toBe(14);
+    expect(refreshed.annotation.range.from).toBe(9);
+    expect(refreshed.annotation.range.to).toBe(14);
   });
 
   it("annotations without relRange get it lazily attached", () => {
@@ -330,7 +330,7 @@ describe("annotation CRDT-anchored positions", () => {
     expect(ann.relRange).toBeUndefined();
 
     const refreshed = refreshRange(ann, ydoc, map);
-    expect(refreshed.relRange).toBeDefined();
+    expect(refreshed.annotation.relRange).toBeDefined();
   });
 });
 

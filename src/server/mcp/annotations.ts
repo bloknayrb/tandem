@@ -450,7 +450,9 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      let results = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
+      let results = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map).map(
+        (r) => r.annotation,
+      );
       if (author) results = results.filter((a) => a.author === author);
       if (type) results = results.filter((a) => a.type === type);
       if (status) results = results.filter((a) => a.status === status);
@@ -606,7 +608,11 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      const annotations = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map);
+      const annotations = refreshAllRanges(
+        collectAnnotations(da.map, da.docHash),
+        da.ydoc,
+        da.map,
+      ).map((r) => r.annotation);
       // Notes are user-private (ADR-027) — exclude from exports.
       const exportable = annotations.filter((a) => a.type !== "note");
       const { ydoc } = da;

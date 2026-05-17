@@ -95,19 +95,23 @@ export function registerAwarenessTools(server: McpServer): void {
       const allAnnotations = collectAnnotations(annotationsMap, docHash(current.filePath));
       const fullText = extractText(doc);
 
-      // Refresh only unsurfaced annotations; batch Y.Map writes
+      // Refresh only unsurfaced annotations; batch Y.Map writes.
+      // refreshRange returns a tagged RefreshResult (ADR-032); we extract
+      // `.annotation` here because the inbox surfacer doesn't currently
+      // distinguish refresh outcomes. A future enhancement could route
+      // `degraded` / `failed` annotations into a separate notification.
       const unsurfaced: Annotation[] = [];
       withMcp(doc, () => {
         for (const raw of allAnnotations) {
           const lastSurfacedEditedAt = surfacedIds.get(raw.id);
           // Not yet surfaced
           if (lastSurfacedEditedAt === undefined) {
-            unsurfaced.push(refreshRange(raw, doc, annotationsMap));
+            unsurfaced.push(refreshRange(raw, doc, annotationsMap).annotation);
             continue;
           }
           // Already surfaced — check if it's been edited since
           if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-            unsurfaced.push(refreshRange(raw, doc, annotationsMap));
+            unsurfaced.push(refreshRange(raw, doc, annotationsMap).annotation);
           }
         }
       });

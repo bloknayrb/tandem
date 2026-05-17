@@ -958,7 +958,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       withReload(doc, () => {
         const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
           skipTransact: true,
-        });
+        }).map((r) => r.annotation);
 
         // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
         for (const ann of refreshed) {

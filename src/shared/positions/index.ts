@@ -6,6 +6,7 @@ export type {
   PmPos,
   PmRangeResult,
   RangeValidation,
+  RefreshResult,
   RelativeRange,
   ResolutionMethod,
   SerializedRelPos,
