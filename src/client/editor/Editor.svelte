@@ -13,9 +13,8 @@ import TableRow from "@tiptap/extension-table-row";
 import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
-import { API_OPEN } from "../../shared/api-paths.js";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
-import { API_BASE } from "../utils/fileUpload.js";
+import { openServerPath } from "../utils/server-paths";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
@@ -262,20 +261,9 @@ async function handleEditorClick(e: MouseEvent) {
     if (currentFilePath) {
       const resolvedPath = resolveRelativeLink(href, currentFilePath);
       if (resolvedPath) {
-        try {
-          const res = await fetch(`${API_BASE}${API_OPEN}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filePath: resolvedPath }),
-          });
-          if (!res.ok) {
-            const data = (await res.json().catch(() => ({}))) as { message?: string };
-            console.warn(
-              `[tandem] Could not open linked file "${resolvedPath}": ${data.message ?? res.statusText}`,
-            );
-          }
-        } catch (err) {
-          console.warn("[tandem] Failed to open relative link:", err);
+        const result = await openServerPath(resolvedPath);
+        if (!result.ok) {
+          console.warn(`[tandem] Could not open linked file "${resolvedPath}": ${result.error}`);
         }
       }
     }

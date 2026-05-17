@@ -1,5 +1,4 @@
 <script lang="ts">
-import { API_OPEN } from "../../shared/api-paths";
 import {
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
@@ -11,7 +10,7 @@ import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
 import { createUserName } from "../hooks/useUserName.svelte";
-import { API_BASE } from "../utils/fileUpload";
+import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
@@ -227,27 +226,16 @@ async function openReadOnlyFile(
   setLoading(true);
   setError(null);
   try {
-    const res = await fetch(`${API_BASE}${API_OPEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath, readOnly: true }),
+    const result = await openServerPath(filePath, {
+      readOnly: true,
+      notFoundMessage: labels.notFound,
+      failureMessage: labels.failed,
     });
-    if (!res.ok) {
-      let msg = labels.failed;
-      try {
-        const data = (await res.json()) as { message?: string };
-        if (data.message) msg = data.message;
-      } catch {
-        // ignore JSON parse failure
-      }
-      if (res.status === 404) msg = labels.notFound;
-      setError(msg);
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
     onClose();
-  } catch (err) {
-    console.warn("[Tandem] Failed to open read-only file:", err);
-    setError("Server unavailable.");
   } finally {
     setLoading(false);
   }

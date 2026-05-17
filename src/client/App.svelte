@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { API_OPEN } from "../shared/api-paths.js";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -73,8 +72,8 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
-import { API_BASE } from "./utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
+import { openServerPath } from "./utils/server-paths";
 
 const yjsSync = createYjsSync();
 onDestroy(() => yjsSync.destroy());
@@ -120,19 +119,8 @@ async function reopenClosedTab() {
     });
   };
   try {
-    const response = await fetch(`${API_BASE}${API_OPEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: rec.filePath }),
-    });
-    if (!response.ok) {
-      // fetch() only rejects on network errors — server-side 4xx/5xx never
-      // throw. Without this branch, the record was silently dropped on a
-      // failed reopen and the toast never fired.
-      handleFailure(`server returned ${response.status}`);
-    }
-  } catch (err) {
-    handleFailure(err instanceof Error ? err.message : "network error");
+    const result = await openServerPath(rec.filePath);
+    if (!result.ok) handleFailure(result.error);
   } finally {
     inflightReopens.delete(rec.filePath);
   }

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { API_OPEN, API_UPLOAD } from "../../shared/api-paths.js";
+import { API_UPLOAD } from "../../shared/api-paths.js";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -7,6 +7,7 @@ import {
   loadRecentFiles,
   saveRecentFiles,
 } from "../utils/recentFiles.js";
+import { openServerPath } from "../utils/server-paths.js";
 
 interface Props {
   onClose: () => void;
@@ -43,27 +44,13 @@ async function openByPath(pathToOpen: string) {
   error = null;
   loading = true;
   try {
-    const res = await fetch(`${API_BASE}${API_OPEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: pathToOpen }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      error = data.message ?? "Failed to open file";
+    const result = await openServerPath(pathToOpen);
+    if (!result.ok) {
+      error = result.error;
       return;
     }
     pushRecent(pathToOpen);
     onClose();
-  } catch (err) {
-    console.error("FileOpenDialog: path open failed", err);
-    if (err instanceof SyntaxError) {
-      error = "Server returned an unexpected response";
-    } else if (err instanceof TypeError) {
-      error = "Unexpected response format";
-    } else {
-      error = "Cannot reach server. Is it running?";
-    }
   } finally {
     loading = false;
   }
