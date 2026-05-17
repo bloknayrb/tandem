@@ -906,8 +906,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     const reloadAdapter = getAdapter(format);
     const reloadPrepared = await reloadAdapter.parse(fileContent);
 
-    // 2. Single transaction: clear awareness + repopulate content, preserve annotations
-    doc.transact(() => {
+    // 2. Single transaction: clear awareness + repopulate content, preserve annotations.
+    //    Tagged RELOAD_ORIGIN via withReload (ADR-031): channel skips, durable-sync
+    //    persists, tombstone observer records — matches the file-watcher reload
+    //    semantics. (Pre-ADR-031 this was FILE_SYNC_ORIGIN.)
+    withReload(doc, () => {
       const awareness = doc.getMap(Y_MAP_AWARENESS);
       awareness.forEach((_, k) => awareness.delete(k));
 
@@ -920,7 +923,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // every file-watcher reload would be noisy. The original surface in
       // openFileByPath catches inject failures during the initial open.
       reloadAdapter.apply(doc, reloadPrepared);
-    }, FILE_SYNC_ORIGIN);
+    });
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
     const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
