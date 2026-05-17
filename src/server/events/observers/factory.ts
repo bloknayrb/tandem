@@ -20,6 +20,16 @@ import * as Y from "yjs";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../origins.js";
 import type { TandemEvent } from "../types.js";
 
+// Local baseline channel-skip set. Wider ADR-031 skip set
+// (mcp/file-sync/internal/reload/test) lands once PR #702 merges; this file
+// will swap to `shouldSkipChannel` from src/shared/origins.ts at that point.
+// Today the production observers only see `mcp` / `file-sync` / null, so the
+// two-origin baseline matches runtime reality. Callers that need to widen
+// (e.g. tombstone observer, durable-sync observer) pass `shouldSkip`.
+function channelSkip(origin: unknown): boolean {
+  return origin === MCP_ORIGIN || origin === FILE_SYNC_ORIGIN;
+}
+
 /** Inputs available to the event-derivation callback. */
 export interface PerKeyChangeContext<T> {
   /** The changed Y.Map key. */
@@ -46,26 +56,29 @@ export interface PerKeyObserverDeps<T> {
   derive: (ctx: PerKeyChangeContext<T>) => TandemEvent | TandemEvent[] | undefined;
   /** Forwarder for derived events. */
   pushEvent: (e: TandemEvent) => void;
-  /** Optional extra origin to skip alongside the channel-skip set. */
-  extraSkipOrigins?: ReadonlyArray<unknown>;
+  /** Optional additional skip predicate composed with the channel-skip set.
+   *  When provided, the observer skips a transaction if EITHER
+   *  `shouldSkipChannel(origin)` OR `shouldSkip(origin)` is true. Lets
+   *  callers compose with `shouldSkipDurableSync` / `shouldSkipTombstone`
+   *  or supply a one-off origin filter without forcing array literals
+   *  at every call site. */
+  shouldSkip?: (origin: unknown) => boolean;
 }
 
 /**
  * Register a per-key change observer. Returns a teardown function that
  * unsubscribes the listener.
  *
- * Origin skip-set today (pre-ADR-031 helpers): `mcp` + `file-sync`. After
- * the origin-helper migration lands, the channel-event observers widen to
- * `mcp` + `file-sync` + `internal` + `reload` via the
- * `shouldSkipChannel` predicate — see ADR-031 § "Skip-set matrix".
+ * Origin skip-set is anchored on ADR-031's `shouldSkipChannel` (skips
+ * `mcp` / `file-sync` / `internal` / `reload` / `test`). The optional
+ * `shouldSkip` predicate is OR'd on top for callers that need to widen.
  */
 export function makePerKeyChangeObserver<T>(deps: PerKeyObserverDeps<T>): () => void {
-  const { map, derive, pushEvent, extraSkipOrigins } = deps;
-
-  const skipOrigins = new Set<unknown>([MCP_ORIGIN, FILE_SYNC_ORIGIN, ...(extraSkipOrigins ?? [])]);
+  const { map, derive, pushEvent, shouldSkip } = deps;
 
   const onChange = (event: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
-    if (skipOrigins.has(txn.origin)) return;
+    if (channelSkip(txn.origin)) return;
+    if (shouldSkip?.(txn.origin)) return;
 
     for (const [key, change] of event.changes.keys) {
       const action = change.action;
