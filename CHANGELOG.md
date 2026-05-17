@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **CI guard: harness components must not leak into production client bundle (Wave 2 PR 7)** — new `scripts/ci/verify-harness-stripped.mjs` runs after `npm run build` and greps `dist/client/` for known harness symbols (`UpdateAvailableHarness`, `harness-acknowledge`, etc.). Defends against a future commit accidentally importing a harness component from a production-shipping module, which would expose internal state (e.g. acknowledge buttons, version accessors) to end users. Pairs with the #660 audit confirming every settings-open path routes through the ack-clearing wrapper.
+
 ### Changed
 
 - **Network settings split into Connection / Advanced (Wave 2 PR 6)** — connection status, transport, and the restart-sidecar button stay always-visible; loopback port, degraded-banner delay, reconnect strategy, hold-while-offline, and token rotation collapsed under a new "Advanced" disclosure. Disclosure state is ephemeral (resets each time the modal opens). New `CollapsibleSection.svelte` primitive uses native `<details>/<summary>` for free keyboard a11y.
