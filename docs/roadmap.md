@@ -417,10 +417,10 @@ First-run wizard that lets users choose their AI integration, plus dropping the 
 
 ### Phase 0: Required Spikes
 
-Sidecar launcher spike shipped 2026-05-14; the two CLI integration spikes from the original plan are still pending and gate PR 4.
+All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-05-17 (PR #712); the sidecar launcher spike resolved 2026-05-14 (PR #640).
 
-- **Spike A (pending)** — `--session-id` + `--resume` round-trip in interactive mode. Reference: anthropics/claude-code#44607. Gates PR 4.
-- **Spike B (pending)** — Plugin monitor delivers the same events as `--dangerously-load-development-channels`. Determines whether the launcher can drop the dev-channels flag. Gates PR 4.
+- **Spike A — session resume round-trip: SHIPPED (GO with caveats).** PR #712 (merged 2026-05-17). Validates `--session-id <uuid>` + `--resume <uuid>` against Claude Code v2.1.143 (6/6 scenarios pass). Full report at `docs/spikes/cli-session-resume-spike.md`. PR-4 caveats: launcher must pin `cwd` deterministically (Claude auto-loads CLAUDE.md from parent dir); catch non-zero exit on stale `--resume` and fall back to fresh `--session-id` spawn; session ID is non-secret (visible in `ps aux`); use `crypto.randomUUID()` (RFC 4122 v4) only. anthropics/claude-code#44607 referenced in the original plan is about the *opposite* problem (reading session ID from within a running session) — not relevant to PR 4.
+- **Spike B — plugin monitor viability: SHIPPED (NO-GO on dropping the flag in v1.0).** PR #712 (merged 2026-05-17). `--plugin-dir <path>` does NOT activate `experimental.monitors[].command` in Claude Code v2.1.143 under any tested mode (`-p` print, faked-TTY interactive startup, `claude plugin install` from path-source). `--dangerously-load-development-channels` remains functional in v2.1.143 despite being hidden from `--help`. Full report at `docs/spikes/plugin-monitor-viability-spike.md`. **Decision below at line 442 is overridden by this empirical finding.**
 - **Spike C — sidecar launcher validation: SHIPPED.** PR #640 (merged 2026-05-14). Validates the sidecar launcher path. Review findings addressed in commit cfb154d; #642–#645 filed as the PR-4 hardening quartet (atomic write, mandatory backup, schema validation, backup-or-prompt UX). #646 (`TANDEM_TAURI_SIDECAR` migration cleanup) is a separate Defer per triage.
 
 ### PR Sequence (5 PRs)
@@ -439,7 +439,7 @@ Sidecar launcher spike shipped 2026-05-14; the two CLI integration spikes from t
 - Tauri permissions use `core:` prefix
 - Hook point: AFTER `Promise.all([startMcpServerHttp, startHocuspocus])` fires, not at line 255
 - `TANDEM_OPEN_BROWSER` replaced with `TANDEM_TAURI_SIDECAR`
-- Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`
+- ~~Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`~~ **Overridden by Spike B (PR #712, 2026-05-17).** `--plugin-dir` does not activate `experimental.monitors[]` in Claude Code v2.1.143; the dev-channels flag remains functional. PR 4 keeps `--dangerously-load-development-channels server:tandem-channel` for v1.0. Revisit when Claude Code surfaces monitor activation via `--plugin-dir` or another zero-marketplace path (see `docs/spikes/plugin-monitor-viability-spike.md` "Follow-up issues").
 - Layout coupling server-side via extended `/api/info`; no client-side race
 - Existing users detected via `last-seen-version` file; wizard pre-selects based on existing MCP config
 - **D4 (2026-05-14):** first-run wizard is option (a) full-screen modal **with multi-provider model registry**. Anthropic + #477 local + OpenAI/Gemini/etc.; user CRUDs models with per-model config; the registry lives at Settings → Models, beyond the wizard.
@@ -474,7 +474,7 @@ Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave pl
 Full per-row table is in `docs/v10-triage.md`. Highlights:
 
 **Strategic (all Core; were TBD in original plan):**
-- **#477 Local LLM** — PR-2 + Phase 0 spike merged; PRs 1/3/4/5 in wave 6. PR-4 needs ≥2-week feature-flag soak (v0.13.0 hidden → v1.0 exposed).
+- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3/4/5 in wave 6. PR-4 needs ≥2-week feature-flag soak (v0.13.0 hidden → v1.0 exposed). Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
 - **#576 .docx write-back (body export only)** — comment round-trip stays v1.1. HIGH risk; kill date 2026-05-28; LibreOffice fallback ready.
 - **#316 Cowork macOS/Linux auto-setup** — Core (was Defer). Couples to #428 cert work.
 
