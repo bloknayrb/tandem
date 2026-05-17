@@ -84,3 +84,23 @@ export interface PmRangeResult {
   /** Which coordinate path was used to resolve the range. */
   method: ResolutionMethod;
 }
+
+/**
+ * Tagged variant for the outcome of `refreshRange` (ADR-032).
+ *
+ * Each kind names a distinct resolution path the function previously
+ * collapsed into a bare `Annotation` return:
+ *  - `ok`        — annotation unchanged; range was already healthy
+ *  - `updated`   — `relRange` resolved to new offsets; flat `range` was rewritten
+ *  - `attached`  — annotation had no `relRange`; one was computed from the flat range
+ *  - `repaired`  — dead `relRange` was re-anchored from the flat range
+ *  - `degraded`  — dead `relRange` was stripped; annotation is now flat-only and will
+ *                  be lazy-attached on a later read if conditions improve
+ *  - `failed`    — `from > to` after refresh ("inverted CRDT range" — concurrent
+ *                  edits moved the anchors past each other). Annotation is returned
+ *                  unchanged for the caller's inspection.
+ */
+export type RefreshResult = {
+  kind: "ok" | "updated" | "attached" | "repaired" | "degraded" | "failed";
+  annotation: import("../types.js").Annotation;
+};

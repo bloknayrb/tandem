@@ -241,9 +241,10 @@ describe("refreshRange", () => {
     expect(ann.relRange).toBeUndefined();
 
     const refreshed = refreshRange(ann, doc, map);
-    expect(refreshed.relRange).toBeDefined();
-    expect(refreshed.relRange!.fromRel).not.toBeNull();
-    expect(refreshed.relRange!.toRel).not.toBeNull();
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.relRange).toBeDefined();
+    expect(refreshed.annotation.relRange!.fromRel).not.toBeNull();
+    expect(refreshed.annotation.relRange!.toRel).not.toBeNull();
 
     // Verify persisted to map
     const stored = map.get(id) as Annotation;
@@ -270,25 +271,26 @@ describe("refreshRange", () => {
 
     // refreshRange should correct the flat offsets
     const refreshed = refreshRange(ann, doc, map);
-    expect(refreshed.range).toEqual({ from: 9, to: 14 }); // shifted by 3
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 9, to: 14 }); // shifted by 3
 
     // Verify persisted
     const stored = map.get(id) as Annotation;
     expect(stored.range).toEqual({ from: 9, to: 14 });
   });
 
-  it("returns original annotation when offsets are unchanged", () => {
+  it("returns kind: 'ok' when offsets are unchanged", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
     const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
 
     const ann = map.get(id) as Annotation;
     const refreshed = refreshRange(ann, doc);
-    // Same object since no update needed (no map write)
-    expect(refreshed.range).toEqual(ann.range);
+    expect(refreshed.kind).toBe("ok");
+    expect(refreshed.annotation.range).toEqual(ann.range);
   });
 
-  it("returns original when relRange resolves to null (deleted content)", () => {
+  it("returns kind: 'repaired' when relRange resolves to null (deleted content) and can re-anchor from flat", () => {
     doc = makeDoc("first\nsecond");
     const map = getAnnotationsMap(doc);
     const id = createAnnotation(map, doc, "comment", rangeOf(6, 12, doc), "note");
@@ -301,8 +303,23 @@ describe("refreshRange", () => {
     fragment.delete(1, 1);
 
     const refreshed = refreshRange(ann, doc);
-    // Falls back to original range since relRange can't resolve
-    expect(refreshed.range).toEqual({ from: 6, to: 12 });
+    // Either re-anchors (repaired) or strips (degraded) depending on what
+    // flatOffsetToRelPos can find post-delete. Both are valid; both leave
+    // the original flat range so downstream code can still render.
+    expect(["repaired", "degraded"]).toContain(refreshed.kind);
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 12 });
+
+    // PR #705 review: enforce the dead-relRange strip invariant per
+    // CLAUDE.md. On the `degraded` branch (lazy-attach OR re-anchor
+    // failure), `relRange` MUST be undefined so the lazy re-attachment
+    // recovery path can fire on the next refresh. A regression that
+    // preserved the dead relRange would silently block recovery.
+    if (refreshed.kind === "degraded") {
+      expect(refreshed.annotation.relRange).toBeUndefined();
+    } else {
+      // `repaired` rebuilt the relRange from flat offsets — must be present.
+      expect(refreshed.annotation.relRange).toBeDefined();
+    }
   });
 });
 

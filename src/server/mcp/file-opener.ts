@@ -17,7 +17,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { withInternal } from "../../shared/origins.js";
+import { withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
@@ -948,8 +948,10 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // window (GH #622) — a process kill between the refresh and relocation
       // passes previously left annotations durably stored at partially
       // refreshed ranges.
-      doc.transact(() => {
-        const refreshed = refreshAllRanges(annotations, doc, annotationMap, { skipTransact: true });
+      withReload(doc, () => {
+        const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
+          skipTransact: true,
+        }).map((r) => r.annotation);
 
         // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
         for (const ann of refreshed) {
@@ -974,7 +976,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
           }
           // RANGE_GONE: annotation text was deleted entirely — leave as-is
         }
-      }, MCP_ORIGIN);
+      });
     }
 
     // 5. Reattach event queue observers (idempotent)
