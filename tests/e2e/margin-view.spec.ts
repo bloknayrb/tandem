@@ -516,18 +516,19 @@ test("PR3: narrow-collapse does not overwrite persisted rail visibility", async 
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  // Seed a known panel-visibility state directly in settings so the assertion
-  // doesn't depend on product defaults that may drift.
-  await page.evaluate((key) => {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : {};
-    parsed.rightPanelVisible = true;
-    parsed.leftPanelVisible = false;
-    localStorage.setItem(key, JSON.stringify(parsed));
-  }, TANDEM_SETTINGS_KEY);
-  await page.reload();
-  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  // `setMarginView` closes both rails as a setup side effect (so existing
+  // tests don't trip on the default-right-rail visible behaviour). Run it
+  // first, THEN snapshot the rail state — this test is checking that the
+  // viewport sweep doesn't write to settings, not that the setup helper
+  // leaves them untouched.
   await setMarginView(page, true);
+
+  const before = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw
+      ? (JSON.parse(raw) as { rightPanelVisible?: unknown; leftPanelVisible?: unknown })
+      : null;
+  }, TANDEM_SETTINGS_KEY);
 
   // Sweep through the narrow boundary and back. Wait between transitions so
   // the $effect that drives narrowSticky actually runs — if it were ever to
@@ -537,15 +538,15 @@ test("PR3: narrow-collapse does not overwrite persisted rail visibility", async 
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.waitForTimeout(120);
 
-  // Settings must reflect the seeded values exactly.
-  const persisted = await page.evaluate((key) => {
+  // Settings must reflect the pre-sweep snapshot exactly.
+  const after = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw
       ? (JSON.parse(raw) as { rightPanelVisible?: unknown; leftPanelVisible?: unknown })
       : null;
   }, TANDEM_SETTINGS_KEY);
-  expect(persisted?.rightPanelVisible).toBe(true);
-  expect(persisted?.leftPanelVisible).toBe(false);
+  expect(after?.rightPanelVisible).toBe(before?.rightPanelVisible);
+  expect(after?.leftPanelVisible).toBe(before?.leftPanelVisible);
 });
 
 /**
