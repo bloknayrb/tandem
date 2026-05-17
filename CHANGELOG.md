@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Models registry data model + `useModels` hook (Wave 2 PR 8a, #659)** — `TandemSettings` now carries a `models: ModelRegistryEntry[]` array tracking AI providers Tandem can call out to (Anthropic, OpenAI, Gemini, local Ollama, local llama.cpp). The data layer ships in this PR; the Settings → Models UI ships in PR 8b. Orthogonal to `IntegrationConfig` (#477) — that schema tracks MCP clients connecting INTO Tandem, while this tracks providers Tandem talks OUT to.
+- **Schema v2 → v3 migration with forward-compat read-only mode** — `loadSettings` now walks an explicit migration chain (v1→v2→v3). An on-disk `schemaVersion` greater than v3 loads defensively with `_readOnly: true`, and `createTandemSettings.updateSettings` short-circuits writes on read-only settings. This is the load-bearing defence against a downgraded client clobbering a newer client's Models registry / future fields on first save.
+
 ### Changed
 
 - **Network settings split into Connection / Advanced (Wave 2 PR 6)** — connection status, transport, and the restart-sidecar button stay always-visible; loopback port, degraded-banner delay, reconnect strategy, hold-while-offline, and token rotation collapsed under a new "Advanced" disclosure. Disclosure state is ephemeral (resets each time the modal opens). New `CollapsibleSection.svelte` primitive uses native `<details>/<summary>` for free keyboard a11y.

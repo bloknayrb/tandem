@@ -54,7 +54,7 @@ describe("loadSettings — selectionDwellMs clamping", () => {
     const settings = loadSettings();
     expect(settings.leftPanelVisible).toBe(false);
     expect(settings.rightPanelVisible).toBe(true);
-    expect(settings.schemaVersion).toBe(2);
+    expect(settings.schemaVersion).toBe(3);
     expect(settings.editorWidthPercent).toBe(100);
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });

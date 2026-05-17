@@ -6,6 +6,8 @@ import { loadSettings, mergeAndClampSettings } from "./useTandemSettings.js";
 export type {
   Density,
   EditorFont,
+  ModelProvider,
+  ModelRegistryEntry,
   PanelOrder,
   PrimaryTab,
   RailTab,
@@ -32,11 +34,18 @@ export interface TandemSettingsState {
  *
  * Manages persistent application settings with localStorage backing.
  * All numeric values are clamped on write via `mergeAndClampSettings`.
+ *
+ * **Read-only short-circuit:** when `loadSettings()` returns settings
+ * tagged `_readOnly: true` (the on-disk schema is newer than this
+ * client), `updateSettings` becomes a no-op. This is the load-bearing
+ * defence against a downgraded client clobbering a newer client's
+ * Models registry / future fields on first save (#659 Wave 2 PR 8a).
  */
 export function createTandemSettings(): TandemSettingsState {
   let settings = $state<TandemSettings>(loadSettings());
 
   const updateSettings = (partial: Partial<TandemSettings>) => {
+    if (settings._readOnly) return;
     const next = mergeAndClampSettings(settings, partial);
     try {
       localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));

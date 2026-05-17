@@ -29,6 +29,51 @@ export const THEME_LABEL: Record<ThemePreference, string> = {
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 export type RailTab = "annotations" | "chat" | "outline";
 
+/**
+ * Provider tag for entries in the local Models registry (#659).
+ *
+ * The registry tracks AI providers Tandem can call OUT to (Anthropic API,
+ * OpenAI API, local Ollama, etc.). It is orthogonal to the
+ * `IntegrationConfig` schema in `src/server/integrations/schema.ts`, which
+ * tracks MCP clients that connect IN to Tandem (Claude Code, Claude Desktop,
+ * other MCP clients). The two concepts don't compete.
+ */
+export type ModelProvider = "anthropic" | "openai" | "gemini" | "local-ollama" | "local-llamacpp";
+
+const VALID_MODEL_PROVIDERS: ModelProvider[] = [
+  "anthropic",
+  "openai",
+  "gemini",
+  "local-ollama",
+  "local-llamacpp",
+];
+
+/**
+ * Transitional inline shape for a Models registry entry. The `apiKey` lives
+ * in localStorage plaintext today — `SettingsModelsTab.svelte` surfaces an
+ * in-product disclosure banner stating this, and a future release will move
+ * keys to the OS keychain (the `tokenSecretRef` pattern from
+ * `IntegrationConfig` is the likely path).
+ */
+export interface ModelRegistryEntry {
+  /** Stable identifier, generated via `crypto.randomUUID()`. */
+  id: string;
+  provider: ModelProvider;
+  /** User-facing label. */
+  displayName: string;
+  /** Provider's own model identifier (e.g. "claude-opus-4-7", "gpt-4o", "llama3.1:70b"). */
+  modelId: string;
+  /** Cloud providers only (anthropic/openai/gemini). */
+  apiKey?: string;
+  /** Local providers only (local-ollama/local-llamacpp). */
+  endpoint?: string;
+  enabled: boolean;
+  params?: Record<string, number | string | boolean>;
+}
+
+/** Per-entry cap so a corrupt or hand-edited blob can't run the merge cost up. */
+const MAX_MODELS = 50;
+
 export interface TandemSettings {
   leftPanelVisible: boolean;
   rightPanelVisible: boolean;
@@ -62,6 +107,19 @@ export interface TandemSettings {
   // until ≥2-week soak completes; enables the full-screen modal on next launch
   // when no integration is configured yet.
   showIntegrationWizard: boolean;
+  // #659 Wave 2 PR 8a: local AI provider registry. Empty until the user adds
+  // entries via Settings → Models (PR 8b ships the UI). API keys live in
+  // plaintext localStorage today; a future release will move them to the OS
+  // keychain (see SettingsModelsTab.svelte's in-product banner).
+  models: ModelRegistryEntry[];
+  /**
+   * **DO NOT** set this from product code. Internal marker stamped by
+   * `loadSettings` when the on-disk `schemaVersion` is newer than this
+   * client knows how to migrate. `createTandemSettings` short-circuits
+   * `updateSettings` on read-only settings so a downgraded client cannot
+   * clobber a newer client's models / keys / future fields.
+   */
+  _readOnly?: boolean;
 }
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
@@ -80,7 +138,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 2,
+  schemaVersion: 3,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -104,6 +162,7 @@ const DEFAULTS: TandemSettings = {
   holdAnnotationsWhileOffline: true,
   marginView: false,
   showIntegrationWizard: false,
+  models: [],
 };
 
 const VALID_RAIL_TABS: RailTab[] = ["annotations", "chat", "outline"];
@@ -119,6 +178,55 @@ function parseRailTabs(raw: unknown, fallback: RailTab[]): RailTab[] {
 }
 
 /**
+ * Strip a corrupt or hand-edited `models` array down to entries that match
+ * the known shape, capping at `MAX_MODELS`. Unknown top-level fields on
+ * each entry are dropped — keeping a controlled set of keys prevents a
+ * downstream consumer from accidentally trusting an attacker-supplied
+ * `__proto__` or whatever else might appear in a poked-at localStorage
+ * blob.
+ */
+function parseModels(raw: unknown): ModelRegistryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ModelRegistryEntry[] = [];
+  for (const entry of raw) {
+    if (out.length >= MAX_MODELS) break;
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (
+      typeof e.id !== "string" ||
+      e.id.length === 0 ||
+      typeof e.provider !== "string" ||
+      !VALID_MODEL_PROVIDERS.includes(e.provider as ModelProvider) ||
+      typeof e.displayName !== "string" ||
+      typeof e.modelId !== "string" ||
+      typeof e.enabled !== "boolean"
+    ) {
+      continue;
+    }
+    const cleaned: ModelRegistryEntry = {
+      id: e.id,
+      provider: e.provider as ModelProvider,
+      displayName: e.displayName,
+      modelId: e.modelId,
+      enabled: e.enabled,
+    };
+    if (typeof e.apiKey === "string") cleaned.apiKey = e.apiKey;
+    if (typeof e.endpoint === "string") cleaned.endpoint = e.endpoint;
+    if (e.params && typeof e.params === "object" && !Array.isArray(e.params)) {
+      const params: Record<string, number | string | boolean> = {};
+      for (const [k, v] of Object.entries(e.params)) {
+        if (typeof v === "number" || typeof v === "string" || typeof v === "boolean") {
+          params[k] = v;
+        }
+      }
+      cleaned.params = params;
+    }
+    out.push(cleaned);
+  }
+  return out;
+}
+
+/**
  * Read and normalize settings from localStorage.
  *
  * Exported for unit testing. All numeric values are clamped to their valid
@@ -129,10 +237,23 @@ function parseRailTabs(raw: unknown, fallback: RailTab[]): RailTab[] {
  * the exception: hue 0 (red) is valid, so it uses an explicit `typeof`
  * range check instead.
  *
- * v1→v2 migration: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
- * v2 migration: `leftSlot.kind` → `leftRailTabs` (ordering preserved so the
- * previously-active tab stays first). Subsequent loads ignore the legacy key.
+ * Migrations chain forward through every known version. Each `if` runs at
+ * most once per load; the chain finishes at `CURRENT_SCHEMA_VERSION`. An
+ * on-disk version greater than what this client knows is loaded
+ * defensively as `_readOnly: true` — `updateSettings` skips writes on
+ * read-only settings so a downgraded client can't clobber a newer client's
+ * data (most notably the Models registry's plaintext API keys; see
+ * `SettingsModelsTab.svelte`).
+ *
+ * v1→v2: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
+ * v2→v3: introduce `models: []`. No legacy shape to migrate from.
+ *
+ * In addition to the version chain, this loader runs an in-place
+ * `leftSlot.kind` → `leftRailTabs` fallback that has been in place since
+ * before the schema was versioned.
  */
+const CURRENT_SCHEMA_VERSION = 3;
+
 export function loadSettings(): TandemSettings {
   let saved: string | null;
   try {
@@ -146,10 +267,13 @@ export function loadSettings(): TandemSettings {
       let parsed = JSON.parse(saved) as Record<string, unknown>;
       // Guard: JSON.parse("null") returns null (valid JSON but not a settings object).
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        parsed = { leftPanelVisible: false, rightPanelVisible: true, schemaVersion: 2 };
+        parsed = { leftPanelVisible: false, rightPanelVisible: true, schemaVersion: 1 };
       }
-      // v1→v2 migration: derive per-side visibility from old layout+panelHidden.
-      if (parsed.schemaVersion !== 2) {
+      // Migration chain — fall-through per step. Each step's guard is
+      // `=== N`, not `!== N+1`, so v1 data climbs v1→v2→v3 in one load.
+      const startingVersion = typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : 1;
+      if (startingVersion === 1) {
+        // v1→v2: derive per-side visibility from old layout+panelHidden.
         const panelHidden = parsed.panelHidden === true;
         let leftPanelVisible = false;
         let rightPanelVisible = true;
@@ -168,6 +292,33 @@ export function loadSettings(): TandemSettings {
         delete parsed.layout;
         delete parsed.panelHidden;
       }
+      if (parsed.schemaVersion === 2) {
+        // v2→v3: introduce empty models registry. No legacy shape to read.
+        parsed = { ...parsed, models: [], schemaVersion: 3 };
+      }
+      // Forward-compat: an on-disk version newer than what we can migrate
+      // is loaded defensively and never written back. `_readOnly: true`
+      // is the contract `createTandemSettings.updateSettings` checks.
+      // The H2 security implication: a stale client on a newer-than-v3
+      // settings blob would otherwise strip unknown future fields
+      // (Models, integration metadata, etc.) on its first save.
+      if (
+        typeof parsed.schemaVersion === "number" &&
+        parsed.schemaVersion > CURRENT_SCHEMA_VERSION
+      ) {
+        console.warn(
+          `[tandem] settings schemaVersion=${parsed.schemaVersion} is newer than v${CURRENT_SCHEMA_VERSION}; loading defensively without writing.`,
+        );
+        return {
+          ...DEFAULTS,
+          reduceMotion: prefersReducedMotion(),
+          // Preserve fields a future schema may have added so the user
+          // doesn't perceive a regression when they go back to the newer
+          // client. We strip the type only, not the value.
+          ...(parsed as Partial<TandemSettings>),
+          _readOnly: true,
+        };
+      }
       // v2 in-place migration: leftSlot.kind → leftRailTabs ordering.
       // Preserve outline-first if the user had selected outline as their left panel.
       let leftRailTabsFallback = DEFAULTS.leftRailTabs;
@@ -183,7 +334,7 @@ export function loadSettings(): TandemSettings {
       return {
         leftPanelVisible: parsed.leftPanelVisible === true,
         rightPanelVisible: parsed.rightPanelVisible !== false,
-        schemaVersion: 2,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
         primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
         panelOrder:
           parsed.panelOrder === "annotations-editor-chat"
@@ -253,6 +404,7 @@ export function loadSettings(): TandemSettings {
         rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
         marginView: parsed.marginView === true,
         showIntegrationWizard: parsed.showIntegrationWizard === true,
+        models: parseModels(parsed.models),
       };
     } catch (err) {
       // Corrupt blob — log so "my prefs reset" reports are diagnosable instead
@@ -286,5 +438,9 @@ export function mergeAndClampSettings(
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
     leftRailTabs: merged.leftRailTabs.length > 0 ? merged.leftRailTabs : DEFAULTS.leftRailTabs,
     rightRailTabs: merged.rightRailTabs.length > 0 ? merged.rightRailTabs : DEFAULTS.rightRailTabs,
+    // Re-run the shape filter on `models` so an unsafe partial update (e.g.
+    // hand-rolled call site that pushes an object missing `enabled`) can't
+    // corrupt the array between persisted reads.
+    models: parseModels(merged.models),
   };
 }
