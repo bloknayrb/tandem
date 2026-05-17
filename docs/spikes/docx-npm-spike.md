@@ -5,6 +5,8 @@
 **Status:** Spike prototype only. NOT wired into MCP tools or the production
 save path. Verdict: **GO with caveats.**
 
+**Scope of validation:** this spike evaluates a file-format engine (docx write-back) and is independent of MCP-client integration. Listed alongside the integration spikes for completeness per [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration), which scopes the **Claude default integration** for the other spike reports.
+
 ## Goal
 
 Evaluate whether the [`docx`](https://www.npmjs.com/package/docx) npm package
