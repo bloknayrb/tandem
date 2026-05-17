@@ -79,7 +79,24 @@ const docxAdapter: FormatAdapter = {
     ]);
     htmlToYDoc(doc, html);
     if (comments.length > 0) {
-      injectCommentsAsAnnotations(doc, comments);
+      try {
+        injectCommentsAsAnnotations(doc, comments);
+      } catch (err) {
+        console.error(
+          "[docx-comments] injectCommentsAsAnnotations failed; document body loaded but comments missing:",
+          err,
+        );
+        pushNotification({
+          id: generateNotificationId(),
+          type: "annotation-error",
+          severity: "warning",
+          message: "Failed to attach Word comments to the document. Comments may be missing.",
+          dedupKey: "docx-inject:format-adapter",
+          timestamp: Date.now(),
+        });
+        // Do NOT rethrow — the document body has loaded; caller should
+        // proceed with no comments rather than aborting the open.
+      }
     }
   },
   save() {
