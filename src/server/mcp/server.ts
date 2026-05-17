@@ -13,7 +13,11 @@ import { createRequire } from "module";
 import { DEFAULT_BIND_HOST, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
-import { SESSION_DIR } from "../platform.js";
+import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
+import { readExistingTandemEntries } from "../integrations/existing-config.js";
+import { createKeychain } from "../integrations/keychain.js";
+import { createIntegrationsStore } from "../integrations/storage.js";
+import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
@@ -379,6 +383,17 @@ export async function startMcpServerHttp(
 
   // --- Channel support endpoints ---
   registerChannelRoutes(app, lanAwareApiMiddleware);
+
+  // --- Integration wizard endpoints (#477 PR 3c-i) ---
+  // Wizard reads existing entries (PR 3a), reads/writes the integrations file
+  // (PR 1), and stores per-integration secrets in the OS keychain (PR 3b).
+  // Behind a feature flag at the client level — endpoints are always mounted
+  // so future programmatic clients (CLI TTY mode, plugins) can use them too.
+  registerIntegrationsRoutes(app, largeBody, lanAwareApiMiddleware, {
+    store: createIntegrationsStore(resolveAppDataDir()),
+    keychain: createKeychain(),
+    readExisting: readExistingTandemEntries,
+  });
 
   // Serve built client assets when present (populated by `vite build`).
   // express.static falls through for paths it doesn't find, so /mcp, /api/*,
