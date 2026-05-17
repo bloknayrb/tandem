@@ -2,10 +2,10 @@
 
 import * as Y from "yjs";
 import { Y_MAP_CHAT } from "../../../shared/constants.js";
+import { shouldSkipChannel } from "../../../shared/origins.js";
 import type { ChatMessage, FlatOffset } from "../../../shared/types.js";
 import { validateRange } from "../../positions.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
-import { MCP_ORIGIN } from "../origins.js";
 import type { BufferedSelection, TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 
@@ -18,7 +18,7 @@ export function makeCtrlChatObserver(deps: {
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
   const chatObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (txn.origin === MCP_ORIGIN) return;
+    if (shouldSkipChannel(txn.origin)) return;
 
     for (const [key, change] of event.changes.keys) {
       if (change.action !== "add") continue;

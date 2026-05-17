@@ -50,13 +50,13 @@ vi.mock("node:crypto", async (importOriginal) => {
   };
 });
 
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
 import { openFileByPath, openFileFromContent } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 
@@ -186,7 +186,7 @@ function assertSingleBatchedPopulate(doc: Y.Doc, updates: UpdateRecord[]): void 
   const fragmentTouches = updates.filter((u) => u.changedTypes.has(fragment));
   expect(fragmentTouches.length).toBe(1);
   for (const u of fragmentTouches) {
-    expect(u.origin).toBe(MCP_ORIGIN);
+    expect(u.origin).toBe(INTERNAL_ORIGIN);
   }
 }
 

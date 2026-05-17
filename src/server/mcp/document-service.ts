@@ -11,9 +11,10 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
+import { withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { closeStore } from "../annotations/store.js";
-import { clearFileSyncContext, MCP_ORIGIN } from "../events/queue.js";
+import { clearFileSyncContext } from "../events/queue.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
@@ -186,7 +187,7 @@ export async function saveDocumentToDisk(
 
     // Mark document clean
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()), MCP_ORIGIN);
+    withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
 
     return { status: "saved" };
   } catch (err) {
@@ -249,10 +250,10 @@ export function broadcastOpenDocs(): void {
   try {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
-    ctrl.transact(() => {
+    withInternal(ctrl, () => {
       ctrlMeta.set(Y_MAP_OPEN_DOCUMENTS, docList);
       ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
-    }, MCP_ORIGIN);
+    });
   } catch (err) {
     console.error("[Tandem] broadcastOpenDocs: failed to update CTRL_ROOM:", err);
   }
@@ -262,10 +263,10 @@ export function broadcastOpenDocs(): void {
     try {
       const ydoc = getOrCreateDocument(docId);
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
-      ydoc.transact(() => {
+      withInternal(ydoc, () => {
         meta.set(Y_MAP_OPEN_DOCUMENTS, docList);
         meta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
-      }, MCP_ORIGIN);
+      });
     } catch (err) {
       console.error(`[Tandem] broadcastOpenDocs: failed to update doc ${docId}:`, err);
     }
@@ -358,10 +359,10 @@ export async function restoreCtrlSession(): Promise<string | null> {
 
   // Clear stale document tracking — no docs are actually open after a restart.
   // Chat history is preserved; only the document list is wiped.
-  ctrlDoc.transact(() => {
+  withInternal(ctrlDoc, () => {
     meta.delete(Y_MAP_OPEN_DOCUMENTS);
     meta.delete(Y_MAP_ACTIVE_DOCUMENT_ID);
-  }, MCP_ORIGIN);
+  });
 
   console.error("[Tandem] Restored chat history from session (cleared stale doc list)");
   return previousActiveDocId;
@@ -372,7 +373,7 @@ export function writeGenerationId(): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
   const generationId = randomUUID();
-  ctrlDoc.transact(() => meta.set(Y_MAP_GENERATION_ID, generationId), MCP_ORIGIN);
+  withInternal(ctrlDoc, () => meta.set(Y_MAP_GENERATION_ID, generationId));
   console.error(`[Tandem] Server generationId: ${generationId}`);
 }
 
@@ -381,20 +382,17 @@ export function writeGenerationId(): void {
  * via CTRL_ROOM's Y_MAP_DOCUMENT_META. Clients observe Y_MAP_STORE_READ_ONLY
  * on the bootstrap Y.Doc to surface a persistent warning banner.
  *
- * The transaction is tagged with MCP_ORIGIN even though this is a server-initiated
- * status broadcast (not a user-intent MCP tool write). This is intentional: the
- * channel event queue and ctrl-meta observer both skip MCP_ORIGIN transactions,
- * which is the desired behaviour for this key (it surfaces only to browser clients
- * via the bootstrap observer, never to Claude via channel events). If a dedicated
- * SYSTEM_ORIGIN is added in the future, prefer it here and update the observer
- * filters to skip it explicitly. See Critical Rule #2 in CLAUDE.md.
+ * The transaction uses `withInternal` (ADR-031): this is server-initiated
+ * metadata, not user-intent. Channel skips internal; durable-sync skips
+ * internal; ctrl-meta observer skips internal. Browser clients observe the
+ * value via the bootstrap observer (which doesn't filter by origin).
  */
 export function broadcastStoreReadOnly(readOnly: boolean): void {
   try {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
     const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
     if (meta.get(Y_MAP_STORE_READ_ONLY) !== readOnly) {
-      ctrlDoc.transact(() => meta.set(Y_MAP_STORE_READ_ONLY, readOnly), MCP_ORIGIN);
+      withInternal(ctrlDoc, () => meta.set(Y_MAP_STORE_READ_ONLY, readOnly));
     }
   } catch (err) {
     console.error("[Tandem] broadcastStoreReadOnly: failed to write to CTRL_ROOM:", err);

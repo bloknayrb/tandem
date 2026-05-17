@@ -17,6 +17,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { withInternal } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
@@ -532,7 +533,7 @@ async function populateDocFromContent(
   const prepared = await prepareContent(format, source, ctx);
 
   try {
-    doc.transact(() => applyPreparedContent(doc, prepared, ctx), MCP_ORIGIN);
+    withInternal(doc, () => applyPreparedContent(doc, prepared, ctx));
   } catch (err) {
     // Clear partial state in a fresh top-level transact so a retry sees a clean
     // Y.Doc instead of a poisoned cached one. Yjs has unwound the failed
@@ -541,14 +542,14 @@ async function populateDocFromContent(
     // above — Critical Rule #2 and observer attach order.
     let cleanupOk = true;
     try {
-      doc.transact(() => {
+      withInternal(doc, () => {
         const fragment = doc.getXmlFragment("default");
         fragment.delete(0, fragment.length);
         // injectCommentsAsAnnotations can leave partial entries even when its
         // own catch fires (Yjs does not roll back inner-transact writes).
         const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
         for (const k of [...annotations.keys()]) annotations.delete(k);
-      }, MCP_ORIGIN);
+      });
     } catch (cleanupErr) {
       cleanupOk = false;
       console.error(
