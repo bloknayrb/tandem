@@ -248,7 +248,7 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 
 ### tandem_status
 
-Check editor status (running state, open documents, active document) and optionally update Claude's status text shown in the editor.
+Check editor status (running state, open documents, active document) and optionally update the AI's status text shown in the editor (Claude's, in the default integration; any connected MCP client can set it).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -380,7 +380,7 @@ Annotations are metadata stored in `Y.Map('annotations')` on the shared document
 
 ### tandem_highlight
 
-> **Deprecated.** Highlights are user-only. Use `tandem_comment` for Claude-authored text annotations. Always returns a `DEPRECATED` error.
+> **Deprecated.** Highlights are user-only. Use `tandem_comment` for AI-authored text annotations (the `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; see roadmap deferred-milestones for the provider-keyed refactor). Always returns a `DEPRECATED` error.
 
 ---
 
@@ -935,7 +935,7 @@ Both `/api/*` endpoints include CORS headers reflecting any `http://127.0.0.1:*`
 
 ## Channel API (Real-Time Push)
 
-The channel API endpoints support the Tandem channel shim, which pushes real-time events from the editor to Claude Code via the Channels API. These are NOT MCP tools — they are HTTP endpoints on port 3479.
+The channel API endpoints expose real-time events from the editor as an SSE stream. The Tandem **channel shim** (a Claude-specific stdio MCP transport per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §extras) consumes these endpoints and forwards events as `notifications/claude/channel` to Claude Code. **Other MCP clients subscribe to `/api/events` directly** — same stream, no shim. These are NOT MCP tools — they are HTTP endpoints on port 3479.
 
 ### GET /api/events
 

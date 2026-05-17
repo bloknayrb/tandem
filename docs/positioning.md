@@ -8,7 +8,9 @@ Tandem lets you work on documents with an AI without the constant copy-paste. Yo
 
 The core value: **you point at text, the AI sees it, and you iterate together without leaving the document.**
 
-> **Integration policy ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)):** Tandem's integration contract is MCP. The default integration is Claude (Claude Code + Claude Desktop) — what we recommend, what we test against, and what ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools; other clients are best-effort, MCP-contract-compatible, not validated today.
+> **Integration policy ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)):**
+>
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 
 ## What Makes It Different
 

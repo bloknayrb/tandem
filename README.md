@@ -6,7 +6,7 @@ Have you ever been working on a piece of writing with an AI and caught yourself 
 
 Tandem hooks into your AI as an [MCP](https://modelcontextprotocol.io) server, so you're not stuck in some stripped-down document-editing silo. It's the full AI — with all its knowledge, your conversation context, and every tool it has access to — just now it can also see and edit your document.
 
-> **Tandem's integration contract is MCP.** The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
 
 ## Why Tandem?
 
@@ -22,10 +22,9 @@ Pick the install path that matches your audience:
 
 Download the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). No Node.js or terminal required.
 
-On first launch the **integration setup wizard** (Settings → Advanced → "Show integration setup wizard") guides you through connecting your AI:
+**Connecting an AI:** today the desktop app auto-configures **Claude** (Claude Code + Claude Desktop) on launch — install Claude, install Tandem, and Claude's MCP entry is written for you. Open Claude Code and the `tandem_*` tools are available immediately.
 
-- **Claude** (Claude Code + Claude Desktop) is detected automatically — one click and you're set up. Tandem's auto-launcher will spawn Claude Code with channel push for you on subsequent launches once the v1.0 auto-launcher ships.
-- **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) are listed in the wizard too. You'll need to point them at Tandem's MCP HTTP endpoint manually — see [Connecting other MCP clients](#connecting-other-mcp-clients) below.
+**Integration setup wizard (preview):** an opt-in wizard for fine-grained control of the integration list — including **other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) — is available behind a Settings toggle (Settings → Advanced → "Show integration setup wizard"). Enable it if you want to manage non-Claude integrations or pre-stage auth tokens before the v1.0 default-on flip. Until then, the wizard is hidden by default and silent auto-configuration of Claude is the path that ships.
 
 The desktop app bundles everything: server, sidecar, and the OS keychain integration that stores any per-client auth tokens you set up. Updates land automatically.
 
@@ -194,7 +193,7 @@ Since the v0.4.0 desktop app launch, Tandem has added auth tokens for LAN exposu
 - **High-fidelity .docx round-trip** — current `.docx` support is review-only; production export is planned so you can stay in Tandem through the final draft.
 - **Exportable annotated documents** — PDF (and eventually `.docx`) with annotations baked in, so you can share reviewed drafts outside Tandem.
 - **Code editing mode** — CodeMirror 6 surface for reviewing code the same way you review prose.
-- **Standalone mode** — direct Anthropic API connection so Tandem can run without Claude Code in the loop, for users who want a pure standalone experience.
+- **Standalone mode** — direct Anthropic API connection (no MCP client required), for users who want an all-in-one Tandem experience without managing a separate AI client process. Complements the MCP-first integration model rather than replacing it.
 
 See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#known-limitations-v1) for the complete picture, including items that are explicitly out of scope for v1.
 
