@@ -1,37 +1,20 @@
 /**
- * Annotation lifecycle module (ADR-035, part 2/N — lifecycle module + adapter wiring).
+ * Annotation lifecycle module (ADR-035).
  *
- * The lifecycle owns annotation mutations as a typed seam between MCP
- * tool handlers and the Y.Doc state. Each public method:
+ * The lifecycle owns annotation mutations as a typed seam between MCP tool
+ * handlers and the Y.Doc state. Each public method:
  *
- *   1. Sanitizes the raw Y.Map value (legacy annotations get coerced via
- *      `sanitizeAnnotation` — e.g. missing/legacy status fields, stripped
- *      directedAt). Without this, downstream branching reads raw legacy
- *      values that the on-the-wire MCP envelope shouldn't surface.
- *   2. Validates the mutation against the annotation's current state
- *      (e.g. accepting a non-pending annotation returns a `not-pending`
- *      result arm — the previous bug #694 becomes a typed branch).
- *   3. Computes the next `rev` via `nextRev`.
- *   4. Wraps the Y.Map write in a transaction with the correct origin.
- *   5. Returns a tagged `LifecycleResult` so callers branch on
- *      structurally-named failures instead of stringly-typed error codes.
+ *   1. Sanitizes the raw Y.Map value so legacy records (missing fields,
+ *      stripped directedAt, etc.) are coerced through the canonical
+ *      normalizer before status branching reads them.
+ *   2. Validates the mutation against the annotation's current state and
+ *      returns a tagged `LifecycleResult` arm (e.g. `not-pending`) instead
+ *      of throwing a stringly-typed error.
+ *   3. Computes the next `rev` via `nextRev` and writes via `withMcp`.
  *
- * Part 2 covers `acceptPending` and `dismissPending` plus the MCP-handler
- * wiring (`tandem_resolveAnnotation` calls the lifecycle directly).
- * Subsequent parts:
- *
- *   - Part 3: `createAnnotation` / `removeAnnotation` / `editPending`
- *     migrated to lifecycle methods.
- *   - Part 4: `narrowForChannel` predicate + `ChannelEligible` branded
- *     type for the channel observer to gate on (depends on the
- *     observer factory in #706 settling).
- *
- * This module still uses raw `doc.transact(fn, MCP_ORIGIN)` to match the
- * current master shape. When PR 1 / #702 (origin helpers) merges, the
- * lifecycle swaps to `withMcp(doc, fn)` — a follow-up commit on this
- * branch (deliberately deferred to keep the merge window small; the
- * PreToolUse blocker introduced by #702 forces the swap to happen as
- * part of the next edit to this file).
+ * Current scope: `acceptPending` / `dismissPending`. Create / remove / edit
+ * paths still live on the handlers and will migrate here when their MCP
+ * envelopes are reworked alongside.
  */
 
 import type * as Y from "yjs";

@@ -17,7 +17,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { withInternal, withReload } from "../../shared/origins.js";
+import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
@@ -25,13 +25,7 @@ import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
-import {
-  attachObservers,
-  clearFileSyncContext,
-  FILE_SYNC_ORIGIN,
-  MCP_ORIGIN,
-  setFileSyncContext,
-} from "../events/queue.js";
+import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
@@ -247,16 +241,12 @@ export async function openScratchpad(): Promise<OpenFileResult> {
   const id = docIdFromPath(syntheticPath);
 
   const doc = getOrCreateDocument(id);
-  // Load with empty content — the markdown adapter clears the fragment and
-  // leaves it empty; Tiptap creates a default paragraph on first mount.
-  // Two-phase per ADR-036: parse("") yields { format: "md", content: "", issues: [] },
-  // apply runs synchronously inside an MCP_ORIGIN transact to match the
-  // production populate path's single-transact invariant.
+  // Empty content — the markdown adapter clears the fragment; Tiptap creates
+  // a default paragraph on first mount. Sync apply inside a single transact
+  // preserves the populate path's atomicity invariant (#609).
   const adapter = getAdapter(format);
   const prepared = await adapter.parse("");
-  doc.transact(() => {
-    adapter.apply(doc, prepared);
-  }, MCP_ORIGIN);
+  withInternal(doc, () => adapter.apply(doc, prepared));
 
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
@@ -354,7 +344,7 @@ function handleAlreadyOpen(
   if (explicitReadOnly && !existing.readOnly) {
     addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    doc.transact(() => meta.set(Y_MAP_READ_ONLY, true), MCP_ORIGIN);
+    withInternal(doc, () => meta.set(Y_MAP_READ_ONLY, true));
   }
 
   setActiveDocId(id);
@@ -412,49 +402,36 @@ interface PopulateContext {
 }
 
 /**
- * Async pre-parse step: runs OUTSIDE any Y.Doc transact. Delegates all
- * format-specific work to the adapter's `parse` (ADR-036 + PR #707 review):
- * the adapter owns `loadDocx` / `extractDocxComments` / etc. and records
- * parse-time failures as `LoadIssue` entries on the returned `Prepared`.
- *
- * Notifications happen at `applyPreparedContent` time, after combining
- * parse-time issues (carried on `Prepared`) with apply-time issues
- * (returned from `adapter.apply`).
+ * Async pre-parse step — runs OUTSIDE any Y.Doc transact. Delegates all
+ * format-specific work to the adapter's `parse`; parse-time failures land
+ * as `LoadIssue` entries on the returned `Prepared` rather than throwing.
+ * Notifications fire later at `applyPreparedContent` time so parse + apply
+ * issues are surfaced together.
  */
-async function prepareContent(
-  format: string,
-  source: string | Buffer,
-  _ctx: PopulateContext,
-): Promise<Prepared> {
+async function prepareContent(format: string, source: string | Buffer): Promise<Prepared> {
   if (format === "docx" && !Buffer.isBuffer(source)) {
     throw Object.assign(new Error("prepareContent: docx requires Buffer source"), {
       code: "INVALID_SOURCE",
     });
   }
-  const adapter = getAdapter(format);
-  return adapter.parse(source);
+  return getAdapter(format).parse(source);
 }
 
 /**
- * Sync apply step: must run INSIDE the caller's `doc.transact(..., MCP_ORIGIN)`.
+ * Sync apply step — must run INSIDE the caller's origin-tagged transact.
  *
- * Delegates the actual doc mutation to `adapter.apply`. The docx adapter
- * owns the snapshot/undo dance around `injectCommentsAsAnnotations` (Yjs
- * does NOT roll back inner-transact writes when a callback throws). Any
- * `LoadIssue` returned is unioned with `prepared.issues` and surfaces
- * here as a deduped user-facing notification.
- *
- * Distinct dedupKey namespaces per failure kind so a docx that hits both
- * comments-failed AND inject-failed shows two toasts, not one collapsed.
+ * Delegates doc mutation to `adapter.apply`. The docx adapter owns the
+ * snapshot/undo dance around `injectCommentsAsAnnotations` (Yjs does NOT roll
+ * back inner-transact writes when a callback throws). Parse-time and apply-
+ * time `LoadIssue`s surface as deduped user-facing notifications; distinct
+ * dedupKey namespaces per failure kind so a docx hitting both comments-failed
+ * AND inject-failed shows two toasts, not one collapsed.
  */
 function applyPreparedContent(doc: Y.Doc, prepared: Prepared, ctx: PopulateContext): void {
-  const format = prepared.format;
-  const adapter = getAdapter(format === "other" ? "txt" : format);
+  const adapter = getAdapter(prepared.format);
   const applyIssues = adapter.apply(doc, prepared);
-  const allIssues = [...prepared.issues, ...applyIssues];
-  for (const issue of allIssues) {
-    notifyIssue(issue, ctx);
-  }
+  for (const issue of prepared.issues) notifyIssue(issue, ctx);
+  for (const issue of applyIssues) notifyIssue(issue, ctx);
 }
 
 /** Translate a single LoadIssue to a user-facing notification. */
@@ -516,12 +493,10 @@ async function loadContentIntoDoc(
 /**
  * Shared populate path for openFileByPath (disk) and openFileFromContent
  * (upload). Async I/O and parsing happen OUTSIDE the transaction; the Y.Doc
- * mutation runs INSIDE one doc.transact(..., MCP_ORIGIN) so mdastToYDoc's
- * many tiny inserts arrive as one update.
- *
- * MCP_ORIGIN is safe here (Critical Rule #2): the durable-annotation sync
- * observer and the channel event queue are attached later via
- * wireAnnotationStore, after this returns — no observer to echo.
+ * mutation runs INSIDE one `withInternal` transact so mdastToYDoc's many tiny
+ * inserts arrive as one update. The durable-annotation sync observer and the
+ * channel event queue both attach later via `wireAnnotationStore`, so no
+ * echo can occur during populate.
  */
 async function populateDocFromContent(
   doc: Y.Doc,
@@ -530,16 +505,16 @@ async function populateDocFromContent(
   docId: string | undefined,
   ctx: PopulateContext,
 ): Promise<void> {
-  const prepared = await prepareContent(format, source, ctx);
+  const prepared = await prepareContent(format, source);
 
   try {
     withInternal(doc, () => applyPreparedContent(doc, prepared, ctx));
   } catch (err) {
     // Clear partial state in a fresh top-level transact so a retry sees a clean
     // Y.Doc instead of a poisoned cached one. Yjs has unwound the failed
-    // transact's _transaction by the time the catch fires, so this is not
-    // nested. MCP_ORIGIN is correct here for the same reason it's correct
-    // above — Critical Rule #2 and observer attach order.
+    // transact by the time the catch fires, so this is not nested. Same
+    // origin as the populate above — observers don't attach until
+    // wireAnnotationStore, so there's nothing to echo to.
     let cleanupOk = true;
     try {
       withInternal(doc, () => {
@@ -548,7 +523,7 @@ async function populateDocFromContent(
         // injectCommentsAsAnnotations can leave partial entries even when its
         // own catch fires (Yjs does not roll back inner-transact writes).
         const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-        for (const k of [...annotations.keys()]) annotations.delete(k);
+        annotations.forEach((_, k) => annotations.delete(k));
       });
     } catch (cleanupErr) {
       cleanupOk = false;
@@ -556,19 +531,8 @@ async function populateDocFromContent(
         "[Tandem] populateDocFromContent: cleanup after populate failure also failed:",
         cleanupErr,
       );
-      // Evict the cached Y.Doc state in-place (#616). If the targeted
-      // cleanup-on-failure pass above threw, the Y.Doc is in an
-      // indeterminate state — a partial XmlFragment plus possibly partial
-      // annotations / reply / awareness entries. Re-opening the same
-      // documentId would then merge fresh content on top of poisoned state.
-      // Evict by clearing every CRDT map + the content fragment in a single
-      // FILE_SYNC_ORIGIN transact so durable-annotation sync skips it (no
-      // re-persist of the half-cleared snapshot) and the channel event
-      // queue skips it (no SSE flood). Also drops the file-sync context
-      // with phase "close" so any tombstone ledger keyed to the prior
-      // docHash is released (eviction = fresh-start semantics, not a swap).
-      // Failures here are logged and swallowed; we still want to rethrow
-      // the ORIGINAL populate error, not eviction noise.
+      // Evict in-place (#616) — see evictPartialDocState. Failures are logged
+      // and swallowed so the original populate error is what bubbles up.
       try {
         evictPartialDocState(doc, docId);
       } catch (evictErr) {
@@ -592,21 +556,17 @@ async function populateDocFromContent(
 /**
  * Evict a cached Y.Doc's content + annotation state in-place (#616).
  *
- * Called only from the cleanup-after-populate-failure path when the targeted
- * cleanup pass itself throws — at that point the Y.Doc is in an indeterminate
- * partial state and a subsequent open of the same `documentId` would merge
- * fresh content on top of poisoned CRDT state. Eviction restores the doc to
- * the same fresh-instance shape `getOrCreateDocument(id)` would have produced.
+ * Called from the cleanup-after-populate-failure path when targeted cleanup
+ * itself threw — the Y.Doc is then in an indeterminate partial state and a
+ * subsequent open of the same `documentId` would merge fresh content on top
+ * of poisoned CRDT state. Eviction restores the doc to the same fresh-
+ * instance shape `getOrCreateDocument(id)` would have produced.
  *
- * Single-transaction in-place clear (per `feedback_inplace_clear_over_destroy`
- * and Critical Rule #2). The transaction is tagged `FILE_SYNC_ORIGIN`:
- *   - the durable-annotation sync observer skips it (no re-persist of the
- *     half-cleared state),
- *   - the channel event queue skips it (no SSE flood of phantom deletions).
- *
- * Also drops the per-doc file-sync context with phase `"close"` (not `"swap"`)
- * because eviction is fresh-start semantics: the tombstone ledger keyed to
- * the prior docHash belongs to a superseded state and must be released.
+ * `withFileSync` tag: both durable-sync and channel-event observers skip
+ * file-sync, so the half-cleared snapshot is neither persisted nor broadcast.
+ * The per-doc file-sync context drops with phase `"close"` (not `"swap"`) —
+ * eviction is fresh-start semantics, so the prior tombstone ledger is
+ * released, not retained.
  */
 function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
   if (docId) {
@@ -617,27 +577,31 @@ function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
     clearFileSyncContext(docId);
   }
 
-  // `clearFileSyncContext` MUST run before the `doc.transact` clear. It detaches
-  // the durable-sync observer first; otherwise clearing the maps would fire the
+  // `clearFileSyncContext` MUST run before the clear. It detaches the
+  // durable-sync observer first; otherwise clearing the maps would fire the
   // observer with empty-map delete events and persist an empty snapshot to the
   // on-disk annotation file — destroying durable annotations for the docId we
   // intended to evict-and-reopen.
-  doc.transact(() => {
-    const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-    annotations.forEach((_, k) => annotations.delete(k));
-
-    const annotationReplies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
-    annotationReplies.forEach((_, k) => annotationReplies.delete(k));
-
-    const awareness = doc.getMap(Y_MAP_AWARENESS);
-    awareness.forEach((_, k) => awareness.delete(k));
-
-    const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-    userAwareness.forEach((_, k) => userAwareness.delete(k));
-
+  withFileSync(doc, () => {
+    clearDocMaps(doc);
     const fragment = doc.getXmlFragment("default");
     fragment.delete(0, fragment.length);
-  }, FILE_SYNC_ORIGIN);
+  });
+}
+
+/**
+ * Clear the four document-state Y.Maps (annotations, replies, awareness,
+ * user-awareness) in place. Caller wraps with the appropriate origin helper
+ * and is responsible for the XmlFragment if it also needs clearing.
+ */
+function clearDocMaps(doc: Y.Doc): void {
+  const maps = [
+    doc.getMap(Y_MAP_ANNOTATIONS),
+    doc.getMap(Y_MAP_ANNOTATION_REPLIES),
+    doc.getMap(Y_MAP_AWARENESS),
+    doc.getMap(Y_MAP_USER_AWARENESS),
+  ];
+  for (const m of maps) m.forEach((_, k) => m.delete(k));
 }
 
 export { evictPartialDocState as __testEvictPartialDocState };
@@ -763,7 +727,7 @@ async function clearAndReload(
     displayName: path.basename(resolved),
     dedupSource: resolved,
   };
-  const prepared = await prepareContent(format, source, ctx);
+  const prepared = await prepareContent(format, source);
   const isDocx = format === "docx";
 
   // 2. Single transaction: clear all state + repopulate + rewrite metadata.
@@ -771,23 +735,10 @@ async function clearAndReload(
   //    try-catch is a diagnostic safety net for Y.js internal corruption; on
   //    throw we re-raise so the caller's force-reload reports the failure.
   try {
-    doc.transact(() => {
-      // Clear Y.Maps
-      const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-      annotations.forEach((_, k) => annotations.delete(k));
-
-      const annotationReplies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
-      annotationReplies.forEach((_, k) => annotationReplies.delete(k));
-
-      const awareness = doc.getMap(Y_MAP_AWARENESS);
-      awareness.forEach((_, k) => awareness.delete(k));
-
-      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-      userAwareness.forEach((_, k) => userAwareness.delete(k));
-
+    withInternal(doc, () => {
+      clearDocMaps(doc);
       // Repopulate content via shared helper (idem with populateDocFromContent).
       applyPreparedContent(doc, prepared, ctx);
-
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.set(Y_MAP_READ_ONLY, isDocx);
@@ -795,7 +746,7 @@ async function clearAndReload(
       meta.set("documentId", id);
       meta.set("fileName", path.basename(resolved));
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
-    }, MCP_ORIGIN);
+    });
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
     attachObservers(id, doc);
@@ -827,7 +778,7 @@ async function initSavedBaseline(doc: Y.Doc, filePath?: string): Promise<void> {
     if (stat) baseline = stat.mtimeMs;
   }
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, baseline), MCP_ORIGIN);
+  withInternal(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, baseline));
 }
 
 function writeDocMeta(
@@ -838,12 +789,12 @@ function writeDocMeta(
   readOnly: boolean,
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  doc.transact(() => {
+  withInternal(doc, () => {
     meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
     meta.set("documentId", id);
     meta.set("fileName", fileName);
-  }, MCP_ORIGIN);
+  });
 }
 
 function buildResult(
@@ -906,10 +857,9 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     const reloadAdapter = getAdapter(format);
     const reloadPrepared = await reloadAdapter.parse(fileContent);
 
-    // 2. Single transaction: clear awareness + repopulate content, preserve annotations.
-    //    Tagged RELOAD_ORIGIN via withReload (ADR-031): channel skips, durable-sync
-    //    persists, tombstone observer records — matches the file-watcher reload
-    //    semantics. (Pre-ADR-031 this was FILE_SYNC_ORIGIN.)
+    // 2. Single transaction: clear awareness + repopulate content, preserve
+    //    annotations. `withReload`: channel skips, durable-sync persists, the
+    //    tombstone observer records — file-watcher reload semantics.
     withReload(doc, () => {
       const awareness = doc.getMap(Y_MAP_AWARENESS);
       awareness.forEach((_, k) => awareness.delete(k));
@@ -938,19 +888,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     );
 
     if (annotations.length > 0) {
-      // Merge the refresh + textSnapshot relocation passes into a single
-      // MCP_ORIGIN transaction. Origin tag is intentionally MCP_ORIGIN (NOT
-      // FILE_SYNC_ORIGIN): these writes update durable annotation state
-      // (range + relRange) that must persist through the durable-annotation
-      // sync observer. The sync observer skips FILE_SYNC_ORIGIN; the channel
-      // observer skips both origins, so there's no phantom channel echo to
-      // silence here. Flipping to FILE_SYNC_ORIGIN would re-introduce the
-      // PR-A1 post-merge blocker (commit 8d9c0ce).
-      //
-      // Merging into one transact closes the pre-existing two-write crash
-      // window (GH #622) — a process kill between the refresh and relocation
-      // passes previously left annotations durably stored at partially
-      // refreshed ranges.
+      // Merge refresh + textSnapshot relocation into a single `withReload`
+      // transact so durable-sync persists the re-anchored ranges in one step.
+      // Closes the two-write crash window (GH #622): a process kill between
+      // the refresh and relocation passes previously left annotations stored
+      // at partially refreshed ranges.
       withReload(doc, () => {
         const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
           skipTransact: true,

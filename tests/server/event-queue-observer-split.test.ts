@@ -18,7 +18,6 @@ import {
   attachObservers,
   detachObservers,
   getBufferedSelection,
-  MCP_ORIGIN,
   resetForTesting,
   setFileSyncContext,
   subscribe,
@@ -31,6 +30,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import { MCP_ORIGIN } from "../../src/shared/origins.js";
 
 // ---------------------------------------------------------------------------
 // Module-level vi.mock — must be declared at file scope (hoisted by Vitest).

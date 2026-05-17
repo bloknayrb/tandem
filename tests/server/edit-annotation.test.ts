@@ -7,7 +7,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
@@ -18,6 +17,7 @@ import {
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 

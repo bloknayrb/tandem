@@ -18,7 +18,6 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeRepliesObserver } from "../../src/server/events/observers/replies.js";
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import {
   addReplyToAnnotation,
@@ -26,6 +25,7 @@ import {
   createAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";

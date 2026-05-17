@@ -20,16 +20,14 @@ export {
 } from "./docx-apply.js";
 export type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
-// -- Adapter implementations (ADR-036 two-phase, PR #707 review revision) --
+// -- Adapter implementations (ADR-036 two-phase parse/apply) --
 
 const markdownAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     return { format: "md", content: content as string, issues: [] };
   },
   apply(doc, prepared) {
-    if (prepared.format !== "md") {
-      throw new Error(`markdownAdapter.apply expected format "md", got "${prepared.format}"`);
-    }
+    if (prepared.format !== "md") return [];
     loadMarkdown(doc, prepared.content);
     return [];
   },
@@ -44,9 +42,7 @@ const plaintextAdapter: FormatAdapter = {
     return { format: "other", content: text, issues: [] };
   },
   apply(doc, prepared) {
-    if (prepared.format !== "other") {
-      throw new Error(`plaintextAdapter.apply expected format "other", got "${prepared.format}"`);
-    }
+    if (prepared.format !== "other") return [];
     populateYDoc(doc, prepared.content);
     return [];
   },
@@ -59,14 +55,13 @@ const plaintextAdapter: FormatAdapter = {
  * The .docx adapter omits `save` — .docx is read-only by ADR-004. Callers
  * check `adapter.save` (truthy) before attempting to serialize.
  *
- * Two-phase shape per ADR-036 + PR #707 review:
- *   - `parse` runs `loadDocx` + `extractDocxComments` in parallel
- *     (async; no doc dependency). Catches comment-extraction failure as
- *     `LoadIssue { kind: "comments-failed" }` instead of swallowing.
+ *   - `parse` runs `loadDocx` + `extractDocxComments` in parallel; comment-
+ *     extraction failures land as `LoadIssue { kind: "comments-failed" }`
+ *     rather than being swallowed.
  *   - `apply` runs `htmlToYDoc` then `injectCommentsAsAnnotations`
- *     synchronously inside the caller's transact. The snapshot/undo
- *     dance around inject (load-bearing — Yjs doesn't roll back inner
- *     transacts when a callback throws) lives here, not in the caller.
+ *     synchronously inside the caller's transact. The snapshot/undo dance
+ *     around inject lives here because Yjs doesn't roll back inner-transact
+ *     writes when a callback throws.
  */
 const docxAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
@@ -86,9 +81,7 @@ const docxAdapter: FormatAdapter = {
     return { format: "docx", html, comments, issues };
   },
   apply(doc, prepared) {
-    if (prepared.format !== "docx") {
-      throw new Error(`docxAdapter.apply expected format "docx", got "${prepared.format}"`);
-    }
+    if (prepared.format !== "docx") return [];
     htmlToYDoc(doc, prepared.html);
     const out: LoadIssue[] = [];
     if (prepared.comments.length > 0) {
@@ -120,11 +113,12 @@ const docxAdapter: FormatAdapter = {
 
 const adapters: Record<string, FormatAdapter> = {
   md: markdownAdapter,
-  txt: plaintextAdapter,
+  other: plaintextAdapter, // covers txt, html, and any other plaintext-routed format
   docx: docxAdapter,
 };
 
-/** Look up the adapter for a given format string */
+/** Look up the adapter for a given format string. Unknown formats fall back
+ * to the plaintext adapter. */
 export function getAdapter(format: string): FormatAdapter {
   return adapters[format] ?? plaintextAdapter;
 }
@@ -135,8 +129,7 @@ export function getAdapter(format: string): FormatAdapter {
  * Atomic rename retry constants. Windows can throw EPERM/EACCES when another
  * process (AV scanner, file indexer, or a stale handle) is briefly holding the
  * destination file. A handful of short retries with exponential backoff clears
- * virtually all such contention in practice. See session manager history for
- * the original rationale (formerly duplicated there).
+ * virtually all such contention in practice.
  */
 const RENAME_MAX_RETRIES = 3;
 const RENAME_RETRY_BASE_MS = 50;

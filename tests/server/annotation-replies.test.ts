@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import {
   addReplyToAnnotation,
   collectRepliesForAnnotation,
   createAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { withMcp } from "../../src/shared/origins.js";
+import { MCP_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";

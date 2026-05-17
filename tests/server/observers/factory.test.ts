@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { makePerKeyChangeObserver } from "../../../src/server/events/observers/factory.js";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/server/events/origins.js";
+import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/shared/origins.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: Y.Doc.transact's second arg is `unknown`.
 const rawTransact = (doc: Y.Doc, fn: () => void, origin?: unknown) =>

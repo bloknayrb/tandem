@@ -32,15 +32,12 @@ export type LoadIssue =
 
 /**
  * Async-parsed source content, ready to `apply` into a Y.Doc inside the
- * caller's transact. Discriminator is `format`. PR #707 review-driven:
- * the previous single-method `load(doc, content)` shape was incompatible
- * with the production prepare/apply split (`prepareContent` async, then
- * `applyPreparedContent` sync inside ONE MCP_ORIGIN transact for #609).
+ * caller's transact. Discriminator is `format`. The async parse + sync apply
+ * split keeps the apply step inside one atomic Y.Doc transact (#609 large-
+ * doc client freeze).
  *
- * Only three adapters exist: `md`, `docx`, `plaintext` (the catch-all
- * registered under key `txt` and used as fallback for `.html` / unknown
- * extensions). The `other` arm collapses txt + html + any future
- * plaintext-routed format.
+ * Three adapters exist: `md`, `docx`, and a plaintext fallback. The `other`
+ * arm collapses txt + html + any future plaintext-routed format.
  */
 export type Prepared =
   | {
@@ -63,17 +60,15 @@ export type Prepared =
     };
 
 /**
- * Format-specific content adapter (ADR-036, PR #707 review revision).
+ * Format-specific content adapter (ADR-036).
  *
  * Two-phase load:
- *   1. `parse(content)` — async, NO doc dependency. Pulls bytes through
- *      format-specific decoders (`loadDocx`, `extractDocxComments`,
- *      `loadMarkdown` is sync but uniform shape). Catches and records
- *      parse-time failures as `LoadIssue` rather than throwing.
- *   2. `apply(doc, prepared)` — SYNC. Runs inside the caller's transact
- *      so the populate is one atomic Y.Doc update (#609 large-doc freeze
- *      mitigation, lesson 74). Returns additional `LoadIssue[]` for
- *      apply-time failures (e.g. inject-failed).
+ *   1. `parse(content)` — async, NO doc dependency. Decodes bytes via
+ *      format-specific helpers; parse-time failures land as `LoadIssue`
+ *      entries rather than throwing.
+ *   2. `apply(doc, prepared)` — SYNC; runs inside the caller's transact so
+ *      the populate is one atomic Y.Doc update (#609). Returns additional
+ *      `LoadIssue[]` for apply-time failures (e.g. inject-failed).
  *
  * **Saveability is structural**: formats that can write back to disk
  * (.md, .txt) provide a `save` method. Read-only formats (.docx) omit
@@ -85,10 +80,9 @@ export interface FormatAdapter {
   parse(content: string | Buffer): Promise<Prepared>;
 
   /**
-   * Sync apply — must be called inside the caller's `doc.transact`. The
-   * caller chooses the origin (typically MCP_ORIGIN for opens). Returns
-   * additional `LoadIssue`s discovered during the apply (e.g. mid-transact
-   * inject-failed). Combine with `prepared.issues` for the full set.
+   * Sync apply — must be called inside the caller's origin-tagged transact.
+   * Returns `LoadIssue`s discovered during apply (e.g. mid-transact inject-
+   * failed); combine with `prepared.issues` for the full set.
    */
   apply(doc: Y.Doc, prepared: Prepared): LoadIssue[];
 
