@@ -51,10 +51,25 @@ let {
   onSendToClaude,
 }: Props = $props();
 
-// Vertical inset from the bubble's top edge to its padded content row. The
-// leader line endpoint is shifted down by this amount so a collision-pushed
-// bubble's connector lands near the title row rather than the empty corner.
+// Vertical inset from the bubble's top edge to its padded content row.
+// Mirrors `--tandem-space-3` (AnnotationCard's `padding` token) at the default
+// `cozy` density. Compact (10px) and spacious (16px) density modes shift the
+// title row by ±2-4px from this constant; matching exactly would require
+// reading `getComputedStyle(...).getPropertyValue("--tandem-space-3")` per
+// render — accepted as a known minor misalignment for now.
 const LEADER_BUBBLE_INSET_PX = 12;
+
+// Component-level $derived values for the leader SVG. `side`, `edgeInset`,
+// `gap`, `width` come from $props() and are themselves reactive, so these
+// recompute precisely when a prop changes. Hoisting `editorX`/`columnX` out
+// of the {#each} block avoids recomputing the same ternary per iteration;
+// `leaderStyle` collapses the previously dense inline-style template.
+const authorVar = $derived(side === "right" ? "claude" : "user");
+const editorX = $derived(side === "right" ? 0 : gap);
+const columnX = $derived(side === "right" ? gap : 0);
+const leaderStyle = $derived(
+  `position: absolute; top: 0; bottom: 0; ${side}: ${edgeInset + width}px; width: ${gap}px; pointer-events: none; color: var(--tandem-author-${authorVar});`,
+);
 
 // Only render annotations whose position is known this frame; without a top
 // offset there is nowhere to place the bubble.
@@ -135,20 +150,11 @@ function recordHeight(id: string, h: number): void {
      stroke-opacity to stay subtle; active review target ramps opacity + width
      so the focused annotation's connector reads as the dominant line on the
      page. -->
-<svg
-  data-testid="margin-leaders-{side}"
-  class="tandem-margin-leaders"
-  aria-hidden="true"
-  style="position: absolute; top: 0; bottom: 0; {side === 'right'
-    ? 'right'
-    : 'left'}: {edgeInset + width}px; width: {gap}px; pointer-events: none; color: var(--tandem-author-{side === 'right' ? 'claude' : 'user'});"
->
+<svg data-testid="margin-leaders-{side}" aria-hidden="true" style={leaderStyle}>
   {#each placeable as ann (ann.id)}
     {@const rawTop = positions.get(ann.id)}
     {@const adjTop = adjustedPositions.get(ann.id)}
     {#if rawTop !== undefined && adjTop !== undefined}
-      {@const editorX = side === "right" ? 0 : gap}
-      {@const columnX = side === "right" ? gap : 0}
       {@const isActive = ann.id === activeAnnotationId}
       <!-- LEADER_BUBBLE_INSET_PX shifts the bubble endpoint down from the
            bubble's top edge into its padded content area, so a

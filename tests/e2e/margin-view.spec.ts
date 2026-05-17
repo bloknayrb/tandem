@@ -169,6 +169,76 @@ test("PR2: two overlapping comments produce non-overlapping bubbles", async ({ p
   expect(b.top).toBeGreaterThanOrEqual(a.bottom);
 });
 
+test("PR3: leader lines render and slope with collision adjustment", async ({ page }) => {
+  // Two adjacent comments on the same line force a collision: the lower
+  // bubble's `adjTop > rawTop`, so its leader connects raw editor anchor
+  // to pushed-down bubble (sloped). The upper bubble is uncollided, so its
+  // leader's `y2 - y1 === LEADER_BUBBLE_INSET_PX` (12) exactly.
+  //
+  // We read `y1`/`y2` directly off the SVG `<line>` attributes — these are
+  // the values the component wrote, untainted by viewport scroll, device
+  // pixel rounding, or layer-relative coordinate math (lesson #71). Sort
+  // by `y1` since `placeable` is annotation-array order, not visual order.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_FROM + 4,
+    text: "first",
+    textSnapshot: TITLE_TEXT.slice(0, 4),
+  });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM + 5,
+    to: TITLE_TO,
+    text: "second",
+    textSnapshot: TITLE_TEXT.slice(5),
+  });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  const leaderSvg = page.locator("[data-testid='margin-leaders-right']");
+  await expect(leaderSvg).toHaveCount(1, { timeout: 5_000 });
+  const lines = leaderSvg.locator("line[data-annotation-id]");
+  await expect(lines).toHaveCount(2, { timeout: 5_000 });
+
+  // Poll until the collision sweep has produced a visibly sloped lower line.
+  // The `> 12` predicate is what proves `adjTop > rawTop` (a real push), not
+  // just the constant LEADER_BUBBLE_INSET_PX offset.
+  await expect
+    .poll(
+      async () => {
+        const ys = await lines.evaluateAll((els) =>
+          els.map((el) => ({
+            y1: parseFloat(el.getAttribute("y1") ?? "NaN"),
+            y2: parseFloat(el.getAttribute("y2") ?? "NaN"),
+          })),
+        );
+        if (ys.length !== 2) return null;
+        if (!ys.every(({ y1, y2 }) => Number.isFinite(y1) && Number.isFinite(y2))) return null;
+        const sorted = [...ys].sort((a, b) => a.y1 - b.y1);
+        return sorted[1].y2 - sorted[1].y1;
+      },
+      { timeout: 5_000, message: "lower leader line must slope (collision pushed bubble down)" },
+    )
+    .toBeGreaterThan(12);
+
+  // Now snapshot once and verify both lines independently. Upper line is
+  // uncollided — `y2 - y1 === LEADER_BUBBLE_INSET_PX` exactly (no float ops
+  // between the assignment and the attribute), with <1px tolerance for any
+  // future subpixel jitter.
+  const ys = await lines.evaluateAll((els) =>
+    els.map((el) => ({
+      y1: parseFloat(el.getAttribute("y1") ?? "NaN"),
+      y2: parseFloat(el.getAttribute("y2") ?? "NaN"),
+    })),
+  );
+  const [upper, lower] = [...ys].sort((a, b) => a.y1 - b.y1);
+  expect(Math.abs(upper.y2 - upper.y1 - 12)).toBeLessThan(1);
+  expect(lower.y2 - lower.y1).toBeGreaterThan(12);
+});
+
 test("PR2: comment with a reply shows reply count in the bubble", async ({ page }) => {
   const open = await mcp.callTool("tandem_open", {
     filePath: path.join(tmpDir, "sample.md"),
