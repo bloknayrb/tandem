@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Re-landed D11 bundled fonts (#680)** — re-applied the fontsource Latin variable-axis builds of Source Serif 4, Inter Tight, and JetBrains Mono originally shipped in PR #663 then reverted via #678. The SIL OFL 1.1 license texts (`public/fonts/OFL-*.txt`) ship alongside the binaries per §4. Editor body text renders in Source Serif 4 via the existing `--tandem-editor-font-family` token.
+
+### Fixed
+
+- **Selection toolbar no longer intercepts clicks on the FormattingBar (#680)** — when the editor's selection sits near the top of the viewport, the BubbleMenu's natural above-placement would clamp onto the TitleBar + FormattingBar chrome (76px combined) and intercept clicks meant for `toolbar-highlight-btn` and siblings. This was the regression that forced PR #663 to be reverted. Position now flips below the selection when above doesn't clear `SELECTION_TOOLBAR_MIN_TOP`, falling back to the clamped above-placement only when below would overflow the viewport bottom.
+
 ## [0.12.0] - 2026-05-15
 
 ### Fixed
