@@ -227,12 +227,14 @@ test("delete with confirm flow", async ({ page }) => {
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 });
 
-test("v2→v3 migration boot — Models tab renders with empty list", async ({ page }) => {
-  // Pre-seed a v2 blob (no `models` field, schemaVersion: 2) — the migration
-  // chain must walk v2→v3 and add `models: []`. If the migration nukes
-  // settings (regression scenario), the Models tab would still render the
-  // empty state, but the rest of settings would be defaults instead of
-  // the seeded `theme: "dark"`. Assertion: theme survives AND models is empty.
+test("v2→v3 migration boot — Models tab renders with empty list, settings survive", async ({
+  page,
+}) => {
+  // Pre-seed a v2 blob (no `models` field, schemaVersion: 2). The loader
+  // walks v2→v3 in memory; persistence happens only when something calls
+  // updateSettings. So we trigger a real write (add a model) which forces
+  // mergeAndClampSettings to persist the migrated shape, then assert the
+  // persisted blob carries schemaVersion: 3 + the seeded theme/textSize.
   await page.evaluate((key) => {
     localStorage.setItem(
       key,
@@ -248,9 +250,20 @@ test("v2→v3 migration boot — Models tab renders with empty list", async ({ p
   await page.reload();
 
   await gotoModelsTab(page);
+  // The empty state proves the migration provided an empty `models` array
+  // (the tab unconditionally renders the empty branch when `models.length === 0`).
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 
-  // Settings survived — theme is "dark", textSize is "l".
+  // Trigger a real settings write to flush the migrated shape to localStorage.
+  await page.locator("[data-testid='model-add-btn']").click();
+  await page.locator("[data-testid='model-edit-displayname']").fill("Migration sentinel");
+  await page.locator("[data-testid='model-edit-modelid']").fill("claude-opus-4-7");
+  await page.locator("[data-testid='model-edit-apikey']").fill("sk-test-DO-NOT-USE-anthropic");
+  await page.locator("[data-testid='model-edit-save']").click();
+  await expect(page.locator(MODAL)).toHaveCount(0);
+
+  // Now inspect the persisted shape — the migration must have preserved
+  // the v2 fields (theme, textSize) and added schemaVersion: 3.
   const settings = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
@@ -258,7 +271,8 @@ test("v2→v3 migration boot — Models tab renders with empty list", async ({ p
   expect(settings?.theme).toBe("dark");
   expect(settings?.textSize).toBe("l");
   expect(settings?.schemaVersion).toBe(3);
-  expect(settings?.models).toEqual([]);
+  expect(settings?.models?.length).toBe(1);
+  expect(settings?.models?.[0]?.displayName).toBe("Migration sentinel");
 });
 
 test("v99 forward-compat boot — unknown field is preserved", async ({ page }) => {
