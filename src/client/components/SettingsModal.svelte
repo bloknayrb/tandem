@@ -57,8 +57,9 @@ import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
 import NetworkSettings from "./NetworkSettings.svelte";
-import SettingsCollaborationTab from "./settings-tabs/SettingsCollaborationTab.svelte";
 import SettingsClaudeCodeTab from "./settings-tabs/SettingsClaudeCodeTab.svelte";
+import SettingsCollaborationTab from "./settings-tabs/SettingsCollaborationTab.svelte";
+import SettingsModelsTab from "./settings-tabs/SettingsModelsTab.svelte";
 import SettingsShortcutsTab from "./settings-tabs/SettingsShortcutsTab.svelte";
 import SettingsAboutTab from "./settings-tabs/SettingsAboutTab.svelte";
 
@@ -113,6 +114,14 @@ export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
     label: "AI Assistant",
     icon: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z",
     component: SettingsClaudeCodeTab,
+  },
+  {
+    id: "models",
+    // CPU/chip glyph — distinct from the AI Assistant sparkle to differentiate
+    // "providers Tandem calls out to" from "MCP clients connecting in".
+    label: "Models",
+    icon: "M4 4h16v16H4V4Zm5-3v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3M8 8h8v8H8V8Z",
+    component: SettingsModelsTab,
   },
   {
     id: "shortcuts",
