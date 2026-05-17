@@ -186,6 +186,40 @@ const hasFilters = $derived(
   filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all",
 );
 
+const filterLabel = $derived.by(() => {
+  if (!hasFilters) return "All";
+  const parts: string[] = [];
+  if (filterType !== "all") {
+    const labels: Record<FilterType, string> = {
+      all: "All",
+      highlight: "Highlights",
+      comment: "Comments",
+      note: "Notes",
+      "with-replacement": "With replacement",
+    };
+    parts.push(labels[filterType]);
+  }
+  if (filterAuthor !== "all") {
+    const labels: Record<FilterAuthor, string> = {
+      all: "Anyone",
+      claude: "Claude",
+      user: "You",
+      import: "Imported",
+    };
+    parts.push(labels[filterAuthor]);
+  }
+  if (filterStatus !== "all") {
+    const labels: Record<FilterStatus, string> = {
+      all: "Any status",
+      pending: "Pending",
+      accepted: "Accepted",
+      dismissed: "Dismissed",
+    };
+    parts.push(labels[filterStatus]);
+  }
+  return parts.join(" · ") || "All";
+});
+
 // `review` is a prop now (lifted to App.svelte) — see App.svelte for the single
 // useAnnotationReview() instantiation that both rails share.
 
@@ -384,6 +418,15 @@ function handleBulk(status: "accepted" | "dismissed") {
           ? "s"
           : ""}
       </span>
+      <button
+        data-testid="filter-bar-toggle"
+        onclick={() => (filterBarOpen = !filterBarOpen)}
+        style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
+      >
+        <span>{filterLabel} {filteredData.filtered.length}</span>
+        <span style="font-size: 9px; opacity: 0.7;">▾</span>
+        <span>Filter</span>
+      </button>
     </div>
   </div>
 
@@ -394,7 +437,6 @@ function handleBulk(status: "accepted" | "dismissed") {
     {filterStatus}
     {hasFilters}
     open={filterBarOpen}
-    totalCount={filteredData.filtered.length}
     onToggleOpen={() => (filterBarOpen = !filterBarOpen)}
     onSetFilterType={(v) => { filterType = v; }}
     onSetFilterAuthor={(v) => { filterAuthor = v; }}

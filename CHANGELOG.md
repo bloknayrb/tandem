@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Re-landed D11 bundled fonts (#680)** — re-applied the fontsource Latin variable-axis builds of Source Serif 4, Inter Tight, and JetBrains Mono originally shipped in PR #663 then reverted via #678. The SIL OFL 1.1 license texts (`public/fonts/OFL-*.txt`) ship alongside the binaries per §4. Editor body text renders in Source Serif 4 via the existing `--tandem-editor-font-family` token.
+- **Margin view auto-collapses on rail open or narrow viewport (#683)** — opening the left rail now hides only the left margin column; opening the right rail hides only the right column. When the viewport gets narrow enough that margin reserve + open rails + readable editor would crowd, both columns hide together. A 32px hysteresis band on the viewport threshold prevents flicker when a user drags through the boundary. New `useViewportWidth` rune store provides the rAF-debounced subscription.
 
 ### Fixed
 
