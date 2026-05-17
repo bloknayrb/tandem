@@ -51,11 +51,6 @@ export function makeAwarenessObserver(deps: {
   let selectionDwellTimer: ReturnType<typeof setTimeout> | null = null;
 
   const awarenessObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    // Skip server-tagged transactions for symmetry with annotations/replies
-    // observers. This observer never calls pushEvent (it only buffers
-    // selections), so the filter is defense-in-depth: if a future selection
-    // write is tagged FILE_SYNC_ORIGIN (e.g. seeded from disk), we must not
-    // buffer it as a user-driven selection event.
     if (shouldSkipChannel(txn.origin)) return;
 
     if (event.keysChanged.has(Y_MAP_SELECTION)) {

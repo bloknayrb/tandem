@@ -6,7 +6,6 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { MCP_ORIGIN } from "../../src/server/events/queue.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { extractText, populateYDoc } from "../../src/server/mcp/document-model.js";
 import {
@@ -15,6 +14,7 @@ import {
   refreshRange,
   validateRange,
 } from "../../src/server/positions.js";
+import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { getAnnotationsMap, makeAnnotation, makeDoc } from "../helpers/ydoc-factory.js";

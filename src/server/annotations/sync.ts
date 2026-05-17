@@ -57,9 +57,9 @@
 
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { FILE_SYNC_ORIGIN, shouldSkipDurableSync } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
-import { FILE_SYNC_ORIGIN } from "../events/origins.js";
 import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
 import {
   type AnnotationDocV1,
@@ -92,8 +92,12 @@ export interface SyncContext {
 // Module-scoped state
 // ---------------------------------------------------------------------------
 
-/** Tombstones live in memory, keyed by docHash. Seeded from disk on load. */
-const tombstonesByDoc = new Map<string, TombstoneRecordV1[]>();
+/**
+ * Tombstones live in memory, keyed by docHash → (annotationId → record).
+ * Inner Map collapses dedup-by-id to a single lookup; the disk envelope still
+ * carries a flat array, so `snapshot()` materializes via `Array.from(...)`.
+ */
+const tombstonesByDoc = new Map<string, Map<string, TombstoneRecordV1>>();
 
 // ---------------------------------------------------------------------------
 // Serialization
@@ -192,7 +196,8 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
     );
   }
 
-  const tombstones = [...(tombstonesByDoc.get(docHash) ?? [])];
+  const tombstoneMap = tombstonesByDoc.get(docHash);
+  const tombstones = tombstoneMap ? Array.from(tombstoneMap.values()) : [];
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -254,22 +259,20 @@ export function registerAnnotationObserver(
       const hasRev = typeof oldValue?.rev === "number";
       const prevRev = hasRev ? (oldValue as { rev: number }).rev : 0;
       recordTombstone(docHash, id, prevRev);
-      console.warn(
-        `[ANNOTATION-SYNC] tombstone recorded docHash=${docHash} id=${id} prevRev=${prevRev} origin=${String(txn.origin)}`,
-      );
       if (!hasRev) {
+        // Legacy session blob entries lack `rev`; CRDT merge ordering against
+        // a same-id resurrection from a stale peer is non-deterministic.
         console.warn(
-          `[ANNOTATION-SYNC] tombstone for id=${id} has no oldValue.rev; using 0 — CRDT merge ordering may be non-deterministic`,
+          `[ANNOTATION-SYNC] tombstone for id=${id} has no oldValue.rev (origin=${String(txn.origin)})`,
         );
       }
     }
 
-    // The file-sync path writes into the Y.Map; echoing that back into the
-    // file would be wasted I/O and — under contention — could race. The
-    // FILE_SYNC early-return guards ONLY the durable-write queue; tombstones
-    // above are recorded unconditionally to survive partial-load and bypass
-    // paths.
-    if (txn.origin === FILE_SYNC_ORIGIN) return;
+    // Skip durable-write queue for origins that explicitly own their own
+    // persistence (file-sync echo, internal setup, test harness). Tombstones
+    // above are recorded unconditionally so partial-load / bypass paths still
+    // produce them — see #695.
+    if (shouldSkipDurableSync(txn.origin)) return;
 
     // Everything else is user intent: MCP_ORIGIN (Claude via an MCP tool),
     // null/undefined (browser), or any future origin tag we haven't named
@@ -279,7 +282,7 @@ export function registerAnnotationObserver(
   };
 
   const onRepMutation = (_ev: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
-    if (txn.origin === FILE_SYNC_ORIGIN) return;
+    if (shouldSkipDurableSync(txn.origin)) return;
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
   };
 
@@ -319,25 +322,15 @@ export function registerAnnotationObserver(
  * fires after a caller-side `recordTombstone`).
  */
 export function recordTombstone(docHash: string, annotationId: string, prevRev: number): void {
-  const list = tombstonesByDoc.get(docHash) ?? [];
   const newRev = prevRev + 1;
-  // Coalesce by id, keeping only the highest rev. Without this, when peer A
-  // writes tombstone rev=N to file and peer B's observer later records the
-  // same delete at a locally-higher rev (concurrent edit bumped local rev
-  // past file's), the old `(id, rev >= newRev)` predicate missed dedup and
-  // the ledger grew unboundedly per peer × concurrent-edit count.
-  let highestExisting = -1;
-  for (const t of list) {
-    if (t.id === annotationId && t.rev > highestExisting) highestExisting = t.rev;
+  let entries = tombstonesByDoc.get(docHash);
+  if (!entries) {
+    entries = new Map();
+    tombstonesByDoc.set(docHash, entries);
   }
-  if (highestExisting >= newRev) return; // existing entry already wins
-  const filtered = highestExisting >= 0 ? list.filter((t) => t.id !== annotationId) : list;
-  filtered.push({
-    id: annotationId,
-    rev: newRev,
-    deletedAt: Date.now(),
-  });
-  tombstonesByDoc.set(docHash, filtered);
+  const existing = entries.get(annotationId);
+  if (existing && existing.rev >= newRev) return; // existing entry already wins
+  entries.set(annotationId, { id: annotationId, rev: newRev, deletedAt: Date.now() });
 }
 
 /**
@@ -345,7 +338,8 @@ export function recordTombstone(docHash: string, annotationId: string, prevRev: 
  * defensive copy so callers can't mutate the module-internal array.
  */
 export function getTombstones(docHash: string): TombstoneRecordV1[] {
-  return [...(tombstonesByDoc.get(docHash) ?? [])];
+  const entries = tombstonesByDoc.get(docHash);
+  return entries ? Array.from(entries.values()) : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -488,8 +482,11 @@ export async function loadAndMerge(
   const ymapHasState = annMap.size > 0 || repMap.size > 0;
 
   // Seed tombstones from the file first so the observer (registered below)
-  // picks them up on its first snapshot.
-  tombstonesByDoc.set(docHash, [...file.tombstones]);
+  // picks them up on its first snapshot. If the file carries duplicate ids,
+  // last one wins (matches the prior array semantics).
+  const seed = new Map<string, TombstoneRecordV1>();
+  for (const stone of file.tombstones) seed.set(stone.id, stone);
+  tombstonesByDoc.set(docHash, seed);
 
   if (fileEmpty && ymapHasState) {
     // First-upgrade path. Write one atomic snapshot capturing whatever the

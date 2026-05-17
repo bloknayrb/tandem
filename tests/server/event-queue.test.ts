@@ -5,10 +5,8 @@ import {
   attachCtrlObservers,
   attachObservers,
   detachObservers,
-  FILE_SYNC_ORIGIN,
   getAnnotationEditedChannelKey,
   getBufferedSelection,
-  MCP_ORIGIN,
   reattachObservers,
   replaySince,
   resetForTesting,
@@ -25,6 +23,7 @@ import {
   Y_MAP_CHAT,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
 
 afterEach(() => {
   resetForTesting();
@@ -778,7 +777,7 @@ describe("reattachObservers — file-sync context rebind", () => {
     const { setFileSyncContext, clearFileSyncContext } = await import(
       "../../src/server/events/queue.js"
     );
-    const { MCP_ORIGIN: mcpOrigin } = await import("../../src/server/events/queue.js");
+    const { MCP_ORIGIN: mcpOrigin } = await import("../../src/shared/origins.js");
 
     const docName = "reattach-filesync-doc";
     const doc1 = new Y.Doc();

@@ -40,8 +40,8 @@ import {
   resetForTesting,
   type SyncContext,
 } from "../../../src/server/annotations/sync.js";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/server/events/queue.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
+import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/shared/origins.js";
 import {
   annRecord,
   FILE_A,

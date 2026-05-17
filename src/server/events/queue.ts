@@ -25,10 +25,9 @@ import { makeAwarenessObserver } from "./observers/awareness.js";
 import { makeCtrlChatObserver } from "./observers/ctrl-chat.js";
 import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "./origins.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
 
-export { clearFileSyncContext, FILE_SYNC_ORIGIN, MCP_ORIGIN, setFileSyncContext };
+export { clearFileSyncContext, setFileSyncContext };
 
 type EventCallback = (event: TandemEvent) => void;
 
