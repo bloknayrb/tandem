@@ -308,6 +308,18 @@ describe("refreshRange", () => {
     // the original flat range so downstream code can still render.
     expect(["repaired", "degraded"]).toContain(refreshed.kind);
     expect(refreshed.annotation.range).toEqual({ from: 6, to: 12 });
+
+    // PR #705 review: enforce the dead-relRange strip invariant per
+    // CLAUDE.md. On the `degraded` branch (lazy-attach OR re-anchor
+    // failure), `relRange` MUST be undefined so the lazy re-attachment
+    // recovery path can fire on the next refresh. A regression that
+    // preserved the dead relRange would silently block recovery.
+    if (refreshed.kind === "degraded") {
+      expect(refreshed.annotation.relRange).toBeUndefined();
+    } else {
+      // `repaired` rebuilt the relRange from flat offsets — must be present.
+      expect(refreshed.annotation.relRange).toBeDefined();
+    }
   });
 });
 

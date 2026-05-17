@@ -379,5 +379,29 @@ export function refreshAllRanges(
   } else {
     ydoc.transact(run, MCP_ORIGIN);
   }
+
+  // PR #705 review observability: surface CRDT corruption (`failed` kind —
+  // inverted CRDT range) at the aggregator boundary. The individual
+  // refreshRange already logs via console.error; this lifts a count + IDs
+  // above the per-annotation noise so a batched reload makes the corruption
+  // visible without log-scraping.
+  const failed = results.filter((r) => r.kind === "failed");
+  if (failed.length > 0) {
+    console.warn(
+      `[positions] refreshAllRanges: ${failed.length} annotation(s) failed CRDT refresh: ${failed
+        .map((r) => r.annotation.id)
+        .join(", ")}`,
+    );
+  }
+
   return results;
+}
+
+/**
+ * Exhaustive-match helper. Use in `switch (result.kind)` defaults so future
+ * additions to the `RefreshResult` discriminator produce a compile error
+ * at every call site that should branch on the new kind.
+ */
+export function assertNeverRefreshResult(value: never): never {
+  throw new Error(`Unexpected RefreshResult kind: ${JSON.stringify(value)}`);
 }
