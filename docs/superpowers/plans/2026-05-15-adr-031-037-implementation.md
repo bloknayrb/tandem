@@ -292,6 +292,8 @@ Internal DAG: PR 6 depends on PRs 5, 4, 1, 2. PR 7 depends on PR 4. PR 8 is inde
 - Remove `MCP_ORIGIN` / `FILE_SYNC_ORIGIN` re-exports from `src/server/events/queue.ts`.
 - CI grep assertions: no `from "./mcp/file-opener.js"` imports remain (file deleted in PR 4); no `MCP_ORIGIN` / `FILE_SYNC_ORIGIN` imports outside `src/shared/origins.ts`.
 
+**Sequencing constraint:** PRs 1, 4, and 6 must merge first. PR 9 removes the re-export shim introduced in PR 1, asserts no imports remain from the file deleted in PR 4, and audits that no raw `transact(MCP_ORIGIN)` remains (PR 6's fix-commit folded the lifecycle's `withMcp` swap, so the audit is clean once PR 6 lands).
+
 **Risk:** Trivial.
 
 ---
