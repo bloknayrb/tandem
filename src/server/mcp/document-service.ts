@@ -65,7 +65,7 @@ const openDocs = getOpenDocs();
 /** Per-document save lock to prevent concurrent auto-save + manual save races. */
 const savingDocs = new Set<string>();
 
-/** Formats eligible for disk auto-save (adapter.canSave && not binary). */
+/** Formats eligible for disk auto-save (adapter.save defined && not binary). */
 const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
 
 export interface SaveResult {
@@ -78,7 +78,7 @@ export interface SaveResult {
  * Save a document to disk. Shared by tandem_save, POST /api/save, and auto-save.
  *
  * Guards:
- * - Only .md and .txt formats (adapter.canSave)
+ * - Only .md and .txt formats (adapter.save defined, see ADR-036)
  * - Not read-only, not upload://
  * - Checks source file mtime to skip if externally modified
  * - Per-document lock prevents concurrent writes
@@ -102,7 +102,7 @@ export async function saveDocumentToDisk(
   }
 
   const adapter = getAdapter(docState.format);
-  if (!adapter.canSave) {
+  if (!adapter.save) {
     return { status: "skipped", reason: "Adapter cannot save" };
   }
 
@@ -135,10 +135,9 @@ export async function saveDocumentToDisk(
     }
 
     const doc = getOrCreateDocument(docId);
+    // `adapter.save` was guard-checked above; assert it for the type narrow
+    // here. Per ADR-036 a missing `save` means the format is read-only.
     const output = adapter.save(doc);
-    if (output == null) {
-      return { status: "skipped", reason: "Adapter returned null" };
-    }
 
     suppressNextChange(docState.filePath);
     await atomicWrite(docState.filePath, output);
