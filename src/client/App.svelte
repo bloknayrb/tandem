@@ -59,6 +59,7 @@ import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
 import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
+import { createViewportWidth } from "./hooks/useViewportWidth.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
@@ -478,9 +479,49 @@ const MARGIN_VIEW_EDGE_INSET_PX = 8;
 const MARGIN_VIEW_GAP_PX = 24;
 const MARGIN_VIEW_RESERVE_PX =
   2 * (MARGIN_VIEW_COLUMN_WIDTH_PX + MARGIN_VIEW_EDGE_INSET_PX + MARGIN_VIEW_GAP_PX);
+
+// Below this readable editor width, margin columns auto-hide rather than
+// squeeze the editor into an unreadable strip. Pairs with a 32px hysteresis
+// band (`MARGIN_VIEW_HYSTERESIS_PX`) so a viewport drag through the threshold
+// doesn't flicker columns on/off at 60fps.
+const MIN_EDITOR_WIDTH_PX = 480;
+const MARGIN_VIEW_HYSTERESIS_PX = 32;
+
+const viewport = createViewportWidth();
+
+// Per-side rail-replaces-margin behavior (#683): when a rail is open, hide the
+// margin column on that side. Reasoning: rail + margin on the same side leaves
+// the editor crushed and visually competes for the same gutter. Hiding by side
+// preserves margin annotations on the un-collapsed side and matches the user
+// mental model that "rail replaces margin." Both columns hide together when
+// `narrowSticky === true`.
+const railsWidthPx = $derived(
+  (effectiveLeftVisible ? dragResizeLeft.width : 0) +
+    (effectiveRightVisible ? dragResizeRight.width : 0),
+);
+const marginNarrowThresholdPx = $derived(
+  MARGIN_VIEW_RESERVE_PX + railsWidthPx + MIN_EDITOR_WIDTH_PX,
+);
+
+// Hysteresis-debounced narrow flag. A plain `width < threshold` boundary
+// flickers when a user drags through it because each side of the threshold
+// re-evaluates on every frame. Sticky entry at `< threshold`, sticky exit at
+// `> threshold + HYSTERESIS` gives a 32px deadband.
+let narrowSticky = $state(false);
+$effect(() => {
+  const w = viewport.width;
+  const t = marginNarrowThresholdPx;
+  if (w < t) narrowSticky = true;
+  else if (w > t + MARGIN_VIEW_HYSTERESIS_PX) narrowSticky = false;
+});
+
+const marginViewEffectivelyOn = $derived(settingsState.settings.marginView && !narrowSticky);
+const marginLeftVisible = $derived(marginViewEffectivelyOn && !effectiveLeftVisible);
+const marginRightVisible = $derived(marginViewEffectivelyOn && !effectiveRightVisible);
+
 const editorMaxWidth = $derived.by(() => {
   const pct = settingsState.settings.editorWidthPercent;
-  const reserve = settingsState.settings.marginView ? MARGIN_VIEW_RESERVE_PX : 0;
+  const reserve = marginViewEffectivelyOn ? MARGIN_VIEW_RESERVE_PX : 0;
   // `max(0px, ...)` guards against `editorWidthPercent` settings that, on
   // narrow viewports with marginView on, would compute a negative max-width.
   // CSS clamps negative max-width to 0 anyway, but the explicit wrap keeps
@@ -761,12 +802,10 @@ const review = useAnnotationReview({
 // via DOM nesting in the positioning layer. Collision resolution lands in
 // PR 2; rail-collapse and narrow-layout auto-disable in PR 3.
 const marginNotes = $derived(
-  settingsState.settings.marginView
-    ? modeGate.visibleAnnotations.filter((a) => a.type === "note")
-    : [],
+  marginViewEffectivelyOn ? modeGate.visibleAnnotations.filter((a) => a.type === "note") : [],
 );
 const marginComments = $derived(
-  settingsState.settings.marginView
+  marginViewEffectivelyOn
     ? modeGate.visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
     : [],
 );
@@ -775,7 +814,7 @@ const marginPositions = createMarginPositions({
   getYdoc: () => activeTab?.ydoc ?? null,
   getAnnotations: () => [...marginNotes, ...marginComments],
   getLayerEl: () => marginLayerEl,
-  getEnabled: () => settingsState.settings.marginView,
+  getEnabled: () => marginViewEffectivelyOn,
 });
 // Replies feed the bubble reply count + thread preview. We observe the raw
 // Y.Map here; MarginColumn applies the `getVisibleReplies()` ADR-027 filter
@@ -1128,7 +1167,7 @@ const tutorial = createTutorial(
          guard. -->
     <div
       bind:this={marginLayerEl}
-      style={settingsState.settings.marginView ? "position: relative;" : "display: contents;"}
+      style={marginViewEffectivelyOn ? "position: relative;" : "display: contents;"}
     >
       <!-- Editor renders paged white-sheet layout for .docx via the `.tandem-paged`
            class (driven by the `format` prop / `isPaged` $derived inside Editor.svelte).
@@ -1149,7 +1188,7 @@ const tutorial = createTutorial(
           {/if}
         </div>
       {/if}
-      {#if settingsState.settings.marginView && activeTab}
+      {#if marginLeftVisible && activeTab}
         <MarginColumn
           side="left"
           annotations={marginNotes}
@@ -1164,6 +1203,8 @@ const tutorial = createTutorial(
             review.scrollToAnnotation(ann);
           }}
         />
+      {/if}
+      {#if marginRightVisible && activeTab}
         <MarginColumn
           side="right"
           annotations={marginComments}
