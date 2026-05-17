@@ -360,6 +360,11 @@ test("tab switch: bubbles rebind to the active doc's annotations", async ({ page
     const fileA = path.join(tmpDir, "sample.md");
     const fileB = path.join(dirB, "sample2.md");
 
+    // sample.md has "# Test Document" (title 2..15 = "Test Document").
+    // sample2.md has "# Second Document" (title 2..17 = "Second Document").
+    // tandem_comment validates textSnapshot against the actual range text and
+    // silently drops the annotation on mismatch, so each file gets its own
+    // range tuple.
     await mcp.callTool("tandem_open", { filePath: fileA });
     await mcp.callTool("tandem_comment", {
       from: TITLE_FROM,
@@ -369,10 +374,10 @@ test("tab switch: bubbles rebind to the active doc's annotations", async ({ page
     });
     await mcp.callTool("tandem_open", { filePath: fileB });
     await mcp.callTool("tandem_comment", {
-      from: TITLE_FROM,
-      to: TITLE_TO,
+      from: 2,
+      to: 17,
       text: "doc B comment",
-      textSnapshot: TITLE_TEXT,
+      textSnapshot: "Second Document",
     });
 
     await page.goto("/");
