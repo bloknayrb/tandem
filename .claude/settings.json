@@ -1,4 +1,16 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__github__pull_request_read",
+      "Bash(git fetch *)",
+      "Bash(claude plugin list *)",
+      "Bash(claude plugin marketplace list *)",
+      "Bash(claude plugin details *)",
+      "Bash(npm run typecheck)",
+      "Bash(npm test)",
+      "Bash(npm test -- --run)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
