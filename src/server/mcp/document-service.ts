@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
-import * as Y from "yjs";
 import {
   CTRL_ROOM,
   Y_MAP_ACTIVE_DOCUMENT_ID,
@@ -27,80 +26,39 @@ import {
   saveSession,
   stopAutoSave,
 } from "../session/manager.js";
-import { getOrCreateDocument, setShouldKeepDocument } from "../yjs/provider.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 
-// --- Multi-document state ---
+// --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
+//
+// The openDocs map, activeDocId state, and keep-alive predicate registration
+// now live in the registry module. This file re-exports them so existing
+// consumers (29 callsites at time of split) keep working without changes.
+// Save / auto-save / broadcast / session-restore concerns stay here for now.
 
-export interface OpenDoc {
-  id: string;
-  filePath: string;
-  format: string;
-  readOnly: boolean;
-  source: "file" | "upload";
-}
+import {
+  docCount,
+  getActiveDocId,
+  getOpenDocs,
+  type OpenDoc,
+  removeDoc,
+  setActiveDocId,
+} from "../documents/registry.js";
 
-/** All open documents, keyed by document ID (which is also the Hocuspocus room name) */
-const openDocs = new Map<string, OpenDoc>();
+export {
+  addDoc,
+  docCount,
+  getActiveDocId,
+  getCurrentDoc,
+  getOpenDocs,
+  hasDoc,
+  type OpenDoc,
+  removeDoc,
+  requireDocument,
+  setActiveDocId,
+} from "../documents/registry.js";
 
-// Prevent Hocuspocus from evicting Y.Docs that MCP still tracks as open,
-// or the bootstrap channel (CTRL_ROOM) which holds persistent chat history.
-setShouldKeepDocument((name) => openDocs.has(name) || name === CTRL_ROOM);
-
-/** The active document ID — tools default to this when no documentId is specified */
-let activeDocId: string | null = null;
-
-export function getOpenDocs(): ReadonlyMap<string, OpenDoc> {
-  return openDocs;
-}
-
-export function addDoc(id: string, entry: OpenDoc): void {
-  openDocs.set(id, entry);
-}
-
-export function removeDoc(id: string): boolean {
-  return openDocs.delete(id);
-}
-
-export function hasDoc(id: string): boolean {
-  return openDocs.has(id);
-}
-
-export function docCount(): number {
-  return openDocs.size;
-}
-
-export function getActiveDocId(): string | null {
-  return activeDocId;
-}
-
-export function setActiveDocId(id: string | null): void {
-  activeDocId = id;
-}
-
-/**
- * Resolve which document to operate on.
- * If documentId is provided, use that. Otherwise use the active doc.
- */
-export function getCurrentDoc(documentId?: string) {
-  const id = documentId ?? activeDocId;
-  if (!id) return null;
-  const doc = openDocs.get(id);
-  if (!doc) return null;
-  return { ...doc, docName: id };
-}
-
-/** Returns the shared Y.Doc or null if the target doc isn't open */
-export function requireDocument(
-  documentId?: string,
-): { doc: Y.Doc; filePath: string; docId: string } | null {
-  const current = getCurrentDoc(documentId);
-  if (!current) return null;
-  return {
-    doc: getOrCreateDocument(current.docName),
-    filePath: current.filePath,
-    docId: current.id,
-  };
-}
+/** Internal alias for the registry's view of open docs — used by closures below. */
+const openDocs = getOpenDocs();
 
 // --- Disk save ---
 
@@ -245,7 +203,7 @@ export function toDocListEntry(d: OpenDoc) {
  *  docs, and to the active document's room so tab-switching clients stay in sync. */
 export function broadcastOpenDocs(): void {
   const docList = Array.from(openDocs.values()).map(toDocListEntry);
-  const id = activeDocId;
+  const id = getActiveDocId();
 
   try {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
