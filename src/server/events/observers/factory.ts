@@ -17,18 +17,8 @@
  */
 
 import * as Y from "yjs";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../origins.js";
+import { shouldSkipChannel } from "../../../shared/origins.js";
 import type { TandemEvent } from "../types.js";
-
-// Local baseline channel-skip set. Wider ADR-031 skip set
-// (mcp/file-sync/internal/reload/test) lands once PR #702 merges; this file
-// will swap to `shouldSkipChannel` from src/shared/origins.ts at that point.
-// Today the production observers only see `mcp` / `file-sync` / null, so the
-// two-origin baseline matches runtime reality. Callers that need to widen
-// (e.g. tombstone observer, durable-sync observer) pass `shouldSkip`.
-function channelSkip(origin: unknown): boolean {
-  return origin === MCP_ORIGIN || origin === FILE_SYNC_ORIGIN;
-}
 
 /** Inputs available to the event-derivation callback. */
 export interface PerKeyChangeContext<T> {
@@ -77,7 +67,7 @@ export function makePerKeyChangeObserver<T>(deps: PerKeyObserverDeps<T>): () => 
   const { map, derive, pushEvent, shouldSkip } = deps;
 
   const onChange = (event: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
-    if (channelSkip(txn.origin)) return;
+    if (shouldSkipChannel(txn.origin)) return;
     if (shouldSkip?.(txn.origin)) return;
 
     for (const [key, change] of event.changes.keys) {

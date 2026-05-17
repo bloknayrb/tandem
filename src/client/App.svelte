@@ -62,6 +62,7 @@ import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
 import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
+import { createLayoutModel } from "./layout/model.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
@@ -168,6 +169,7 @@ const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
   () => settingsState.settings.selectionDwellMs,
 );
+const layoutModel = createLayoutModel(settingsState, modeState);
 const modeGate = $derived.by(() => {
   const annotations = yjsSync.annotations;
   const mode = modeState.tandemMode;
@@ -456,61 +458,18 @@ const dragResizeRight = createDragResize({
   getVisible: () => effectiveRightVisible,
 });
 
-// Left rail: no solo override (outline stays visible in solo mode).
-// Right rail: suppressed in solo when soloRailHidden is set.
-const effectiveLeftVisible = $derived(settingsState.settings.leftPanelVisible);
-const effectiveRightVisible = $derived(
-  settingsState.settings.rightPanelVisible &&
-    !(modeState.tandemMode === "solo" && settingsState.settings.soloRailHidden),
-);
-
-function toggleLeftPanel() {
-  settingsState.updateSettings({ leftPanelVisible: !settingsState.settings.leftPanelVisible });
-}
-
-function toggleRightPanel() {
-  if (effectiveRightVisible) {
-    settingsState.updateSettings({ rightPanelVisible: false });
-  } else {
-    // Also clear soloRailHidden so the panel actually shows in solo mode.
-    settingsState.updateSettings({
-      rightPanelVisible: true,
-      ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
-    });
-  }
-}
-
-// Returns true if committed, false if blocked (would empty the other rail).
-function moveTabsBetweenRails(
+// Panel visibility + tab-move semantics are encapsulated by `layoutModel`
+// (ADR-037). The model owns the orphan-rail rule, the solo-mode override
+// for the right rail, and the `soloRailHidden`-clearing side-effect when
+// toggling the right panel back on in solo mode.
+const effectiveLeftVisible = $derived(layoutModel.leftVisible);
+const effectiveRightVisible = $derived(layoutModel.rightVisible);
+const toggleLeftPanel = () => layoutModel.toggleLeft();
+const toggleRightPanel = () => layoutModel.toggleRight();
+const moveTabsBetweenRails = (
   side: "left" | "right",
   newTabsForSide: ("annotations" | "chat" | "outline")[],
-): boolean {
-  const leftTabs = settingsState.settings.leftRailTabs;
-  const rightTabs = settingsState.settings.rightRailTabs;
-  const currentSide = side === "left" ? leftTabs : rightTabs;
-  const otherTabs = side === "left" ? rightTabs : leftTabs;
-  const newlyAdded = newTabsForSide.filter((t) => !currentSide.includes(t));
-  if (newlyAdded.length === 0) {
-    settingsState.updateSettings(
-      side === "left" ? { leftRailTabs: newTabsForSide } : { rightRailTabs: newTabsForSide },
-    );
-    return true;
-  }
-  const prunedOther = otherTabs.filter((t) => !newlyAdded.includes(t));
-  if (prunedOther.length === 0) {
-    console.warn(
-      "[tandem] cross-rail tab move blocked — would leave the %s rail empty",
-      side === "left" ? "right" : "left",
-    );
-    return false;
-  }
-  settingsState.updateSettings(
-    side === "left"
-      ? { leftRailTabs: newTabsForSide, rightRailTabs: prunedOther }
-      : { rightRailTabs: newTabsForSide, leftRailTabs: prunedOther },
-  );
-  return true;
-}
+): boolean => layoutModel.moveTabs(side, newTabsForSide);
 
 function handleFilterChange(
   type: (typeof activeAnnotationFilter)["type"],

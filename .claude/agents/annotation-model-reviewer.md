@@ -39,11 +39,11 @@ Read these before reviewing changes:
 - **Check:** All mutation paths in `tandem_editAnnotation` and internal helpers must guard on `status === "pending"`.
 - **Exception:** `refreshRange()` updates flat offsets on any annotation (this keeps coordinates fresh, not content).
 
-### 3. MCP_ORIGIN Transaction Tagging
-- **Rule:** Every `doc.transact()` call in MCP tool handler call sites must pass `MCP_ORIGIN` as the origin argument. Bare `doc.transact(() => { ... })` without origin in an MCP handler will echo the change back to Claude via the channel.
-- **Check:** Grep for `transact(` in `src/server/mcp/`. Each MCP tool handler's transact call must pass `MCP_ORIGIN`.
-- **Exception:** Shared helpers like `addReplyToAnnotation()` accept an optional `origin` parameter — the helper itself may contain a bare `transact()` path, but this is safe as long as all MCP call sites pass `MCP_ORIGIN` when invoking the helper. Verify at the call site, not inside the helper.
-- **Exception:** `FILE_SYNC_ORIGIN` is used in `src/server/annotations/sync.ts`, not in MCP handlers.
+### 3. Origin-Tagged Transaction Wrappers (ADR-031)
+- **Rule:** Every Y.Doc write goes through one of the five wrapper helpers in `src/shared/origins.ts` — `withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser`. Raw `doc.transact(...)` is forbidden outside `src/shared/origins.ts` (caught by `.claude/hooks/check-raw-transact.sh`).
+- **Check:** Grep for `.transact(` in `src/server/mcp/`. Every callsite should be a `withX` helper. MCP tool handlers must use `withMcp` (Claude-initiated user intent).
+- **Skip-set matrix:** channel event queue skips `mcp / file-sync / internal / reload` (only `browser` emits). Durable-sync observer skips `file-sync / internal`. Tombstone observer skips `file-sync / internal`. Picking the wrong helper is a silent bug.
+- **Shared helpers** (e.g. `addReplyToAnnotation`) accept a `wrap: (doc, fn) => void` parameter — caller supplies `withMcp` or `withBrowser`. Verify the helper signature passes the wrapper through to the actual `transact`.
 
 ### 4. ADR-027 Note Privacy
 - **Rule:** Annotations with `type: "note"` must never appear in:
@@ -52,10 +52,10 @@ Read these before reviewing changes:
 - **Check:** Verify `tandem_getAnnotations`/`tandem_exportAnnotations` in `src/server/mcp/annotations.ts` filter notes before returning. Verify the annotations observer in `src/server/events/observers/annotations.ts` only emits events for `type: "comment"` (the `if (ann.type !== "comment") continue` guard on line 39).
 - **Also check:** `tandem_editAnnotation` should reject edits to notes (they're user-private, Claude can't modify them).
 
-### 5. Channel Event Origin Filtering
-- **Rule:** The annotations observer in `src/server/events/observers/annotations.ts` must skip transactions with origin `MCP_ORIGIN` (Claude already saw the action) and `FILE_SYNC_ORIGIN` (disk echo, not a user action).
-- **Check:** The observer callback (line 19) must inspect `txn.origin` and early-return for both origins.
-- **Edge case:** Ensure the observer doesn't accidentally skip legitimate user actions that happen to occur in the same Y.Map.
+### 5. Channel Event Origin Filtering (ADR-031)
+- **Rule:** Channel-event observers (in `src/server/events/observers/`) must call `shouldSkipChannel(txn.origin)` and early-return when true. This skips mcp / file-sync / internal / reload, leaving only browser-origin writes to project to channel events.
+- **Check:** Each observer callback should `import { shouldSkipChannel } from "../../../shared/origins.js"` and use the predicate, not inline origin equality.
+- **Edge case:** Ensure the observer doesn't accidentally skip browser-origin user actions (e.g. by importing the durable-sync predicate by mistake).
 
 ## Output Format
 

@@ -17,6 +17,7 @@
  */
 
 import * as Y from "yjs";
+import { withMcp } from "../shared/origins.js";
 import type {
   AnchoredRangeResult,
   DocumentRange,
@@ -28,7 +29,6 @@ import type {
 } from "../shared/positions/index.js";
 import { toFlatOffset, toSerializedRelPos } from "../shared/positions/index.js";
 import type { Annotation } from "../shared/types.js";
-import { MCP_ORIGIN } from "./events/queue.js";
 import {
   collectXmlTexts,
   extractText,
@@ -372,7 +372,7 @@ export function refreshAllRanges(
   if (opts?.skipTransact) {
     run();
   } else {
-    ydoc.transact(run, MCP_ORIGIN);
+    withMcp(ydoc, run);
   }
   return results;
 }
