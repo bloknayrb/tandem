@@ -90,7 +90,7 @@ Re-ran with the flag set to `noop:none`. Same debug log shape; same zero mention
 
 ## Verdict
 
-**NO-GO** on a one-command marketplace install delivering the channel-push experience.
+**NO-GO** on a one-command marketplace install delivering the channel-push experience in Claude Code v2.1.143.
 
 The marketplace install delivers the MCP servers (`tandem`, `tandem-channel`) and the skill — which is the **non-channel-push baseline experience**. Annotations, edits, chat, and document operations all work through the MCP servers. What is *missing* is the real-time push of channel events from Tandem to Claude Code, which requires either:
 
