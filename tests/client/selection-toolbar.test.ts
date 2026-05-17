@@ -24,11 +24,12 @@ describe("selection toolbar position", () => {
     expect(position.left).toBe(115);
   });
 
-  it("falls back to clamped above-placement when below would overflow the viewport (#680)", () => {
+  it("pins to viewport bottom when neither above nor below fits (#680 fold-straddle)", () => {
     // Tight viewport — neither above (12) nor below (172+40=212 vs viewport
-    // 180) fits. Clamp to MIN_TOP=48, matching pre-#680 behavior. The user
-    // already has an unusable viewport; overlap is the least of their
-    // worries.
+    // 180) fits. Pre-fold-straddle this clamped to MIN_TOP=48 (on the chrome),
+    // which is exactly the pointer-intercept failure mode #678 caught. Pin to
+    // the viewport bottom instead — the toolbar is visible, the user can
+    // dismiss it, and fixed-bar clicks above are never intercepted.
     const position = computeSelectionToolbarPosition({
       start: { left: 80, top: 62, bottom: 162, right: 150 },
       end: { left: 80, top: 62, bottom: 162, right: 150 },
@@ -38,7 +39,60 @@ describe("selection toolbar position", () => {
       viewportWidth: 800,
     });
 
-    expect(position.top).toBe(48);
+    // maxTop = max(MIN_TOP=48, viewportHeight - toolbarHeight - EDGE_GAP)
+    //        = max(48, 180 - 40 - 8) = 132.
+    expect(position.top).toBe(132);
+    expect(position.placement).toBe("below");
+  });
+
+  it("applies flip hysteresis at the above/below boundary", () => {
+    // Selection.top sits where aboveTop = 50: just above MIN_TOP=48 (so a naïve
+    // implementation would call this "above"), but BELOW the +4 entry threshold.
+    // With no prior placement, the toolbar flips below. Then, with placement
+    // already below, the same bounds still resolve to below.
+    //
+    // Numbers: selection.top = 100, aboveTop = 100 - 10 - 40 = 50.
+    // Without hysteresis: 50 >= 48 → above. With +4 entry: 50 >= 52 → below.
+    const argsBoundary = {
+      start: { left: 80, top: 100, bottom: 120, right: 150 },
+      end: { left: 80, top: 100, bottom: 120, right: 150 },
+      toolbarHeight: 40,
+      toolbarWidth: 160,
+      viewportHeight: 600,
+      viewportWidth: 800,
+    } as const;
+    const first = computeSelectionToolbarPosition(argsBoundary);
+    expect(first.placement).toBe("below");
+
+    // Once placed above, exit only when aboveTop drops 4 below MIN_TOP.
+    // selection.top = 95 → aboveTop = 45. Without hysteresis: 45 < 48 → flip
+    // below. With sticky-above (-4 exit): 45 >= 44 → still above. This is the
+    // load-bearing assertion preventing per-frame flicker on slow drags.
+    const stickyAbove = computeSelectionToolbarPosition({
+      start: { left: 80, top: 95, bottom: 115, right: 150 },
+      end: { left: 80, top: 95, bottom: 115, right: 150 },
+      toolbarHeight: 40,
+      toolbarWidth: 160,
+      viewportHeight: 600,
+      viewportWidth: 800,
+      previousPlacement: "above",
+    });
+    expect(stickyAbove.placement).toBe("above");
+    // aboveTop = 95 - 10 - 40 = 45, clamped up to MIN_TOP=48.
+    expect(stickyAbove.top).toBe(48);
+
+    // From above, only crossing the -4 exit threshold flips below.
+    // selection.top = 91 → aboveTop = 41 → 41 < 44 → flip.
+    const flipDown = computeSelectionToolbarPosition({
+      start: { left: 80, top: 91, bottom: 111, right: 150 },
+      end: { left: 80, top: 91, bottom: 111, right: 150 },
+      toolbarHeight: 40,
+      toolbarWidth: 160,
+      viewportHeight: 600,
+      viewportWidth: 800,
+      previousPlacement: "above",
+    });
+    expect(flipDown.placement).toBe("below");
   });
 
   it("places the toolbar above when there's room", () => {

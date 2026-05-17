@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Selection toolbar no longer intercepts clicks on the FormattingBar (#680)** — when the editor's selection sits near the top of the viewport, the BubbleMenu's natural above-placement would clamp onto the TitleBar + FormattingBar chrome (76px combined) and intercept clicks meant for `toolbar-highlight-btn` and siblings. This was the regression that forced PR #663 to be reverted. Position now flips below the selection when above doesn't clear `SELECTION_TOOLBAR_MIN_TOP`, falling back to the clamped above-placement only when below would overflow the viewport bottom.
+- **Selection toolbar places itself clear of fixed chrome (#680)** — the selection BubbleMenu flips below the selection when above-placement would overlap the TitleBar + FormattingBar; selections that straddle the viewport fold pin the toolbar to the viewport bottom rather than clamping onto the chrome; and a 4px hysteresis band at the flip boundary keeps the toolbar from shimmering as a selection drifts across the threshold.
 
 ## [0.12.0] - 2026-05-15
 

@@ -16,6 +16,7 @@ import { toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
+  type SelectionToolbarPlacement,
 } from "./selection-toolbar";
 import ToolbarButton from "./ToolbarButton.svelte";
 
@@ -60,12 +61,19 @@ const showPopup = $derived(
 );
 const annotationTextTrimmed = $derived(annotationText.trim());
 
+// Plain `let` — see SelectionToolbarPositionArgs.previousPlacement docstring.
+// This is read+written from a Tiptap event listener, NOT from inside a
+// Svelte $effect, so it does not need to be reactive and must not be
+// $state (would risk effect_update_depth on every selection change).
+let lastPlacement: SelectionToolbarPlacement | undefined;
+
 function updateSelectionAffordance(ed: TiptapEditor) {
   const { from, to } = ed.state.selection;
   const next = from !== to;
   hasSelection = next;
   if (!next) {
     selectionPosition = null;
+    lastPlacement = undefined;
     return;
   }
 
@@ -79,7 +87,9 @@ function updateSelectionAffordance(ed: TiptapEditor) {
       toolbarWidth,
       viewportHeight,
       viewportWidth,
+      previousPlacement: lastPlacement,
     });
+    lastPlacement = nextPosition.placement;
     if (
       selectionPosition &&
       selectionPosition.left === nextPosition.left &&
@@ -87,9 +97,10 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     ) {
       return;
     }
-    selectionPosition = nextPosition;
+    selectionPosition = { left: nextPosition.left, top: nextPosition.top };
   } catch {
     selectionPosition = null;
+    lastPlacement = undefined;
   }
 }
 
