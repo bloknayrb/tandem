@@ -123,14 +123,20 @@ function recordHeight(id: string, h: number): void {
      height so absolute Y coords (relative to the margin layer) line up with
      `useMarginPositions` output. SVG default user units = pixels (no viewBox),
      so we render lines directly at the computed Y offsets. Decorative only:
-     pointer-events: none, aria-hidden. -->
+     pointer-events: none, aria-hidden.
+
+     Stroke is tinted by side (left = notes / user, right = comments / Claude)
+     to mirror the authorship decoration convention (ADR-026). Default uses
+     stroke-opacity to stay subtle; active review target ramps opacity + width
+     so the focused annotation's connector reads as the dominant line on the
+     page. -->
 <svg
   data-testid="margin-leaders-{side}"
   class="tandem-margin-leaders"
   aria-hidden="true"
   style="position: absolute; top: 0; bottom: 0; {side === 'right'
     ? 'right'
-    : 'left'}: {edgeInset + width}px; width: {gap}px; pointer-events: none;"
+    : 'left'}: {edgeInset + width}px; width: {gap}px; pointer-events: none; color: var(--tandem-author-{side === 'right' ? 'claude' : 'user'});"
 >
   {#each placeable as ann (ann.id)}
     {@const rawTop = positions.get(ann.id)}
@@ -139,14 +145,19 @@ function recordHeight(id: string, h: number): void {
       {@const editorX = side === "right" ? 0 : gap}
       {@const columnX = side === "right" ? gap : 0}
       {@const isActive = ann.id === activeAnnotationId}
+      <!-- LEADER_BUBBLE_INSET_PX (12) shifts the bubble endpoint down from
+           the bubble's top edge into its padded content area, so a
+           collision-pushed bubble's connector lands near the title row
+           instead of pointing at the empty corner above it. -->
       <line
         data-annotation-id={ann.id}
         x1={editorX}
         y1={rawTop}
         x2={columnX}
-        y2={adjTop}
-        stroke={isActive ? "var(--tandem-fg-muted)" : "var(--tandem-border-strong)"}
-        stroke-width={isActive ? 1.5 : 1}
+        y2={adjTop + 12}
+        stroke="currentColor"
+        stroke-width={isActive ? 1.75 : 1}
+        stroke-opacity={isActive ? 0.9 : 0.4}
         stroke-linecap="round"
         fill="none"
       />

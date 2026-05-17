@@ -534,7 +534,11 @@ const MARGIN_VIEW_RESERVE_PX =
 const editorMaxWidth = $derived.by(() => {
   const pct = settingsState.settings.editorWidthPercent;
   const reserve = settingsState.settings.marginView ? MARGIN_VIEW_RESERVE_PX : 0;
-  return reserve > 0 ? `calc(${pct}% - ${reserve}px)` : `${pct}%`;
+  // `max(0px, ...)` guards against `editorWidthPercent` settings that, on
+  // narrow viewports with marginView on, would compute a negative max-width.
+  // CSS clamps negative max-width to 0 anyway, but the explicit wrap keeps
+  // the resulting style declaration legible in devtools.
+  return reserve > 0 ? `max(0px, calc(${pct}% - ${reserve}px))` : `${pct}%`;
 });
 
 function captureSelectionForChat() {
