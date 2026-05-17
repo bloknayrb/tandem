@@ -44,10 +44,28 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
   await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
 }
 
+/**
+ * #683 PR3 — Per-side rail-replaces-margin gates margin columns on rail
+ * visibility. The product default has `rightPanelVisible=true`, which would
+ * hide the right margin column out of the box. Toggle each rail off only if
+ * currently visible (read via `aria-pressed` on the titlebar toggles) so we
+ * exercise the on-state of margin view, not the rail-default.
+ */
+async function closeBothRails(page: import("@playwright/test").Page): Promise<void> {
+  for (const side of ["left", "right"] as const) {
+    const btn = page.locator(`[data-testid='titlebar-toggle-${side}']`);
+    if ((await btn.getAttribute("aria-pressed")) === "true") {
+      await btn.click();
+      await expect(btn).toHaveAttribute("aria-pressed", "false");
+    }
+  }
+}
+
 async function setMarginView(
   page: import("@playwright/test").Page,
   enabled: boolean,
 ): Promise<void> {
+  if (enabled) await closeBothRails(page);
   await openSettingsAndGotoCowork(page);
   const popover = page.locator("[data-testid='settings-popover']");
   const toggleInput = popover.locator("[data-testid='margin-view-toggle'] input");
