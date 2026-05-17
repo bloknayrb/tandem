@@ -51,6 +51,11 @@ let {
   onSendToClaude,
 }: Props = $props();
 
+// Vertical inset from the bubble's top edge to its padded content row. The
+// leader line endpoint is shifted down by this amount so a collision-pushed
+// bubble's connector lands near the title row rather than the empty corner.
+const LEADER_BUBBLE_INSET_PX = 12;
+
 // Only render annotations whose position is known this frame; without a top
 // offset there is nowhere to place the bubble.
 const placeable = $derived(
@@ -145,8 +150,8 @@ function recordHeight(id: string, h: number): void {
       {@const editorX = side === "right" ? 0 : gap}
       {@const columnX = side === "right" ? gap : 0}
       {@const isActive = ann.id === activeAnnotationId}
-      <!-- LEADER_BUBBLE_INSET_PX (12) shifts the bubble endpoint down from
-           the bubble's top edge into its padded content area, so a
+      <!-- LEADER_BUBBLE_INSET_PX shifts the bubble endpoint down from the
+           bubble's top edge into its padded content area, so a
            collision-pushed bubble's connector lands near the title row
            instead of pointing at the empty corner above it. -->
       <line
@@ -154,7 +159,7 @@ function recordHeight(id: string, h: number): void {
         x1={editorX}
         y1={rawTop}
         x2={columnX}
-        y2={adjTop + 12}
+        y2={adjTop + LEADER_BUBBLE_INSET_PX}
         stroke="currentColor"
         stroke-width={isActive ? 1.75 : 1}
         stroke-opacity={isActive ? 0.9 : 0.4}
