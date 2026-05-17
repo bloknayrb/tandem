@@ -186,6 +186,17 @@ test("PR6: Network Advanced section ships collapsed and toggles open", async ({ 
   await expect(advanced).toHaveAttribute("open", /.*/);
   await expect(delaySlider).toBeVisible();
 
+  // Prove pointer events route into the expanded <details> subtree. A
+  // `pointer-events: none` regression on CollapsibleSection, or a stacking-
+  // context bug occluding children, would block selectOption here. The
+  // post-change toHaveValue check is not tautological: Playwright dispatches
+  // a real change event and the read-back value comes from Svelte re-rendering
+  // the `value={settings.sidecarRetryStrategy}` binding after the onUpdate
+  // round-trip.
+  const retrySelect = page.locator("[data-testid='network-retry-strategy']");
+  await retrySelect.selectOption("constant-2s");
+  await expect(retrySelect).toHaveValue("constant-2s");
+
   // Toggle collapses again.
   await page.locator("[data-testid='network-advanced-toggle']").click();
   await expect(advanced).not.toHaveAttribute("open", /.*/);
