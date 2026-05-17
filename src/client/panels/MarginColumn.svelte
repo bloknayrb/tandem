@@ -15,6 +15,10 @@ interface Props {
   width: number;
   /** Distance from the column edge to the nearest scroll-container edge. */
   edgeInset: number;
+  /** Horizontal gap between the editor's text edge and the near edge of this
+   *  column. Also defines the horizontal zone occupied by leader lines that
+   *  visually connect anchor text in the editor to the corresponding bubble. */
+  gap: number;
   activeAnnotationId: string | null;
   /** Raw replies grouped by annotation id. The component applies the
    *  `getVisibleReplies()` ADR-027 filter at the lookup site so notes /
@@ -35,6 +39,7 @@ let {
   side,
   width,
   edgeInset,
+  gap,
   activeAnnotationId,
   repliesById,
   onClick,
@@ -112,6 +117,42 @@ function recordHeight(id: string, h: number): void {
   heights = next;
 }
 </script>
+
+<!-- Leader-line SVG sits in the gap zone between the editor's text edge and
+     the column's near edge. Top/bottom stretch makes it cover the full layer
+     height so absolute Y coords (relative to the margin layer) line up with
+     `useMarginPositions` output. SVG default user units = pixels (no viewBox),
+     so we render lines directly at the computed Y offsets. Decorative only:
+     pointer-events: none, aria-hidden. -->
+<svg
+  data-testid="margin-leaders-{side}"
+  class="tandem-margin-leaders"
+  aria-hidden="true"
+  style="position: absolute; top: 0; bottom: 0; {side === 'right'
+    ? 'right'
+    : 'left'}: {edgeInset + width}px; width: {gap}px; pointer-events: none;"
+>
+  {#each placeable as ann (ann.id)}
+    {@const rawTop = positions.get(ann.id)}
+    {@const adjTop = adjustedPositions.get(ann.id)}
+    {#if rawTop !== undefined && adjTop !== undefined}
+      {@const editorX = side === "right" ? 0 : gap}
+      {@const columnX = side === "right" ? gap : 0}
+      {@const isActive = ann.id === activeAnnotationId}
+      <line
+        data-annotation-id={ann.id}
+        x1={editorX}
+        y1={rawTop}
+        x2={columnX}
+        y2={adjTop}
+        stroke={isActive ? "var(--tandem-fg-muted)" : "var(--tandem-border-strong)"}
+        stroke-width={isActive ? 1.5 : 1}
+        stroke-linecap="round"
+        fill="none"
+      />
+    {/if}
+  {/each}
+</svg>
 
 <div
   data-testid="margin-column-{side}"
