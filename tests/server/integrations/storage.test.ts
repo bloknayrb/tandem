@@ -46,6 +46,11 @@ describe("createIntegrationsStore", () => {
     expect(() => createIntegrationsStore("")).toThrow(/basePath is required/);
   });
 
+  it("requires an absolute basePath", () => {
+    expect(() => createIntegrationsStore("relative/path")).toThrow(/must be absolute/);
+    expect(() => createIntegrationsStore("./relative")).toThrow(/must be absolute/);
+  });
+
   it("filePath joins basePath with integrations.json", () => {
     const store = createIntegrationsStore(tmpDir);
     expect(store.filePath).toBe(path.join(tmpDir, INTEGRATIONS_FILE_NAME));

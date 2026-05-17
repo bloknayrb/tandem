@@ -36,6 +36,9 @@ export function createIntegrationsStore(basePath: string): IntegrationsStore {
   if (!basePath || basePath.length === 0) {
     throw new Error("createIntegrationsStore: basePath is required");
   }
+  if (!path.isAbsolute(basePath)) {
+    throw new Error(`createIntegrationsStore: basePath must be absolute (got "${basePath}")`);
+  }
   const filePath = path.join(basePath, INTEGRATIONS_FILE_NAME);
 
   return {
@@ -91,6 +94,7 @@ async function writeIntegrationsFile(filePath: string, file: IntegrationsFile): 
 
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true });
+  warnIfWindowsDataDirOutsideLocalAppData(dir);
 
   const content = JSON.stringify(file, null, 2) + "\n";
   const tmp = path.join(dir, `.${INTEGRATIONS_FILE_NAME}.${randomUUID()}.tmp`);
@@ -124,11 +128,42 @@ async function writeIntegrationsFile(filePath: string, file: IntegrationsFile): 
 }
 
 /**
+ * Mirrors the warning in `src/server/auth/token-store.ts:writeTokenToFile`.
+ * On Windows the access-control story is NTFS ACL inheritance from the
+ * parent directory, not POSIX 0o600. If the data dir resolves outside
+ * `%LOCALAPPDATA%` (e.g. the user has remapped Tandem's app data via
+ * `TANDEM_APP_DATA_DIR`), ACL inheritance may not restrict access to the
+ * current user. Defense-in-depth via cross-process file mode is not
+ * available; the warning is the user-visible signal. Issue #643 tracks
+ * a deeper ACL solution.
+ */
+function warnIfWindowsDataDirOutsideLocalAppData(dir: string): void {
+  if (process.platform !== "win32") return;
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return;
+  const normalizedDir = path.resolve(dir).toLowerCase();
+  const normalizedLocal = path.resolve(localAppData).toLowerCase();
+  if (!normalizedDir.startsWith(normalizedLocal)) {
+    console.warn(
+      `[tandem] integrations.json dir is outside %LOCALAPPDATA% (${dir}); NTFS ACL inheritance may not restrict access to current user`,
+    );
+  }
+}
+
+/**
  * EXDEV fallback path. Open the destination directly with O_CREAT|O_EXCL via
- * the "wx" flag; if the file already exists, fall back to a regular open so
- * the rewrite proceeds. Refusing to follow symlinks is the goal of the
- * initial "wx" attempt — a symlink at the destination causes EEXIST, which
- * we surface as an error rather than silently overwriting the target.
+ * the "wx" flag; if the file already exists, lstat-check it is not a symlink
+ * before reopening in "w" mode.
+ *
+ * Known limitation: there is a TOCTOU window between the lstat and the "w"
+ * open during which an attacker with write access to the directory could
+ * substitute a symlink. Node does not expose O_NOFOLLOW or openat(2); closing
+ * the window fully would require a native addon. In practice the data dir is
+ * under `%LOCALAPPDATA%` / `~/.local/share/` and writable only by the current
+ * user. The outer `chmod 0o600` at the end of `writeIntegrationsFile` is the
+ * cross-process backstop; the in-function chmod here closes the transient
+ * window between fh.close() and that outer chmod where an existing-file "w"
+ * open would otherwise inherit the prior mode bits.
  */
 async function writeViaOpen(filePath: string, content: string): Promise<void> {
   let fh: fs.promises.FileHandle;
@@ -149,6 +184,9 @@ async function writeViaOpen(filePath: string, content: string): Promise<void> {
   }
   try {
     await fh.writeFile(content, "utf8");
+    if (process.platform !== "win32") {
+      await fh.chmod(0o600);
+    }
   } finally {
     await fh.close();
   }
