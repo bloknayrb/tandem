@@ -1,0 +1,163 @@
+/**
+ * Origin-tagged Y.Doc transaction wrappers (ADR-031).
+ *
+ * Every Y.Doc write — server-side or browser-side — MUST go through one of
+ * the five helpers below. Direct `*.transact()` calls outside this file are
+ * blocked by the pre-commit hook `.claude/hooks/block-raw-transact.sh` and
+ * the Biome AST rule that catches dynamic-dispatch bypasses. The wrapper
+ * choice is the contract: the rest of the system reads `txn.origin` and
+ * decides whether to project events, persist to disk, record tombstones,
+ * etc.
+ *
+ * | Origin     | Channel event queue | Durable-sync observer | Tombstone observer |
+ * |------------|---------------------|-----------------------|--------------------|
+ * | `mcp`      | skip                | persist               | record             |
+ * | `file-sync`| skip                | skip                  | skip               |
+ * | `internal` | skip                | skip                  | skip               |
+ * | `reload`   | skip                | persist               | record             |
+ * | `browser`  | emit                | persist               | record             |
+ *
+ * Picking the wrong helper is a silent bug. See ADR-031 for the full
+ * "how to choose" enumeration with worked examples.
+ */
+
+import type * as Y from "yjs";
+
+// ---------------------------------------------------------------------------
+// Origin constants
+// ---------------------------------------------------------------------------
+
+/** Origin for Claude-initiated writes from MCP tool handlers. */
+export const MCP_ORIGIN = "mcp";
+
+/** Origin for durable-annotation file-writer echoes (JSON → Y.Map sync). */
+export const FILE_SYNC_ORIGIN = "file-sync";
+
+/**
+ * Origin for server-internal setup writes. See ADR-031's `withInternal`
+ * worked examples — session restore, file population, tutorial / scratchpad
+ * seeding, clear-and-reload (user-initiated force-reload), cleanup-after-
+ * failure paths, server metadata broadcasts on CTRL_ROOM.
+ */
+export const INTERNAL_ORIGIN = "internal";
+
+/**
+ * Origin for the file-watcher mid-session `reloadFromDisk` flow. Channel
+ * skips (not a user action), durable-sync persists (we want the re-anchored
+ * relRanges saved), tombstone observer records.
+ */
+export const RELOAD_ORIGIN = "reload";
+
+/** Origin for user edits originating in the browser (no current observer
+ * filters on this — explicit label preserves the universal rule). */
+export const BROWSER_ORIGIN = "browser";
+
+export type TandemOrigin =
+  | typeof MCP_ORIGIN
+  | typeof FILE_SYNC_ORIGIN
+  | typeof INTERNAL_ORIGIN
+  | typeof RELOAD_ORIGIN
+  | typeof BROWSER_ORIGIN;
+
+// ---------------------------------------------------------------------------
+// Skip-set predicates
+// ---------------------------------------------------------------------------
+
+/**
+ * Origins that channel-event observers must skip — every internal-purpose
+ * origin. Only `browser` produces channel events today.
+ */
+const CHANNEL_SKIP: ReadonlySet<unknown> = new Set([
+  MCP_ORIGIN,
+  FILE_SYNC_ORIGIN,
+  INTERNAL_ORIGIN,
+  RELOAD_ORIGIN,
+]);
+
+/** Origins that the durable-annotation sync observer must skip. */
+const DURABLE_SKIP: ReadonlySet<unknown> = new Set([FILE_SYNC_ORIGIN, INTERNAL_ORIGIN]);
+
+/** Origins that the tombstone observer must skip. */
+const TOMBSTONE_SKIP: ReadonlySet<unknown> = new Set([FILE_SYNC_ORIGIN, INTERNAL_ORIGIN]);
+
+export function shouldSkipChannel(origin: unknown): boolean {
+  return CHANNEL_SKIP.has(origin);
+}
+
+export function shouldSkipDurableSync(origin: unknown): boolean {
+  return DURABLE_SKIP.has(origin);
+}
+
+export function shouldSkipTombstone(origin: unknown): boolean {
+  return TOMBSTONE_SKIP.has(origin);
+}
+
+// ---------------------------------------------------------------------------
+// Wrapper helpers
+// ---------------------------------------------------------------------------
+
+function runTransact<T>(doc: Y.Doc, fn: () => T, origin: TandemOrigin): T {
+  let result: T | undefined;
+  let captured = false;
+  // biome-ignore lint/suspicious/noExplicitAny: Y.Doc.transact's second arg is `unknown`; passing a typed string is safe.
+  (doc as any).transact(() => {
+    result = fn();
+    captured = true;
+  }, origin);
+  if (!captured) {
+    // Should be unreachable — Y.Doc.transact invokes the callback synchronously.
+    throw new Error(`origins: transact callback did not run (origin=${origin})`);
+  }
+  return result as T;
+}
+
+/** Wrap user-intent writes from MCP tool handlers. */
+export function withMcp<T>(doc: Y.Doc, fn: () => T): T {
+  return runTransact(doc, fn, MCP_ORIGIN);
+}
+
+/** Wrap echoes from the durable-annotation file-writer / file-watcher
+ * reload path. The channel skips, the durable-sync observer skips, the
+ * tombstone observer skips. */
+export function withFileSync<T>(doc: Y.Doc, fn: () => T): T {
+  return runTransact(doc, fn, FILE_SYNC_ORIGIN);
+}
+
+/** Wrap server-internal setup writes — see the `INTERNAL_ORIGIN` doc
+ * comment for the worked-example list. */
+export function withInternal<T>(doc: Y.Doc, fn: () => T): T {
+  return runTransact(doc, fn, INTERNAL_ORIGIN);
+}
+
+/** Wrap mid-session `reloadFromDisk` writes. Distinct from `withFileSync`:
+ * the durable-sync observer PERSISTS reload writes so the re-anchored
+ * relRanges land on disk. */
+export function withReload<T>(doc: Y.Doc, fn: () => T): T {
+  return runTransact(doc, fn, RELOAD_ORIGIN);
+}
+
+/** Wrap user edits originating in the browser. */
+export function withBrowser<T>(doc: Y.Doc, fn: () => T): T {
+  return runTransact(doc, fn, BROWSER_ORIGIN);
+}
+
+// ---------------------------------------------------------------------------
+// Test helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-only transact wrapper for synthetic Y.Docs. Tagged with a sentinel
+ * origin so observers and lint can distinguish from production transacts.
+ * Allowlisted in the `block-raw-transact` hook via the helpers-file
+ * exception.
+ */
+export const TEST_ORIGIN = "test";
+
+export function transactForTest<T>(doc: Y.Doc, fn: () => T): T {
+  let result: T | undefined;
+  // biome-ignore lint/suspicious/noExplicitAny: Y.Doc.transact's second arg is `unknown`.
+  (doc as any).transact(() => {
+    result = fn();
+  }, TEST_ORIGIN);
+  return result as T;
+}

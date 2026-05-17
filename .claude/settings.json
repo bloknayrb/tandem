@@ -77,6 +77,10 @@
           },
           {
             "type": "command",
+            "command": "bash .claude/hooks/check-raw-transact.sh"
+          },
+          {
+            "type": "command",
             "command": "bash .claude/hooks/svelte-check-on-edit.sh"
           },
           {

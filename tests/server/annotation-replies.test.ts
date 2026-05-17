@@ -6,6 +6,7 @@ import {
   createAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { withMcp } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
@@ -67,7 +68,7 @@ describe("addReplyToAnnotation", () => {
     const ann = map.get(annId) as Annotation;
     map.set(annId, { ...ann, status: "dismissed" });
 
-    const result = addReplyToAnnotation(ydoc, map, annId, "too late", "claude", MCP_ORIGIN);
+    const result = addReplyToAnnotation(ydoc, map, annId, "too late", "claude", withMcp);
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.code).toBe("ANNOTATION_RESOLVED");
@@ -111,7 +112,7 @@ describe("event emission on reply", () => {
     });
 
     // Claude reply — MCP_ORIGIN, observer filters these out
-    addReplyToAnnotation(ydoc, map, annId, "claude says hi", "claude", MCP_ORIGIN);
+    addReplyToAnnotation(ydoc, map, annId, "claude says hi", "claude", withMcp);
     // The transaction IS tagged with MCP_ORIGIN, so the real event queue would skip it
     expect(mcpEvents).toHaveLength(1);
     expect(mcpEvents[0].origin).toBe(MCP_ORIGIN);
@@ -125,7 +126,7 @@ describe("collectRepliesForAnnotation", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
 
     addReplyToAnnotation(ydoc, map, annId, "first", "user");
-    addReplyToAnnotation(ydoc, map, annId, "second", "claude", MCP_ORIGIN);
+    addReplyToAnnotation(ydoc, map, annId, "second", "claude", withMcp);
     addReplyToAnnotation(ydoc, map, annId, "third", "user");
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -155,7 +156,7 @@ describe("tandem_removeAnnotation cleans up replies", () => {
 
     // Add replies to the annotation
     addReplyToAnnotation(ydoc, map, annId, "reply 1", "user");
-    addReplyToAnnotation(ydoc, map, annId, "reply 2", "claude", MCP_ORIGIN);
+    addReplyToAnnotation(ydoc, map, annId, "reply 2", "claude", withMcp);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);

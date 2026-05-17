@@ -35,9 +35,9 @@
  */
 
 import type * as Y from "yjs";
+import { withMcp } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationStatus } from "../../shared/types.js";
-import { MCP_ORIGIN } from "../events/queue.js";
 import { nextRev } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ function transitionPending(
     rev: nextRev(ann),
   };
 
-  ydoc.transact(() => map.set(id, updated), MCP_ORIGIN);
+  withMcp(ydoc, () => map.set(id, updated));
 
   return { kind: "ok", data: updated };
 }
