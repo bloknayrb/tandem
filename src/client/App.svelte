@@ -63,6 +63,12 @@ import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
+import {
+  editAnnotation as marginEditAnnotation,
+  removeAnnotation as marginRemoveAnnotation,
+  replyToAnnotation as marginReplyToAnnotation,
+  sendNoteToClaude as marginSendNoteToClaude,
+} from "./panels/annotation-actions";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
@@ -1150,6 +1156,13 @@ const tutorial = createTutorial(
         </div>
       {/if}
       {#if settingsState.settings.marginView && activeTab}
+        {@const marginYdoc = activeTab.ydoc ?? null}
+        {@const marginDocId = activeTab.id}
+        {@const marginOnEdit = (id: string, c: string) => marginEditAnnotation(marginYdoc, id, c)}
+        {@const marginOnReply = (id: string, t: string) =>
+          marginReplyToAnnotation(id, t, marginDocId)}
+        {@const marginOnRemove = (id: string) => marginRemoveAnnotation(id, marginDocId)}
+        {@const marginOnSendToClaude = (id: string) => marginSendNoteToClaude(marginYdoc, id)}
         <MarginColumn
           side="left"
           annotations={marginNotes}
@@ -1163,6 +1176,12 @@ const tutorial = createTutorial(
             activeAnnotationId = ann.id;
             review.scrollToAnnotation(ann);
           }}
+          onAccept={review.handleAccept}
+          onDismiss={review.handleDismiss}
+          onRemove={marginOnRemove}
+          onEdit={marginOnEdit}
+          onReply={marginOnReply}
+          onSendToClaude={marginOnSendToClaude}
         />
         <MarginColumn
           side="right"
@@ -1179,6 +1198,10 @@ const tutorial = createTutorial(
           }}
           onAccept={review.handleAccept}
           onDismiss={review.handleDismiss}
+          onRemove={marginOnRemove}
+          onEdit={marginOnEdit}
+          onReply={marginOnReply}
+          onSendToClaude={marginOnSendToClaude}
         />
       {/if}
     </div>
