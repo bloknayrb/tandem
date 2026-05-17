@@ -30,6 +30,14 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 
 **Out of scope for v1.0:** authorship gutter (D2 picked per-character only), annotation thread reactions (D5), inline diff hunk-staging UI (D3 surface deferred — option B locked for v1.1 revisit), mobile/responsive (D7), author chip/avatar (D8), compact density (D9), most §1D refactors except #313.
 
+## Integration Policy (ADR-038)
+
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+>
+> **Integration setup** runs through the integration setup wizard (#477 PR 3). Today's transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — is **deprecated when the wizard ships**.
+
+See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) for the full policy, the four-term glossary, the auto-launch and auto-configuration sub-decisions, and the list of Claude-specific extras vs Claude-side dev tooling. The integration picker work below (#477) is the materialization of this policy in code, not a new direction.
+
 ## Step 5: File I/O
 
 ### Goal
@@ -413,7 +421,7 @@ Remaining Cowork work (#316, #317, #322) is polish — making the installer turn
 
 First-run wizard that lets users choose their AI integration, plus dropping the browser distribution path entirely (Tauri-only going forward). The integration choice drives startup behavior, auto-launch strategy, and default layout. Triaged **Core** for v1.0 on 2026-05-14.
 
-**Motivation:** Claude's continuity features (CLAUDE.md, hooks, skills, memory) require spawning the real Claude Code CLI — an Agent SDK connection can't replicate them. The first-run wizard makes that explicit and exposes additional integration slots (Claude Desktop, local LLM, OpenAI, Gemini). The browser distribution path also added ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches, npm global install) without serving the primary Tauri user base.
+**Motivation:** The integration picker materializes [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) — Tandem speaks MCP; Claude is the default. **The default integration's depth is a flagship feature**, not a constraint to route around: Claude's continuity features (CLAUDE.md, hooks, skills, memory) ride on top of the same `--session-id` + `--resume` spawn primitive Spike A validated, and the wizard's one-click Claude setup is what makes them accessible to non-developers. The wizard also exposes additional integration slots (Claude Desktop, local LLM, OpenAI, Gemini) per D4. The browser distribution path also added ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches, npm global install) without serving the primary Tauri user base.
 
 ### Phase 0: Required Spikes
 
@@ -429,9 +437,9 @@ All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-0
 |----|---------|--------------|--------|
 | 1 | Schema + storage + migration framework (`IntegrationConfig` discriminated union, zod validator, atomic writes) | — | v1.0 wave 6 |
 | 2 | **Browser deprecation** — remove `TANDEM_OPEN_BROWSER`, `open-browser.ts`, npm CLI start path, CORS localhost wildcard | — (independent) | **SHIPPED** PR #637 |
-| 3 | First-run wizard UI — integration picker (D4 picked **option a, full-screen modal**), existing-user detection via `last-seen-version`, pre-selection from existing MCP config | PR 1 | v1.0 wave 6 |
-| 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])`. **PR-4 quartet (#642–#645) hardens:** atomic `O_EXCL` temp+rename, mandatory `.claude.json` backup, schema validation, "backup-or-prompt" UX | PR 1 + #642–#645 quartet + ≥2-week feature-flag soak | v0.13.0 (hidden) → v1.0 (exposed) |
-| 5 | Multi-provider model registry (D4) — Anthropic + local LLM (#477) + OpenAI / Gemini / others; CRUD with per-model config; new Settings → Models page beyond the wizard | PR 4 | v1.0 wave 6 |
+| 3 | First-run wizard UI — integration picker (D4 picked **option a, full-screen modal**), existing-user detection via `last-seen-version`, pre-selection from existing MCP config. **Replaces auto-configuration of Claude** per ADR-038 §2b — every integration (Claude included) is configured via the wizard, never silently. `tandem setup` CLI becomes a TTY-mode wrapper around the wizard; auto-configuration code in `src-tauri/src/lib.rs` and `src/cli/setup.ts` is removed in this PR. | PR 1 | v1.0 wave 6 |
+| 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])`. **PR-4 quartet (#642–#645) hardens:** atomic `O_EXCL` temp+rename, mandatory `.claude.json` backup, schema validation, "backup-or-prompt" UX. **Claude-specific by design** per ADR-038 §2 — other providers in the registry are user-driven startup for v1.0; per-provider auto-launchers are future work. | PR 1 + #642–#645 quartet + ≥2-week feature-flag soak | v0.13.0 (hidden) → v1.0 (exposed) |
+| 5 | Multi-provider model registry (D4) — Anthropic + local LLM (#477) + OpenAI / Gemini / others; CRUD with per-model config; new Settings → Models page beyond the wizard. Non-MCP providers (OpenAI, Gemini) integrate via Tandem's Agent SDK adapter per ADR-038 §3, not as direct MCP clients — adapter design owned by a future ADR (likely ADR-039); whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open. | PR 4 | v1.0 wave 6 |
 
 ### Key Decisions (locked)
 
@@ -439,10 +447,21 @@ All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-0
 - Tauri permissions use `core:` prefix
 - Hook point: AFTER `Promise.all([startMcpServerHttp, startHocuspocus])` fires, not at line 255
 - `TANDEM_OPEN_BROWSER` replaced with `TANDEM_TAURI_SIDECAR`
-- ~~Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`~~ **Overridden by Spike B (PR #712, 2026-05-17).** `--plugin-dir` does not activate `experimental.monitors[]` in Claude Code v2.1.143; the dev-channels flag remains functional. PR 4 keeps `--dangerously-load-development-channels server:tandem-channel` for v1.0. Revisit when Claude Code surfaces monitor activation via `--plugin-dir` or another zero-marketplace path (see `docs/spikes/plugin-monitor-viability-spike.md` "Follow-up issues").
+- ~~Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`~~ **Overridden by Spike B (PR #712, 2026-05-17) and grounded in [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §extras (auto-launcher is Claude-specific by design).** `--plugin-dir` does not activate `experimental.monitors[]` in Claude Code v2.1.143; the dev-channels flag remains functional. PR 4 keeps `--dangerously-load-development-channels server:tandem-channel` for v1.0. Revisit when Claude Code surfaces monitor activation via `--plugin-dir` or another zero-marketplace path (see `docs/spikes/plugin-monitor-viability-spike.md` "Follow-up issues", including F5 — the GitHub-marketplace install path validation promoted from a deferred item to a v1.0-blocking spike by the docs reframe).
 - Layout coupling server-side via extended `/api/info`; no client-side race
 - Existing users detected via `last-seen-version` file; wizard pre-selects based on existing MCP config
-- **D4 (2026-05-14):** first-run wizard is option (a) full-screen modal **with multi-provider model registry**. Anthropic + #477 local + OpenAI/Gemini/etc.; user CRUDs models with per-model config; the registry lives at Settings → Models, beyond the wizard.
+- **D4 (2026-05-14):** first-run wizard is option (a) full-screen modal **with multi-provider model registry**. Anthropic + #477 local + OpenAI/Gemini/etc.; user CRUDs models with per-model config; the registry lives at Settings → Models, beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2, the wizard explicitly surfaces the auto-launch asymmetry — Claude auto-launches in v1.0; other providers require user-driven startup. Per ADR-038 §2b, the wizard *replaces* today's silent auto-configuration of Claude; auto-config code is removed in PR 3.
+
+### Deferred milestones (post-reframe)
+
+Tracked here so #477 PRs know what they inherit; not v1.0-blocking unless noted:
+
+- **Data-model refactor (PR 1):** when `IntegrationConfig` lands, `author: "claude" | "user" | "import"` becomes provider-keyed (or a `provider` sidecar field is added). `src/cli/setup.ts` `TargetKind` becomes registry-driven. CSS tokens `--tandem-author-claude` / `--tandem-claude-focus-bg` renamed when a second provider's authorship color is needed. See ADR-038 §consequences.
+- **Auto-configuration removal (PR 3):** `src-tauri/src/lib.rs` Tauri-startup auto-write + `src/cli/setup.ts` `tandem setup` command both removed in the PR that ships the wizard, per ADR-038 §2b. **Migration UX gap:** existing users have stale Tandem entries in `~/.claude.json` written by earlier Tandem versions; the wizard's first-run flow must detect pre-existing entries and either preserve them as "Claude Code: already configured" or re-prompt. Design decision owned by PR 3.
+- **F5 — GitHub-marketplace install validation:** promoted to a Phase 0-extended spike by the docs reframe (originally filed as a Spike B follow-up). Half-day probe of `claude plugin marketplace add github:bloknayrb/tandem` + `claude plugin install tandem@tandem-editor` against Claude Code v2.1.143+. Outcome determines whether the v1.0 README leads users to the marketplace one-command install or to the channel-shim install with `--dangerously-load-development-channels`. **Blocks the v1.0 marketing/documentation rewrite phase**, not the wizard PR itself.
+- **Per-provider auto-launchers:** ADR-038 §2 commits to Claude-only auto-launch for v1.0. If we add auto-launchers for Claude Desktop, local LLM, or OpenAI (via Agent SDK adapter), each gets its own ADR.
+- **MCP-bridge for non-MCP providers:** ADR-038 §3 commits to Agent SDK adapter for OpenAI/Gemini. Adapter design is a separate ADR (likely ADR-039); whether it ships in v1.0 wave 6 or slips to v1.1 is open.
+- **Other MCP-client validation:** Cursor, Continue.dev, Claude Desktop standalone (not via cowork) — none validated today. Tracked as follow-up; ADR-038 acknowledges the gap.
 
 ---
 
@@ -459,7 +478,7 @@ Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave pl
 | D1  | Density × textSize collision                   | Density controls **interface chrome only**; font-size controls **editor body only**. Verified 2026-05-14 — `useDensity.ts` writes only `[data-density]` (→ `--tandem-space-*`); `App.svelte` writes only `--tandem-editor-font-size`. No collision. |
 | D2  | Authorship visual                              | **Per-character only**. Gutter and hybrid rejected. Defers the §1G gutter row in `docs/v10-triage.md`.                                    |
 | D3  | Diff/Apply-edit hunk staging                   | Option **B (modal-based)** locked for the v1.1 revisit; the surface itself defers from v1.0.                                              |
-| D4  | First-run wizard                               | Option **(a) full-screen modal** + **multi-provider model registry** (Anthropic + #477 local + OpenAI/Gemini/etc.). Settings → Models page beyond the wizard. |
+| D4  | First-run wizard                               | Option **(a) full-screen modal** + **multi-provider model registry** (Anthropic + #477 local + OpenAI/Gemini/etc.). Settings → Models page beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2/§2b: wizard replaces silent auto-configuration of Claude; Claude is the only provider auto-launched in v1.0; non-MCP providers via Agent SDK adapter (ADR-039 TBD). |
 | D5  | Annotation reply thread                        | **Expanded thread, no reactions.**                                                                                                        |
 | D6  | Updater UX                                     | **Banner (#561) + small colored dot badge** on titlebar settings gear.                                                                    |
 | D7  | Mobile / narrow-window                         | **Defer.**                                                                                                                                |

@@ -201,7 +201,7 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 - [Architecture](docs/architecture.md) — System design, data flows, coordinate systems, channel push
 - [Workflows](docs/workflows.md) — Claude Code usage patterns: text iteration, cross-referencing, multi-model
 - [Roadmap](docs/roadmap.md) — Phase 2+ roadmap, known issues, future extensions
-- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-030
+- [Design Decisions](docs/decisions.md) — ADR-001 through ADR-038 (integration policy in [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration))
 - [Lessons Learned](docs/lessons-learned.md) — 73 implementation lessons
 
 ## CLI Commands

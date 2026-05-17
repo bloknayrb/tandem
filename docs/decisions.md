@@ -11,6 +11,7 @@
 ## ADR-003: MCP over REST for Claude Integration
 **Decision:** Expose tools via MCP (HTTP, formerly stdio) instead of a custom REST API.
 **Rationale:** Claude Code discovers MCP tools natively. No curl wrappers needed. Tools appear in Claude's tool list automatically. See ADR-012 for the stdio → HTTP migration.
+**See ADR-038:** the MCP contract here applies to any MCP-capable client, not only Claude. The title's "for Claude Integration" framing pre-dates ADR-038's policy.
 
 ## ADR-004: .docx Review-Only by Default
 **Decision:** .docx files open in review-only mode. Never overwrite the original.
@@ -116,9 +117,10 @@
 **Rationale:** Position bugs are the #1 source of annotation placement issues. Centralizing the logic makes it auditable and testable in isolation. The shared types enforce a consistent vocabulary across layers (`RangeValidation` instead of ad-hoc `{ valid, reason }` objects). Consumers import from one predictable location per layer.
 **Consequences:** `src/server/positions.ts` exports `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`, `relPosToFlatOffset`. `src/client/positions.ts` exports `annotationToPmRange`, `pmSelectionToFlat`, `flatOffsetToPmPos`, `pmPosToFlatOffset`. Annotation and awareness extensions are significantly simpler — they delegate to the position module instead of containing conversion logic inline. 307 new server position tests + 168 expanded client tests.
 
-## ADR-019: Channel Shim for Push Notifications (Issue #106)
+## ADR-019: Channel Shim for Push Notifications (Issue #106) — Claude default integration
 
 **Status:** Accepted
+**See ADR-038:** documents the channel push transport for the Claude default integration. Other MCP-capable clients use the same `/api/events` SSE endpoint directly; the Claude Code subprocess + Channels API path described here is Claude-specific.
 **Context:** Claude Code previously relied on polling (`tandem_checkInbox`) to detect user actions — annotation accepts/dismisses, chat messages, document switches. Polling introduces latency (seconds between checks) and wastes tokens on empty responses. The Claude Code Channels API provides a push mechanism via `notifications/claude/channel`, but requires a stdio subprocess with specific SDK patterns.
 **Decision:** Implement a thin channel shim (`src/channel/index.ts`) as a separate process alongside the existing HTTP MCP server. The shim connects to the Tandem server's SSE endpoint (`GET /api/events`) and forwards events to Claude Code as channel notifications. Server-side Y.Map observers detect browser-originated changes and emit `TandemEvent` objects to an event queue. All MCP-initiated Y.Map writes are tagged with `doc.transact(() => { ... }, 'mcp')` to prevent echo.
 **Options considered:**
@@ -163,8 +165,9 @@
 **Rationale:** The old `suggestion` and `question` types weren't independent concepts — they were comments with extra metadata. Making that explicit in the type system reduces surface area (fewer schema values, fewer UI controls, fewer tool variants) without losing expressiveness. The `suggestedText` and `directedAt` fields are composable — a comment can be both a suggestion and directed at Claude.
 **Consequences:** `AnnotationTypeSchema` narrows from 5 to 3 values. Side panel filters replace "Suggestions"/"Questions" with "With replacement"/"For Claude". Browser toolbar collapses three buttons into one with toggles. `tandem_suggest` still works but is documented as a legacy shim. Existing annotations with `type: "suggestion"` or `type: "question"` are migrated on load.
 
-## ADR-023: Cowork Plugin Bridge — stdio via npx, not HTTP (PRs #301, #304)
+## ADR-023: Cowork Plugin Bridge — stdio via npx, not HTTP (PRs #301, #304) — Claude default integration
 **Status:** Accepted
+**See ADR-038:** documents the Cowork plugin bridge for the Claude default integration. Cowork is a Claude Desktop feature; the stdio-via-npx bridge described here is one of the six Claude-specific extras.
 **Context:** Claude Desktop's Cowork tab runs in an isolated VM and does NOT forward `localhost` HTTP MCP servers (either plugin-registered or globally registered in `claude_desktop_config.json`) into the VM. The Cowork support article confirms: *"Local MCP servers configured via claude_desktop_config.json... aren't available in Cowork."* Tandem originally registered a single plugin MCP entry: `{"type": "http", "url": "http://localhost:3479/mcp"}`. Cowork users saw zero `tandem_*` tools. We needed an empirical test and a distribution path that actually works.
 **Decision:** Ship a `tandem mcp-stdio` CLI subcommand (thin stdio↔HTTP proxy that speaks the MCP stdio transport, preflights `/health`, and relays JSON-RPC to `http://localhost:3479/mcp`). Plugin MCP entries use `{"command": "npx", "args": ["-y", "tandem-editor", "mcp-stdio"]}`. Same pattern for the channel shim. Global `claude_desktop_config.json` entries remain HTTP for host Desktop sessions.
 **Empirical findings (Phase 0 probes, 2026-04-15):**
@@ -188,6 +191,7 @@
 
 ## ADR-024: `bearer_methods_supported` is advisory metadata; Claude Code ignores it (Phase 2 spike)
 **Status:** Accepted (spike findings; enforcement change deferred to PR b)
+**See ADR-038:** the spike findings here are empirical observations against the Claude default integration. Equivalent validation against other MCP clients is best-effort.
 **Context:** The durable-annotations plan (`docs/superpowers/plans/2026-04-16-durable-annotations-cowork.md`) gates Phase 2 PR b (auth middleware) on two prerequisites. Task 5b asked: when `bearer_methods_supported` in the RFC 9728 Protected Resource Metadata is non-empty (e.g., `["header"]`), does Claude Code's MCP client change behavior — in particular, does it start sending an `Authorization` header? If yes, a conditional advertisement (`["header"]` when token active, `[]` when not — prescribed below) is necessary to avoid breaking the loopback-no-auth path. If no, the field is advisory and the flip has zero functional impact on connection behavior.
 
 The current server (`src/server/mcp/server.ts:207,217`) advertises `bearer_methods_supported: []` unconditionally. The endpoint was introduced in `c57d7210` (2026-03-26, "serve RFC 9728 metadata so newer Claude Code skips auth prompt") because, at that time, newer Claude Code versions were observed probing `/.well-known/oauth-protected-resource` before connecting, and without the endpoint the client offered "authenticate" instead of listing tools. That commit reports an empirical probe from Claude Code; this ADR records the same measurement one year later.
@@ -293,6 +297,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 ## ADR-027: Annotation System Redesign — Audience-Based Model
 
 **Status:** Accepted
+**See ADR-038:** the `author: "claude" | "user" | "import"` constant and the `directedAt: enum(["claude"])` schema value defined here are preserved as pre-ADR-038 backward-compat artifacts. The wire-level string `"claude"` survives in exported annotation data; the data-model refactor milestone tied to `IntegrationConfig` (#477 PR 1) revisits both.
 **Context:** First-principles analysis of the annotation system (see `docs/annotation-system-analysis.md`) revealed that the type-based model (highlight / comment / flag) asks users "what kind of annotation?" when the natural question is "who is this for?" Users have three intents: instruct Claude, ask Claude a question, or leave a personal note. The current system encodes these indirectly through type choice and hidden sub-fields (`suggestedText`, `directedAt`), producing five visual presentations from three types. Additionally, `directedAt: "claude"` is vestigial — only Claude can set it (PR #382 removed the user's @Claude checkbox), meaning Claude directs comments at itself. `flag` overlaps with `highlight` (both mark text without additional info).
 **Decision:** Redesign around audience. Three user annotation types: `highlight` (visual marker, not sent to Claude), `note` (personal text annotation, findable but Claude doesn't act), `comment` (text annotation sent to Claude). Claude creates only comments (with optional `suggestedText` for tracked changes). Remove `flag` type, `directedAt` field, `tandem_highlight` tool, `tandem_flag` tool, `tandem_suggest` tool, and modal review mode. Notes have a "convert to comment" action. Import (Word) comments enter as notes for user triage. `checkInbox` surfaces only comments, not notes or highlights. Selection toolbar becomes a near-text popup with text input and two submit buttons ("Note to self" / "Comment") plus highlight color buttons.
 **Supersedes:** Parts of ADR-022 (type unification from 5→3). ADR-022's three types were `highlight`, `comment`, `flag`; ADR-027's three are `highlight`, `note`, `comment`.
@@ -308,6 +313,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 ## ADR-028: Plugin Monitor URL and Auth Resolution — `userConfig` over Hardcoded Default
 
 **Status:** Proposed
+**See ADR-038:** the plugin monitor is one of the six Claude-specific extras built on top of the MCP contract. The URL/auth resolution policy here applies to the Claude monitor; other MCP clients connect to the same MCP HTTP endpoint without the plugin-host indirection.
 **Context:** `src/monitor/index.ts` hardcoded `http://localhost:3479` and `authFetch` in `src/shared/cli-runtime.ts` read only `TANDEM_AUTH_TOKEN`. In Cowork VM sessions the monitor connects to loopback inside the VM (not the host's server) and silently fails; in custom-port and LAN-dev setups the URL override was ignored entirely. Phase 0 probe (2026-05) confirmed: (a) Claude Code's `monitors[]` manifest schema (CLI 2.1.126) rejects `env` blocks — the proposed manifest-level env injection approach is impossible; (b) the documented channel for runtime config is `userConfig` + `CLAUDE_PLUGIN_OPTION_*` env exports.
 **Decision (v0.10.1):** Bake `CLAUDE_PLUGIN_OPTION_SERVER_URL` into `resolveTandemUrl()`'s precedence chain (before `TANDEM_URL`, after explicit override) and add peer function `resolveAuthToken()` with the same pattern for `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`. `authFetch` calls `resolveAuthToken()` instead of reading `TANDEM_AUTH_TOKEN` directly. Both the monitor and channel shim automatically benefit — no per-caller changes needed.
 **Precedence rationale:** The order is `explicit override → CLAUDE_PLUGIN_OPTION_* → TANDEM_*`. Plugin-host vars represent the per-install configured value (written into `settings.json` by the Cowork installer or set by the user via `userConfig` UI), so they are the canonical install-time configuration. `TANDEM_*` is reserved for ad-hoc per-shell overrides — common in dev workflows but secondary to a stable plugin install. The explicit programmatic override sits above both so test code (and any future caller that needs to force a value) can short-circuit env entirely. Operators relying on `TANDEM_URL` from a plugin context must clear `CLAUDE_PLUGIN_OPTION_SERVER_URL` (or unset both and use the loopback default).
@@ -672,3 +678,61 @@ Public surface (sketch):
 - Migrations stay in `useTandemSettings.ts`. The model trusts that `settingsState.settings` is v2-shaped.
 - Future features (rail collapse, density modes affecting rail width, additional `RailTab` values like `'search'` or `'history'`) land as model extensions, not as changes propagated across four files.
 - This is a client-only refactor; no ADR or memory entries about server architecture change. Pairs with no other ADR in this grilling pass — independent.
+
+## ADR-038: MCP-First Integration Policy; Claude as Default Integration
+
+**Status:** Accepted (2026-05-17)
+
+**Context:** Tandem started Claude-integrated because Claude Code was the MCP-capable client we built against. The integration contract — exposed via `src/server/mcp/`, the 26 MCP tools, and the channel API at `src/channel/` — is **MCP**, not Claude. But the docs, the marketing copy, several in-app surfaces (the Tauri "Claude Not Found" dialog, `sample/welcome.md`, the OnboardingTutorial, the EmptyState), the MCP tool descriptions (sent to *every* connecting MCP client during tool discovery), `package.json`'s npm-published description, and the `.claude-plugin/marketplace.json` install blurb all read as if Claude is the only possible integration. This conflicts with the multi-provider scope already locked in D4 (roadmap.md:462) — the v1.0 first-run wizard ships with a multi-provider model registry covering Anthropic + local LLM + OpenAI + Gemini — and with the top distribution risk recorded in `docs/positioning.md:75-77` ("Tandem currently requires Claude Code, which gates the audience to developers and technical users").
+
+This ADR records the policy that resolves the gap: Tandem is an MCP-first product; Claude is the default, deepest-supported integration; other MCP-capable clients are best-effort over the same MCP endpoint.
+
+**Decision §1 — canonical policy statement.** Every doc surface that states the policy quotes the following paragraphs verbatim:
+
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+>
+> **Integration setup** runs through the integration setup wizard (#477 PR 3). Today's transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — is **deprecated when the wizard ships**. Going forward, every integration (Claude included) is configured via the wizard, never silently.
+
+Four terms have precise meanings; every doc surface uses them consistently:
+
+| Term | Meaning |
+|---|---|
+| **MCP contract** | The 26 MCP tools at `http://127.0.0.1:3479` and the SSE event stream at `/api/events`. Available to every MCP client. |
+| **Default integration** | Claude. Recommended in all install flows. Documented, tested, and the target of the first-run wizard's one-click setup. |
+| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: (1) channel push (channel shim + plugin monitor), (2) `--dangerously-load-development-channels` flag wiring, (3) auto-launcher (#477 PR 4), (4) Cowork plugin bridge (`tandem mcp-stdio`), (5) Claude Code skill (`skills/tandem/SKILL.md`), (6) plugin marketplace artifacts (`.claude-plugin/`). |
+| **Best-effort, not validated** | What we say about other MCP clients today. We don't intentionally break them; we don't test them. The MCP HTTP endpoint is the same surface they all use. |
+
+**Claude-side dev tooling** (`CLAUDE.md`, `.claude/hooks/`, `.claude/agents/`, `.claude/skills/`) is contributor-facing automation for working ON Tandem — not user-facing integration. It is listed separately from "Claude-specific extras" to avoid conflation.
+
+**Decision §2 — auto-launch policy.** In v1.0, only Claude Code is auto-launched (#477 PR 4). Other entries in the multi-provider model registry (#477 PR 5) are recorded for configuration purposes but require user-driven startup. The wizard surfaces this asymmetry explicitly so users picking OpenAI / Gemini / a local LLM are not surprised that they have to launch the client themselves. Per-provider auto-launchers may be added in future ADRs.
+
+**Decision §2b — auto-configuration deprecation.** Today's silent configuration-writing behavior is deprecated. Two surfaces are affected:
+- (a) The Tauri-startup auto-write of Tandem's MCP entry to Claude's config files in `src-tauri/src/lib.rs`.
+- (b) The `tandem setup` CLI command in `src/cli/setup.ts`, which writes the same entries from the npm install path.
+
+Both are silent from the user's perspective today; both end when the integration setup wizard (#477 PR 3) ships. Replacements: the Tauri-startup behavior is replaced by first-run-wizard invocation; `tandem setup` becomes a TTY-mode wrapper that prompts for the same answers the GUI wizard collects. Auto-configuration code is removed in the same PR that lands the wizard. Until then, the existing behaviors continue to ship; users see a one-time toast on first launch after upgrade to v0.13.0+ announcing the upcoming change.
+
+**Auto-launch (§2) is unaffected by §2b.** §2 governs whether Tandem *spawns* the AI client at session start; §2b governs whether Tandem *writes its MCP entry to the AI client's config file* silently. The two are independent: auto-launch survives because it's the user-invoked Tandem app spawning a child process; auto-config dies because it's Tandem writing to another app's config without explicit consent. When the wizard ships and a user picks Claude, auto-launch still spawns Claude Code per the auto-launcher design.
+
+**Decision §3 — MCP and non-MCP providers.** MCP is the contract for *native* integrations. The multi-provider model registry (#477 PR 5) may include providers that don't speak MCP natively (OpenAI, Gemini); they integrate via Tandem's Agent SDK adapter (a future PR, likely ADR-039), not as direct MCP clients. Adapter-shim integrations are second-tier — the MCP contract is the canonical interface and the one that gets new tool surface first.
+
+**Decision §4 — Claude-specific code paths are encouraged, not tolerated.** Contributors may add Claude-specific code paths (additional channel push features, plugin manifests, hooks, skills, cowork extensions) without policy friction. The constraint is one-way: Claude-specific features are **additive**, not subtractive — the MCP contract continues to work for non-Claude clients. A Claude-specific feature that breaks the MCP contract for non-Claude clients is a regression; a Claude-specific feature that exists alongside the MCP contract is fine.
+
+**Consequences:**
+
+- User-facing copy uses "your AI" / "the AI" generically; Claude appears in concrete examples and as the default-recommended path. "Reference integration" remains technical contributor language and stays in this ADR; user-facing surfaces use plain language ("Claude works out of the box; other MCP clients need setup").
+- **Stays Claude-named-by-design** (no churn, no deprecation):
+  - `CLAUDE.md` body — Claude Code project memory for contributors working on Tandem.
+  - `.claude-plugin/marketplace.json` + `plugin.json` *structural* Claude-specificity — these are Claude-marketplace artifacts and the manifest schema is Claude's. (The descriptive blurb users read during `claude plugin install` is updated; the manifest structure stays.)
+  - `.claude/hooks/`, `.claude/agents/`, `.claude/skills/` — Claude Code dev-time automation.
+  - `src/server/mcp/launcher.ts` — auto-launcher is Claude-specific by design per §2.
+  - `src/client/components/CoworkOnboardingStep.svelte` — Cowork is a Claude Desktop feature per ADR-023.
+  - CSS tokens `--tandem-author-claude` / `--tandem-claude-focus-bg` — code-internal.
+- **Backward-compat artifacts preserved for v1.0; refactored when `IntegrationConfig` lands** (#477 PR 1):
+  - `author: "claude" | "user" | "import"` constant — the wire-level string `"claude"` survives in exported annotation data. User-facing deprecation messages are neutralized; the schema string is left for backward-compat.
+  - `directedAt: enum(["claude"])` schema value in `src/server/mcp/annotations.ts:347-376` — same rationale.
+  - `src/cli/setup.ts` `TargetKind = "claude-code" | "claude-desktop"` type — replaced by `IntegrationConfig`.
+- **Auto-launch parity:** v1.0 auto-launches Claude only. Per-provider auto-launchers are future work, each in its own ADR.
+- **MCP-bridge for non-MCP providers:** the OpenAI/Gemini adapter design is owned by a separate ADR (likely ADR-039) — this ADR commits to the approach but not the implementation.
+
+**Cross-references:** ADR-003 (MCP over REST), ADR-019 (Channel Shim — channel push transport), ADR-023 (Cowork Plugin Bridge — Cowork extra), ADR-024 (`bearer_methods_supported` — Claude Code empirical findings), ADR-027 (Annotation System Redesign — `author: "claude"` constant), ADR-028 (Plugin Monitor URL/Auth). Spike reports: `docs/spikes/plugin-monitor-viability-spike.md`, `docs/spikes/cli-session-resume-spike.md`, `docs/spikes/sidecar-launcher-spike.md`. Roadmap: `docs/roadmap.md` #477 + D4.

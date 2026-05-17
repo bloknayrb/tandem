@@ -5,6 +5,8 @@
 **Claude Code version tested:** 2.1.143
 **Refs:** [#477](https://github.com/bloknayrb/tandem/issues/477) PR 4 (auto-launch supervisor), [#640](https://github.com/bloknayrb/tandem/pull/640) Spike C (precedent), `docs/roadmap.md:412–447`, anthropics/claude-code#44607.
 
+**Scope of validation:** validates the **Claude default integration** per [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). Equivalent session-resume validation against other MCP-capable clients is best-effort and tracked separately.
+
 ## Goal
 
 Empirically validate that the auto-launch supervisor (#477 PR 4) can spawn Claude Code with a stable session identifier, kill and respawn, and have Claude recover prior conversation transcript. The *flag name* and contract semantics had to be probed against the installed binary; the multi-angle plan review surfaced conflicting assumptions about what flags actually exist in v2.1.143.

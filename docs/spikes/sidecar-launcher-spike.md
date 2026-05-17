@@ -4,6 +4,8 @@
 **Date:** 2026-05-14
 **Refs:** [#477](https://github.com/bloknayrb/tandem/issues/477), integration system plan (`project_integration_system_plan.md`).
 
+**Scope of validation:** validates the **Claude default integration** per [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The launcher is Claude-specific by design (ADR-038 §2 — only Claude is auto-launched in v1.0; other providers in the model registry are user-driven startup).
+
 ## Goal
 
 Validate that the Tandem Node sidecar can be launched from a **non-Tauri parent**

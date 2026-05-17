@@ -5,6 +5,8 @@
 **Claude Code version tested:** 2.1.143
 **Refs:** [#477](https://github.com/bloknayrb/tandem/issues/477) PR 4 (auto-launch supervisor), [Spike A](./cli-session-resume-spike.md), `docs/roadmap.md:421–447` (locked decision: "Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`").
 
+**Scope of validation:** validates the **Claude default integration** per [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The plugin monitor is one of the six Claude-specific extras; the channel shim is too. Other MCP clients receive events via the same `/api/events` SSE endpoint without either of these transports.
+
 ## Goal
 
 Validate two propositions:
@@ -123,7 +125,7 @@ The locked decision in `docs/roadmap.md:442` ("Plugin monitor is canonical; laun
 | # | Concern | Tracked |
 |---|---|---|
 | F1 | Revisit dropping `--dangerously-load-development-channels` when Claude Code surfaces monitor activation from `--plugin-dir` (or any other zero-marketplace path) | New issue, v1.1+ |
-| F2 | Publish Tandem to a GitHub-source marketplace and verify `claude plugin install tandem@tandem-editor` activates `experimental.monitors[].command` | New issue, v1.1+ |
+| F2 | Publish Tandem to a GitHub-source marketplace and verify `claude plugin install tandem@tandem-editor` activates `experimental.monitors[].command` | **Promoted to v1.0 marketing-rewrite blocker by [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).** Half-day spike. Outcome determines whether the v1.0 README leads users to the marketplace one-command install or to the channel-shim install with `--dangerously-load-development-channels`. |
 | F3 | Update `docs/roadmap.md:442` to reflect that the "plugin monitor canonical / drop the flag" decision is conditional on Claude Code distribution changes, not a v1.0 invariant | Roadmap edit (small) |
 | F4 | Cross-platform reverification (macOS, Windows) before PR 4 commits to either path | PR 4 own follow-up |
 
