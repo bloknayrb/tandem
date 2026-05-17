@@ -479,14 +479,25 @@ function handleFilterChange(
   activeAnnotationFilter = { type, author, status };
 }
 
-// Margin annotation view reserves 240px column + 8px edge inset per side.
-// Subtract from available width so the editor text never sits underneath the
-// absolutely-positioned MarginColumn cards.
-const MARGIN_VIEW_RESERVE_PX = 2 * (240 + 8);
+// Margin annotation view reserves a column + edge inset + breathing-room gap
+// per side. Subtract from available width so the editor text never sits
+// underneath (or flush against) the absolutely-positioned MarginColumn cards.
+// `MARGIN_VIEW_GAP_PX` is the space between the editor's text edge and the
+// near edge of the margin column — it also defines the horizontal zone where
+// leader lines from anchor text to bubbles are drawn (see MarginColumn).
+const MARGIN_VIEW_COLUMN_WIDTH_PX = 240;
+const MARGIN_VIEW_EDGE_INSET_PX = 8;
+const MARGIN_VIEW_GAP_PX = 24;
+const MARGIN_VIEW_RESERVE_PX =
+  2 * (MARGIN_VIEW_COLUMN_WIDTH_PX + MARGIN_VIEW_EDGE_INSET_PX + MARGIN_VIEW_GAP_PX);
 const editorMaxWidth = $derived.by(() => {
   const pct = settingsState.settings.editorWidthPercent;
   const reserve = settingsState.settings.marginView ? MARGIN_VIEW_RESERVE_PX : 0;
-  return reserve > 0 ? `calc(${pct}% - ${reserve}px)` : `${pct}%`;
+  // `max(0px, ...)` guards against `editorWidthPercent` settings that, on
+  // narrow viewports with marginView on, would compute a negative max-width.
+  // CSS clamps negative max-width to 0 anyway, but the explicit wrap keeps
+  // the resulting style declaration legible in devtools.
+  return reserve > 0 ? `max(0px, calc(${pct}% - ${reserve}px))` : `${pct}%`;
 });
 
 function captureSelectionForChat() {
@@ -1155,8 +1166,9 @@ const tutorial = createTutorial(
           side="left"
           annotations={marginNotes}
           positions={marginPositions.byId}
-          width={240}
-          edgeInset={8}
+          width={MARGIN_VIEW_COLUMN_WIDTH_PX}
+          edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
+          gap={MARGIN_VIEW_GAP_PX}
           {activeAnnotationId}
           repliesById={marginReplies.byId}
           onClick={(ann) => {
@@ -1168,8 +1180,9 @@ const tutorial = createTutorial(
           side="right"
           annotations={marginComments}
           positions={marginPositions.byId}
-          width={240}
-          edgeInset={8}
+          width={MARGIN_VIEW_COLUMN_WIDTH_PX}
+          edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
+          gap={MARGIN_VIEW_GAP_PX}
           {activeAnnotationId}
           repliesById={marginReplies.byId}
           onClick={(ann) => {

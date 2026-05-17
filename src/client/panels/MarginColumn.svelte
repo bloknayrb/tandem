@@ -15,6 +15,10 @@ interface Props {
   width: number;
   /** Distance from the column edge to the nearest scroll-container edge. */
   edgeInset: number;
+  /** Horizontal gap between the editor's text edge and the near edge of this
+   *  column. Also defines the horizontal zone occupied by leader lines that
+   *  visually connect anchor text in the editor to the corresponding bubble. */
+  gap: number;
   activeAnnotationId: string | null;
   /** Raw replies grouped by annotation id. The component applies the
    *  `getVisibleReplies()` ADR-027 filter at the lookup site so notes /
@@ -35,6 +39,7 @@ let {
   side,
   width,
   edgeInset,
+  gap,
   activeAnnotationId,
   repliesById,
   onClick,
@@ -45,6 +50,11 @@ let {
   onReply,
   onSendToClaude,
 }: Props = $props();
+
+// Vertical inset from the bubble's top edge to its padded content row. The
+// leader line endpoint is shifted down by this amount so a collision-pushed
+// bubble's connector lands near the title row rather than the empty corner.
+const LEADER_BUBBLE_INSET_PX = 12;
 
 // Only render annotations whose position is known this frame; without a top
 // offset there is nowhere to place the bubble.
@@ -112,6 +122,53 @@ function recordHeight(id: string, h: number): void {
   heights = next;
 }
 </script>
+
+<!-- Leader-line SVG sits in the gap zone between the editor's text edge and
+     the column's near edge. Top/bottom stretch makes it cover the full layer
+     height so absolute Y coords (relative to the margin layer) line up with
+     `useMarginPositions` output. SVG default user units = pixels (no viewBox),
+     so we render lines directly at the computed Y offsets. Decorative only:
+     pointer-events: none, aria-hidden.
+
+     Stroke is tinted by side (left = notes / user, right = comments / Claude)
+     to mirror the authorship decoration convention (ADR-026). Default uses
+     stroke-opacity to stay subtle; active review target ramps opacity + width
+     so the focused annotation's connector reads as the dominant line on the
+     page. -->
+<svg
+  data-testid="margin-leaders-{side}"
+  class="tandem-margin-leaders"
+  aria-hidden="true"
+  style="position: absolute; top: 0; bottom: 0; {side === 'right'
+    ? 'right'
+    : 'left'}: {edgeInset + width}px; width: {gap}px; pointer-events: none; color: var(--tandem-author-{side === 'right' ? 'claude' : 'user'});"
+>
+  {#each placeable as ann (ann.id)}
+    {@const rawTop = positions.get(ann.id)}
+    {@const adjTop = adjustedPositions.get(ann.id)}
+    {#if rawTop !== undefined && adjTop !== undefined}
+      {@const editorX = side === "right" ? 0 : gap}
+      {@const columnX = side === "right" ? gap : 0}
+      {@const isActive = ann.id === activeAnnotationId}
+      <!-- LEADER_BUBBLE_INSET_PX shifts the bubble endpoint down from the
+           bubble's top edge into its padded content area, so a
+           collision-pushed bubble's connector lands near the title row
+           instead of pointing at the empty corner above it. -->
+      <line
+        data-annotation-id={ann.id}
+        x1={editorX}
+        y1={rawTop}
+        x2={columnX}
+        y2={adjTop + LEADER_BUBBLE_INSET_PX}
+        stroke="currentColor"
+        stroke-width={isActive ? 1.75 : 1}
+        stroke-opacity={isActive ? 0.9 : 0.4}
+        stroke-linecap="round"
+        fill="none"
+      />
+    {/if}
+  {/each}
+</svg>
 
 <div
   data-testid="margin-column-{side}"
