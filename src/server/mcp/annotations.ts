@@ -212,13 +212,13 @@ function notifyRangeFailure(
   });
 }
 
-/** Surface a deprecated-tool call to the user; without this, only Claude sees the failure. */
+/** Surface a deprecated-tool call to the user; without this, only the AI client sees the failure. */
 function notifyDeprecatedTool(toolName: string): void {
   pushNotification({
     id: generateNotificationId(),
     type: "annotation-error",
     severity: "warning",
-    message: `Claude tried a deprecated tool (${toolName}). Ask Claude to retry with tandem_comment.`,
+    message: `Your AI tried a deprecated tool (${toolName}). Ask it to retry with tandem_comment.`,
     toolName,
     errorCode: "DEPRECATED",
     dedupKey: `deprecated:${toolName}`,
@@ -373,7 +373,7 @@ export function registerAnnotationTools(server: McpServer): void {
         if (directedAt !== undefined)
           return mcpError(
             "DEPRECATED",
-            "directedAt is no longer supported — comments now always reach Claude. Drop the field from your call.",
+            "directedAt is no longer supported — comments now always reach the connected AI client. Drop the field from your call.",
           );
         const da = getDocAndAnnotations(documentId);
         if (!da) return noDocumentError();

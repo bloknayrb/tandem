@@ -25,7 +25,7 @@ const BASE_STEPS = [
   {
     id: "question",
     title: "Ask a question",
-    text: "Select text and click Comment to send a question to Claude — or click Note to keep a private thought to yourself. You can also use the Chat panel.",
+    text: "Select text and click Comment to send a question to your AI (Claude, in the default setup) — or click Note to keep a private thought to yourself. You can also use the Chat panel.",
   },
   {
     id: "edit",

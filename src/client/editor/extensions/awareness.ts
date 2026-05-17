@@ -64,7 +64,7 @@ export function buildAwarenessDecorations(
 
           const label = document.createElement("span");
           label.className = "tandem-claude-cursor-label";
-          label.textContent = "Claude";
+          label.textContent = "AI";
           cursor.appendChild(label);
 
           return cursor;

@@ -420,7 +420,7 @@ async function main() {
     console.error(`  WebSocket:   ws://127.0.0.1:${wsPort}`);
     console.error(`  Health:      http://127.0.0.1:${mcpPort}/health`);
     console.error("");
-    console.error("  Open Claude Code and ask Claude to review a document.");
+    console.error("  Open your AI client (Claude by default) and ask it to review a document.");
     console.error("");
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout

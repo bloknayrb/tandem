@@ -43,3 +43,7 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 - Check the existing CHANGELOG.md format to match style (indentation, heading levels, PR references)
 - If there's already an `[Unreleased]` section, show what to append, not a replacement
 - Omit empty categories (don't show "### Security" if there are no security commits)
+
+## Conventions
+
+Going forward, changelog entries follow [ADR-038](../../../docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) framing — write "your AI" / "the AI" generically; use "Claude" as the concrete example when a feature is Claude-specific (e.g. channel push, plugin monitor, cowork, auto-launcher, plugin marketplace). Past entries (v0.12.0 and earlier) are historical record and not rewritten.

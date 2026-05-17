@@ -31,7 +31,7 @@ $effect(() => {
     <span>No document open. Click + in the tab bar or drop a file here.</span>
     {#if connected && !claudeActive}
       <span style="font-family: var(--tandem-font-sans); font-size: 13px; color: var(--tandem-fg-subtle);">
-        Tip: open Claude Code in this directory to start collaborating
+        Tandem works alongside Claude (the default integration) or any MCP-capable AI client.
       </span>
     {/if}
   {/if}

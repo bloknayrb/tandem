@@ -99,7 +99,7 @@ test("tab switching shows tab-specific content", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
   await openSettingsModal(page);
 
-  // Claude Code/Cowork tab.
+  // AI Assistant tab (id preserved as "claude-code" for backward compatibility).
   await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
   await expect(page.locator("[data-testid='settings-modal-dwell-time-slider']")).toBeVisible();
   await expect(

@@ -512,13 +512,13 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_status",
-    "Check editor status (no params), or set Claude's visible status text (pass text).",
+    "Check editor status (no params), or set your visible status text (pass text). The connected AI client's status appears in the editor's status bar.",
     {
       text: z.string().optional().describe("Status text to display — omit for read-only"),
       focusParagraph: z
         .number()
         .optional()
-        .describe("Index of paragraph Claude is focusing on (write mode only)"),
+        .describe("Index of paragraph the AI is focusing on (write mode only)"),
       focusOffset: z
         .number()
         .optional()

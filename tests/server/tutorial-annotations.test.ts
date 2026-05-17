@@ -34,7 +34,7 @@ const FIXTURE_PATH = path.join(__dirname, "..", "fixtures", "welcome-snapshot.md
 // If this list drifts from the production module, the count assertion below
 // will catch it.
 const EXPECTED_TARGETS = [
-  "highlight text and Claude sees it",
+  "highlight text and your AI sees it",
   "edit this document at the same time",
   "simplify onboarding",
   "accept or dismiss",

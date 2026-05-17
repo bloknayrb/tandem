@@ -12,12 +12,12 @@ const { tandemMode, onModeChange }: Props = $props();
 <div
   data-testid="mode-toggle"
   role="group"
-  aria-label="Claude collaboration mode"
+  aria-label="AI collaboration mode"
   style="display: inline-flex; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); padding: 2px; gap: 2px;"
 >
   <button
     data-testid="mode-solo-btn"
-    title="Write undisturbed — Claude only responds when you message"
+    title="Write undisturbed — your AI only responds when you message"
     aria-pressed={tandemMode === "solo"}
     onclick={() => onModeChange("solo")}
     style="height: 24px; padding: 0 10px; font-size: 12px; border: none; border-radius: var(--tandem-r-1); cursor: pointer;
@@ -35,7 +35,7 @@ const { tandemMode, onModeChange }: Props = $props();
   </button>
   <button
     data-testid="mode-tandem-btn"
-    title="Full collaboration — Claude reacts to selections and document changes"
+    title="Full collaboration — your AI reacts to selections and document changes"
     aria-pressed={tandemMode === "tandem"}
     onclick={() => onModeChange("tandem")}
     style="height: 24px; padding: 0 10px; font-size: 12px; border: none; border-radius: var(--tandem-r-1); cursor: pointer;

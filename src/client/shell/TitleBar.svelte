@@ -195,8 +195,8 @@ $effect(() => {
     {#if claudeActive}
       <span
         class="status-dot"
-        title="Claude is connected"
-        aria-label="Claude is connected"
+        title="AI assistant is connected"
+        aria-label="AI assistant is connected"
       ></span>
     {/if}
 

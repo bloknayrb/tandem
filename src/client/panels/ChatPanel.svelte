@@ -198,7 +198,7 @@ function toggleAnchorExpand(msgId: string) {
       <div
         style="color: var(--tandem-fg-subtle); font-size: 13px; text-align: center; margin-top: 24px;"
       >
-        No messages yet. Select text and send a message to Claude.
+        No messages yet. Select text and send a message to your AI.
       </div>
     {/if}
     {#each messages as msg (msg.id)}
@@ -272,7 +272,7 @@ function toggleAnchorExpand(msgId: string) {
             ></span>
           {/each}
         </span>
-        <span>{claudeStatus ?? "Claude is thinking..."}</span>
+        <span>{claudeStatus ?? "Your AI is thinking..."}</span>
       </div>
     {/if}
     <div bind:this={messagesEndEl}></div>
@@ -307,7 +307,7 @@ function toggleAnchorExpand(msgId: string) {
       value={inputText}
       oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
       onkeydown={handleKeyDown}
-      placeholder="Message Claude..."
+      placeholder="Message your AI..."
       rows={2}
       style="flex: 1; padding: var(--tandem-space-2); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-3); font-size: var(--tandem-text-base); resize: none; outline: none; font-family: inherit; background: var(--tandem-surface); color: var(--tandem-fg);"
     ></textarea>

@@ -41,7 +41,7 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
   await page.locator("[data-testid='settings-btn']").click();
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
-  await popover.getByRole("button", { name: "Claude Code/Cowork" }).click();
+  await popover.getByRole("button", { name: "AI Assistant" }).click();
 }
 
 async function setMarginView(
