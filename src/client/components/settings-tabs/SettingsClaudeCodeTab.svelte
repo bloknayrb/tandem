@@ -3,19 +3,17 @@ import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-// Read fields via `ctx.foo` instead of destructuring with `let { ... } = ctx`:
-// destructuring freezes the getter at mount in Svelte 5
-// (feedback_svelte_getter_destructuring), which would stall reactive updates
-// to settings. The modal always passes the full context shape at runtime, so
-// the non-null assertions below are safe even though the type is `Partial<>`.
-let ctx: Partial<SettingsTabContext> = $props();
+// Keep `$props()` as a single proxy variable and read fields via `ctx.foo`.
+// Capturing into a local and then destructuring (`let c = $props(); let { settings } = c`)
+// would freeze the inner getters at mount (feedback_svelte_getter_destructuring).
+let ctx: SettingsTabContext = $props();
 </script>
 
 <div>
   <div class="settings-section-label">
     Selection Sensitivity:
     <span style="font-weight: 400; text-transform: none;">
-      {(ctx.settings!.selectionDwellMs / 1000).toFixed(1)}s
+      {(ctx.settings.selectionDwellMs / 1000).toFixed(1)}s
     </span>
   </div>
   <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-bottom: 6px;">
@@ -27,9 +25,9 @@ let ctx: Partial<SettingsTabContext> = $props();
     min={SELECTION_DWELL_MIN_MS}
     max={SELECTION_DWELL_MAX_MS}
     step={100}
-    value={ctx.settings!.selectionDwellMs}
+    value={ctx.settings.selectionDwellMs}
     oninput={(e) =>
-      ctx.onUpdate!({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
+      ctx.onUpdate({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
     style="width: 100%; accent-color: var(--tandem-accent);"
     aria-label="Selection dwell time"
   />
@@ -47,9 +45,9 @@ let ctx: Partial<SettingsTabContext> = $props();
 >
   <input
     type="checkbox"
-    checked={ctx.settings!.selectionToolbar}
+    checked={ctx.settings.selectionToolbar}
     onchange={(e) =>
-      ctx.onUpdate!({ selectionToolbar: (e.target as HTMLInputElement).checked })}
+      ctx.onUpdate({ selectionToolbar: (e.target as HTMLInputElement).checked })}
     style="accent-color: var(--tandem-accent);"
   />
   <span>Show floating selection toolbar</span>
@@ -61,8 +59,8 @@ let ctx: Partial<SettingsTabContext> = $props();
 >
   <input
     type="checkbox"
-    checked={ctx.settings!.marginView}
-    onchange={(e) => ctx.onUpdate!({ marginView: (e.target as HTMLInputElement).checked })}
+    checked={ctx.settings.marginView}
+    onchange={(e) => ctx.onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
     style="accent-color: var(--tandem-accent);"
   />
   <span>Margin annotation view (Word-style)</span>

@@ -10,8 +10,11 @@ import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
  * stable: new fields should be added with defaults rather than breaking
  * existing tab implementations.
  *
- * **Do not destructure** the context with `const` — pass it through to
- * children so reactivity is preserved (see `feedback_svelte_getter_destructuring`).
+ * **Do not capture `$props()` into a local and then destructure** — that
+ * second destructure freezes the getters at the captured snapshot. Either
+ * destructure directly off `$props()` (each named local becomes its own live
+ * getter) or keep the proxy as a single variable and read fields via
+ * `ctx.foo` (see `feedback_svelte_getter_destructuring`).
  */
 export interface SettingsTabContext {
   open: boolean;
@@ -36,15 +39,12 @@ export interface SettingsTab {
   label: string;
   icon: string;
   /**
-   * Widened to `Partial<SettingsTabContext>` so the registry accepts both the
-   * new `SettingsTabContext`-consuming tab bodies (Collaboration, Claude
-   * Code/Cowork, Shortcuts, About) and the legacy narrower settings panels
-   * (`AppearanceSettings`, `EditorSettings`, `NetworkSettings`,
-   * `AccessibilitySettings`) which declare their own Props subsets. The modal
-   * always passes the full context shape at runtime — tabs can rely on every
-   * field being present even though the type says optional.
+   * Tab bodies receive the full `SettingsTabContext` and pull out only the
+   * fields they read. Direct destructure off `$props()` keeps each named
+   * local reactive; tabs that don't read a particular field simply omit it
+   * from the destructure pattern.
    */
-  component: Component<Partial<SettingsTabContext>>;
+  component: Component<SettingsTabContext>;
 }
 </script>
 
@@ -72,46 +72,35 @@ const FOCUSABLE_SELECTOR =
  * Wave 2 will retire the popover; any Wave 2 additions land here as new
  * entries (or via the `tabs` prop) without touching this default array.
  *
- * **About the `as unknown as Component<Partial<SettingsTabContext>>` casts:**
- * the legacy settings sub-components (`AppearanceSettings`, `EditorSettings`,
- * `NetworkSettings`, `AccessibilitySettings`) declare narrower `Props`
- * interfaces — they only read a subset of the context fields, and they
- * declare those fields as non-optional. That structural mismatch makes them
- * unassignable to `Component<Partial<SettingsTabContext>>` directly. Svelte
- * 5 silently drops unknown props when a component uses non-rest
- * destructuring in `$props()`, which is the desired runtime behavior: pass
- * the uniform context to every tab and let each component consume what it
- * needs. The casts are load-bearing; do not "fix" them by widening the
- * sub-component Props interfaces — that would force every Wave 2 settings
- * panel to declare fields it doesn't read. The new tab bodies
- * (`SettingsCollaborationTab`, `SettingsClaudeCodeTab`,
- * `SettingsShortcutsTab`, `SettingsAboutTab`) accept
- * `Partial<SettingsTabContext>` directly and do not need a cast.
+ * Every tab body declares its `Props` as `SettingsTabContext` and destructures
+ * the subset it reads directly off `$props()`. The uniform shape lets the
+ * registry stay strictly typed (`Component<SettingsTabContext>`) without
+ * casts.
  */
 export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
   {
     id: "appearance",
     label: "Appearance",
     icon: "M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z",
-    component: AppearanceSettings as unknown as Component<Partial<SettingsTabContext>>,
+    component: AppearanceSettings,
   },
   {
     id: "editor",
     label: "Editor",
     icon: "M4 4h11M4 9h16M4 14h11M4 19h16",
-    component: EditorSettings as unknown as Component<Partial<SettingsTabContext>>,
+    component: EditorSettings,
   },
   {
     id: "network",
     label: "Network",
     icon: "M3 12h18M3 12a9 9 0 0 1 18 0M3 12a9 9 0 0 0 18 0M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18",
-    component: NetworkSettings as unknown as Component<Partial<SettingsTabContext>>,
+    component: NetworkSettings,
   },
   {
     id: "accessibility",
     label: "Accessibility",
     icon: "M12 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM4 9h16M9 9v5l-2 7M15 9v5l2 7M9 14h6",
-    component: AccessibilitySettings as unknown as Component<Partial<SettingsTabContext>>,
+    component: AccessibilitySettings,
   },
   {
     id: "collaboration",

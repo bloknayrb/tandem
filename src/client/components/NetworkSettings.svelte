@@ -1,15 +1,10 @@
 <script lang="ts">
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { createAppInfo } from "../hooks/useAppInfo.svelte.js";
-import type { SidecarRetryStrategy, TandemSettings } from "../hooks/useTandemSettings.svelte.js";
+import type { SidecarRetryStrategy } from "../hooks/useTandemSettings.svelte.js";
+import type { SettingsTabContext } from "./SettingsModal.svelte";
 
-interface Props {
-  open: boolean;
-  settings: TandemSettings;
-  onUpdate: (partial: Partial<TandemSettings>) => void;
-  connected: boolean;
-  reconnectAttempts: number;
-}
+type Props = SettingsTabContext;
 
 const { open, settings, onUpdate, connected, reconnectAttempts }: Props = $props();
 

@@ -507,9 +507,9 @@ function aboutRows() {
               restores when you return to Tandem.
             </div>
           {:else if activeSection === "appearance"}
-            <AppearanceSettings {open} {settings} {onUpdate} />
+            <AppearanceSettings {open} {settings} {onUpdate} {connected} {reconnectAttempts} />
           {:else if activeSection === "editor"}
-            <EditorSettings {settings} {onUpdate} />
+            <EditorSettings {open} {settings} {onUpdate} {connected} {reconnectAttempts} />
           {:else if activeSection === "network"}
             <NetworkSettings
               {open}
@@ -519,7 +519,7 @@ function aboutRows() {
               {reconnectAttempts}
             />
           {:else if activeSection === "accessibility"}
-            <AccessibilitySettings {settings} {onUpdate} />
+            <AccessibilitySettings {open} {settings} {onUpdate} {connected} {reconnectAttempts} />
           {:else if activeSection === "claude-code"}
             <div>
               <div style={sectionLabelStyle}>
