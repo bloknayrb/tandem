@@ -113,8 +113,7 @@ const docxAdapter: FormatAdapter = {
 
 const adapters: Record<string, FormatAdapter> = {
   md: markdownAdapter,
-  txt: plaintextAdapter,
-  other: plaintextAdapter,
+  other: plaintextAdapter, // covers txt, html, and any other plaintext-routed format
   docx: docxAdapter,
 };
 

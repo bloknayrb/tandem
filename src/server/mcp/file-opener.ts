@@ -17,7 +17,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { withFileSync, withInternal, withMcp, withReload } from "../../shared/origins.js";
+import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
@@ -246,7 +246,7 @@ export async function openScratchpad(): Promise<OpenFileResult> {
   // preserves the populate path's atomicity invariant (#609).
   const adapter = getAdapter(format);
   const prepared = await adapter.parse("");
-  withMcp(doc, () => adapter.apply(doc, prepared));
+  withInternal(doc, () => adapter.apply(doc, prepared));
 
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
@@ -735,7 +735,7 @@ async function clearAndReload(
   //    try-catch is a diagnostic safety net for Y.js internal corruption; on
   //    throw we re-raise so the caller's force-reload reports the failure.
   try {
-    withReload(doc, () => {
+    withInternal(doc, () => {
       clearDocMaps(doc);
       // Repopulate content via shared helper (idem with populateDocFromContent).
       applyPreparedContent(doc, prepared, ctx);
