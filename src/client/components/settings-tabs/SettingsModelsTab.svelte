@@ -5,26 +5,16 @@ import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
 import ModelEditModal from "../ModelEditModal.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
-// SettingsTabContext is the registry's uniform shape; this tab reads no
-// fields off it directly (the Models registry hangs off a parallel
-// settings instance created here so the tab can mutate `models` without
-// the modal's parent caring). But the type contract is honored so the
-// registry stays uniform.
-// `SettingsTabContext` is the registry's uniform Props contract; this tab
-// reads none of its fields (the Models registry hangs off a parallel
-// `createTandemSettings()` instantiated below so the tab can mutate
-// `models` without threading it through the parent modal's `onUpdate`).
-// We type via a no-op destructure for registry conformance; nothing is
-// destructured into local state.
+// `SettingsTabContext` is the registry's uniform Props contract; this
+// tab reads none of its fields directly (the Models registry hangs off
+// the shared `createTandemSettings()` singleton, mutated via `models`
+// below). We type via a no-op destructure for registry conformance.
 const {}: SettingsTabContext = $props();
 
-// We instantiate our own `createTandemSettings` rather than pull it
-// through props. Reason: the rest of the SettingsModal threads a curated
-// subset of fields via the `SettingsTabContext`, and routing the Models
-// CRUD through that single `onUpdate` would require wiring `models`
-// everywhere `onUpdate` is called. Instantiating here keeps the surface
-// confined; both instances back to the same localStorage key so writes
-// stay coherent.
+// `createTandemSettings()` is a module-level singleton — calling it
+// here returns the same instance App.svelte uses. Mutations propagate
+// via shared `$state` reactivity, and serial localStorage writes
+// accumulate instead of clobbering across consumers.
 const settingsState = createTandemSettings();
 const models = createModels(settingsState);
 
