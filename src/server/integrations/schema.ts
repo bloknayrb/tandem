@@ -21,6 +21,10 @@
 import path from "node:path";
 import { z } from "zod";
 
+import { INTEGRATIONS_SCHEMA_VERSION as SHARED_SCHEMA_VERSION } from "../../shared/integrations/contract.js";
+
+export { INTEGRATIONS_SCHEMA_VERSION } from "../../shared/integrations/contract.js";
+
 const AbsolutePath = z.string().min(1).refine(path.isAbsolute, {
   message: "configPath must be an absolute path",
 });
@@ -96,10 +100,8 @@ export const IntegrationConfigSchema = z
 
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 
-export const INTEGRATIONS_SCHEMA_VERSION = 2 as const;
-
 export const IntegrationsFileSchema = z.object({
-  schemaVersion: z.literal(INTEGRATIONS_SCHEMA_VERSION),
+  schemaVersion: z.literal(SHARED_SCHEMA_VERSION),
   integrations: z.array(IntegrationConfigSchema),
   defaultIntegrationId: z.string().min(1).optional(),
 });
@@ -108,7 +110,7 @@ export type IntegrationsFile = z.infer<typeof IntegrationsFileSchema>;
 
 export function emptyIntegrationsFile(): IntegrationsFile {
   return {
-    schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+    schemaVersion: SHARED_SCHEMA_VERSION,
     integrations: [],
   };
 }

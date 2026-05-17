@@ -17,6 +17,7 @@ import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svel
 import EmptyState from "./components/EmptyState.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
+import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
@@ -226,6 +227,18 @@ if (isTauriRuntime()) {
 
 let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
+let integrationWizardOpen = $state(false);
+
+// SettingsClaudeCodeTab dispatches this when the user clicks "Open wizard".
+// Listening here avoids threading another callback through every Settings tab.
+$effect(() => {
+  const onOpen = () => {
+    integrationWizardOpen = true;
+    settingsModalOpen = false;
+  };
+  window.addEventListener("tandem:open-integration-wizard", onOpen);
+  return () => window.removeEventListener("tandem:open-integration-wizard", onOpen);
+});
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 
 // Dev-only test hook for E2E specs that need to open the SettingsModal
@@ -1069,6 +1082,13 @@ const tutorial = createTutorial(
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+
+    {#if settingsState.settings.showIntegrationWizard}
+      <IntegrationWizardModal
+        open={integrationWizardOpen}
+        onClose={() => (integrationWizardOpen = false)}
+      />
+    {/if}
 
     {#if fileOpenDialogOpen}
       <FileOpenDialog onClose={() => (fileOpenDialogOpen = false)} />
