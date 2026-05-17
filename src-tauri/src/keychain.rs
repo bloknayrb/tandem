@@ -25,10 +25,24 @@
 use keyring::Entry;
 
 const SERVICE: &str = "tandem-integrations";
+/// Mirrors `REF_MAX_LENGTH` in `src/server/integrations/api-routes.ts` so the
+/// Tauri path and the HTTP path reject the same inputs.
+const ACCOUNT_MAX_LENGTH: usize = 256;
+/// Mirrors `SECRET_MAX_LENGTH` in `src/server/integrations/api-routes.ts`.
+/// Real API keys are well under 4 KB; 8 KB is a forgiving cap. Windows
+/// Credential Manager itself caps blobs around 2.5 KB and returns
+/// `keyring::Error::TooLong` for larger values — we'd rather reject with
+/// our own message than surface a platform-specific failure.
+const SECRET_MAX_LENGTH: usize = 8192;
 
 fn make_entry(account: &str) -> Result<Entry, String> {
     if account.is_empty() {
         return Err("keychain-init: account is required".to_string());
+    }
+    if account.len() > ACCOUNT_MAX_LENGTH {
+        return Err(format!(
+            "keychain-init: account exceeds {ACCOUNT_MAX_LENGTH}-char limit"
+        ));
     }
     Entry::new(SERVICE, account).map_err(|e| format!("keychain-init: {e}"))
 }
@@ -53,6 +67,11 @@ pub fn keychain_get(account: String) -> Result<Option<String>, String> {
 pub fn keychain_set(account: String, secret: String) -> Result<(), String> {
     if secret.is_empty() {
         return Err("keychain-set: secret must be non-empty".to_string());
+    }
+    if secret.len() > SECRET_MAX_LENGTH {
+        return Err(format!(
+            "keychain-set: secret exceeds {SECRET_MAX_LENGTH}-char limit"
+        ));
     }
     let entry = make_entry(&account)?;
     entry

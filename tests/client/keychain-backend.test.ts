@@ -90,10 +90,28 @@ describe("createTauriKeychainBackend", () => {
     expect(result).toEqual({ status: "unavailable" });
   });
 
-  it("set(): PlatformFailure error → unavailable", async () => {
+  it("set(): keyring PlatformFailure (Display string) → unavailable", async () => {
+    // Pinned to keyring v3.6.3's actual Display output in error.rs:64 —
+    // NOT the Debug variant name. PR 3c-tauri-keychain's review caught
+    // this exact mismatch.
     const invoke = vi
       .fn()
-      .mockRejectedValue(new Error("keychain-set: PlatformFailure(dbus not running)"));
+      .mockRejectedValue(
+        new Error("keychain-set: Platform secure storage failure: dbus not running"),
+      );
+    const backend = createTauriKeychainBackend({ invoke });
+    const result = await backend.set("ref-1", "secret");
+    expect(result).toEqual({ status: "unavailable" });
+  });
+
+  it("set(): keyring NoStorageAccess (Display string) → unavailable", async () => {
+    // keyring v3.6.3 error.rs:65-67 — macOS Keychain locked, Linux dbus
+    // unreachable, etc.
+    const invoke = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("keychain-set: Couldn't access platform secure storage: locked"),
+      );
     const backend = createTauriKeychainBackend({ invoke });
     const result = await backend.set("ref-1", "secret");
     expect(result).toEqual({ status: "unavailable" });

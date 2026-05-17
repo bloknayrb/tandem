@@ -88,13 +88,35 @@ interface TauriBackendOptions {
   invoke?: InvokeFn;
 }
 
+/**
+ * Pinned to keyring v3.6.3's `Display` impl (see `error.rs:64-67`). The
+ * substrings come from the crate's actual formatted output — NOT the Debug
+ * variant names. Update this list if the crate's error formatting changes.
+ */
+const KEYRING_UNAVAILABLE_MARKERS = [
+  // Rust-side init guard (account-empty or Entry::new failure).
+  "keychain-init",
+  // keyring::Error::PlatformFailure — e.g. libsecret missing on Linux.
+  "Platform secure storage failure",
+  // keyring::Error::NoStorageAccess — e.g. dbus not reachable, keychain locked.
+  "Couldn't access platform secure storage",
+];
+
+function isKeychainUnavailableMessage(message: string): boolean {
+  return KEYRING_UNAVAILABLE_MARKERS.some((marker) => message.includes(marker));
+}
+
 export function createTauriKeychainBackend(opts: TauriBackendOptions = {}): ClientKeychainBackend {
-  // Cache the invoke resolution — there's no reason to re-import per call.
-  let invokePromise: Promise<InvokeFn> | null = null;
+  // Don't memoize the result of `loadInvoke()` — when it fails to import
+  // `@tauri-apps/api/core` it returns a permanently-rejecting stub that
+  // emits TAURI_NOT_AVAILABLE. Caching that would poison the backend for
+  // the process lifetime. The ESM module loader caches successful imports
+  // by spec, so calling `loadInvoke()` per request is cheap in the happy
+  // path while preserving the ability to recover from a transient import
+  // failure (e.g. dev-time package reinstall).
   const getInvoke = (): Promise<InvokeFn> => {
     if (opts.invoke) return Promise.resolve(opts.invoke);
-    invokePromise ??= loadInvoke();
-    return invokePromise;
+    return loadInvoke();
   };
 
   return {
@@ -104,14 +126,17 @@ export function createTauriKeychainBackend(opts: TauriBackendOptions = {}): Clie
         await keychainSet(invoke, ref, secret);
         return { status: "ok" };
       } catch (err) {
-        // Tauri commands surface a string; the wizard maps "keychain-*" prefixes
-        // to a generic "unavailable" only when we can confirm the keyring crate
-        // itself failed (init error or platform unsupported). Any other error
-        // is a real failure that should be reported, not swallowed.
+        // Tauri commands surface a string. We map to `unavailable` only when
+        // we can confirm the keyring crate itself is the failing layer (init
+        // error or the platform's secure storage is unreachable). Other
+        // errors are real and should be reported, not swallowed.
+        //
+        // Substring choices are pinned to keyring v3.6.3's Display impl
+        // (`error.rs` lines 64-67) — the actual emitted strings, not the
+        // Debug variant names. See PR 3c-tauri-keychain's adversarial review
+        // for the bug this catches.
         const message = err instanceof Error ? err.message : String(err);
-        if (message.includes("keychain-init") || message.includes("PlatformFailure")) {
-          return { status: "unavailable" };
-        }
+        if (isKeychainUnavailableMessage(message)) return { status: "unavailable" };
         return { status: "error", message };
       }
     },
@@ -131,7 +156,12 @@ export function createTauriKeychainBackend(opts: TauriBackendOptions = {}): Clie
 // ---------------------------------------------------------------------------
 
 interface DefaultBackendOptions extends HttpBackendOptions, TauriBackendOptions {
-  /** Force a specific backend, overriding the Tauri-runtime detection. */
+  /**
+   * **Tests only.** Force a specific backend, overriding the Tauri-runtime
+   * detection. Production call sites should leave this undefined — the
+   * default (`isTauriRuntime()` → Tauri, else HTTP) is the only correct
+   * choice for the npm CLI install path and the desktop app respectively.
+   */
   force?: "http" | "tauri";
 }
 
