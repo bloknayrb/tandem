@@ -790,6 +790,22 @@ const marginReplies = createAnnotationReplies({
   getYdoc: () => activeTab?.ydoc ?? null,
 });
 
+// All six handlers + ydoc/docId in one $derived so closures capture the same
+// activeTab snapshot. Per-property access at call sites preserves reactivity
+// (destructuring would freeze the values at template-instantiation time).
+const marginHandlers = $derived.by(() => {
+  const ydoc = activeTab?.ydoc ?? null;
+  const docId = activeTab?.id;
+  return {
+    ydoc,
+    docId,
+    onEdit: (id: string, c: string) => marginEditAnnotation(ydoc, id, c),
+    onReply: (id: string, t: string) => marginReplyToAnnotation(id, t, docId),
+    onRemove: (id: string) => marginRemoveAnnotation(id, docId),
+    onSendToClaude: (id: string) => marginSendNoteToClaude(ydoc, id),
+  };
+});
+
 const tutorial = createTutorial(
   () => modeGate.visibleAnnotations,
   () => editor,
@@ -1156,13 +1172,6 @@ const tutorial = createTutorial(
         </div>
       {/if}
       {#if settingsState.settings.marginView && activeTab}
-        {@const marginYdoc = activeTab.ydoc ?? null}
-        {@const marginDocId = activeTab.id}
-        {@const marginOnEdit = (id: string, c: string) => marginEditAnnotation(marginYdoc, id, c)}
-        {@const marginOnReply = (id: string, t: string) =>
-          marginReplyToAnnotation(id, t, marginDocId)}
-        {@const marginOnRemove = (id: string) => marginRemoveAnnotation(id, marginDocId)}
-        {@const marginOnSendToClaude = (id: string) => marginSendNoteToClaude(marginYdoc, id)}
         <MarginColumn
           side="left"
           annotations={marginNotes}
@@ -1178,10 +1187,10 @@ const tutorial = createTutorial(
           }}
           onAccept={review.handleAccept}
           onDismiss={review.handleDismiss}
-          onRemove={marginOnRemove}
-          onEdit={marginOnEdit}
-          onReply={marginOnReply}
-          onSendToClaude={marginOnSendToClaude}
+          onRemove={marginHandlers.onRemove}
+          onEdit={marginHandlers.onEdit}
+          onReply={marginHandlers.onReply}
+          onSendToClaude={marginHandlers.onSendToClaude}
         />
         <MarginColumn
           side="right"
@@ -1198,10 +1207,10 @@ const tutorial = createTutorial(
           }}
           onAccept={review.handleAccept}
           onDismiss={review.handleDismiss}
-          onRemove={marginOnRemove}
-          onEdit={marginOnEdit}
-          onReply={marginOnReply}
-          onSendToClaude={marginOnSendToClaude}
+          onRemove={marginHandlers.onRemove}
+          onEdit={marginHandlers.onEdit}
+          onReply={marginHandlers.onReply}
+          onSendToClaude={marginHandlers.onSendToClaude}
         />
       {/if}
     </div>
