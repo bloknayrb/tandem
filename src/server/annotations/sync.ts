@@ -18,8 +18,14 @@
  *
  * ## Observer origin semantics
  *
- *   - `file-sync`  → skip tombstone + durable-write (echo from our own file writes).
- *   - `internal`   → skip tombstone + durable-write (server setup, session restore, etc.).
+ *   - `file-sync`  → **record tombstone** + skip durable-write (echo from our own file writes).
+ *                    Tombstone recording is load-bearing (#700): if `loadAndMerge` fails or is
+ *                    skipped, this observer must still capture file-driven deletes so they aren't
+ *                    lost. `recordTombstone` dedupes by id, so a seed + observer record at the
+ *                    same rev is a no-op.
+ *   - `internal`   → record tombstone + skip durable-write (setup ops; in practice no
+ *                    INTERNAL_ORIGIN delete reaches the observer while it is live because
+ *                    `clearAndReload` detaches the observer via `clearFileSyncContext` first).
  *   - `reload`     → record tombstone + queueWrite (file-watcher reload; relRanges must persist).
  *   - `mcp`        → record tombstone + queueWrite (Claude tool intent).
  *   - `null`/`undefined` → record tombstone + queueWrite (browser-origin user intent).
@@ -59,7 +65,7 @@
 
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { shouldSkipDurableSync, shouldSkipTombstone, withFileSync } from "../../shared/origins.js";
+import { shouldSkipDurableSync, withFileSync } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
 import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
@@ -245,27 +251,25 @@ export function registerAnnotationObserver(
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
   const onAnnMutation = (ev: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
-    // Record tombstones for user-intent deletes. Skip file-sync and internal
-    // origins per the ADR-031 matrix: those are setup operations (loadAndMerge
-    // echoes, clear-before-reload, populate-failure cleanup), not user deletions.
-    // `recordTombstone` dedupes by id (keeping highest rev), so a concurrent
-    // observer-driven record on the same delete as a direct `recordTombstone`
-    // call is a no-op. Reload and MCP/browser origins still record unconditionally
-    // so stale-tab CRDT merges and all user-intent delete paths produce tombstones.
-    if (!shouldSkipTombstone(txn.origin)) {
-      for (const [id, change] of ev.changes.keys) {
-        if (change.action !== "delete") continue;
-        const oldValue = change.oldValue as { rev?: number } | undefined;
-        const hasRev = typeof oldValue?.rev === "number";
-        const prevRev = hasRev ? (oldValue as { rev: number }).rev : 0;
-        recordTombstone(docHash, id, prevRev);
-        if (!hasRev) {
-          // Legacy session blob entries lack `rev`; CRDT merge ordering against
-          // a same-id resurrection from a stale peer is non-deterministic.
-          console.warn(
-            `[ANNOTATION-SYNC] tombstone for id=${id} has no oldValue.rev (origin=${String(txn.origin)})`,
-          );
-        }
+    // Record tombstones unconditionally for ALL origins — including file-sync.
+    // This is the load-bearing invariant (#700/#695): if `loadAndMerge` fails
+    // or is skipped, file-sync deletes must still land in the ledger so they
+    // aren't lost on the next snapshot. `recordTombstone` dedupes by id
+    // (keeping highest rev), so a seed + observer record at the same rev is a
+    // no-op. Stale-tab CRDT merges, browser-origin deletes, and all other
+    // future write paths are also covered without special-casing.
+    for (const [id, change] of ev.changes.keys) {
+      if (change.action !== "delete") continue;
+      const oldValue = change.oldValue as { rev?: number } | undefined;
+      const hasRev = typeof oldValue?.rev === "number";
+      const prevRev = hasRev ? (oldValue as { rev: number }).rev : 0;
+      recordTombstone(docHash, id, prevRev);
+      if (!hasRev) {
+        // Legacy session blob entries lack `rev`; CRDT merge ordering against
+        // a same-id resurrection from a stale peer is non-deterministic.
+        console.warn(
+          `[ANNOTATION-SYNC] tombstone for id=${id} has no oldValue.rev (origin=${String(txn.origin)})`,
+        );
       }
     }
 
