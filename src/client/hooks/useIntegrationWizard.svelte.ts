@@ -29,13 +29,15 @@
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_EXISTING,
-  apiIntegrationsSecretPath,
-  ERROR_CODE_KEYCHAIN_UNAVAILABLE,
   type ExistingMcpInstall,
   INTEGRATIONS_SCHEMA_VERSION,
   type IntegrationConfig,
   type IntegrationsFile,
 } from "../../shared/integrations/contract.js";
+import {
+  type ClientKeychainBackend,
+  createDefaultKeychainBackend,
+} from "../keychain/keychain-backend.js";
 
 export type WizardStep = "detect" | "pick" | "secrets" | "review" | "saving" | "done" | "error";
 
@@ -92,6 +94,13 @@ export interface IntegrationWizardOptions {
    * which is what the dev Vite server proxies and what production serves.
    */
   baseUrl?: string;
+  /**
+   * Inject a custom keychain backend (#477 PR 3c-tauri-keychain). Defaults to
+   * `createDefaultKeychainBackend()` which picks Tauri commands when running
+   * inside the desktop app and the HTTP loopback elsewhere. Tests pass a
+   * stub backend so the wizard logic can be verified without either transport.
+   */
+  keychainBackend?: ClientKeychainBackend;
 }
 
 export function createIntegrationWizard(
@@ -99,6 +108,8 @@ export function createIntegrationWizard(
 ): IntegrationWizardState {
   const fetchFn = opts.fetchFn ?? globalThis.fetch.bind(globalThis);
   const baseUrl = opts.baseUrl ?? "";
+  const keychainBackend =
+    opts.keychainBackend ?? createDefaultKeychainBackend({ fetchFn, baseUrl });
 
   let step = $state<WizardStep>("detect");
   let existing = $state<ExistingMcpInstall[]>([]);
@@ -149,40 +160,29 @@ export function createIntegrationWizard(
 
   const submitSecret = async (target: PickedIntegration, secret: string) => {
     const ref = makeSecretRef(target.id);
-    try {
-      const res = await fetchFn(`${baseUrl}${apiIntegrationsSecretPath(ref)}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ secret }),
-      });
-      if (res.status === 503) {
-        const body = (await res.json().catch(() => null)) as { code?: string } | null;
-        if (body?.code === ERROR_CODE_KEYCHAIN_UNAVAILABLE) {
-          keychainUnavailable = true;
-          picked = picked.map((p) =>
-            p.id === target.id ? { ...p, keychainUnavailable: true, pendingSecret: undefined } : p,
-          );
-          return;
-        }
-      }
-      if (!res.ok) {
-        setError(`Could not store secret (HTTP ${res.status}).`);
-        return;
-      }
+    const result = await keychainBackend.set(ref, secret);
+    if (result.status === "unavailable") {
+      keychainUnavailable = true;
       picked = picked.map((p) =>
-        p.id === target.id
-          ? {
-              ...p,
-              config: { ...p.config, tokenSecretRef: ref } as IntegrationConfig,
-              hasStoredSecret: true,
-              pendingSecret: undefined,
-              keychainUnavailable: false,
-            }
-          : p,
+        p.id === target.id ? { ...p, keychainUnavailable: true, pendingSecret: undefined } : p,
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      return;
     }
+    if (result.status === "error") {
+      setError(`Could not store secret: ${result.message}`);
+      return;
+    }
+    picked = picked.map((p) =>
+      p.id === target.id
+        ? {
+            ...p,
+            config: { ...p.config, tokenSecretRef: ref } as IntegrationConfig,
+            hasStoredSecret: true,
+            pendingSecret: undefined,
+            keychainUnavailable: false,
+          }
+        : p,
+    );
   };
 
   const advanceToReview = () => {
@@ -200,13 +200,7 @@ export function createIntegrationWizard(
     const storedRefs = picked
       .map((p) => p.config.tokenSecretRef)
       .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
-    await Promise.all(
-      storedRefs.map((ref) =>
-        fetchFn(`${baseUrl}${apiIntegrationsSecretPath(ref)}`, { method: "DELETE" }).catch(() => {
-          /* best-effort */
-        }),
-      ),
-    );
+    await Promise.all(storedRefs.map((ref) => keychainBackend.delete(ref)));
   };
 
   const save = async () => {
