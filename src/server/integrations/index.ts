@@ -4,6 +4,14 @@ export {
   hasExistingTandemEntry,
   readExistingTandemEntries,
 } from "./existing-config.js";
+export {
+  createKeychain,
+  generateSecretRef,
+  KEYCHAIN_SERVICE,
+  type Keychain,
+  type KeychainBackend,
+  KeychainUnavailableError,
+} from "./keychain.js";
 export { type MigrationFn, migrateUp } from "./migrations.js";
 export {
   emptyIntegrationsFile,

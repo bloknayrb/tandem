@@ -148,6 +148,60 @@ describe("createIntegrationsStore", () => {
     await expect(store.read()).rejects.toThrow(/newer than this Tandem build/);
   });
 
+  it("read() migrates a v1 file forward to the current schema version", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    const v1OnDisk = {
+      schemaVersion: 1,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/home/user/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+      ],
+      defaultIntegrationId: "cc-1",
+    };
+    await fs.promises.writeFile(store.filePath, JSON.stringify(v1OnDisk), "utf8");
+
+    const result = await store.read();
+    expect(result.schemaVersion).toBe(INTEGRATIONS_SCHEMA_VERSION);
+    expect(result.integrations).toEqual(v1OnDisk.integrations);
+    expect(result.defaultIntegrationId).toBe("cc-1");
+  });
+
+  it("read() does NOT rewrite the v1 file in place (next write upgrades it)", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    const v1OnDisk = { schemaVersion: 1, integrations: [] };
+    await fs.promises.writeFile(store.filePath, JSON.stringify(v1OnDisk), "utf8");
+
+    await store.read();
+    const onDisk = JSON.parse(await fs.promises.readFile(store.filePath, "utf8"));
+    expect(onDisk.schemaVersion).toBe(1);
+  });
+
+  it("write() round-trips an other-mcp integration with tokenSecretRef", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    const file: IntegrationsFile = {
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [
+        {
+          kind: "other-mcp",
+          id: "cursor-1",
+          label: "Cursor",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          tokenSecretRef: "ref-abc",
+        },
+      ],
+    };
+    await store.write(file);
+    const result = await store.read();
+    expect(result).toEqual(file);
+  });
+
   it("read() backs up files missing schemaVersion", async () => {
     const store = createIntegrationsStore(tmpDir);
     await fs.promises.writeFile(store.filePath, JSON.stringify({ integrations: [] }), "utf8");

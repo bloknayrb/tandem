@@ -1,12 +1,6 @@
 /**
  * Versioned migration framework for the `IntegrationsFile` on-disk shape.
  *
- * PR 1 ships the framework with **no migrations**. PR 3 (wizard) introduces
- * the first v1→v2 migration alongside `tokenSecretRef`. To register a real
- * migration in a future PR, add an entry to the `migrations` array below
- * (do NOT re-export it; the registry is module-local on purpose so external
- * code cannot push a migration into the chain at runtime).
- *
  * **Contract for migration authors:** the `input` parameter is typed
  * `unknown` and the framework does not validate the v_n shape before
  * passing it to your function. Validate with Zod against `IntegrationsFileVn`
@@ -14,20 +8,40 @@
  * `unknown` input type is the compile-time signal that runtime validation
  * is required.
  *
- * The simple `unknown → unknown` signature is intentional — when the array
- * is empty, generics would erase to `unknown` anyway and add no safety.
- * PR 3 may revisit the generic typing when there is a real type witness
- * pair (v1 → v2) to constrain.
+ * The simple `unknown → unknown` signature is intentional — when generics
+ * would erase to `unknown` for the empty initial array, they add no safety.
+ * When a future PR has a real type-witness pair (v2 → v3) to constrain,
+ * we can revisit.
  */
+
+import { IntegrationsFileV1Schema } from "./schema.js";
 
 export type MigrationFn = (input: unknown) => unknown;
 
 /**
- * Ordered migration chain. `migrations[i]` migrates v(i+1) → v(i+2).
- * Empty for PR 1. Module-local — exposed only via `migrateUp` so external
- * code cannot inject a migration at runtime.
+ * v1 → v2: re-stamp `schemaVersion` to 2. v1 added no new required fields
+ * to existing kinds and removed no kinds, so the `integrations` array is
+ * a structurally valid v2 payload. The v1 Zod schema is the input contract
+ * — we refuse to migrate garbage, even though the v2 schema would accept
+ * a superset of v1's shape.
  */
-const migrations: ReadonlyArray<MigrationFn> = [];
+const migrateV1ToV2: MigrationFn = (input) => {
+  const parsed = IntegrationsFileV1Schema.parse(input);
+  return {
+    schemaVersion: 2,
+    integrations: parsed.integrations,
+    ...(parsed.defaultIntegrationId !== undefined
+      ? { defaultIntegrationId: parsed.defaultIntegrationId }
+      : {}),
+  };
+};
+
+/**
+ * Ordered migration chain. `migrations[i]` migrates v(i+1) → v(i+2).
+ * Module-local — exposed only via `migrateUp` so external code cannot
+ * inject a migration at runtime.
+ */
+const migrations: ReadonlyArray<MigrationFn> = [migrateV1ToV2];
 
 /**
  * Run the migration chain forward from `fromVersion` to `toVersion`. The

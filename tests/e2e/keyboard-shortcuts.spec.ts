@@ -81,17 +81,18 @@ test("Ctrl+N switches to the Nth tab", async ({ page }) => {
 
   // Press Ctrl+1 — first tab becomes active. Generous timeout because the
   // store update + Svelte effect + Tiptap re-render can exceed the default 5s
-  // on cold-start CI runners.
+  // on cold-start CI runners. 15s tolerates a worst-case CI runner under
+  // load — the 10s ceiling flaked under retry on the #730 PR run.
   await page.keyboard.press("Control+1");
-  await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
+  await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
 
   // Press Ctrl+2 — second tab.
   await page.keyboard.press("Control+2");
-  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
+  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
 
   // Press Ctrl+9 — clamps to last (3rd) tab.
   await page.keyboard.press("Control+9");
-  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
+  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
 });
 
 test("Ctrl+W is ignored while a form input has focus", async ({ page }) => {

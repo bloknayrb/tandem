@@ -1,15 +1,21 @@
 /**
- * Tandem `IntegrationConfig` schema (#477 PR 1).
+ * Tandem `IntegrationConfig` schema.
  *
  * Tandem's integration contract is MCP. Claude (Claude Code + Claude Desktop)
  * is the default integration. See
  * [ADR-038](../../../docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)
  * for the four-term glossary and the canonical policy statement.
  *
- * PR 1 lands two integration kinds — `claude-code` and `claude-desktop`. LM
- * Studio, Ollama, and a generic `other-mcp` are deferred to PR 5+ and arrive
- * via the migration framework (`migrations.ts`). The schema version is bumped
- * each time the union grows so existing on-disk configs migrate explicitly.
+ * **Versions:**
+ * - v1 (#477 PR 1): `claude-code` + `claude-desktop` kinds, no `tokenSecretRef`.
+ * - v2 (#477 PR 3b): adds optional `tokenSecretRef` on every variant; adds
+ *   `other-mcp` kind for generic MCP-capable clients (Cursor, Continue.dev,
+ *   LM Studio, Ollama, etc.).
+ *
+ * `tokenSecretRef` is an opaque pointer into the OS keychain — never a
+ * secret value. The keychain backend lives in `./keychain.ts`. Future
+ * versions bump `INTEGRATIONS_SCHEMA_VERSION` and add a migration in
+ * `./migrations.ts`.
  */
 
 import path from "node:path";
@@ -26,6 +32,7 @@ const ClaudeCodeIntegration = z.object({
   configPath: AbsolutePath,
   transport: z.literal("http"),
   url: z.string().url(),
+  tokenSecretRef: z.string().min(1).optional(),
 });
 
 const ClaudeDesktopIntegration = z.object({
@@ -35,16 +42,61 @@ const ClaudeDesktopIntegration = z.object({
   configPath: AbsolutePath,
   transport: z.literal("stdio"),
   nodeBinary: z.string().min(1).optional(),
+  tokenSecretRef: z.string().min(1).optional(),
 });
 
-export const IntegrationConfigSchema = z.discriminatedUnion("kind", [
-  ClaudeCodeIntegration,
-  ClaudeDesktopIntegration,
-]);
+/**
+ * Generic MCP-capable client (Cursor, Continue.dev, LM Studio, Ollama, etc.).
+ * Tandem doesn't auto-configure these — the user wires their client to
+ * Tandem's MCP HTTP endpoint or stdio channel shim manually. The record
+ * exists so the wizard can surface them in the integrations list and
+ * associate an auth token with the client.
+ *
+ * `url` is the Tandem endpoint the client will connect to; defaults to
+ * `http://127.0.0.1:3479` when omitted. `configPath` is optional because
+ * many MCP clients have no canonical config file location Tandem can
+ * detect.
+ */
+const OtherMcpIntegration = z.object({
+  kind: z.literal("other-mcp"),
+  id: z.string().min(1),
+  label: z.string().min(1),
+  transport: z.union([z.literal("http"), z.literal("stdio")]),
+  url: z.string().url().optional(),
+  configPath: AbsolutePath.optional(),
+  tokenSecretRef: z.string().min(1).optional(),
+});
+
+/**
+ * `discriminatedUnion` members must be plain `ZodObject`s, so the
+ * cross-field invariant ("`transport: http` requires `url`") is applied
+ * via `superRefine` on the union itself. The wizard (PR 3c) could in
+ * principle default `url` to `http://127.0.0.1:3479` for `other-mcp`,
+ * but enforcing at the schema boundary prevents every downstream
+ * consumer from having to defend against a missing `url` on an
+ * http-transport integration.
+ */
+export const IntegrationConfigSchema = z
+  .discriminatedUnion("kind", [
+    ClaudeCodeIntegration,
+    ClaudeDesktopIntegration,
+    OtherMcpIntegration,
+  ])
+  .superRefine((val, ctx) => {
+    if (val.kind === "other-mcp" && val.transport === "http") {
+      if (val.url === undefined || val.url.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["url"],
+          message: "url is required when transport is http",
+        });
+      }
+    }
+  });
 
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 
-export const INTEGRATIONS_SCHEMA_VERSION = 1 as const;
+export const INTEGRATIONS_SCHEMA_VERSION = 2 as const;
 
 export const IntegrationsFileSchema = z.object({
   schemaVersion: z.literal(INTEGRATIONS_SCHEMA_VERSION),
@@ -60,3 +112,50 @@ export function emptyIntegrationsFile(): IntegrationsFile {
     integrations: [],
   };
 }
+
+/**
+ * v1 input shape for the v1→v2 migration. Exported solely so `migrations.ts`
+ * can validate untrusted on-disk v1 input. v1 differs from v2 only in:
+ * - `INTEGRATIONS_SCHEMA_VERSION === 1`
+ * - No `tokenSecretRef` on any kind
+ * - No `other-mcp` variant in the union
+ *
+ * **`.strict()` on every record:** a hand-edited v1 file containing a
+ * field that does not exist in v1's union (most notably `tokenSecretRef`,
+ * which only exists in v2) is rejected outright rather than silently
+ * stripped. This keeps the migration's "v1 records are valid v2 records"
+ * invariant honest — if extra v2-only data appears on a v1 record, the
+ * file is corrupt and should fail loudly rather than propagate truncated
+ * records into v2.
+ */
+const ClaudeCodeIntegrationV1 = z
+  .object({
+    kind: z.literal("claude-code"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    configPath: AbsolutePath,
+    transport: z.literal("http"),
+    url: z.string().url(),
+  })
+  .strict();
+
+const ClaudeDesktopIntegrationV1 = z
+  .object({
+    kind: z.literal("claude-desktop"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    configPath: AbsolutePath,
+    transport: z.literal("stdio"),
+    nodeBinary: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const IntegrationsFileV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    integrations: z.array(
+      z.discriminatedUnion("kind", [ClaudeCodeIntegrationV1, ClaudeDesktopIntegrationV1]),
+    ),
+    defaultIntegrationId: z.string().min(1).optional(),
+  })
+  .strict();
