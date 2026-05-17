@@ -2,25 +2,34 @@
   <img src="docs/assets/banner.png" alt="Tandem — Collaborative AI-Human Document Editor" width="800">
 </p>
 
-Have you ever been working on a piece of writing with an LLM and caught yourself copy-pasting the same paragraph into the chat for the fifth time just so the model knows what you're talking about? That's the friction Tandem eliminates. Open a file directly, or just tell Claude "let's work on my draft in tandem" — the document appears in the editor, and from that point on you highlight text and Claude sees it directly. No pasting, no "here's the paragraph I mean," no losing your place.
+Have you ever been working on a piece of writing with an AI and caught yourself copy-pasting the same paragraph into the chat for the fifth time just so the model knows what you're talking about? That's the friction Tandem eliminates. Open a file directly, or tell your AI "let's work on my draft in tandem" — the document appears in the editor, and from that point on you highlight text and the AI sees it directly. No pasting, no "here's the paragraph I mean," no losing your place.
 
-And because Tandem hooks into Claude as an MCP server, you're not stuck in some stripped-down document-editing silo. It's the full Claude — with all its knowledge, your conversation context, and every tool it has access to — just now it can also see and edit your document.
+Tandem hooks into your AI as an [MCP](https://modelcontextprotocol.io) server, so you're not stuck in some stripped-down document-editing silo. It's the full AI — with all its knowledge, your conversation context, and every tool it has access to — just now it can also see and edit your document.
+
+> **Tandem's integration contract is MCP.** The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
 
 ## Why Tandem?
 
-- **No more copy-paste ping-pong.** Select text in the editor, and Claude reads your selection directly. Ask "what do you think of this?" or "make this more concise" — Claude knows exactly which text you mean.
-- **Your full LLM, not a toy editor.** Tandem connects via MCP, so Claude keeps all its knowledge, all its tools, and your full conversation context. Need it to cross-reference your document against a codebase, a URL, or another file? It can — it's still Claude.
-- **Iterate in place.** Claude can suggest rewrites, leave comments, flag issues, and edit text — all appearing as annotations you accept, dismiss, or tweak right in the document.
+- **No more copy-paste ping-pong.** Select text in the editor, and your AI reads your selection directly. Ask "what do you think of this?" or "make this more concise" — the AI knows exactly which text you mean.
+- **Your full AI, not a toy editor.** Tandem connects via MCP, so the AI keeps all its knowledge, all its tools, and your full conversation context. Need it to cross-reference your document against a codebase, a URL, or another file? It can — it's still the full client.
+- **Iterate in place.** Your AI can suggest rewrites, leave comments, flag issues, and edit text — all appearing as annotations you accept, dismiss, or tweak right in the document.
 
 ## Quick Start
 
-### Option A: Desktop App
+Pick the install path that matches your audience:
 
-Download the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest).
+### Just want to use it — Desktop App
 
-The desktop app bundles everything — no Node.js required. It auto-configures Claude Code on launch, manages the server as a background process, and updates itself automatically. Just install and open.
+Download the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). No Node.js or terminal required.
 
-### Option B: npm Global Install
+On first launch the **integration setup wizard** (Settings → Advanced → "Show integration setup wizard") guides you through connecting your AI:
+
+- **Claude** (Claude Code + Claude Desktop) is detected automatically — one click and you're set up. Tandem's auto-launcher will spawn Claude Code with channel push for you on subsequent launches once the v1.0 auto-launcher ships.
+- **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) are listed in the wizard too. You'll need to point them at Tandem's MCP HTTP endpoint manually — see [Connecting other MCP clients](#connecting-other-mcp-clients) below.
+
+The desktop app bundles everything: server, sidecar, and the OS keychain integration that stores any per-client auth tokens you set up. Updates land automatically.
+
+### Power-user setup — npm + Claude Code channel push
 
 Requires **Node.js 22+** ([download](https://nodejs.org)) and **Claude Code** (`npm install -g @anthropic-ai/claude-code`).
 
@@ -32,44 +41,20 @@ tandem           # starts server + opens editor
 
 `tandem setup` auto-detects Claude Code and Claude Desktop, writes MCP configuration, and installs a skill (`~/.claude/skills/tandem/SKILL.md`) that teaches Claude how to use Tandem's tools effectively. Re-run after upgrading (`npm update -g tandem-editor && tandem setup`).
 
-### Quickstart: Claude Code plugin (recommended)
+> **Heads-up:** `tandem setup` is the v0.12.x transitional CLI. Once the wizard's auto-config-removal sub-PR (#477 PR 3c-ii) ships, `tandem setup` becomes a TTY wrapper around the wizard flow. Same questions, same end state — just no silent writes to your Claude config.
 
-Install the plugin to expose Tandem's tools and real-time event stream into Claude Desktop chats **and** Cowork VM sessions:
+#### Channel push (recommended for Claude Code)
 
-```bash
-claude plugin marketplace add bloknayrb/tandem
-claude plugin install tandem@tandem-editor
-```
+For the full live-collaborator experience, start Claude Code with the **channel push** flag after running `tandem setup --with-channel-shim`:
 
-**Tandem must be running on the host before the plugin can do anything.** The plugin spawns two stdio MCP processes (`tandem mcp-stdio` and `tandem channel`) that proxy to `http://127.0.0.1:3479`. If the server isn't up they fail fast and log "Tandem server not reachable at …". Start the Tauri desktop app or run `tandem start` on the host first, then open Claude.
-
-### Legacy stdio channel shim
-
-If you can't install the plugin, use the older channel shim:
+> **Desktop app users:** Claude Code is auto-configured every launch — skip the manual `--with-channel-shim` step. The `tandem_*` tools are available immediately.
 
 ```bash
-tandem setup --with-channel-shim
-```
-
-This writes a `tandem-channel` entry to your Claude Code MCP config. Start Claude Code with:
-
-```bash
+tandem setup --with-channel-shim   # one-time: writes the tandem-channel entry
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Don't combine this with the plugin — both subscribe to `/api/events` and you'll get duplicate notifications for every event.
-
-### Connect Claude Code
-
-For the full Tandem experience, start Claude Code with the **channel push** flag:
-
-> **Desktop app users:** Claude Code is configured automatically on every launch — skip `tandem setup` and just start Claude Code. The `tandem_*` tools will be available immediately.
-
-```bash
-claude --dangerously-load-development-channels server:tandem-channel
-```
-
-This is the magic-sauce mode — and it's the one I'd recommend you run with. The channel shim pushes events (selections, annotations, chat) to Claude over SSE the moment they happen, so Tandem genuinely feels like there's another person on the other end of the document: someone watching what you highlight, reacting to edits you accept, and chiming in on a paragraph the instant you select it, the way a collaborator on a Google Doc would. The `--dangerously-load-development-channels` flag is an experimental Claude Code feature, which is why it isn't on by default — but turning it on is what makes the whole experience click.
+This is the magic-sauce mode — and it's the one I'd recommend for Claude Code users. The channel shim pushes events (selections, annotations, chat) over SSE the moment they happen, so Tandem genuinely feels like there's another person on the other end of the document: someone watching what you highlight, reacting to edits you accept, and chiming in on a paragraph the instant you select it, the way a collaborator on a Google Doc would. The `--dangerously-load-development-channels` flag is an experimental Claude Code feature, which is why it isn't on by default — but turning it on is what makes the whole experience click.
 
 **Recommended layout:** snap the Claude Code terminal to one side of your screen and the Tandem editor window to the other. You'll be flipping attention between them constantly, and having both visible is what makes the side-by-side-collaborator feeling land.
 
@@ -99,13 +84,32 @@ claude
 Then pick one of two ways to keep the conversation flowing:
 
 1. **Just chat in the terminal (simplest).** Every time you send Claude a message, it has a chance to call `tandem_checkInbox` and pick up your latest selection, any annotations you accepted or dismissed, and any chat messages from the Tandem sidebar. Zero setup — this is how it works out of the box. With Tandem and the terminal snapped side by side, the loop feels surprisingly natural; Claude just reacts when you nudge it rather than spontaneously.
-2. **Background polling with&#x20;****/loop****&#x20;(hands-off).** Ask Claude to check in on its own using the `/loop` skill:
+2. **Background polling with `/loop` (hands-off).** Ask Claude to check in on its own using the `/loop` skill:
    ```
    /loop 30s check tandem inbox and respond to any new messages
    ```
    Claude polls every 30 seconds — responses lag by up to that interval, but you don't have to prompt it yourself.
 
 Either way, Claude reads the exact same information (selections, annotations, chat) through the same `tandem_checkInbox` tool. The only thing channels change is *when* Claude finds out something happened — not *whether* it can see it.
+
+### Connecting other MCP clients
+
+Any MCP-capable client (Cursor, Continue.dev, LM Studio, Ollama, custom integrations) can connect to Tandem over the same MCP contract Claude uses:
+
+- **MCP HTTP endpoint:** `http://127.0.0.1:3479/mcp`
+- **SSE event stream:** `http://127.0.0.1:3479/api/events`
+- **26 tools** at the MCP endpoint — same set Claude uses. See [docs/mcp-tools.md](docs/mcp-tools.md).
+
+What works:
+- All 26 MCP tools (document, annotation, chat, status).
+- The SSE event stream — if your client subscribes, you get the same real-time events Claude does via channel push.
+
+What doesn't:
+- **Channel push as a Claude Code-style flag** — that's `--dangerously-load-development-channels`, which is a Claude Code-specific feature. Other MCP clients have to subscribe to `/api/events` themselves.
+- **Auto-launch.** v1.0 only auto-launches Claude Code per [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2. Other clients need to be started by you.
+- **Cowork plugin bridge, Claude Code skill, plugin marketplace artifacts** — Claude-specific by design.
+
+This is **best-effort, MCP-contract-compatible, not validated** today. We don't intentionally break other clients; we don't test them in CI. If you wire up a client and hit an issue, file it — patches that don't regress the Claude default are welcome.
 
 ### Verify
 
@@ -120,7 +124,7 @@ curl http://127.0.0.1:3479/health
 # → {"status":"ok","version":"0.8.0","transport":"http","hasSession":false}
 ```
 
-`hasSession` becomes `true` once Claude Code connects.
+`hasSession` becomes `true` once an MCP client connects.
 
 <details>
 <summary><strong>Development Setup</strong> (contributing / building from source)</summary>
@@ -220,7 +224,12 @@ See the full [Roadmap](docs/roadmap.md) and [Known Limitations](docs/roadmap.md#
 
 ## MCP Configuration
 
-Tandem registers two MCP connections: **HTTP** for document tools (28 tools including annotation editing — always on), and a **channel shim** for real-time push notifications. The channel shim is what enables the live-collaborator experience described in [Connect Claude Code](#connect-claude-code) and is recommended; it activates when you start Claude Code with `--dangerously-load-development-channels server:tandem-channel`. If you'd rather not pass that experimental flag, the entry sits idle and everything still works through polling on the HTTP connection — you just lose spontaneous reactions.
+Tandem's MCP contract is **two HTTP transports** at `http://127.0.0.1:3479`:
+
+- **HTTP MCP** — all 26 tools (document, annotation, chat, status). Always on.
+- **SSE event stream** at `/api/events` — real-time push of selections, annotations, and chat messages. Required for the live-collaborator experience.
+
+For Claude Code specifically, the **channel shim** is a stdio MCP wrapper that subscribes to `/api/events` on Claude's behalf and exposes the events as MCP notifications. It's activated by the `--dangerously-load-development-channels server:tandem-channel` flag and is what enables the [magic-sauce mode](#channel-push-recommended-for-claude-code) described above. The shim is a Claude-specific transport on top of the MCP contract — other MCP clients subscribe to `/api/events` directly.
 
 **Global install** (`tandem setup`): Automatically writes both entries to `~/.claude/mcp_settings.json` (Claude Code) and/or `claude_desktop_config.json` (Claude Desktop) with absolute paths. No manual configuration needed.
 
@@ -243,6 +252,8 @@ Tandem registers two MCP connections: **HTTP** for document tools (28 tools incl
 ```
 
 Both entries are cross-platform — no platform-specific configuration needed.
+
+**Other MCP clients:** the `tandem` HTTP entry above is all you need. The `tandem-channel` stdio shim is Claude-specific and won't apply.
 
 ## Environment Variables
 

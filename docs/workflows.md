@@ -1,5 +1,7 @@
 # Workflows
 
+> **Scope:** Real-world usage patterns. Examples use Claude Code as the default AI integration per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration); patterns generalize to any MCP-capable client speaking the same 26 tools at `http://127.0.0.1:3479/mcp`.
+
 > **Looking for editor UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
 
 Real-world patterns for using Tandem with Claude on toll consulting documents.
