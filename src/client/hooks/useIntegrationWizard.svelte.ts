@@ -70,12 +70,17 @@ export interface IntegrationWizardState {
 
 /**
  * Generate a tokenSecretRef for a picked integration. Uses the integration's
- * `id` + a short random suffix so the keychain entry is identifiable in OS
- * keychain UIs ("tandem-integrations / cc-1-abc123") and a refused-write retry
+ * `id` + a CSPRNG-derived suffix so the keychain entry is identifiable in OS
+ * keychain UIs ("tandem-integrations / cc-1-9f3a…") and a refused-write retry
  * doesn't reuse a stale ref.
+ *
+ * `crypto.randomUUID()` provides 122 bits of CSPRNG entropy — far more than
+ * needed for collision resistance among a single user's keychain entries.
+ * Math.random() is not cryptographically secure (CodeQL js/insecure-randomness)
+ * and would be misleading in this security context even if practically safe.
  */
 function makeSecretRef(integrationId: string): string {
-  const suffix = Math.random().toString(36).slice(2, 10);
+  const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   return `${integrationId}-${suffix}`;
 }
 
@@ -100,6 +105,10 @@ export function createIntegrationWizard(
   let picked = $state<PickedIntegration[]>([]);
   let errorMessage = $state<string | null>(null);
   let keychainUnavailable = $state(false);
+  // Monotonic generation counter for `begin()` — a later run invalidates
+  // earlier in-flight responses so rapid open/close/reopen can't have the
+  // earlier request's response clobber the later one's state.
+  let beginGen = 0;
 
   const setError = (msg: string) => {
     errorMessage = msg;
@@ -107,17 +116,21 @@ export function createIntegrationWizard(
   };
 
   const begin = async () => {
+    const myGen = ++beginGen;
     step = "detect";
     errorMessage = null;
     try {
       const res = await fetchFn(`${baseUrl}${API_INTEGRATIONS_EXISTING}`);
+      if (myGen !== beginGen) return; // a newer begin() ran; drop this response
       if (!res.ok) {
         setError(`Could not load existing entries (HTTP ${res.status}).`);
         return;
       }
       const body = (await res.json()) as { installs: ExistingMcpInstall[] };
+      if (myGen !== beginGen) return;
       existing = body.installs;
     } catch (err) {
+      if (myGen !== beginGen) return;
       setError(err instanceof Error ? err.message : String(err));
     }
   };
@@ -176,6 +189,26 @@ export function createIntegrationWizard(
     step = "review";
   };
 
+  /**
+   * Best-effort cleanup: when save fails after `submitSecret` calls have
+   * already stored secrets in the OS keychain, delete each one so the user
+   * isn't left with orphan credentials referenced by no integrations file.
+   * Errors are swallowed because cleanup is post-failure — surfacing a
+   * second error would replace the more actionable original.
+   */
+  const cleanupStoredSecrets = async (): Promise<void> => {
+    const storedRefs = picked
+      .map((p) => p.config.tokenSecretRef)
+      .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+    await Promise.all(
+      storedRefs.map((ref) =>
+        fetchFn(`${baseUrl}${apiIntegrationsSecretPath(ref)}`, { method: "DELETE" }).catch(() => {
+          /* best-effort */
+        }),
+      ),
+    );
+  };
+
   const save = async () => {
     step = "saving";
     const file: IntegrationsFile = {
@@ -190,11 +223,13 @@ export function createIntegrationWizard(
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
+        await cleanupStoredSecrets();
         setError(body?.message ?? `Could not save (HTTP ${res.status}).`);
         return;
       }
       step = "done";
     } catch (err) {
+      await cleanupStoredSecrets();
       setError(err instanceof Error ? err.message : String(err));
     }
   };

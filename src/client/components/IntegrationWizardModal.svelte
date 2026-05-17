@@ -75,10 +75,21 @@ function close(): void {
  * only generates `claude-code` / `claude-desktop` records here — the
  * "add other-mcp" path is exposed via a separate button in step=pick.
  */
+/**
+ * Build a stable id. `Date.now()` has only millisecond resolution and
+ * `IntegrationsFileSchema` doesn't reject duplicate ids — two rapid picks
+ * in the same tick would silently overwrite each other downstream.
+ * `crypto.randomUUID()` is CSPRNG and collision-free for any human-scale
+ * usage.
+ */
+function newPickedId(kindPrefix: string): string {
+  return `${kindPrefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
 function detectedToPicked(install: ExistingMcpInstall): PickedIntegration | null {
   if (install.target.kind === "claude-code") {
     const url = install.tandemEntry?.url ?? "http://127.0.0.1:3479";
-    const id = `claude-code-${Date.now().toString(36)}`;
+    const id = newPickedId("claude-code");
     return {
       id,
       config: {
@@ -94,7 +105,7 @@ function detectedToPicked(install: ExistingMcpInstall): PickedIntegration | null
     };
   }
   if (install.target.kind === "claude-desktop") {
-    const id = `claude-desktop-${Date.now().toString(36)}`;
+    const id = newPickedId("claude-desktop");
     return {
       id,
       config: {

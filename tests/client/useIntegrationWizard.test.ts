@@ -214,6 +214,50 @@ describe("createIntegrationWizard", () => {
     expect(wizard.errorMessage).toMatch(/schemaVersion/);
   });
 
+  it("save(): failure cleans up secrets already stored via DELETE", async () => {
+    const deleted: string[] = [];
+    const wizard = createIntegrationWizard({
+      fetchFn: (async (input, init) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if ((init?.method ?? "GET") === "DELETE") {
+          const match = url.match(/\/secrets\/([^/?]+)/);
+          if (match) deleted.push(decodeURIComponent(match[1]));
+          return new Response(JSON.stringify({ existed: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        // POST /api/integrations fails — wizard should rollback via DELETE.
+        return new Response(JSON.stringify({ error: "INTERNAL" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    // Hand-craft a picked entry as if submitSecret had already stamped the ref.
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          tokenSecretRef: "cc-1-abc",
+        },
+        hasStoredSecret: true,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.save();
+    flushSync();
+    expect(wizard.step).toBe("error");
+    expect(deleted).toEqual(["cc-1-abc"]);
+  });
+
   it("reset(): returns to step=detect and clears state", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([

@@ -107,19 +107,41 @@ function makePostIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
   };
 }
 
+/**
+ * Validate the `:ref` path parameter. Express decodes URL-encoded params
+ * before the handler sees them, so an attacker could pass arbitrary
+ * bytes through `encodeURIComponent`. We constrain to a conservative
+ * character class — alphanumeric, `-`, `_`, `~`, `.` — and a 256-char
+ * upper bound. Native keychains accept much more, but the wizard only
+ * ever generates short UUID-derived refs.
+ */
+const REF_CHAR_CLASS = /^[\w\-~.]+$/;
+const REF_MAX_LENGTH = 256;
+/** Practical upper bound for an auth token. Largest realistic API key is well under 4 KB. */
+const SECRET_MAX_LENGTH = 8192;
+
+function isValidRef(ref: unknown): ref is string {
+  return (
+    typeof ref === "string" &&
+    ref.length > 0 &&
+    ref.length <= REF_MAX_LENGTH &&
+    REF_CHAR_CLASS.test(ref)
+  );
+}
+
 function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
-    const ref = req.params.ref;
-    if (!ref || ref.length === 0) {
-      res.status(400).json({ error: "BAD_REQUEST", message: "Missing :ref" });
+    if (!isValidRef(req.params.ref)) {
+      res.status(400).json({ error: "BAD_REQUEST", message: "Invalid :ref" });
       return;
     }
+    const ref = req.params.ref;
     const secret = (req.body as { secret?: unknown }).secret;
-    if (typeof secret !== "string" || secret.length === 0) {
+    if (typeof secret !== "string" || secret.length === 0 || secret.length > SECRET_MAX_LENGTH) {
       res.status(400).json({
         error: "BAD_REQUEST",
         code: ERROR_CODE_INVALID_SECRET,
-        message: "Body must include { secret: <non-empty string> }",
+        message: `Body must include { secret: <non-empty string up to ${SECRET_MAX_LENGTH} chars> }`,
       });
       return;
     }
@@ -134,13 +156,12 @@ function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
 
 function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
-    const ref = req.params.ref;
-    if (!ref || ref.length === 0) {
-      res.status(400).json({ error: "BAD_REQUEST", message: "Missing :ref" });
+    if (!isValidRef(req.params.ref)) {
+      res.status(400).json({ error: "BAD_REQUEST", message: "Invalid :ref" });
       return;
     }
     try {
-      const existed = await deps.keychain.deleteSecret(ref);
+      const existed = await deps.keychain.deleteSecret(req.params.ref);
       res.status(200).json({ existed });
     } catch (err) {
       sendKeychainError(res, err, "Failed to delete secret");
@@ -148,11 +169,17 @@ function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   };
 }
 
+/**
+ * Internal-error response. The full error is logged server-side; the client
+ * gets only a generic message. Other routes in this codebase follow the
+ * same pattern — leaking filesystem paths or stack traces through the
+ * response body is a no-no even on a loopback-only server.
+ */
 function sendInternal(res: Response, err: unknown, label: string): void {
   console.error(`[Tandem] ${label}:`, err);
   res.status(500).json({
     error: "INTERNAL",
-    message: err instanceof Error ? err.message : String(err),
+    message: "Internal server error",
   });
 }
 

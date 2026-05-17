@@ -91,7 +91,10 @@ export function createApiMiddleware(extraHosts: string[] = []): Handler {
     }
     const origin = req.headers.origin as string | undefined;
     res.header("Access-Control-Allow-Origin", isLocalhostOrigin(origin) ? origin! : "null");
-    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    // DELETE added in #477 PR 3c-i for /api/integrations/secrets/:ref — Tauri's
+    // tauri.localhost origin sends preflight for cross-origin requests, and
+    // omitting DELETE here silently breaks secret deletion.
+    res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") {
       res.sendStatus(204);
