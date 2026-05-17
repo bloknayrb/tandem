@@ -46,19 +46,20 @@
  *     and keeps the ordering obvious in stack traces.
  *   - `recordTombstone(docHash, id, prevRev)` is PURE STATE MUTATION. It
  *     appends to the tombstone ledger and returns. It does NOT queue a
- *     store write on its own — the delete MCP tool always follows
- *     `recordTombstone` with a Y.Map.delete inside an MCP-origin
- *     transaction, and the observer fires on that delete, snapshotting the
- *     (already-updated) tombstone list via its lazy thunk. If the caller
- *     needs a standalone write without a Y.Map.delete, they call
- *     `store.flush()` explicitly.
+ *     store write on its own. The observer that wraps `annMap` records
+ *     tombstones automatically on every `delete` mutation (regardless of
+ *     origin) using the value's pre-delete `rev` from `YMapEvent.changes`.
+ *     Callers may also call `recordTombstone` directly (it is idempotent
+ *     via dedup), but the observer guarantees deletes that bypass the MCP
+ *     tool path — stale-tab CRDT merges, browser-origin deletes, future
+ *     write paths — still produce tombstones. See #695.
  */
 
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { shouldSkipDurableSync, withFileSync } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
+import { FILE_SYNC_ORIGIN } from "../events/origins.js";
 import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
 import {
   type AnnotationDocV1,
@@ -236,23 +237,58 @@ export function registerAnnotationObserver(
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
-  const onMutation = (_ev: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
-    // ADR-031 durable-sync skip set: file-sync (echo) + internal (setup
-    // writes are not user-meaningful state to persist).
-    if (shouldSkipDurableSync(txn.origin)) return;
+  const onAnnMutation = (ev: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
+    // Record tombstones for every delete the observer sees, regardless of
+    // origin (MCP, browser, stale-tab CRDT merge, file-sync echo, future
+    // paths). The pre-delete value is exposed via
+    // `YMapEvent.changes.keys[i].oldValue`; we extract `.rev` from it.
+    // `recordTombstone` dedupes by id (keeping highest rev), so the
+    // loadAndMerge seed + observer-driven record on the same delete is a
+    // no-op. Recording unconditionally — including for FILE_SYNC_ORIGIN —
+    // is the load-bearing invariant: if `loadAndMerge` ever failed or was
+    // skipped (partial load, error path), the FILE_SYNC_ORIGIN early-return
+    // below would otherwise drop the tombstone silently.
+    for (const [id, change] of ev.changes.keys) {
+      if (change.action !== "delete") continue;
+      const oldValue = change.oldValue as { rev?: number } | undefined;
+      const hasRev = typeof oldValue?.rev === "number";
+      const prevRev = hasRev ? (oldValue as { rev: number }).rev : 0;
+      recordTombstone(docHash, id, prevRev);
+      console.warn(
+        `[ANNOTATION-SYNC] tombstone recorded docHash=${docHash} id=${id} prevRev=${prevRev} origin=${String(txn.origin)}`,
+      );
+      if (!hasRev) {
+        console.warn(
+          `[ANNOTATION-SYNC] tombstone for id=${id} has no oldValue.rev; using 0 — CRDT merge ordering may be non-deterministic`,
+        );
+      }
+    }
 
-    // Everything else (mcp / reload / browser per ADR-031) is durable-meaningful.
-    // Queue a LAZY snapshot — the thunk only runs when the debounce timer fires,
-    // so a burst of N mutations produces one serialization.
+    // The file-sync path writes into the Y.Map; echoing that back into the
+    // file would be wasted I/O and — under contention — could race. The
+    // FILE_SYNC early-return guards ONLY the durable-write queue; tombstones
+    // above are recorded unconditionally to survive partial-load and bypass
+    // paths.
+    if (txn.origin === FILE_SYNC_ORIGIN) return;
+
+    // Everything else is user intent: MCP_ORIGIN (Claude via an MCP tool),
+    // null/undefined (browser), or any future origin tag we haven't named
+    // yet. Queue a LAZY snapshot — the thunk only runs when the debounce
+    // timer fires, so a burst of N mutations produces one serialization.
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
   };
 
-  annMap.observe(onMutation);
-  repMap.observe(onMutation);
+  const onRepMutation = (_ev: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
+    if (txn.origin === FILE_SYNC_ORIGIN) return;
+    store.queueWrite(() => snapshot(ydoc, docHash, meta));
+  };
+
+  annMap.observe(onAnnMutation);
+  repMap.observe(onRepMutation);
 
   return (phase: ObserverCleanupPhase = "close") => {
-    annMap.unobserve(onMutation);
-    repMap.unobserve(onMutation);
+    annMap.unobserve(onAnnMutation);
+    repMap.unobserve(onRepMutation);
     if (phase === "close") {
       tombstonesByDoc.delete(docHash);
       // Drop migration-log dedup so a subsequent reopen can log once again —
@@ -270,30 +306,38 @@ export function registerAnnotationObserver(
  * Record a deletion. Appends a tombstone at `prevRev + 1` (so the tombstone
  * wins any subsequent stale-peer merge that carries the pre-deletion copy).
  *
- * PURE STATE MUTATION — no store write is queued here. The delete MCP tool
- * is expected to follow `recordTombstone` with a `Y.Map.delete(id)` inside
- * an `MCP_ORIGIN` transaction; the observer fires on that delete, and its
- * lazy snapshot thunk picks up the already-updated tombstone list. If a
- * caller records a tombstone without a paired Y.Map delete (rare — not the
- * normal flow), they should `flush()` explicitly or rely on the next
- * observer-triggered snapshot to carry the tombstone forward.
+ * PURE STATE MUTATION — no store write is queued here. The annotation
+ * observer (`registerAnnotationObserver`) calls this automatically on every
+ * non-file-sync Y.Map delete event, snapshotting the pre-delete `rev` from
+ * `YMapEvent.changes.keys`. Callers that want a synchronous tombstone
+ * record without waiting for the observer can still call this directly —
+ * it is idempotent.
  *
  * Idempotent: a duplicate call with the same `(id, rev)` (or an older rev
  * for the same id) is a no-op. Guards against unbounded array growth if a
- * caller double-fires.
+ * caller double-fires (and is the contract relied on when the observer
+ * fires after a caller-side `recordTombstone`).
  */
 export function recordTombstone(docHash: string, annotationId: string, prevRev: number): void {
   const list = tombstonesByDoc.get(docHash) ?? [];
   const newRev = prevRev + 1;
-  // Dedupe: if we already have a tombstone at `newRev` or higher for this id,
-  // the call is redundant. Cheap linear scan — tombstone arrays are small.
-  if (list.some((t) => t.id === annotationId && t.rev >= newRev)) return;
-  list.push({
+  // Coalesce by id, keeping only the highest rev. Without this, when peer A
+  // writes tombstone rev=N to file and peer B's observer later records the
+  // same delete at a locally-higher rev (concurrent edit bumped local rev
+  // past file's), the old `(id, rev >= newRev)` predicate missed dedup and
+  // the ledger grew unboundedly per peer × concurrent-edit count.
+  let highestExisting = -1;
+  for (const t of list) {
+    if (t.id === annotationId && t.rev > highestExisting) highestExisting = t.rev;
+  }
+  if (highestExisting >= newRev) return; // existing entry already wins
+  const filtered = highestExisting >= 0 ? list.filter((t) => t.id !== annotationId) : list;
+  filtered.push({
     id: annotationId,
     rev: newRev,
     deletedAt: Date.now(),
   });
-  tombstonesByDoc.set(docHash, list);
+  tombstonesByDoc.set(docHash, filtered);
 }
 
 /**
@@ -464,7 +508,7 @@ export async function loadAndMerge(
   // those additions land durably without waiting for the next mutation.
   let needsWrite = false;
 
-  withFileSync(ydoc, () => {
+  ydoc.transact(() => {
     // Apply tombstones first so a later merge step can't overwrite a winning
     // delete.
     for (const stone of file.tombstones) {
@@ -499,7 +543,7 @@ export async function loadAndMerge(
     const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
     const repResult = mergeMap(repMap, fileReplies, normalizeReply);
     if (repResult.needsWrite) needsWrite = true;
-  });
+  }, FILE_SYNC_ORIGIN);
 
   if (needsWrite) {
     store.queueWrite(() => snapshot(ydoc, docHash, meta));

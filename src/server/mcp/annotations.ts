@@ -28,7 +28,6 @@ import {
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
-import { recordTombstone } from "../annotations/sync.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
@@ -61,21 +60,19 @@ function getRepliesMap(ydoc: Y.Doc): Y.Map<unknown> {
   return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 }
 
-/** Records a tombstone (sync module side effect) then removes the annotation and its orphaned replies. */
+/** Remove the annotation and its orphaned replies. Tombstones are recorded
+ *  automatically by the sync observer on the Y.Map delete event (see #695). */
 export function removeAnnotationById(
   ydoc: Y.Doc,
   annotationsMap: Y.Map<unknown>,
   filePath: string,
   annotationId: string,
 ): { ok: true; id: string } | { ok: false; code: string; error: string } {
+  void filePath;
   const existing = annotationsMap.get(annotationId) as Annotation | undefined;
   if (!existing) {
     return { ok: false, code: "NOT_FOUND", error: `Annotation ${annotationId} not found` };
   }
-
-  // Record tombstone BEFORE delete so the sync observer's lazy snapshot already
-  // carries the entry (order is load-bearing — see sync.ts `recordTombstone`).
-  recordTombstone(docHash(filePath), annotationId, existing.rev ?? 0);
 
   withMcp(ydoc, () => {
     annotationsMap.delete(annotationId);

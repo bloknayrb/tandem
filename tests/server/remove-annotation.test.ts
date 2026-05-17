@@ -1,27 +1,60 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { getTombstones, resetForTesting } from "../../src/server/annotations/sync.js";
+import {
+  createStore,
+  resetForTesting as resetStoreForTesting,
+} from "../../src/server/annotations/store.js";
+import {
+  getTombstones,
+  registerAnnotationObserver,
+  resetForTesting,
+} from "../../src/server/annotations/sync.js";
 import {
   addReplyToAnnotation,
   createAnnotation,
   removeAnnotationById,
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
+
+useTmpAnnotationsEnvWithFlag("tandem-remove-annotation-test-");
+
+const observerCleanups: Array<() => void> = [];
+
+/** Mirror the production wiring: register the sync observer so the tombstone
+ * ledger is updated automatically on Y.Map deletes (see #695). */
+function bindObserver(ydoc: ReturnType<typeof setupDoc>, filePath: string) {
+  const hash = docHash(filePath);
+  const store = createStore(hash, { filePath });
+  const cleanup = registerAnnotationObserver({
+    ydoc,
+    store,
+    docHash: hash,
+    meta: { filePath },
+  });
+  observerCleanups.push(cleanup);
+}
 
 beforeEach(() => {
   clearOpenDocs();
   resetForTesting();
+  resetStoreForTesting();
+});
+
+afterEach(() => {
+  while (observerCleanups.length) observerCleanups.pop()?.();
 });
 
 describe("removeAnnotationById", () => {
   it("deletes annotation from map and records tombstone", () => {
     const ydoc = setupDoc("rm-fn-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const filePath = "/tmp/rm-fn-1.md";
+    bindObserver(ydoc, filePath);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test note");
 
-    const filePath = "/tmp/rm-fn-1.md";
     const result = removeAnnotationById(ydoc, map, filePath, id);
 
     expect(result.ok).toBe(true);

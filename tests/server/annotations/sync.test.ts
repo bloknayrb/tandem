@@ -1039,6 +1039,126 @@ describe("recordTombstone + getTombstones", () => {
   });
 });
 
+describe("observer-driven tombstones (#695)", () => {
+  it("MCP-origin Y.Map.delete produces a tombstone via the observer", () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_dead", annRecord({ id: "ann_dead", rev: 3 }));
+
+    ydoc.transact(() => annMap.delete("ann_dead"), MCP_ORIGIN);
+
+    const stones = getTombstones(HASH_A);
+    expect(stones).toHaveLength(1);
+    expect(stones[0].id).toBe("ann_dead");
+    expect(stones[0].rev).toBe(4); // prevRev (3) + 1
+
+    cleanup();
+  });
+
+  it("browser-origin Y.Map.delete produces a tombstone via the observer", () => {
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_dead", annRecord({ id: "ann_dead", rev: 7 }));
+
+    // No-origin transaction simulates a browser-driven delete that bypasses
+    // the MCP tool. Pre-fix this would silently skip the tombstone ledger
+    // and the annotation could resurrect from a stale-tab CRDT merge.
+    ydoc.transact(() => annMap.delete("ann_dead"));
+
+    const stones = getTombstones(HASH_A);
+    expect(stones).toHaveLength(1);
+    expect(stones[0].id).toBe("ann_dead");
+    expect(stones[0].rev).toBe(8);
+
+    cleanup();
+  });
+
+  it("simulated stale-tab CRDT merge delete is captured by the observer", () => {
+    // Author A: holds an annotation. Author B (stale peer): deletes it.
+    // Merge B → A simulates the stale-tab path where the delete propagates
+    // via Hocuspocus's sync protocol rather than an MCP tool call.
+    const docA = new Y.Doc();
+    const docB = new Y.Doc();
+
+    const annA = docA.getMap(Y_MAP_ANNOTATIONS);
+    const annB = docB.getMap(Y_MAP_ANNOTATIONS);
+
+    docA.transact(() => annA.set("ann_remote", annRecord({ id: "ann_remote", rev: 2 })));
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA));
+    docB.transact(() => annB.delete("ann_remote"));
+
+    // Register observer on docA, then merge the deletion in. The observer
+    // fires with the txn origin set by Yjs's own apply path (not MCP, not
+    // FILE_SYNC), and we want the tombstone recorded.
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(docA, store));
+
+    Y.applyUpdate(docA, Y.encodeStateAsUpdate(docB));
+
+    const stones = getTombstones(HASH_A);
+    expect(stones.map((t) => t.id)).toContain("ann_remote");
+
+    cleanup();
+  });
+
+  it("FILE_SYNC-origin Y.Map.delete records a tombstone but does NOT queue a write", () => {
+    // File-sync deletes happen during `loadAndMerge` when applying file
+    // tombstones to the Y.Map. The tombstone IS recorded by the observer
+    // (load-bearing for the partial-load case where `loadAndMerge` failed
+    // or was skipped); `recordTombstone` coalesces, so the seed + observer
+    // record at the same rev is a no-op. The write queue is NOT touched —
+    // FILE_SYNC echoes must not round-trip back to disk.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_dead", annRecord({ id: "ann_dead", rev: 1 }));
+    queueSpy.mockClear();
+
+    ydoc.transact(() => annMap.delete("ann_dead"), FILE_SYNC_ORIGIN);
+
+    const stones = getTombstones(HASH_A);
+    expect(stones).toHaveLength(1);
+    expect(stones[0].id).toBe("ann_dead");
+    expect(stones[0].rev).toBe(2); // prevRev=1 + 1
+    expect(queueSpy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("FILE_SYNC-origin delete records tombstone even without loadAndMerge seed (#700 partial-load invariant)", () => {
+    // Codifies the regression fix for PR #700: if `loadAndMerge` fails or
+    // is skipped on a doc, the observer must still record tombstones on
+    // FILE_SYNC delete events so they aren't lost. Previously the early-
+    // return on FILE_SYNC_ORIGIN dropped the tombstone silently.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_orphan", annRecord({ id: "ann_orphan", rev: 3 }));
+
+    // No `loadAndMerge` call → no seed in the ledger.
+    expect(getTombstones(HASH_A)).toHaveLength(0);
+
+    ydoc.transact(() => annMap.delete("ann_orphan"), FILE_SYNC_ORIGIN);
+
+    const stones = getTombstones(HASH_A);
+    expect(stones.map((t) => t.id)).toContain("ann_orphan");
+    expect(stones.find((t) => t.id === "ann_orphan")?.rev).toBe(4);
+
+    cleanup();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Replies (canonical merge case)
 // ---------------------------------------------------------------------------
