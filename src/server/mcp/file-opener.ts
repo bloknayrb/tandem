@@ -31,11 +31,7 @@ import {
   MCP_ORIGIN,
   setFileSyncContext,
 } from "../events/queue.js";
-import { loadDocx } from "../file-io/docx.js";
-import { extractDocxComments, injectCommentsAsAnnotations } from "../file-io/docx-comments.js";
-import { htmlToYDoc } from "../file-io/docx-html.js";
-import { getAdapter } from "../file-io/index.js";
-import { loadMarkdown } from "../file-io/markdown.js";
+import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
@@ -50,7 +46,7 @@ import {
 } from "../session/manager.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { sanitizeAnnotation } from "./annotations.js";
-import { detectFormat, docIdFromPath, extractText, populateYDoc } from "./document-model.js";
+import { detectFormat, docIdFromPath, extractText } from "./document-model.js";
 import {
   addDoc,
   autoSaveAllToDisk,
@@ -252,8 +248,14 @@ export async function openScratchpad(): Promise<OpenFileResult> {
   const doc = getOrCreateDocument(id);
   // Load with empty content — the markdown adapter clears the fragment and
   // leaves it empty; Tiptap creates a default paragraph on first mount.
+  // Two-phase per ADR-036: parse("") yields { format: "md", content: "", issues: [] },
+  // apply runs synchronously inside an MCP_ORIGIN transact to match the
+  // production populate path's single-transact invariant.
   const adapter = getAdapter(format);
-  await adapter.load(doc, "");
+  const prepared = await adapter.parse("");
+  doc.transact(() => {
+    adapter.apply(doc, prepared);
+  }, MCP_ORIGIN);
 
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
   setActiveDocId(id);
@@ -409,104 +411,83 @@ interface PopulateContext {
 }
 
 /**
- * Pre-parsed source content, ready to apply into a Y.Doc inside a transact.
- * docx splits into html + comments (async pre-parse is non-trivial);
- * md/other keep raw text. Discriminator is `format`.
- */
-type PreparedContent =
-  | { format: "docx"; html: string; comments: Awaited<ReturnType<typeof extractDocxComments>> }
-  | { format: "md"; content: string }
-  | { format: "other"; content: string };
-
-/**
- * Async pre-parse step: runs OUTSIDE any Y.Doc transact and owns all async
- * work (loadDocx, extractDocxComments). Surfaces docx comment-extract failures
- * as a deduped user-facing notification — empty comments + warn toast rather
- * than aborting the whole open.
+ * Async pre-parse step: runs OUTSIDE any Y.Doc transact. Delegates all
+ * format-specific work to the adapter's `parse` (ADR-036 + PR #707 review):
+ * the adapter owns `loadDocx` / `extractDocxComments` / etc. and records
+ * parse-time failures as `LoadIssue` entries on the returned `Prepared`.
+ *
+ * Notifications happen at `applyPreparedContent` time, after combining
+ * parse-time issues (carried on `Prepared`) with apply-time issues
+ * (returned from `adapter.apply`).
  */
 async function prepareContent(
   format: string,
   source: string | Buffer,
-  ctx: PopulateContext,
-): Promise<PreparedContent> {
-  if (format === "docx") {
-    if (!Buffer.isBuffer(source)) {
-      throw Object.assign(new Error("prepareContent: docx requires Buffer source"), {
-        code: "INVALID_SOURCE",
-      });
-    }
-    const buffer = source;
-    const [html, comments] = await Promise.all([
-      loadDocx(buffer),
-      extractDocxComments(buffer).catch((err) => {
-        console.error("[docx-comments] Comment extraction failed:", err);
-        pushNotification({
-          id: generateNotificationId(),
-          type: "annotation-error",
-          severity: "warning",
-          message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments.`,
-          dedupKey: `docx-comments:${ctx.dedupSource}`,
-          timestamp: Date.now(),
-        });
-        return [] as Awaited<ReturnType<typeof extractDocxComments>>;
-      }),
-    ]);
-    return { format: "docx", html, comments };
+  _ctx: PopulateContext,
+): Promise<Prepared> {
+  if (format === "docx" && !Buffer.isBuffer(source)) {
+    throw Object.assign(new Error("prepareContent: docx requires Buffer source"), {
+      code: "INVALID_SOURCE",
+    });
   }
-  const content = typeof source === "string" ? source : source.toString("utf-8");
-  if (format === "md") return { format: "md", content };
-  return { format: "other", content };
+  const adapter = getAdapter(format);
+  return adapter.parse(source);
 }
 
 /**
  * Sync apply step: must run INSIDE the caller's `doc.transact(..., MCP_ORIGIN)`.
  *
- * For docx, snapshots annotation keys before `injectCommentsAsAnnotations` and
- * rolls back any keys it added if the inject throws. injectCommentsAsAnnotations
- * opens an inner MCP_ORIGIN transact that Yjs flattens into ours, so writes land
- * directly on this transaction's change set. Yjs does NOT roll back inner-transact
- * writes when a callback throws — without the snapshot/undo dance, the doc would
- * commit with N-of-M partial comments and re-open would hit importAnnotationId
- * dedup, permanently dropping the failing comment with no surfaced error.
+ * Delegates the actual doc mutation to `adapter.apply`. The docx adapter
+ * owns the snapshot/undo dance around `injectCommentsAsAnnotations` (Yjs
+ * does NOT roll back inner-transact writes when a callback throws). Any
+ * `LoadIssue` returned is unioned with `prepared.issues` and surfaces
+ * here as a deduped user-facing notification.
  *
- * Symmetric notification with the extract-failure path: both modes mean "docx
- * loaded without (some) comments" from the user's perspective. Distinct dedupKey
- * namespace so a file that hits both modes shows two toasts, not one collapsed.
+ * Distinct dedupKey namespaces per failure kind so a docx that hits both
+ * comments-failed AND inject-failed shows two toasts, not one collapsed.
  */
-function applyPreparedContent(doc: Y.Doc, prepared: PreparedContent, ctx: PopulateContext): void {
-  switch (prepared.format) {
-    case "docx": {
-      htmlToYDoc(doc, prepared.html);
-      if (prepared.comments.length > 0) {
-        const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
-        const before = new Set(annotMap.keys());
-        try {
-          injectCommentsAsAnnotations(doc, prepared.comments);
-        } catch (err) {
-          for (const k of annotMap.keys()) {
-            if (!before.has(k)) annotMap.delete(k);
-          }
-          console.error(
-            "[docx-comments] inject failed mid-transact; document loads without imported comments:",
-            err,
-          );
-          pushNotification({
-            id: generateNotificationId(),
-            type: "annotation-error",
-            severity: "warning",
-            message: `Failed to import some Word comments from ${ctx.displayName}. Document opened, but comments may be missing.`,
-            dedupKey: `docx-comments-inject:${ctx.dedupSource}`,
-            timestamp: Date.now(),
-          });
-        }
-      }
+function applyPreparedContent(doc: Y.Doc, prepared: Prepared, ctx: PopulateContext): void {
+  const format = prepared.format;
+  const adapter = getAdapter(format === "other" ? "txt" : format);
+  const applyIssues = adapter.apply(doc, prepared);
+  const allIssues = [...prepared.issues, ...applyIssues];
+  for (const issue of allIssues) {
+    notifyIssue(issue, ctx);
+  }
+}
+
+/** Translate a single LoadIssue to a user-facing notification. */
+function notifyIssue(issue: LoadIssue, ctx: PopulateContext): void {
+  switch (issue.kind) {
+    case "comments-failed":
+      pushNotification({
+        id: generateNotificationId(),
+        type: "annotation-error",
+        severity: "warning",
+        message: `Failed to import Word comments from ${ctx.displayName}. Document opened without comments.`,
+        dedupKey: `docx-comments:${ctx.dedupSource}`,
+        timestamp: Date.now(),
+      });
       return;
-    }
-    case "md":
-      loadMarkdown(doc, prepared.content);
+    case "inject-failed":
+      pushNotification({
+        id: generateNotificationId(),
+        type: "annotation-error",
+        severity: "warning",
+        message: `Failed to import some Word comments from ${ctx.displayName}. Document opened, but comments may be missing.`,
+        dedupKey: `docx-comments-inject:${ctx.dedupSource}`,
+        timestamp: Date.now(),
+      });
       return;
     case "other":
-      populateYDoc(doc, prepared.content);
+      pushNotification({
+        id: generateNotificationId(),
+        type: "annotation-error",
+        severity: "warning",
+        message: issue.message ?? `Loading ${ctx.displayName} produced a warning.`,
+        dedupKey: `load-other:${ctx.dedupSource}`,
+        timestamp: Date.now(),
+      });
       return;
   }
 }
@@ -916,8 +897,13 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
 
     const doc = getOrCreateDocument(id);
 
-    // 1. Read new content outside the transaction (async I/O)
+    // 1. Read new content outside the transaction (async I/O). Pre-parse
+    //    through the adapter so we use the same code path as opens
+    //    (ADR-036 + PR #707 review — single source of truth). For md/txt
+    //    `parse` is essentially a no-op wrap.
     const fileContent = await fs.readFile(filePath, "utf-8");
+    const reloadAdapter = getAdapter(format);
+    const reloadPrepared = await reloadAdapter.parse(fileContent);
 
     // 2. Single transaction: clear awareness + repopulate content, preserve annotations
     doc.transact(() => {
@@ -927,12 +913,12 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
       userAwareness.forEach((_, k) => userAwareness.delete(k));
 
-      // Repopulate content (load functions clear XmlFragment internally)
-      if (format === "md") {
-        loadMarkdown(doc, fileContent);
-      } else {
-        populateYDoc(doc, fileContent);
-      }
+      // Repopulate content via adapter.apply (clears XmlFragment internally).
+      // Any apply-time issues are dropped here — reload is a recovery path,
+      // not a user-initiated open; surfacing inject failures via toast on
+      // every file-watcher reload would be noisy. The original surface in
+      // openFileByPath catches inject failures during the initial open.
+      reloadAdapter.apply(doc, reloadPrepared);
     }, FILE_SYNC_ORIGIN);
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)

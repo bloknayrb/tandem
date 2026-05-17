@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
+import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
 import { htmlToYDoc, loadDocx } from "./docx.js";
 import {
@@ -9,7 +10,7 @@ import {
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
-import type { FormatAdapter, LoadIssue } from "./types.js";
+import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
 export {
   type AcceptedSuggestion,
@@ -17,14 +18,20 @@ export {
   type ApplyOutput,
   applyTrackedChanges,
 } from "./docx-apply.js";
-export type { FormatAdapter, LoadIssue, LoadResult } from "./types.js";
+export type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
-// -- Adapter implementations --
+// -- Adapter implementations (ADR-036 two-phase, PR #707 review revision) --
 
 const markdownAdapter: FormatAdapter = {
-  load(doc, content) {
-    loadMarkdown(doc, content as string);
-    return { issues: [] };
+  async parse(content): Promise<Prepared> {
+    return { format: "md", content: content as string, issues: [] };
+  },
+  apply(doc, prepared) {
+    if (prepared.format !== "md") {
+      throw new Error(`markdownAdapter.apply expected format "md", got "${prepared.format}"`);
+    }
+    loadMarkdown(doc, prepared.content);
+    return [];
   },
   save(doc) {
     return saveMarkdown(doc);
@@ -32,9 +39,16 @@ const markdownAdapter: FormatAdapter = {
 };
 
 const plaintextAdapter: FormatAdapter = {
-  load(doc, content) {
-    populateYDoc(doc, content as string);
-    return { issues: [] };
+  async parse(content): Promise<Prepared> {
+    const text = typeof content === "string" ? content : content.toString("utf-8");
+    return { format: "other", content: text, issues: [] };
+  },
+  apply(doc, prepared) {
+    if (prepared.format !== "other") {
+      throw new Error(`plaintextAdapter.apply expected format "other", got "${prepared.format}"`);
+    }
+    populateYDoc(doc, prepared.content);
+    return [];
   },
   save(doc) {
     return extractText(doc);
@@ -45,12 +59,17 @@ const plaintextAdapter: FormatAdapter = {
  * The .docx adapter omits `save` — .docx is read-only by ADR-004. Callers
  * check `adapter.save` (truthy) before attempting to serialize.
  *
- * `load` returns a `LoadResult` whose `issues` array surfaces partial-
- * load failures (e.g. comment extraction). The caller decides whether to
- * push a user-visible notification — see #696.
+ * Two-phase shape per ADR-036 + PR #707 review:
+ *   - `parse` runs `loadDocx` + `extractDocxComments` in parallel
+ *     (async; no doc dependency). Catches comment-extraction failure as
+ *     `LoadIssue { kind: "comments-failed" }` instead of swallowing.
+ *   - `apply` runs `htmlToYDoc` then `injectCommentsAsAnnotations`
+ *     synchronously inside the caller's transact. The snapshot/undo
+ *     dance around inject (load-bearing — Yjs doesn't roll back inner
+ *     transacts when a callback throws) lives here, not in the caller.
  */
 const docxAdapter: FormatAdapter = {
-  async load(doc, content) {
+  async parse(content): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
     const [html, comments] = await Promise.all([
@@ -64,11 +83,36 @@ const docxAdapter: FormatAdapter = {
         return [] as DocxComment[];
       }),
     ]);
-    htmlToYDoc(doc, html);
-    if (comments.length > 0) {
-      injectCommentsAsAnnotations(doc, comments);
+    return { format: "docx", html, comments, issues };
+  },
+  apply(doc, prepared) {
+    if (prepared.format !== "docx") {
+      throw new Error(`docxAdapter.apply expected format "docx", got "${prepared.format}"`);
     }
-    return { issues };
+    htmlToYDoc(doc, prepared.html);
+    const out: LoadIssue[] = [];
+    if (prepared.comments.length > 0) {
+      // Snapshot-and-rollback: Yjs does NOT roll back inner-transact writes
+      // when a callback throws, so we capture the key set before inject and
+      // delete any newly-added keys on throw. Without this, a partial inject
+      // would commit half the comments and re-open would hit importAnnotationId
+      // dedup, permanently dropping the failing comment.
+      const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
+      const before = new Set(annotMap.keys());
+      try {
+        injectCommentsAsAnnotations(doc, prepared.comments);
+      } catch (err) {
+        for (const k of annotMap.keys()) {
+          if (!before.has(k)) annotMap.delete(k);
+        }
+        console.error(
+          "[docx-comments] inject failed mid-transact; document loads without imported comments:",
+          err,
+        );
+        out.push({ kind: "inject-failed", error: err });
+      }
+    }
+    return out;
   },
 };
 
