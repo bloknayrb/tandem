@@ -26,6 +26,7 @@ import {
   generateReplyId,
 } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { acceptPending, dismissPending } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
@@ -492,20 +493,26 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      const raw = da.map.get(id) as Annotation | undefined;
-      if (!raw) return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+      // Route through the AnnotationLifecycle module (ADR-035 part 2/N).
+      // The lifecycle owns sanitize → status-check → rev-bump → tagged
+      // result; the handler becomes a thin adapter translating
+      // LifecycleResult arms to MCP error envelopes.
+      const result =
+        action === "accept"
+          ? acceptPending(id, da.ydoc, da.map)
+          : dismissPending(id, da.ydoc, da.map);
 
-      const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
-      if (ann.status !== "pending") {
-        return mcpError("ANNOTATION_NOT_PENDING", `Annotation ${id} is already ${ann.status}`);
+      switch (result.kind) {
+        case "ok":
+          return mcpSuccess({ id, status: result.data.status });
+        case "not-found":
+          return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+        case "not-pending":
+          return mcpError(
+            "ANNOTATION_NOT_PENDING",
+            `Annotation ${id} is already ${result.currentStatus}`,
+          );
       }
-      const updated = {
-        ...ann,
-        status: action === "accept" ? ("accepted" as const) : ("dismissed" as const),
-        rev: nextRev(ann),
-      };
-      withMcp(da.ydoc, () => da.map.set(id, updated));
-      return mcpSuccess({ id, status: updated.status });
     }),
   );
 
