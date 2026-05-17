@@ -355,10 +355,10 @@ test("tab switch: bubbles rebind to the active doc's annotations", async ({ page
   // ydoc/docId and the second tab's bubbles would render against stale state.
   // The visible bubble set switching after a tab swap proves the $derived
   // re-runs against the new `activeTab`.
-  const dirB = createFixtureDir("second.md");
+  const dirB = createFixtureDir("sample2.md");
   try {
     const fileA = path.join(tmpDir, "sample.md");
-    const fileB = path.join(dirB, "second.md");
+    const fileB = path.join(dirB, "sample2.md");
 
     await mcp.callTool("tandem_open", { filePath: fileA });
     await mcp.callTool("tandem_comment", {
@@ -391,17 +391,11 @@ test("tab switch: bubbles rebind to the active doc's annotations", async ({ page
     // Switch to doc A. The bubble set must change — proving the column annotation
     // input (and, by extension, the $derived that produces the handlers reading
     // `activeTab.ydoc`/`activeTab.id`) re-evaluated against the new tab.
-    const tabs = page.locator("[data-testid^='tab-']");
-    const tabACount = await tabs
-      .filter({ hasText: "sample.md" })
-      .or(tabs.filter({ hasText: "sample" }))
-      .count();
-    expect(tabACount).toBeGreaterThan(0);
-    await tabs
-      .filter({ hasText: "sample.md" })
-      .or(tabs.filter({ hasText: "sample" }))
-      .first()
-      .click();
+    // Address tabs by exact aria-label so "sample.md" doesn't collide with
+    // "sample2.md" via substring matching.
+    const tabA = page.locator("[role='tab'][aria-label='sample.md']");
+    await expect(tabA).toBeVisible({ timeout: 5_000 });
+    await tabA.click();
 
     await expect(rightBubbles).toHaveCount(1, { timeout: 5_000 });
     await expect
