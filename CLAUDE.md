@@ -60,6 +60,7 @@ Key files for navigation:
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
+- `src/server/integrations/` -- `IntegrationConfig` schema, atomic storage, migration framework (#477 PR 1; no production consumer yet — wizard PR 3 wires it up)
 - `src/client/` -- Tiptap editor, Svelte 5 components, `.svelte.ts` rune-based hooks, types (`types.ts`)
 - `src/shared/` -- Types (`types.ts`), constants (`constants.ts`), offsets (`offsets.ts`), position types (`positions/`)
 
