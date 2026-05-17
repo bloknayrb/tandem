@@ -1,3 +1,4 @@
+pub mod keychain;
 mod token_store;
 
 #[cfg(target_os = "windows")]
@@ -657,6 +658,9 @@ pub fn run() {
             cowork_retry_admin_elevation,
             restart_sidecar,
             install_update,
+            keychain::keychain_get,
+            keychain::keychain_set,
+            keychain::keychain_delete,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
