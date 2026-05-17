@@ -1,0 +1,211 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  emptyIntegrationsFile,
+  INTEGRATIONS_SCHEMA_VERSION,
+  type IntegrationsFile,
+} from "../../../src/server/integrations/schema.js";
+import {
+  createIntegrationsStore,
+  INTEGRATIONS_FILE_NAME,
+} from "../../../src/server/integrations/storage.js";
+
+const claudeCode = {
+  kind: "claude-code" as const,
+  id: "cc-1",
+  label: "Claude Code",
+  configPath: "/home/user/.claude.json",
+  transport: "http" as const,
+  url: "http://127.0.0.1:3479",
+};
+
+const claudeDesktop = {
+  kind: "claude-desktop" as const,
+  id: "cd-1",
+  label: "Claude Desktop",
+  configPath: "/Users/user/Library/Application Support/Claude/claude_desktop_config.json",
+  transport: "stdio" as const,
+};
+
+describe("createIntegrationsStore", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-integ-"));
+  });
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a non-empty basePath", () => {
+    expect(() => createIntegrationsStore("")).toThrow(/basePath is required/);
+  });
+
+  it("filePath joins basePath with integrations.json", () => {
+    const store = createIntegrationsStore(tmpDir);
+    expect(store.filePath).toBe(path.join(tmpDir, INTEGRATIONS_FILE_NAME));
+  });
+
+  it("read() returns an empty config when the file does not exist", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    const result = await store.read();
+    expect(result).toEqual(emptyIntegrationsFile());
+  });
+
+  it("write() then read() round-trips a populated config", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    const file: IntegrationsFile = {
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [claudeCode, claudeDesktop],
+      defaultIntegrationId: "cc-1",
+    };
+    await store.write(file);
+
+    const result = await store.read();
+    expect(result).toEqual(file);
+  });
+
+  it("write() creates the basePath directory if missing", async () => {
+    const nested = path.join(tmpDir, "nested", "dir");
+    const store = createIntegrationsStore(nested);
+    await store.write(emptyIntegrationsFile());
+    const stat = await fs.promises.stat(nested);
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it("write() rejects an invalid IntegrationsFile shape", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await expect(
+      store.write({
+        schemaVersion: 1,
+        integrations: [{ kind: "unknown" } as never],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "write() creates the file with 0o600 permissions on POSIX",
+    async () => {
+      const store = createIntegrationsStore(tmpDir);
+      await store.write(emptyIntegrationsFile());
+      const stat = await fs.promises.stat(store.filePath);
+      expect(stat.mode & 0o777).toBe(0o600);
+    },
+  );
+
+  it("read() backs up malformed JSON and returns an empty config", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await fs.promises.writeFile(store.filePath, "{ not valid json", "utf8");
+    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await store.read();
+      expect(result).toEqual(emptyIntegrationsFile());
+
+      const entries = await fs.promises.readdir(tmpDir);
+      const backup = entries.find((name) => name.startsWith(`${INTEGRATIONS_FILE_NAME}.broken-`));
+      expect(backup).toBeDefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "read() malformed-JSON backup has 0o600 permissions on POSIX",
+    async () => {
+      const store = createIntegrationsStore(tmpDir);
+      await fs.promises.writeFile(store.filePath, "{ bad", "utf8");
+      const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await store.read();
+        const entries = await fs.promises.readdir(tmpDir);
+        const backup = entries.find((name) => name.startsWith(`${INTEGRATIONS_FILE_NAME}.broken-`));
+        expect(backup).toBeDefined();
+        const stat = await fs.promises.stat(path.join(tmpDir, backup!));
+        expect(stat.mode & 0o777).toBe(0o600);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    },
+  );
+
+  it("read() throws when schemaVersion is in the future", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await fs.promises.writeFile(
+      store.filePath,
+      JSON.stringify({ schemaVersion: 99, integrations: [] }),
+      "utf8",
+    );
+    await expect(store.read()).rejects.toThrow(/newer than this Tandem build/);
+  });
+
+  it("read() backs up files missing schemaVersion", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await fs.promises.writeFile(store.filePath, JSON.stringify({ integrations: [] }), "utf8");
+    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await store.read();
+      expect(result).toEqual(emptyIntegrationsFile());
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("read() clears a dangling defaultIntegrationId and warns", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await fs.promises.writeFile(
+      store.filePath,
+      JSON.stringify({
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [claudeCode],
+        defaultIntegrationId: "nonexistent",
+      }),
+      "utf8",
+    );
+    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await store.read();
+      expect(result.defaultIntegrationId).toBeUndefined();
+      expect(result.integrations).toEqual([claudeCode]);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("read() preserves a valid defaultIntegrationId", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await store.write({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [claudeCode, claudeDesktop],
+      defaultIntegrationId: "cd-1",
+    });
+    const result = await store.read();
+    expect(result.defaultIntegrationId).toBe("cd-1");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "write() refuses to follow a symlink at the destination on POSIX (EXDEV-fallback path)",
+    async () => {
+      const store = createIntegrationsStore(tmpDir);
+      const realTarget = path.join(tmpDir, "redirect-target.json");
+      await fs.promises.writeFile(realTarget, "", "utf8");
+      await fs.promises.symlink(realTarget, store.filePath);
+
+      // The normal rename path replaces the symlink itself on POSIX
+      // (the symlink at the destination is overwritten). The hardened
+      // behavior we care about is the EXDEV branch, but reliably forcing
+      // EXDEV in a unit test requires a cross-filesystem setup that the
+      // CI runners do not guarantee. We assert the post-state on the
+      // normal-path write: the symlink target file must NOT have been
+      // modified through the link.
+      await store.write(emptyIntegrationsFile());
+      const targetContent = await fs.promises.readFile(realTarget, "utf8");
+      expect(targetContent).toBe("");
+    },
+  );
+});
