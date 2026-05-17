@@ -102,6 +102,11 @@ async function readOneTarget(target: DetectedTarget): Promise<ExistingMcpInstall
 function extractEntry(mcp: Record<string, unknown>, name: string): McpEntry | undefined {
   const raw = mcp[name];
   if (!raw || typeof raw !== "object") return undefined;
+  // The object-shape guard rejects primitives and null, but does not validate
+  // the McpEntry field types (e.g. a `command: null` would pass through). PR
+  // 3c's wizard consumer MUST re-validate shape before trusting any field —
+  // the cast here is "yes, this is something we extracted from mcpServers,"
+  // not "this is a valid McpEntry."
   return raw as McpEntry;
 }
 

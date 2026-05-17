@@ -122,6 +122,48 @@ describe("readExistingTandemEntries", () => {
     // No ~/.claude.json, no ~/.claude/, not forced — should be empty.
     expect(installs).toEqual([]);
   });
+
+  it("extracts a tandem-channel entry even when no tandem entry is present", async () => {
+    await fs.promises.writeFile(
+      path.join(tmpHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": {
+            command: "node",
+            args: ["/path/to/channel.js"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.status).toBe("ok");
+    expect(cc?.tandemEntry).toBeUndefined();
+    expect(cc?.channelEntry).toBeDefined();
+    expect(cc?.channelEntry?.command).toBe("node");
+  });
+
+  it("returns status: error with message on a non-ENOENT read failure (EACCES)", async () => {
+    // Make ~/.claude.json unreadable. On Linux/macOS, chmod 000 denies even the
+    // owner. Skipped on Windows where chmod is a no-op and on root (uid 0,
+    // which our CI may run as) where the mode bit doesn't restrict.
+    if (process.platform === "win32") return;
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const configPath = path.join(tmpHome, ".claude.json");
+    await fs.promises.writeFile(configPath, "{}", "utf-8");
+    await fs.promises.chmod(configPath, 0o000);
+    try {
+      const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+      const cc = installs.find((i) => i.target.kind === "claude-code");
+      expect(cc?.status).toBe("error");
+      expect(cc?.errorMessage).toBeDefined();
+      expect(cc?.errorMessage?.length).toBeGreaterThan(0);
+    } finally {
+      // Restore so rm -rf can clean up.
+      await fs.promises.chmod(configPath, 0o600);
+    }
+  });
 });
 
 describe("hasExistingTandemEntry", () => {
