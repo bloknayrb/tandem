@@ -1,9 +1,8 @@
 <script lang="ts">
-import { API_OPEN } from "../../shared/api-paths.js";
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import type { OpenTab } from "../types.js";
-import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
+import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
 
@@ -282,20 +281,11 @@ $effect(() => {
       anchorEl={openBtnEl}
       onOpen={async (filePath) => {
         showRecent = false;
-        try {
-          const res = await fetch(`${API_BASE}${API_OPEN}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filePath }),
-          });
-          if (res.ok) {
-            saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
-          } else {
-            const err = await res.text();
-            console.warn("[tandem] failed to open recent file:", err);
-          }
-        } catch (err) {
-          console.warn("[tandem] failed to open recent file:", err);
+        const result = await openServerPath(filePath);
+        if (result.ok) {
+          saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
+        } else {
+          console.warn("[tandem] failed to open recent file:", result.error);
         }
       }}
       onNewScratchpad={() => {
