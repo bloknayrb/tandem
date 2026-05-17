@@ -453,7 +453,7 @@ describe("injectCommentsAsAnnotations", () => {
     expect(count).toBe(1);
   });
 
-  it("uses mcp origin tag on the transaction", () => {
+  it("uses internal origin tag on the transaction (ADR-031)", () => {
     const origins: unknown[] = [];
     doc.on("beforeTransaction", (tr: Y.Transaction) => {
       origins.push(tr.origin);
@@ -470,7 +470,10 @@ describe("injectCommentsAsAnnotations", () => {
     ];
 
     injectCommentsAsAnnotations(doc, comments);
-    expect(origins).toContain("mcp");
+    // .docx comment injection happens during file open, before observers
+    // attach — withInternal is the ADR-031 category. Channel skips internal;
+    // durable-sync skips internal; tombstone observer skips internal.
+    expect(origins).toContain("internal");
   });
 
   it("handles multiple comments", () => {

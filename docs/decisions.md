@@ -302,7 +302,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 - **(c) Keep current model, remove directedAt only:** Minimal change. Doesn't address the flag/highlight overlap or the unintuitive type-based mental model.
 **Rationale:** The type-based model forced users to think in annotation taxonomy rather than intent. The audience-based model maps directly to user goals: mark text (highlight), write for myself (note), write for Claude (comment). Removing flag is safe because highlight colors already carry severity semantics. Removing `directedAt` eliminates a vestigial field with no behavioral backing. Making notes convertible to comments supports a natural workflow: review alone, mark up, then selectively share with Claude.
 **Consequences:** `AnnotationTypeSchema` changes from `["highlight", "comment", "flag"]` to `["highlight", "note", "comment"]`. `sanitizeAnnotation()` migrates legacy `flag` → `note` and strips `directedAt`. Side panel filters change. Tutorial annotations updated. MCP tools reduced. Claude skill updated to not act on notes. Full design in `docs/annotation-system-analysis.md`.
-**Imported `.docx` comments:** Word reviewer comments enter as `author: "import"`, `type: "comment"` so Claude can act on them like any other comment. The user can scope to them via the side-panel "Imported" filter (which keys off `author: "import"`, not type) or via `tandem_getAnnotations` with `author: "import"`. The earlier PR #474 plan to import them as `type: "note"` (gated behind a `tandem_getAnnotations` `includeImports` opt-in) was reverted in #482 / v0.9.1 before any tagged release shipped — surfacing reviewer comments to Claude by default matches the .docx review use case better than forcing per-document opt-in. `sanitizeAnnotation` migrates legacy `author: "import", type: "note"` records to `type: "comment"` on read (one-line clause, emits a `import-note-to-comment` migration-log event). `tandem_checkInbox` continues to ignore notes; imported comments now flow through the inbox like any comment.
+**Imported `.docx` comments (revised 2026-05-15, ADR-035 grilling pass):** Word reviewer comments enter as `author: "import"`, `type: "note"` — *not* `"comment"`. Rationale: imported comments are potentially third-party content (a colleague's review pass), not the active user's intent. The audience-based model already treats notes as user-private — visible to the user, surfaced via `tandem_getAnnotations`, but not auto-pushed to Claude. The user reviews each imported comment and promotes individually to `type: "comment"` (using the existing note→comment "Send to Claude" action) when they want Claude to act on it. `tandem_checkInbox` continues to ignore notes, including imports — Claude does not see imported comments without explicit user promotion. `sanitizeAnnotation` migrates legacy `author: "import", type: "comment"` records to `type: "note"` on read (emits an `import-comment-to-note` migration-log event). This reverses the earlier PR #482 / v0.9.1 revert; the original PR #474 import-as-note model was correct, and the revert traded user agency for convenience that wasn't load-bearing. The side-panel "Imported" filter (keyed off `author: "import"`) continues to work for both pre- and post-migration records.
 **Target version:** v0.9.0 (data model + tool consolidation, PR #474); UI redesign (selection toolbar, convert-to-comment) deferred to v0.10.0 Svelte migration.
 
 ## ADR-028: Plugin Monitor URL and Auth Resolution — `userConfig` over Hardcoded Default
@@ -353,3 +353,322 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 **Cost / quota ceiling:** Basic tier includes 5,000 signing operations / month at ~$10. One full release across all platforms uses ~6 operations (NSIS + MSI primary + sidecar). Monthly signing volume even with weekly rc tags is far below ceiling. If volume grows (e.g. nightly builds), upgrade to Premium or add throttling. Cost is per-signing-operation, not per-artifact-size; large NSIS bundles are not penalized.
 
 **Out of scope / follow-ups:** Tightening `id-token: write` permission scope to the Windows job only (low risk, deferred); hardening the cert-subject regex after the first signed rc captures the real DN; Dependabot config for the pinned `azure/login` SHA (accepting the freeze).
+
+## ADR-031: Origin-Tagged Transaction Wrappers
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15)
+
+**Context:** Critical Rule #2 required every server-side `doc.transact(...)` to carry an origin string — `MCP_ORIGIN` ("mcp") for Claude-initiated writes, `FILE_SYNC_ORIGIN` ("file-sync") for disk-reload echoes. Enforcement was reviewer-eyes plus a post-tool-use hook. An audit found ~40 `transact()` callsites across the server; roughly half passed an origin and half did not. The unlabelled half were not (yet) bugs — they happen during session restore, mdast / docx population, tutorial seeding, scratchpad seeding, and `clearAndReload`, which all run before the event queue and durable-annotation observers attach to that document — but the rule "every write declares its origin" had a silent exception that lived only in the reviewer's head. The origins themselves were plain `string` constants, so a typo or a forgotten second argument compiled fine and broke echo-prevention silently.
+
+**Decision:** Replace direct `doc.transact(...)` with five free-function helpers in `src/shared/origins.ts`:
+- `withMcp(doc, fn)` — Claude-initiated writes from MCP tools.
+- `withFileSync(doc, fn)` — writes echoing from the durable-annotation file-writer (the back-from-disk path: load JSON annotations, write into Y.Map).
+- `withInternal(doc, fn)` — server-internal setup writes that must not surface as user events and must not be persisted back as if they were live edits. Worked examples (every `withInternal` callsite in the codebase falls into one of these):
+  - Session restore — populating Y.Doc fragment from disk-cached state; pruning chat history pre-save (`src/server/session/manager.ts`).
+  - mdast / `.docx` HTML population during file open (`applyPreparedContent` in `src/server/mcp/file-opener.ts`).
+  - Tutorial / scratchpad seeding (`src/server/mcp/tutorial-annotations.ts`; scratchpad seed in `src/server/mcp/file-opener.ts`).
+  - **`clear-and-reload`** user-initiated via `tandem_open force: true` — `withInternal`, distinct from the file-watcher `reloadFromDisk` path (`withReload`). The user-initiated force-reload semantically overwrites local state with disk truth; channel skip is correct, durable-sync skip is correct (the file is authoritative), tombstone skip is correct (cleared annotations are not user deletions).
+  - **Cleanup-after-failure paths** — e.g. `populateDocFromContent` partial-state cleanup in `src/server/mcp/file-opener.ts` and `evictPartialDocState` eviction transacts. These are not user actions; observability surfaces should not see them.
+  - **Server metadata broadcasts on CTRL_ROOM** — `broadcastOpenDocs`, `Y_MAP_GENERATION_ID`, `Y_MAP_STORE_READ_ONLY` writes in `src/server/mcp/document-service.ts`. These are server-internal state announcements. Today they are tagged `MCP_ORIGIN` only because every observer that would care happens to skip MCP — a behaviour-by-coincidence pattern. `withInternal` makes the intent explicit and survives future observer changes.
+- `withReload(doc, fn)` — file-watcher reload path (the `reloadFromDisk` flow): channel skips the event (not a user action) but durable-sync *must* persist (we want the re-anchored relRanges saved). Added after the CRDT-reviewer agent flagged that `reloadFromDisk` couldn't be classified under the original four-origin set without regressing #622 or producing a labelling lie. The post-reload annotation-refresh step (`refreshAllRanges` + position relocation, currently the second transact in `reloadFromDisk`) is also `withReload` — it is a continuation of the same logical operation, not a separate user-intent write.
+- `withBrowser(doc, fn)` — user edits originating in the browser. Sets origin `"browser"`. No listener filters on it today, but the explicit label preserves the universal rule and gives future listeners a value to read.
+
+Skip-set matrix:
+
+| Origin     | Channel event queue | Durable-sync observer | Tombstone observer |
+|------------|---------------------|-----------------------|--------------------|
+| `mcp`      | skip                | persist               | record             |
+| `file-sync`| skip                | skip                  | **skip**           |
+| `internal` | skip                | skip                  | skip               |
+| `reload`   | skip                | **persist**           | record             |
+| `browser`  | emit                | persist               | record             |
+
+The tombstone observer's `file-sync` skip is load-bearing: file-opener's eviction-and-reopen path (clear under `file-sync`, repopulate from disk) must not tombstone the cleared annotations or they would not reappear after the reopen. Same for `internal` (population writes are not real deletes even when overwriting prior state).
+
+A pre-commit hook (`.claude/hooks/block-raw-transact.sh`) blocks any new `*.transact(` outside the helpers' file. The grep is paired with a Biome AST lint rule (`MemberExpression(property.name === "transact")`) to catch dynamic-dispatch bypasses (`doc["trans" + "act"](...)`, `Reflect.apply`, etc.) the grep misses. Test fixtures that construct synthetic Y.Docs are allowlisted via path pattern (`tests/**`, `**/*.test.ts`) or routed through a `transactForTest` helper exposed from `src/shared/origins.ts`.
+
+**Options considered:**
+- **(a) Four helpers, universal hook rule (chosen):** One mental model — "every write goes through a helper." No exceptions for `src/client/` vs `src/server/`.
+- **(b) Server-only wrapper, raw `transact` allowed in browser:** Smaller diff, but the hook rule needs a path exception, and a reader of `withMcp` naturally asks "what about user edits?" — the answer "raw transact" reintroduces the discipline-only contract the wrapper was meant to remove.
+- **(c) Branded `Origin` type with same call shape:** Keep `doc.transact(fn, MCP_ORIGIN)`, but make `MCP_ORIGIN` a branded type so plain strings fail to type-check. Does not catch the actual bug we care about — `doc.transact(fn)` with no second argument still compiles, because Y.Doc's second arg is declared optional upstream.
+- **(d) Audit-and-remove all untagged writes, three categories only:** Treats the unlabelled writes as latent bugs to clean up. Rejected because the writes are intentional — they are a real category (server-internal setup), and naming them is more honest than re-classifying each as `mcp` or `file-sync`.
+- **(e) Scoped writer (`originScope(doc, MCP).run(fn)`):** Useful for codebases with many multi-step transactions sharing one origin. Tandem's writes are overwhelmingly single-step; the scope object is over-engineered.
+
+**Rationale:** The wrapper turns Critical Rule #2 from a prose rule reviewers must remember into a structural rule the toolchain enforces. The universal hook rule (no raw `.transact(` anywhere in `src/`) is simpler to teach and to verify than a server-only rule with a client-side exception. `internal` exists because the unlabelled startup writes are a genuine category, not an accident — giving them a name makes the contract complete instead of implicit.
+
+**Consequences:**
+- `src/shared/origins.ts` owns the helpers and origin constants; `src/server/events/queue.ts` and `src/server/events/origins.ts` re-export for backward compatibility during migration.
+- Pre-commit hook `.claude/hooks/block-raw-transact.sh` exits 2 (block) on `*.transact(` matches in `src/` outside the helpers' file.
+- Channel event queue (`src/server/events/queue.ts`) and durable-annotation sync observer (`src/server/annotations/sync.ts`) skip transactions whose origin is `mcp`, `file-sync`, or `internal`.
+- Migration touches the ~40 server `transact` callsites plus the small number of browser callsites (e.g. `src/client/editor/toolbar/highlight-toggle.ts`). Sequenced as a single PR — the helpers' behaviour is functionally identical to the existing `doc.transact(fn, origin)` call shape, so the migration is mechanical.
+- Critical Rule #2 in `CLAUDE.md` rewritten to name the four helpers and the four categories; the old MCP_ORIGIN / FILE_SYNC_ORIGIN constants stay exported (as `withMcp`'s internal origin string) but are no longer surfaced in the contract.
+- Future channel-event observer work (see #5 grill) can rely on origins being structurally enforced rather than disciplinary, which simplifies the observer-factory design.
+
+## ADR-032: Position Module Results as Tagged Variants
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Continuation of ADR-018.
+
+**Context:** ADR-018 consolidated position logic into `src/server/positions.ts`, `src/client/positions.ts`, and `src/shared/positions/`. The consolidation succeeded structurally but left the result *types* under-designed. Each of the four high-level entry points returns an ad-hoc shape that hides a sum type behind a single nominal return:
+- `refreshRange(ann, ydoc, map?)` returns `Annotation` but takes six semantically distinct paths: healthy (unchanged), updated (relRange resolved to new offsets), lazy-attached (relRange computed from flat), repaired (dead relRange re-anchored from flat), stripped (dead relRange deleted because re-anchor failed — annotation is now degraded but indistinguishable from healthy at the type level), and inverted (newFrom > newTo — logs an error and returns input unchanged, silently masking data corruption).
+- `annotationToPmRange(ann, pmDoc, ydoc)` already encodes its variant via a `method: 'rel' | 'flat'` field but does not include a `'failed'` arm (null is used) and every checked caller (`useAnnotationReview`, `Editor.svelte` extension, `useMarginPositions`) ignores `method` entirely.
+- `anchoredRange(...)` returns `{ok, fullyAnchored, range, relRange?}` — a boolean-tagged variant in flat object form.
+- `validateRange(...)` returns `RangeValidation` with ad-hoc `valid`/`reason` fields.
+
+Callers cannot distinguish degradation from health, and the "inverted CRDT range" and "stripped, can't re-anchor" paths flow through caller code as if nothing went wrong. The `method` field in `annotationToPmRange` proves callers will accept a tagged field; nothing in the consuming code reads it because there is nothing to reach for elsewhere.
+
+**Decision:** Promote every high-level position result to a tagged variant. Apply uniformly so the module presents one shape contract:
+- `refreshRange` returns `RefreshResult = { kind: 'ok' | 'updated' | 'attached' | 'repaired' | 'degraded' | 'failed', annotation: Annotation }`.
+- `annotationToPmRange` returns `PmRangeResult = { kind: 'rel', from, to } | { kind: 'flat', from, to } | { kind: 'failed' }`, promoting the existing `method` field into the discriminator.
+- `anchoredRange` returns `AnchoredRangeResult = { kind: 'anchored' | 'flat', range, relRange? }` (replacing `ok`/`fullyAnchored`). Validation failures use `kind: 'invalid'` with a reason.
+- `validateRange` returns `RangeValidation = { kind: 'valid' } | { kind: 'invalid', reason }`.
+
+Callers that don't care about the variant destructure `.annotation` / `.from` / `.to` and proceed. Callers that should care switch on `kind` with an exhaustive `never` fallthrough, so future variants force compile-time updates. Diagnostic emission (toasts, banners) is a caller responsibility — the position module emits no notifications, leaving its functions pure and testable in isolation.
+
+**Options considered:**
+- **(a) Tagged variants across all position results (chosen).** Most honest about what each function does. Migration is mechanical (~10 caller sites). Pairs naturally with the existing `method` field, which becomes meaningful instead of decorative.
+- **(b) Tagged variants only on `refreshRange` and `annotationToPmRange`.** Leaves `anchoredRange` / `validateRange` half-migrated under boolean-tagged shapes. Friction shows up next time a new caller needs to distinguish "validated but not anchored" from "fully anchored." Rejected: piecemeal migration is more expensive than one consistent pass.
+- **(c) Status field bolted onto `Annotation`.** Conflates transient resolution state with the serializable data type. Annotation flows into Y.Map writes; a `_status` field would silently serialize unless every writer strips it. Re-introduces the discipline-only pattern that ADR-031 just eliminated for origin tagging.
+- **(d) Side-channel diagnostic callback.** `refreshRange(ann, ydoc, map, { onEvent })` keeps the existing flat return and emits events for observability. Cannot *prevent* a caller from rendering a broken annotation — only tells you afterwards. Position outcomes are something callers should be able to react to, not just observe.
+- **(e) Centralised notification emission inside the position module.** Position functions would push toasts on degraded/failed. Hidden side effect couples server position logic to the notification system; makes the module non-pure and harder to test. Rejected — the notification ring buffer exists precisely so callers can decide whether a particular degradation warrants user attention.
+
+**Rationale:** The functions are already sum types — they just lie about it in their return signatures. Tagged variants make the true shape visible to TypeScript's exhaustiveness checker, which is exactly the structural enforcement pattern Tandem has been moving toward (ADR-018 for module location, ADR-031 for origin tagging). The "inverted CRDT range" and "stripped without re-anchor" bugs hiding in `refreshRange` get *names* in the new shape; caller code that doesn't handle them fails the type check, which is when you want to learn about it. Keeping the position module pure (no side-channel notifications) preserves the testability gains from ADR-018 — the entire module remains coverable by unit tests that never touch the notification ring buffer or the toast container.
+
+**Consequences:**
+- `src/shared/positions/types.ts` gains `RefreshResult`, `PmRangeResult` (replacing the existing one), `AnchoredRangeResult` (replacing the existing one), and `RangeValidation` updated to the new shape.
+- ~10 caller sites migrate. For "don't care" callers (most), the change is mechanical: `const ann = refreshRange(...)` → `const { annotation } = refreshRange(...)`. For "should care" callers (margin overlay, side-panel review, MCP error responses for invalid ranges), a `switch` block decides what to do with `degraded` / `failed`.
+- `console.warn` / `console.error` calls inside the position module are removed; the variant carries the same information without the side effect. Callers that want a log line emit one at the call site.
+- `refreshAllRanges` inherits the new shape — returns `RefreshResult[]`. The `MCP_ORIGIN` import in `refreshAllRanges` becomes `withMcp(ydoc, run)` once ADR-031 lands.
+- ADR-018 remains the canonical record of the module split; this ADR is a continuation focused on result-type design. No supersede relationship.
+
+## ADR-033: Document Registry and Named Hocuspocus Lifecycle Interface
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15)
+
+**Context:** Document state was spread across two modules with three implicit invariants enforced only by call-order discipline:
+
+- `src/server/mcp/document-service.ts` owned `openDocs: Map<string, OpenDoc>` (per-tab metadata: filePath, format, readOnly, source), `activeDocId: string | null`, and registered a `shouldKeepDocument` predicate at module-load time via the side-effecting `setShouldKeepDocument((name) => openDocs.has(name) || name === CTRL_ROOM)`. It also owned `broadcastOpenDocs()`, which writes the open-document list to `Y.Map('documentMeta')` on the CTRL_ROOM Y.Doc so the browser sees fresh tab state.
+- `src/server/yjs/provider.ts` owned `documents: Map<string, Y.Doc>` (Y.Doc instances keyed by Hocuspocus room name), the Hocuspocus instance and lifecycle (`onLoadDocument` / `afterUnloadDocument`), and three free callback slots — `shouldKeepDocument`, `onDocSwapped`, `onDocUnloaded` — registered from `document-service.ts` and `events/queue.ts` at module load to avoid circular imports.
+
+The implicit invariants: `openDocs.has(id)` implies `documents.get(id)` is live; `activeDocId` must be a key in `openDocs` or null; `Y.Map('documentMeta')` must reflect `openDocs` after every add / remove / setActive; CTRL_ROOM is never evicted and never appears in `openDocs`. Any caller adding to `openDocs` but forgetting to call `broadcastOpenDocs`, or setting `activeDocId` to a value not in `openDocs`, breaks consistency silently. Failure manifests downstream as missing tabs, MCP tools finding a tracked doc whose Y.Doc Hocuspocus evicted, or stale browser tabs (the "stale CRDT tabs merge old state back" gotcha in CLAUDE.md is partially this coupling).
+
+**Decision:** Introduce a `DocumentRegistry` (singleton, lives in `src/server/documents/registry.ts`) that owns `openDocs`, `activeDocId`, the keep-alive-predicate logic, and `broadcastOpenDocs`. The registry layers *above* `provider.ts`'s `documents` map — it does not absorb Y.Doc instance storage. The three free callback slots in `provider.ts` are replaced by a named `HocuspocusLifecycle` interface (`src/server/yjs/lifecycle.ts`) with explicit `shouldKeep(name)`, `onLoad(name, ydoc)`, and `onUnload(name)` methods. The registry implements this interface; `provider.ts` invokes it during Hocuspocus's lifecycle hooks.
+
+Public registry interface (sketch — not authoritative):
+- `open(id, meta: OpenDoc): void` — adds entry, broadcasts, sets active if first.
+- `close(id): void` — removes entry, broadcasts, clears active if it was active.
+- `setActive(id | null): void` — validates id ∈ openDocs (or null), broadcasts.
+- `get(id): OpenDoc | undefined` / `getActive(): OpenDoc | null` / `getCurrent(documentId?): { ...OpenDoc, docName } | null`.
+- `getYDoc(id): Y.Doc | undefined` — delegates to `provider.getDocument(id)`. Documented as "may have been replaced by Hocuspocus on browser connect — do not cache the reference across awaits."
+- `eachOpen(): IterableIterator<[id, OpenDoc]>` — iteration without exposing the underlying Map.
+
+**Options considered:**
+- **(a) Registry layers above provider; named lifecycle interface (chosen).** Single writer for openDocs / activeDocId / broadcast (the registry). Single writer for `documents` (provider, driven by Hocuspocus's lifecycle hooks). The seam between them is the `HocuspocusLifecycle` interface — published, typed, no free callback slots.
+- **(b) Registry absorbs provider's `documents` map.** Rejected. `documents` legitimately holds two classes of entries: tracked-open tabs MCP serves *and* Hocuspocus-internal rooms (CTRL_ROOM on first browser connect, stale-tab reconnects to closed docs) that have no `OpenDoc` metadata. Making the registry own `documents` forces it to model both — the type lies. Additionally, the merge-and-swap in `provider.onLoadDocument` destroys and replaces Y.Doc instances; today every read calls `getOrCreateDocument(name)` fresh, and that pattern is load-bearing. Absorption tempts callers to cache registry-returned Y.Doc refs across awaits and break under swap.
+- **(c) Keep state in two modules, just add helpers.** Rejected — leaves the implicit invariants exactly where they are. Doesn't earn its keep.
+- **(d) Dependency-injected registry passed through every consumer.** Rejected. Tandem has no DI framework, the registry is process-global by nature (one process serves one set of open documents), and the existing callers already depend on module-level state. DI would be ceremony without a payoff.
+
+**Rationale:** The agent-grounded read of `provider.ts` makes the layered call clear: the boundary between "Hocuspocus's view of every live Y.Doc" and "MCP's view of user-facing tabs" is real, not poorly drawn. The smell isn't the boundary — it's the three free callback slots used to cross it. Naming the contract (the `HocuspocusLifecycle` interface) eliminates the smell while keeping the boundary. CTRL_ROOM is the proof case: it's a Hocuspocus document that holds persistent chat history and must never be evicted, but it never appears in the tracked-open list. Layered handles this trivially; absorption would force a phantom `OpenDoc` or a special branch in every registry method.
+
+**Consequences:**
+- `src/server/documents/registry.ts` (new) owns openDocs, activeDocId, broadcast, the keep-alive predicate, and implements `HocuspocusLifecycle`.
+- `src/server/yjs/lifecycle.ts` (new) exports the `HocuspocusLifecycle` interface. `provider.ts` accepts a `HocuspocusLifecycle` instance instead of three free `set*` callback registrations. The setter functions (`setShouldKeepDocument`, `setDocLifecycleCallbacks`) and the module-load side effect in `document-service.ts` are removed.
+- `src/server/mcp/document-service.ts` is reduced to file-open / save / restore workflows; its state-management section is replaced by registry calls. The `addDoc` / `removeDoc` / `getActiveDocId` / `setActiveDocId` / `getCurrentDoc` exports become registry methods.
+- The `broadcastOpenDocs` invariant is enforced by the registry — callers can't add to openDocs without broadcasting because they can't touch openDocs directly.
+- The "stale CRDT tabs merge old state back" gotcha in CLAUDE.md is partially mitigated: the registry guarantees Y.Map('documentMeta') matches the tracked-open list, so a reconnecting tab sees the current truth instead of a stale snapshot.
+- Pairs with #2 (file-open paths grill, ADR-034 forthcoming): the unified file-open seam writes through the registry instead of poking three pieces of state in order.
+
+## ADR-034: File-Open Pipeline with Named Entry Points and Shared Core
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Pairs with ADR-033.
+
+**Context:** `src/server/mcp/file-opener.ts` is 1049 lines exposing three public entry points (`openFileByPath`, `openFileFromContent`, `openScratchpad`) and internal helpers (`applyPreparedContent`, `clearAndReload`, `wireAnnotationStore`, `ensureAutoSave`). Six callers invoke `openFileByPath`: `startup-file.ts` (cold-start file-association), `index.ts` (welcome/changelog auto-open), `mcp/routes/open.ts` (HTTP REST API), `mcp/document.ts` (`tandem_open` MCP tool), `mcp/convert.ts` (after `.docx` HTML conversion), and `mcp/document-service.ts` (session restore — using a dynamic `await import(...)` to dodge a circular dependency through provider/registry state). Each caller wires the same downstream steps (track the doc, broadcast, set active, attach auto-save) in slightly different orders. `OpenFileResult` conflates outcomes via booleans (`forceReloaded`, `alreadyOpen`). The "open before HTTP bind" startup invariant (CLAUDE.md) is enforced by call ordering in `src/server/index.ts` only.
+
+**Decision:** Restructure file-opener around named entry points that delegate to one shared internal pipeline:
+
+- **Public entry points** (`src/server/documents/open.ts`, replaces `mcp/file-opener.ts`):
+  - `openFromDisk(filePath, opts?: { readOnly?, force? }): Promise<OpenResult>`
+  - `openFromUpload(fileName, content: Buffer): Promise<OpenResult>`
+  - `openScratchpad(): Promise<OpenResult>`
+  - `openFromRestore(sessionEntry): Promise<OpenResult>` — replaces the dynamic-import workaround in `document-service.ts`.
+
+- **Shared internal pipeline** takes a normalized `PreparedSource = { kind, docName, content?, filePath?, format, readOnly, source: 'file' | 'upload' | 'scratchpad' }` and runs a fixed step sequence:
+  1. Source-specific prelude (path resolve+validate for disk, decode for upload, synthesize empty buffer for scratchpad).
+  2. Acquire Y.Doc via `provider.getOrCreateDocument(docName)`.
+  3. Populate Y.Doc inside `withInternal(doc, ...)` (ADR-031) — server-internal setup writes.
+  4. Wire durable annotation store.
+  5. Wire auto-save (skipped for `readOnly`, `scratchpad`, and `upload`).
+  6. Register with `DocumentRegistry` (ADR-033) — which broadcasts and updates `Y.Map('documentMeta')` atomically.
+  7. Return a tagged `OpenResult`.
+
+- **Result type**: `OpenResult = { kind: 'opened' | 'already-open' | 'reloaded-from-disk' | 'failed', doc?, reason? }` — replaces booleans, consistent with ADR-032's tagged-variant pattern.
+
+**Options considered:**
+- **(a) Named entry points with shared internal pipeline (chosen).** Discoverability — `grep openFromDisk` is the answer to "how do I open a file?" Per-source option shapes stay typed at the entry point (disk has `readOnly` / `force`; upload has neither). Six existing `openFileByPath` callers migrate by renaming; the others migrate at their own pace.
+- **(b) Single `openDocument(source: TaggedSource, opts: TaggedOpts)` function.** The tagged union for source forces options to also become a tagged union, since `readOnly`/`force` only make sense for disk. The compound discriminated union reads awkwardly at call sites and gains nothing over named entry points.
+- **(c) Class-based `FileOpenWorkflow`.** Each entry path becomes a method on a class that holds shared dependencies (registry, file-watcher, notification ring). Reasonable but heavier than Tandem's existing functional module style. Names like `new FileOpenWorkflow(filePath).normalOpen()` read worse than `openFromDisk(filePath)`. The class buys nothing over the registry-singleton + shared-helper combination.
+- **(d) Keep the current shape; just split the file.** Rejected — leaves the boolean-conflated result type, the dynamic-import workaround, and the "every caller wires the postlude" pattern intact.
+
+**Cold-start ordering note:** The CLAUDE.md invariant — "startup document opens must precede HTTP bind in HTTP mode, or stale browser tabs CRDT-merge incomplete openDocuments lists" — remains enforced by call order in `src/server/index.ts`. Solving it structurally (e.g. a deferral queue executed after bind) would require machinery for a one-time-per-process rule. The pipeline does not enforce it; it documents the requirement on the public entry points' JSDoc and trusts the startup-file flow to call before `startHocuspocus(port)`. The OS file-association warm-start path (Tauri `single-instance` plugin POSTing `/api/open`) goes through `openFromDisk` after bind, which is correct — only the cold-start preface matters.
+
+**Rationale:** The three current entry points are *already* distinct interfaces with shared postlude — naming that explicitly is more honest than the boolean-flagged `OpenFileResult`. Pulling the postlude into the registry (ADR-033) and the internal-setup writes into `withInternal` (ADR-031) lets the pipeline focus on what's actually unique: the source-specific prelude. The circular-import workaround in `document-service.ts:411` disappears because session-restore becomes a fourth public entry point in the same module rather than a back-door reach into file-opener.
+
+**Consequences:**
+- `src/server/documents/open.ts` (new) replaces `src/server/mcp/file-opener.ts`. Re-export from the old location for one release to ease migration; remove the shim in the next.
+- `src/server/mcp/document-service.ts` shrinks substantially — its file-open / save / restore workflow becomes calls into the open pipeline and the registry; its state-management section goes to the registry (ADR-033).
+- `OpenFileResult` (boolean-conflated) becomes `OpenResult` (tagged). All six current callers of `openFileByPath` migrate; the `forceReloaded` / `alreadyOpen` branches in callers like `mcp/document.ts:189` become `switch (result.kind)`.
+- The dynamic `await import("./file-opener.js")` in `document-service.ts:411` is removed; session-restore goes through `openFromRestore`.
+- `routes/upload.ts` continues to call `openFromUpload` (renamed from `openFileFromContent`); `routes/open.ts` calls `openFromDisk`.
+- `mcp/document.ts`'s `tandem_open` tool becomes a thin wrapper around `openFromDisk`. The MCP tool is the *adapter*, not the implementation — matching the seam pattern from ADR-016.
+- Pairs with #1 (annotation lifecycle, ADR-035 forthcoming): the post-load annotation re-anchor pass (`refreshAllRanges`) runs inside step 3 of the pipeline, so the annotation lifecycle module doesn't have to know about file-open ordering.
+
+## ADR-035: Annotation Lifecycle Module
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants).
+
+**Context:** The annotation lifecycle is fragmented across six modules. Creating one comment touches all of them in implicit order:
+
+1. `src/server/mcp/annotations.ts` (668 LOC) — MCP tool handlers. Inserts into `Y.Map(Y_MAP_ANNOTATIONS)` with `ydoc.transact(() => map.set(id, ann), MCP_ORIGIN)`.
+2. `src/shared/sanitize.ts` — privacy normalizer (ADR-027): strips `directedAt`, migrates legacy `flag`→`note`, derives audience. Called in three places (read, observer, edit) with different `onLossy` sinks.
+3. `src/server/annotations/schema.ts` (386 LOC) — `nextRev()`, status transitions.
+4. `src/server/annotations/store.ts` (582 LOC) — durable JSON persistence keyed by content hash.
+5. `src/server/annotations/sync.ts` (519 LOC) — file-sync observer; tombstone tracking with a "this ordering is load-bearing" comment around `recordTombstone` that points at a real fragility.
+6. `src/server/events/observers/annotations.ts` — channel projection with author/type cascade and the ADR-027 "drop notes from channel" rule enforced via `if (ann.type !== "comment") continue`.
+
+Changing the annotation shape — adding a field, renaming a state, tightening a privacy rule — forces edits across all six. Three real bugs and risks surfaced during the grilling pass (annotation-model-reviewer second opinion, 2026-05-15):
+- **Re-accept bug at `annotations.ts:491`**: `tandem_resolveAnnotation` flips status to accepted/dismissed *without* checking `status === "pending"` first. An already-resolved annotation can be re-accepted, bumping `rev` and re-firing channel events.
+- **Privacy rule lives only at the projection point.** The note-drop rule is `if (ann.type !== "comment") continue` inside the observer. A future refactor that bypasses the observer (e.g. a new channel path, or a tool that emits events directly) loses the privacy guarantee with no compile-time signal.
+- **Tombstone ordering coupling.** `removeAnnotationById` (annotations.ts:78) calls `recordTombstone` *before* the delete transact, with a load-bearing comment. This is a coupling between the MCP tool and the durable-sync layer — a write path that bypasses the lifecycle (CRDT merge from a stale tab, file-sync reload) won't tombstone correctly.
+
+**Decision:** Introduce `AnnotationLifecycle` (`src/server/annotations/lifecycle.ts`) as the seam for all annotation mutations. MCP tool handlers in `src/server/mcp/annotations.ts` become thin *adapters* that validate inputs and translate `LifecycleResult` into MCP response envelopes. The lifecycle owns: origin-tagged writes (via ADR-031's `withMcp` / `withInternal`), rev bumps via `nextRev`, status transitions, sanitize-on-write, and channel-event projection via the observer factory (ADR-?, #5 grill). The durable annotation store stays an *observer-driven* seam — `sync.ts` watches Y.Map and persists; the lifecycle does not call into store/sync directly. Tombstone tracking moves entirely into the sync observer; the load-bearing ordering comment is fixed in place by widening the observer's snapshot, not by preserving the coupling.
+
+**Privacy invariant placement (Q1).** Channel projection consumes a branded `ChannelEligible` type produced by a narrowing function `narrowForChannel(ann): ChannelEligible | null`. Notes return `null`; comments return the branded value. The observer factory's projection function takes `ChannelEligible`, not `Annotation`. A future refactor that drops the narrow gets a TypeScript error at the projection call site instead of silently leaking notes. `sanitizeAnnotation` stays the canonical privacy normalizer (ADR-027) and is called inside `narrowForChannel`; rules are not duplicated. The narrow happens at projection time — not write time — because `note→comment` promotion is a real path that must surface as a channel event, and audience can change post-write.
+
+**State machine placement (Q2).** Separate methods, not a single `apply(action)`:
+- `createComment(range, content, opts) → LifecycleResult`
+- `createHighlight(range, color) → LifecycleResult`
+- `createNote(range, content) → LifecycleResult`
+- `importNote(range, content, importSource) → LifecycleResult` — imports enter as notes per the revised ADR-027 (potentially third-party content, user-gated for promotion to Claude).
+- `editPending(id, patch) → LifecycleResult`
+- `acceptPending(id) → LifecycleResult` — fixes the re-accept bug; rejects non-pending.
+- `dismissPending(id) → LifecycleResult` — same.
+- `replyToPending(id, content, author) → LifecycleResult`
+- `promoteNoteToComment(id) → LifecycleResult` — the single promotion path for both user-authored notes and `author: "import"` notes. The note → comment audience change is what surfaces an annotation to Claude; identical handling for both author types means imports require the same explicit user action as personal notes.
+
+Each method's `LifecycleResult` failure variant enumerates only the failures that method can produce — types carry the preconditions. A single `apply(action)` would force every caller to handle every failure variant and would not have surfaced the re-accept bug.
+
+**Imported `.docx` comments (Q3).** Separate `importNote(range, content, importSource)` entry. Creation context differs — imports run under `withInternal` (ADR-031) during `.docx` load, not under `withMcp`; preserve `importSource` metadata; set `author: "import"`, `type: "note"`. The audience is `private` (not `outbound`) — Claude does not see imported comments via `tandem_checkInbox` or the channel until the user explicitly promotes via `promoteNoteToComment`. Surfacing parity is *not* automatic: imports are gated by user intent the same way personal notes are. This reverses the earlier ADR-027 stance that imports surface like Claude-readable comments by default. The reasoning: a `.docx` reviewer comment may originate from a colleague, not from the active Tandem user; auto-surfacing it to Claude assumes consent the user did not give. **`narrowForChannel`'s predicate is `audience === "outbound" && type === "comment"` (both, not either)** — the audience derivation in `sanitizeAnnotation` is the load-bearing privacy gate, not the type alone.
+
+**Tombstone tracking (Q4).** Stays observer-driven in `sync.ts`. The current `recordTombstone`-before-delete ordering is a `sync.ts` bug to fix (widen the observer's snapshot so it captures the pre-delete state on its own), not a coupling for the lifecycle to inherit. Observer-driven tombstoning survives writes that bypass the lifecycle: stale-tab CRDT merges (`feedback_stale_crdt_browser_tabs.md`), file-sync reload, future write paths. The lifecycle's delete method (`dismissPending` flips status; actual map deletion is rare and only happens on explicit cleanup) does not call into sync.
+
+**Options considered:**
+- **(a) Lifecycle module with separate methods + branded channel narrow + observer-driven tombstones (chosen).** Privacy invariants become structural via the branded type. Pre/post conditions become method signatures. Durable store stays decoupled.
+- **(b) Single `apply(action: AnnotationAction)` method.** Rejected — masks state-machine preconditions inside a runtime check, would not have caught the re-accept bug.
+- **(c) Privacy check only at write time, not at projection.** Rejected — note→comment promotion changes audience after write; projection-time enforcement is mandatory.
+- **(d) Lifecycle owns durable persistence directly (writes to store as part of `createComment`).** Rejected — couples lifecycle to disk I/O, loses the "observer is the source of truth for what's on disk" invariant, and bypasses survives-the-lifecycle write paths (CRDT merge, file-sync).
+
+**Rationale:** The lifecycle module collapses six modules' worth of implicit ordering into one explicit seam. The branded `ChannelEligible` type turns ADR-027's privacy guarantee from prose-in-a-comment into a TypeScript invariant. Separate state-machine methods surface the re-accept bug as a side effect of the typing discipline. Keeping the durable store observer-driven preserves the existing "what's on disk reflects what's in Y.Map" property, which survives all write paths — not just the well-behaved ones.
+
+**Consequences:**
+- `src/server/annotations/lifecycle.ts` (new) — public seam.
+- `src/server/mcp/annotations.ts` (668 LOC) shrinks substantially — handlers become thin adapters. Re-accept bug fixed as a structural consequence of `acceptPending` requiring `status === "pending"`.
+- `narrowForChannel` (in `src/shared/sanitize.ts` or a new `src/server/annotations/projection.ts`) becomes the only producer of `ChannelEligible`. Observer factory (#5 grill) projection takes `ChannelEligible`.
+- `sanitizeAnnotation` consolidated to one call inside the lifecycle's read path. The three current call sites (read/observer/edit) collapse; migration-log relay context (docHash) flows through the lifecycle as a parameter.
+- `rev` bump ownership: lifecycle calls `nextRev`. `sanitizeAnnotation` stops being responsible for preserving `rev` across the consolidated path; pick lifecycle as the sole owner.
+- `sync.ts` tombstone observer widened to snapshot pre-delete state. The "load-bearing ordering" comment in `removeAnnotationById` and `sync.ts` is removed because the dependency is removed.
+- Tests: `note→comment` projection path covered explicitly. Re-accept rejected explicitly. Stale-tab merge tombstoning verified.
+- Pairs with #5 (observer factory): the channel projection function is the consumer of `ChannelEligible`; the factory's typed seam makes the privacy invariant un-bypassable.
+- Pairs with #4 (origin tagging): `withMcp` is invoked exclusively inside the lifecycle for user-intent writes; `withInternal` exclusively for `importComment` during `.docx` load. MCP tool handlers do not call `transact` directly.
+
+## ADR-036: Format Adapter as Capability Set
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Sharpens encoding of ADR-004 (.docx review-only) and unblocks issue #576 (.docx write-back).
+
+**Context:** `src/server/file-io/types.ts` declares a three-method `FormatAdapter` interface (`load`, `save`, `canSave`). The actual capabilities of registered adapters do not match that shape:
+
+- **markdown / txt**: both methods + `canSave: true` — fits the interface.
+- **docx**: `load` does four things (.docx→HTML conversion, comment extraction with silent `.catch(() => [])` fallback, Y.Doc population from HTML, inject comments as annotations); `save()` returns `null`; `canSave: false`. The interface models one of three real `.docx` capabilities — the other two (extract-embedded-comments, apply-tracked-changes) live in `docx-comments.ts` and `docx-apply.ts` (829 LOC of `applyTrackedChanges`) and are consumed via direct imports from `mcp/convert.ts` and `file-opener.ts`. ADR-004's "review-only by default" semantics are encoded by `canSave: false` plus a `null` return — two ways of saying the same thing.
+
+Consequences observed: the `.docx` comment-extraction `.catch` silently turns "comments failed to extract" into "document loaded fine, just no comments" — callers can't tell the difference and users get no signal. The `canSave` boolean and `save() === null` invariant must stay in lockstep; nothing enforces that. New capabilities (#576 docx write-back; future formats that emit metadata; future formats that support tracked changes) have no place to live in the current interface.
+
+**Decision:** Redefine `FormatAdapter` as a *capability set* — each capability is an optional method. The presence of the method is the contract; no boolean flags duplicate the structural fact.
+
+```ts
+interface FormatAdapter {
+  load: (doc: Y.Doc, content: string | Buffer) => Promise<LoadResult>;
+  save?: (doc: Y.Doc) => SaveResult;
+  extractComments?: (content: Buffer) => Promise<Comment[]>;
+  applyTrackedChanges?: ApplyTrackedChangesFn;
+}
+
+type LoadResult =
+  | { kind: 'ok' }
+  | { kind: 'partial', issues: LoadIssue[] }  // e.g. comments-failed
+  | { kind: 'failed', reason: string };
+
+type SaveResult =
+  | { kind: 'ok', content: string | Buffer }
+  | { kind: 'failed', reason: string };
+```
+
+`canSave` becomes `'save' in adapter`. Read-only is structural: a format adapter without a `save` method *cannot* save, full stop. The registry's `getAdapter(format)` return type stays singular but inspections happen by capability probe at call sites.
+
+Comment extraction migrates from `.docx`'s `load()` body into the adapter's optional `extractComments` method. The pipeline (ADR-034) calls `extractComments` if present, after `load`, and translates failure into a `LoadResult.partial` issue rather than swallowing in `.catch`. `applyTrackedChanges` becomes an optional capability — `mcp/convert.ts` probes `if (adapter.applyTrackedChanges)` instead of importing the function from a sibling file.
+
+**Options considered:**
+- **(a) Optional methods as the capability surface (chosen).** Structural — the interface tells you what an adapter can do. `'save' in adapter` is canonical TypeScript narrowing. Future capabilities (e.g. `exportTo: (format) => Buffer` for cross-format conversion) slot in without breaking existing adapters.
+- **(b) Capability flags object alongside methods.** `{ canSave: bool, canExtractComments: bool, ... }` plus methods. Two ways to say the same thing (the existing flaw). Rejected.
+- **(c) Adapter returns capability set on request.** `adapter.capabilities() → Set<string>`. Indirection without payoff; structural narrowing on optional methods is the idiomatic TypeScript answer.
+- **(d) Sub-interfaces (`SaveableFormatAdapter extends FormatAdapter`).** Forces a class hierarchy that's all noise for a registry that just maps strings to adapters. Optional methods on one interface give the same compile-time narrowing without ceremony.
+
+**LoadResult variants rationale.** The .docx comment-extraction `.catch(() => [])` is the canonical "silent partial failure" the variant model surfaces. `LoadResult.partial` with `issues: [{ kind: 'comments-failed', error }]` lets the file-open pipeline (ADR-034) push a notification to the user ("Document loaded; reviewer comments could not be extracted") instead of pretending nothing went wrong. Consistent with ADR-032's tagged-variant pattern across the codebase.
+
+**Rationale:** The current interface lies about what `.docx` can do. The lie is harmless today because there's one .docx caller for each non-`load` capability, but every reach into `docx-comments.ts` or `docx-apply.ts` is a place that bypasses the registry — the registry says "use this adapter," and then the caller goes around the adapter to do the other thing. Modeling capabilities as the interface's primary content puts those operations under one roof and makes ADR-004's review-only invariant a structural property of the .docx adapter rather than a flag plus a null return. Issue #576 (.docx write-back) becomes a *capability addition* — the adapter grows a `save` method — without an interface change.
+
+**Consequences:**
+- `src/server/file-io/types.ts` rewrites with the capability-set interface + `LoadResult` / `SaveResult` variants.
+- `src/server/file-io/index.ts` adapter definitions migrate: markdown/txt keep `load`/`save`, drop `canSave`. .docx keeps `load` (pure HTML conversion + Y.Doc population — no comment extraction inline), drops `save`/`canSave`, adds `extractComments`. The .docx adapter's body shrinks; the `.catch(() => [])` swallow becomes a structural `partial` result.
+- `src/server/documents/open.ts` (the unified file-open pipeline from ADR-034) probes capabilities: calls `extractComments` if present, surfaces `LoadResult.partial` issues to the user via the notification ring buffer, calls `applyTrackedChanges` only when the adapter offers it.
+- `mcp/convert.ts` (currently does .docx HTML→YDoc + apply-tracked-changes) imports from the adapter rather than from `docx-apply.ts` directly.
+- ADR-004 stays accurate; the encoding sharpens. The CHANGELOG/PR description for #576 reads as "add `save` and `applyTrackedChanges` to the .docx adapter" rather than "flip `canSave` and add a write-back path elsewhere."
+- Pairs with #2 (ADR-034): the file-open pipeline is the only place capability probing happens; MCP tool handlers do not probe.
+- Pairs with ADR-032 (tagged variants): `LoadResult` and `SaveResult` follow the same shape pattern as `RefreshResult` / `PmRangeResult` / `OpenResult`. One mental model for "what did this operation actually do?" across the server.
+
+## ADR-037: Layout Model — Rune Store Layered Over Settings
+
+**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15).
+
+**Context:** Panel-visibility and rail-tab state is encoded as four settings fields on `settingsState` plus a derivation in `App.svelte`:
+
+- `leftPanelVisible: boolean`, `rightPanelVisible: boolean` (raw user preference; persisted).
+- `leftRailTabs: RailTab[]`, `rightRailTabs: RailTab[]` (which tabs sit on which rail; `RailTab = 'annotations' | 'chat' | 'outline'`).
+- Derived in `App.svelte:461-463`: `effectiveRightVisible` is `rightPanelVisible && rightRailTabs.length > 0` — a rail with no tabs is forced invisible regardless of the boolean.
+- Mutual exclusion: a tab lives on one rail at a time. Maintained by hand in `moveTabToRail` (App.svelte:488-510), which prunes the "other" rail's array when a tab moves.
+- Disable rules: line 916 disables left-rail tabs that would orphan the right rail (`disabledLeftTabs = rightRailTabs.length === 1 ? rightRailTabs : []`).
+- Two migrations in `useTandemSettings.loadSettings`: v1 `layout` enum → v2 two-boolean pair; v1 `leftSlot.kind` → v2 `leftRailTabs` array.
+- Toggle handlers are asymmetric (`toggleLeft` flips; `toggleRight` reads the derived effective state before toggling).
+
+Adding a rail tab today requires edits to `useTandemSettings.ts` (defaults + validation), `App.svelte` (toggle, move, derive, render), `TitleBar.svelte` (toggle UI), and `SidePanel.svelte` (tab consumption). The mutual-exclusion and disable-orphan invariants live in `App.svelte`'s render path, not in the state model. A future "left rail collapse" feature would have to re-derive `effectiveLeftVisible` in another component.
+
+**Decision:** Introduce `LayoutModel` (`src/client/layout/model.svelte.ts`) as a Svelte 5 rune-store layered *over* `settingsState`, matching the pattern from ADR-033 (registry layered over provider). The model is the only place that knows the layout invariants. Components read derived state from the model; mutations go through model methods that call `settingsState.updateSettings` underneath.
+
+Public surface (sketch):
+- Derived getters: `effectiveLeftVisible`, `effectiveRightVisible`, `activeLeftTab`, `activeRightTab`, `disabledLeftTabs`, `disabledRightTabs`.
+- Operations: `toggleRail(side: 'left' | 'right')`, `moveTabToRail(tab, side)`, `setActiveTab(side, tab)`.
+- The model enforces mutual exclusion (moving a tab to a rail prunes it from the other) and the orphan-rail rule (the last tab on a rail can't be removed if the other rail is hidden; or the move forces the destination rail visible).
+- Settings migration stays in `useTandemSettings.loadSettings` — it's a settings-shape concern. The model consumes a v2 shape only.
+
+**Options considered:**
+- **(a) Rune-store model layered over settings (chosen).** Single owner for invariants. Components stop reasoning about derived state and mutual exclusion. Settings persistence stays where it is; no parallel storage.
+- **(b) Pull layout out of `settingsState` into its own persisted store.** Two persistence layers (one for layout, one for other settings) — more surface, no payoff. Layout is a settings concern from the user's perspective ("my panel preference").
+- **(c) Compute derived state via `$derived` blocks scattered across components.** Status quo. Rejected — the invariants stay un-named and fragmented.
+- **(d) Replace the two booleans with the v1 `layout` enum.** Goes backward. The two-boolean model (introduced in the layout-mode migration) is more expressive — it allows the "both rails visible" and "both rails hidden" states the enum couldn't represent. Rejected.
+
+**Rationale:** The layout state isn't fundamentally different from the document registry (ADR-033) or annotation lifecycle (ADR-035): it's a set of correlated facts with implicit invariants that today's code maintains by hand. Naming the invariants by giving them a model makes them structural — a new component that wants to know "is the right rail effectively visible?" reads from the model; a new feature that adds a fourth rail tab type registers it through the model's operations; mutual exclusion is enforced by the only method that can mutate rail arrays. The Svelte 5 rune-store form keeps the API reactive without introducing a new state framework — same primitives the rest of the client already uses.
+
+**Consequences:**
+- `src/client/layout/model.svelte.ts` (new) — public layout seam.
+- `App.svelte:461-510` (derivation + toggle + move handlers) shrinks to thin wrappers over model methods. `App.svelte:916` disable rule moves into `model.disabledLeftTabs`.
+- `TitleBar.svelte` toggle handlers call `layoutModel.toggleRail('left' | 'right')` instead of `settingsState.updateSettings({...})`.
+- Migrations stay in `useTandemSettings.ts`. The model trusts that `settingsState.settings` is v2-shaped.
+- Future features (rail collapse, density modes affecting rail width, additional `RailTab` values like `'search'` or `'history'`) land as model extensions, not as changes propagated across four files.
+- This is a client-only refactor; no ADR or memory entries about server architecture change. Pairs with no other ADR in this grilling pass — independent.

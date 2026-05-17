@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants";
+import { withBrowser } from "../../../shared/origins";
 import type { Annotation, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 
@@ -85,7 +86,7 @@ export function toggleHighlight(
     timestamp: Date.now(),
     color,
   } as Annotation;
-  ydoc.transact(() => {
+  withBrowser(ydoc, () => {
     map.delete(matchKey as string);
     map.set(id, annotation);
   });

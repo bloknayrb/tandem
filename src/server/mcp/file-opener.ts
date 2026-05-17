@@ -17,6 +17,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { withFileSync, withInternal, withMcp, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
@@ -24,13 +25,7 @@ import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
-import {
-  attachObservers,
-  clearFileSyncContext,
-  FILE_SYNC_ORIGIN,
-  MCP_ORIGIN,
-  setFileSyncContext,
-} from "../events/queue.js";
+import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { loadDocx } from "../file-io/docx.js";
 import { extractDocxComments, injectCommentsAsAnnotations } from "../file-io/docx-comments.js";
 import { htmlToYDoc } from "../file-io/docx-html.js";
@@ -351,7 +346,7 @@ function handleAlreadyOpen(
   if (explicitReadOnly && !existing.readOnly) {
     addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    doc.transact(() => meta.set(Y_MAP_READ_ONLY, true), MCP_ORIGIN);
+    withMcp(doc, () => meta.set(Y_MAP_READ_ONLY, true));
   }
 
   setActiveDocId(id);
@@ -551,7 +546,7 @@ async function populateDocFromContent(
   const prepared = await prepareContent(format, source, ctx);
 
   try {
-    doc.transact(() => applyPreparedContent(doc, prepared, ctx), MCP_ORIGIN);
+    withInternal(doc, () => applyPreparedContent(doc, prepared, ctx));
   } catch (err) {
     // Clear partial state in a fresh top-level transact so a retry sees a clean
     // Y.Doc instead of a poisoned cached one. Yjs has unwound the failed
@@ -560,14 +555,14 @@ async function populateDocFromContent(
     // above — Critical Rule #2 and observer attach order.
     let cleanupOk = true;
     try {
-      doc.transact(() => {
+      withInternal(doc, () => {
         const fragment = doc.getXmlFragment("default");
         fragment.delete(0, fragment.length);
         // injectCommentsAsAnnotations can leave partial entries even when its
         // own catch fires (Yjs does not roll back inner-transact writes).
         const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
         for (const k of [...annotations.keys()]) annotations.delete(k);
-      }, MCP_ORIGIN);
+      });
     } catch (cleanupErr) {
       cleanupOk = false;
       console.error(
@@ -640,7 +635,7 @@ function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
   // observer with empty-map delete events and persist an empty snapshot to the
   // on-disk annotation file — destroying durable annotations for the docId we
   // intended to evict-and-reopen.
-  doc.transact(() => {
+  withFileSync(doc, () => {
     const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
     annotations.forEach((_, k) => annotations.delete(k));
 
@@ -655,7 +650,7 @@ function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
 
     const fragment = doc.getXmlFragment("default");
     fragment.delete(0, fragment.length);
-  }, FILE_SYNC_ORIGIN);
+  });
 }
 
 export { evictPartialDocState as __testEvictPartialDocState };
@@ -789,7 +784,7 @@ async function clearAndReload(
   //    try-catch is a diagnostic safety net for Y.js internal corruption; on
   //    throw we re-raise so the caller's force-reload reports the failure.
   try {
-    doc.transact(() => {
+    withInternal(doc, () => {
       // Clear Y.Maps
       const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
       annotations.forEach((_, k) => annotations.delete(k));
@@ -813,7 +808,7 @@ async function clearAndReload(
       meta.set("documentId", id);
       meta.set("fileName", path.basename(resolved));
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
-    }, MCP_ORIGIN);
+    });
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
     attachObservers(id, doc);
@@ -845,7 +840,7 @@ async function initSavedBaseline(doc: Y.Doc, filePath?: string): Promise<void> {
     if (stat) baseline = stat.mtimeMs;
   }
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  doc.transact(() => meta.set(Y_MAP_SAVED_AT_VERSION, baseline), MCP_ORIGIN);
+  withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, baseline));
 }
 
 function writeDocMeta(
@@ -856,12 +851,12 @@ function writeDocMeta(
   readOnly: boolean,
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  doc.transact(() => {
+  withMcp(doc, () => {
     meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
     meta.set("documentId", id);
     meta.set("fileName", fileName);
-  }, MCP_ORIGIN);
+  });
 }
 
 function buildResult(
@@ -919,8 +914,10 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // 1. Read new content outside the transaction (async I/O)
     const fileContent = await fs.readFile(filePath, "utf-8");
 
-    // 2. Single transaction: clear awareness + repopulate content, preserve annotations
-    doc.transact(() => {
+    // 2. Single transaction: clear awareness + repopulate content, preserve annotations.
+    //    ADR-031 `withReload`: channel skips (not a user action) but durable-sync
+    //    persists (we want the refreshed annotation positions saved).
+    withReload(doc, () => {
       const awareness = doc.getMap(Y_MAP_AWARENESS);
       awareness.forEach((_, k) => awareness.delete(k));
 
@@ -933,7 +930,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       } else {
         populateYDoc(doc, fileContent);
       }
-    }, FILE_SYNC_ORIGIN);
+    });
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
     const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
@@ -948,20 +945,17 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     );
 
     if (annotations.length > 0) {
-      // Merge the refresh + textSnapshot relocation passes into a single
-      // MCP_ORIGIN transaction. Origin tag is intentionally MCP_ORIGIN (NOT
-      // FILE_SYNC_ORIGIN): these writes update durable annotation state
-      // (range + relRange) that must persist through the durable-annotation
-      // sync observer. The sync observer skips FILE_SYNC_ORIGIN; the channel
-      // observer skips both origins, so there's no phantom channel echo to
-      // silence here. Flipping to FILE_SYNC_ORIGIN would re-introduce the
-      // PR-A1 post-merge blocker (commit 8d9c0ce).
+      // ADR-031 `withReload`: continuation of the reload operation above.
+      // Channel skips reload (not a user action); durable-sync persists (we
+      // want the refreshed range + relRange saved). The skip-set is identical
+      // to the prior FILE_SYNC-vs-MCP-ORIGIN dance; withReload makes the
+      // intent explicit instead of relying on observer skip-set coincidence.
       //
       // Merging into one transact closes the pre-existing two-write crash
       // window (GH #622) — a process kill between the refresh and relocation
       // passes previously left annotations durably stored at partially
       // refreshed ranges.
-      doc.transact(() => {
+      withReload(doc, () => {
         const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
           skipTransact: true,
         }).map((r) => r.annotation);
@@ -989,7 +983,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
           }
           // RANGE_GONE: annotation text was deleted entirely — leave as-is
         }
-      }, MCP_ORIGIN);
+      });
     }
 
     // 5. Reattach event queue observers (idempotent)
