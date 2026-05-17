@@ -23,7 +23,7 @@
  *     SIGINT/SIGTERM/uncaughtException handlers ensure cleanup on crash.
  */
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";

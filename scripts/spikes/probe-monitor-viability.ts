@@ -30,8 +30,8 @@
  * SIGINT/SIGTERM handlers, fresh-temp-cwd per run.
  */
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join as joinPath, resolve as resolvePath } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
