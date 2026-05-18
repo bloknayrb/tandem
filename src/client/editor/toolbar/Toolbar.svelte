@@ -327,11 +327,15 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 </script>
 
 {#if showPopup && selectionPosition}
+  <!-- Wave C: selection popup uses the shared .tandem-floating-pill recipe
+       (same shadow + warm/white/dark variants as the formatting bar and
+       titlebar pills). Replaces the previous inline 2-layer shadow. -->
   <div
     bind:this={toolbarEl}
     role="toolbar"
     aria-label="Selection tools"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), 0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
+    class="tandem-floating-pill"
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-4); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
   >
     <div style="display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--tandem-border);">
       <ToolbarButton
