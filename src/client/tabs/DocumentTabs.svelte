@@ -202,7 +202,7 @@ $effect(() => {
      left/right arrow buttons, which became redundant with native trackpad
      scroll + the visual cue from the fade. -->
 <div
-  style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base);"
+  style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base); width: 100%; min-width: 0;"
 >
   <div
     bind:this={scrollEl}
@@ -216,7 +216,7 @@ $effect(() => {
     ]}
     role="tablist"
     aria-label="Open documents"
-    style="display: flex; align-items: stretch; gap: 2px; flex: 1; overflow-x: auto; overflow-y: hidden;"
+    style="display: flex; align-items: stretch; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;"
   >
     {#each tabs as tab (tab.id)}
       <TabItem

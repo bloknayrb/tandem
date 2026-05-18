@@ -236,10 +236,10 @@ function handleKeyDown(e: KeyboardEvent) {
       aria-label="Search document"
       style="
         width: 100%; box-sizing: border-box;
-        padding: var(--tandem-space-1) var(--tandem-space-2);
+        padding: var(--tandem-space-1) var(--tandem-space-3);
         font-size: var(--tandem-text-xs);
         border: 1px solid var(--tandem-border);
-        border-radius: var(--tandem-r-2);
+        border-radius: var(--tandem-r-pill);
         background: var(--tandem-surface);
         color: var(--tandem-fg);
         outline: none;
