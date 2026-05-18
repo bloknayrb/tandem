@@ -25,8 +25,12 @@ export function _resetForTests(): void {
   if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = undefined;
 }
 
-/** Write-through setter: keeps tauriTheme.current and the window bootstrap seed in sync. */
-function setTauriTheme(next: ResolvedTheme): void {
+/**
+ * Write-through setter: keeps tauriTheme.current and the window bootstrap seed in sync.
+ * Narrowed to "light" | "dark" — the OS reports only those two; "warm" is a
+ * user-pref-only resolved theme (W1) that never originates from the OS bridge.
+ */
+function setTauriTheme(next: "light" | "dark"): void {
   tauriTheme.current = next;
   if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = next;
 }
@@ -76,7 +80,7 @@ export function initTauriTheme(): void {
     if (!document.hasFocus() || !invokeRef) return;
     invokeRef("get_app_theme")
       .then((theme) => {
-        const resolved: ResolvedTheme = theme === "dark" ? "dark" : "light";
+        const resolved: "light" | "dark" = theme === "dark" ? "dark" : "light";
         if (tauriTheme.current !== resolved) {
           setTauriTheme(resolved);
           pollErrorLogged = false;

@@ -42,15 +42,16 @@ export function resolveTheme(pref: ThemePreference): ResolvedTheme {
  *
  * Colors are hardcoded hex approximations of --tandem-bg so the meta tag
  * is set synchronously before the next paint without a getComputedStyle
- * round-trip. Must match the light/dark --tandem-bg values in index.html:
+ * round-trip. Must match the light/dark/warm --tandem-bg values in index.html:
  *   light: oklch(0.985 0.004 80)  ≈ #fafaf9
  *   dark:  oklch(0.18 0.012 270)  ≈ #1c1c24
+ *   warm:  oklch(0.945 0.012 70)  ≈ #f1ead9
  */
-function syncThemeColorMeta(resolved: "light" | "dark"): void {
+function syncThemeColorMeta(resolved: ResolvedTheme): void {
   try {
     const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (meta) {
-      meta.content = resolved === "dark" ? "#1c1c24" : "#fafaf9";
+      meta.content = resolved === "dark" ? "#1c1c24" : resolved === "warm" ? "#f1ead9" : "#fafaf9";
     }
   } catch {
     // Guard against SSR or DOM-less test environments where document may throw.
