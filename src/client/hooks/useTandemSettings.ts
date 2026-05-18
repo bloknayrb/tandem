@@ -11,11 +11,12 @@ export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
-export type ThemePreference = "light" | "dark" | "system";
+export type ThemePreference = "light" | "dark" | "warm" | "system";
 
 export const THEME_NEXT: Record<ThemePreference, ThemePreference> = {
   system: "dark",
-  dark: "light",
+  dark: "warm",
+  warm: "light",
   light: "system",
 };
 
@@ -23,7 +24,8 @@ export const THEME_NEXT: Record<ThemePreference, ThemePreference> = {
 // tooltips announce what clicking will do, not what the current theme is.
 export const THEME_LABEL: Record<ThemePreference, string> = {
   light: "Switch to system theme",
-  dark: "Switch to light theme",
+  dark: "Switch to warm theme",
+  warm: "Switch to light theme",
   system: "Switch to dark theme",
 };
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
@@ -307,7 +309,10 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.textSize
         : DEFAULTS.textSize,
     theme:
-      parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
+      parsed.theme === "light" ||
+      parsed.theme === "dark" ||
+      parsed.theme === "warm" ||
+      parsed.theme === "system"
         ? parsed.theme
         : DEFAULTS.theme,
     accentHue:

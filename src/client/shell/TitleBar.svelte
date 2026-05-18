@@ -258,6 +258,16 @@ $effect(() => {
               fill="currentColor"
             />
           </svg>
+        {:else if theme === "warm"}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="3.2" fill="currentColor" />
+            <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <line x1="8" y1="1.5" x2="8" y2="3" />
+              <line x1="8" y1="13" x2="8" y2="14.5" />
+              <line x1="1.5" y1="8" x2="3" y2="8" />
+              <line x1="13" y1="8" x2="14.5" y2="8" />
+            </g>
+          </svg>
         {:else}
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path

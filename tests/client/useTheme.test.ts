@@ -80,6 +80,10 @@ describe("resolveTheme", () => {
     expect(resolveTheme("dark")).toBe("dark");
   });
 
+  it("passes 'warm' through (W1: v7 floating chrome canvas tone)", () => {
+    expect(resolveTheme("warm")).toBe("warm");
+  });
+
   it("delegates 'system' to the current systemTheme() result", () => {
     expect(resolveTheme("system")).toBe("light");
     vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
@@ -146,6 +150,12 @@ describe("useTheme — DOM side effects (via applyTheme)", () => {
     const { attrs } = installDomStubs();
     applyTheme("dark");
     expect(attrs.get("data-theme")).toBe("dark");
+  });
+
+  it("sets data-theme='warm' when pref is 'warm' (W1)", () => {
+    const { attrs } = installDomStubs();
+    applyTheme("warm");
+    expect(attrs.get("data-theme")).toBe("warm");
   });
 
   it("cleanup removes data-theme (non-system pref)", () => {

@@ -36,7 +36,7 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
 
 const themeRg = createRadioGroup<ThemePreference>(
   () => settings.theme,
-  ["light", "dark", "system"] as const,
+  ["light", "warm", "dark", "system"] as const,
   (t) => onUpdate({ theme: t }),
 );
 const primaryTabRg = createRadioGroup<PrimaryTab>(
@@ -71,7 +71,7 @@ const densityRg = createRadioGroup<Density>(
     onkeydown={themeRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
-    {#each (["light", "dark", "system"] as const) as t (t)}
+    {#each (["light", "warm", "dark", "system"] as const) as t (t)}
       <button
         data-testid={`theme-${t}-btn`}
         role="radio"
@@ -80,7 +80,7 @@ const densityRg = createRadioGroup<Density>(
         onclick={() => onUpdate({ theme: t })}
         style={cardStyle(settings.theme === t)}
       >
-        {t === "light" ? "Light" : t === "dark" ? "Dark" : "System"}
+        {t === "light" ? "Light" : t === "warm" ? "Warm" : t === "dark" ? "Dark" : "System"}
       </button>
     {/each}
   </div>
@@ -180,7 +180,7 @@ const densityRg = createRadioGroup<Density>(
     onkeydown={editorFontRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
-    {#each ([["sans", "Sans-serif"], ["serif", "Serif"], ["mono", "Monospace"]] as const) as [value, label] (value)}
+    {#each ([["sans", "Sans-serif"], ["serif", "Serif (Source Serif 4)"], ["mono", "Monospace"]] as const) as [value, label] (value)}
       <button
         data-testid={`editor-font-${value}-btn`}
         role="radio"

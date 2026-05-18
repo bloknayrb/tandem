@@ -1,4 +1,4 @@
-export type ResolvedTheme = "light" | "dark";
+export type ResolvedTheme = "light" | "dark" | "warm";
 
 // systemTheme, resolveTheme, applyTheme live in useTheme.svelte.ts — they need
 // access to tauriTheme (a Svelte $state) for live OS theme updates in Tauri.

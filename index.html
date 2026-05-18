@@ -200,6 +200,41 @@
         --tandem-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
       }
 
+      /* Warm canvas theme — v7 floating chrome. OKLCH values come straight
+         from calm-v7.css. Foundational tokens only: surface family + border
+         + scrollbars + page metaphor + the shared pill-shadow used by every
+         floating-pill surface (titlebar clusters, fmtbar, tabs, status,
+         rails, wincontrols). Component-level adoption happens in W3-W6. */
+      [data-theme="warm"] {
+        --tandem-bg: oklch(0.945 0.012 70);
+        --tandem-fg: oklch(0.22 0.012 280);
+        --tandem-surface: oklch(0.975 0.005 75);
+        --tandem-surface-muted: oklch(0.960 0.010 75);
+        --tandem-surface-sunk: oklch(0.920 0.014 65);
+        --tandem-border: oklch(0.91 0.006 75);
+        --tandem-border-strong: oklch(0.84 0.008 75);
+        --tandem-fg-muted: oklch(0.48 0.008 280);
+        --tandem-fg-subtle: oklch(0.54 0.008 280);
+        --tandem-fg-faint: oklch(0.64 0.005 280);
+        --tandem-scrollbar-track: oklch(0.94 0.012 70);
+        --tandem-scrollbar-thumb: oklch(0.78 0.010 75);
+        --tandem-page-bg: oklch(0.925 0.012 70);
+        --tandem-page-paper: oklch(0.985 0.005 75);
+        --tandem-page-shadow: 0 2px 8px oklch(0 0 0 / 0.12);
+        /* Floating-pill shadow stack — consumed by the shared
+           .tandem-floating-pill class introduced in W3. Three light/dark
+           variants of the same shape are exposed so each surface can pick
+           the right contrast against its canvas. */
+        --c7-pill-shadow:
+          0 1px 1px oklch(0 0 0 / 0.03),
+          0 4px 10px -4px oklch(0 0 0 / 0.10),
+          0 16px 30px -18px oklch(0 0 0 / 0.18);
+        --c7-pill-shadow-white:
+          0 1px 1px oklch(0 0 0 / 0.04),
+          0 6px 14px -6px oklch(0 0 0 / 0.10),
+          0 22px 38px -22px oklch(0 0 0 / 0.16);
+      }
+
       /* density spacing scale — cozy is the default (matches :root values) */
       [data-density="compact"] {
         --tandem-space-1: 2px;
