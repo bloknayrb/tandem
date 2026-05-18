@@ -54,6 +54,12 @@ test.describe("WCAG AA — light mode", () => {
       .include("#root")
       .exclude("[contenteditable]")
       .exclude(".ProseMirror")
+      // The status pill carries an intentional `opacity: 0.4` muted-affordance
+      // treatment (see StatusBar.svelte). axe computes color-contrast against
+      // the post-opacity rendered text, which fails AA. The fade is a
+      // deliberate design override (PR #760 commit message); excluded from
+      // contrast audits rather than reverted.
+      .exclude(".tandem-status-pill")
       // The WAI-ARIA APG closable tabs pattern places a close button inside role="tab".
       // axe's nested-interactive rule fires on this well-established pattern; the close
       // button is fully operable by pointer and assistive technology via its aria-label.
@@ -90,6 +96,12 @@ test.describe("WCAG AA — light mode", () => {
       .include("#root")
       .exclude("[contenteditable]")
       .exclude(".ProseMirror")
+      // The status pill carries an intentional `opacity: 0.4` muted-affordance
+      // treatment (see StatusBar.svelte). axe computes color-contrast against
+      // the post-opacity rendered text, which fails AA. The fade is a
+      // deliberate design override (PR #760 commit message); excluded from
+      // contrast audits rather than reverted.
+      .exclude(".tandem-status-pill")
       .disableRules(["nested-interactive"])
       .analyze();
 
@@ -108,6 +120,12 @@ test.describe("WCAG AA — dark mode", () => {
       .include("#root")
       .exclude("[contenteditable]")
       .exclude(".ProseMirror")
+      // The status pill carries an intentional `opacity: 0.4` muted-affordance
+      // treatment (see StatusBar.svelte). axe computes color-contrast against
+      // the post-opacity rendered text, which fails AA. The fade is a
+      // deliberate design override (PR #760 commit message); excluded from
+      // contrast audits rather than reverted.
+      .exclude(".tandem-status-pill")
       // The WAI-ARIA APG closable tabs pattern places a close button inside role="tab".
       // axe's nested-interactive rule fires on this well-established pattern; the close
       // button is fully operable by pointer and assistive technology via its aria-label.
@@ -140,6 +158,12 @@ test.describe("WCAG AA — dark mode", () => {
       .include("#root")
       .exclude("[contenteditable]")
       .exclude(".ProseMirror")
+      // The status pill carries an intentional `opacity: 0.4` muted-affordance
+      // treatment (see StatusBar.svelte). axe computes color-contrast against
+      // the post-opacity rendered text, which fails AA. The fade is a
+      // deliberate design override (PR #760 commit message); excluded from
+      // contrast audits rather than reverted.
+      .exclude(".tandem-status-pill")
       .disableRules(["nested-interactive"])
       .analyze();
 

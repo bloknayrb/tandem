@@ -919,10 +919,11 @@ const tutorial = createTutorial(
     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
       {#if effectiveLeftVisible}
         <!-- Left rail = outline only (Wave D). No tab bar, no picker; the
-             redesign V7OutlineRail is anchored outline + heading list. -->
+             redesign V7OutlineRail is anchored outline + heading list.
+             Wave A: rail stops above the floating status pill (#7). -->
         <div
           data-testid="left-outline-rail"
-          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); overflow: hidden;`}
+          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
         >
           <PanelSlot
             kind="outline"
@@ -1211,55 +1212,54 @@ const tutorial = createTutorial(
        --tandem-rail-top-clearance var defaults to 0; Wave 3 will raise it
        to ~52px when the fmtbar lifts out of the in-flow layout. -->
   <div
-    style={`display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); overflow: hidden;`}
+    style={`display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
   >
-    <div
-      style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
-    >
-      {#if enabledTabs.includes("annotations")}
-        <button
-          data-testid="annotations-tab"
-          onclick={() => { activeRailTab = "annotations"; }}
-          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "annotations" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "annotations" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; position: relative; white-space: nowrap;`}
-          title={iconOnly ? "Annotations" : undefined}
-        >
-          {#if iconOnly}◨{:else}Annotations{/if}
-          {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
-            <span
-              style="position: absolute; top: 2px; right: 2px; background: var(--tandem-error); color: var(--tandem-error-fg); font-size: 9px; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700;"
-            >
-              {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
-            </span>
-          {/if}
-        </button>
-      {/if}
-      {#if enabledTabs.includes("chat")}
-        <button
-          data-testid="chat-tab"
-          onmousedown={captureSelectionForChat}
-          onclick={() => { activeRailTab = "chat";  }}
-          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "chat" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "chat" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
-          title={iconOnly ? "Chat" : undefined}
-        >
-          {#if iconOnly}💬{:else}Chat{/if}
-        </button>
-      {/if}
-      {#if enabledTabs.includes("outline")}
-        <button
-          data-testid="outline-tab"
-          onclick={() => { activeRailTab = "outline"; }}
-          style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeRailTab === "outline" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeRailTab === "outline" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
-          title={iconOnly ? "Outline" : undefined}
-        >
-          {#if iconOnly}≡{:else}Outline{/if}
-        </button>
-      {/if}
-      <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
-        <RailTabPicker
-          enabledTabs={settingsState.settings.rightRailTabs}
-          onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
-        />
+    <!-- Wave A: rail-tab header restyled to match calm-v7 .c7-rail-tabs —
+         inset pill track with rounded segment buttons. Active segment gets
+         soft background + tiny shadow; underline-bottom pattern is gone. -->
+    <div class="rail-tabs-row">
+      <div class="rail-tabs-track">
+        {#if enabledTabs.includes("annotations")}
+          <button
+            data-testid="annotations-tab"
+            class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
+            onclick={() => { activeRailTab = "annotations"; }}
+            title={iconOnly ? "Annotations" : undefined}
+          >
+            {#if iconOnly}◨{:else}Annotations{/if}
+            {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
+              <span class="rail-tab-badge">
+                {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+              </span>
+            {/if}
+          </button>
+        {/if}
+        {#if enabledTabs.includes("chat")}
+          <button
+            data-testid="chat-tab"
+            class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
+            onmousedown={captureSelectionForChat}
+            onclick={() => { activeRailTab = "chat";  }}
+            title={iconOnly ? "Chat" : undefined}
+          >
+            {#if iconOnly}💬{:else}Chat{/if}
+          </button>
+        {/if}
+        {#if enabledTabs.includes("outline")}
+          <button
+            data-testid="outline-tab"
+            class={"rail-tab" + (activeRailTab === "outline" ? " on" : "")}
+            onclick={() => { activeRailTab = "outline"; }}
+            title={iconOnly ? "Outline" : undefined}
+          >
+            {#if iconOnly}≡{:else}Outline{/if}
+          </button>
+        {/if}
       </div>
+      <RailTabPicker
+        enabledTabs={settingsState.settings.rightRailTabs}
+        onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
+      />
     </div>
     <PanelSlot
       kind="chat"
@@ -1306,3 +1306,62 @@ const tutorial = createTutorial(
     {/if}
   </div>
 {/snippet}
+
+<style>
+  /* Wave A: rail-tab pill (matches calm-v7 .c7-rail-tabs).
+     Inset track + rounded segments + soft active fill. No underline. */
+  .rail-tabs-row {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    margin: 12px 12px 10px;
+    flex-shrink: 0;
+  }
+  .rail-tabs-track {
+    display: flex;
+    flex: 1;
+    gap: 3px;
+    padding: 4px;
+    background: var(--tandem-surface-sunk);
+    border-radius: var(--tandem-r-pill);
+    font-size: 11.5px;
+  }
+  .rail-tab {
+    flex: 1;
+    text-align: center;
+    padding: 5px 8px;
+    border: none;
+    border-radius: var(--tandem-r-pill);
+    background: transparent;
+    color: var(--tandem-fg-subtle);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    position: relative;
+    white-space: nowrap;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .rail-tab:hover:not(.on) {
+    color: var(--tandem-fg);
+  }
+  .rail-tab.on {
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  }
+  .rail-tab-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background: var(--tandem-error);
+    color: var(--tandem-error-fg);
+    font-size: 9px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+  }
+</style>
