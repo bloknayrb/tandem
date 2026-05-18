@@ -401,7 +401,8 @@ describe("highlight color migration", () => {
     const { doc, droppedAnnotations } = migrateToV1(legacy);
     expect(droppedAnnotations).toBe(0);
     expect(doc.annotations).toHaveLength(3);
-    expect(doc.annotations[0]?.color).toBe("yellow");
+    // W7 palette migration: red → pink (was red → yellow before v7).
+    expect(doc.annotations[0]?.color).toBe("pink");
     expect(doc.annotations[1]?.color).toBe("blue");
     expect(doc.annotations[2]?.color).toBe("yellow");
   });
@@ -417,7 +418,8 @@ describe("highlight color migration", () => {
     };
     const result = parseAnnotationDoc(docWithOldColors);
     if (!result.ok) throw new Error("expected success");
-    expect(result.doc.annotations[0]?.color).toBe("yellow");
+    // W7 palette migration: red → pink (was red → yellow before v7).
+    expect(result.doc.annotations[0]?.color).toBe("pink");
     expect(result.doc.annotations[1]?.color).toBe("blue");
     expect(result.doc.annotations[2]?.color).toBe("blue");
   });

@@ -180,8 +180,14 @@ export type TombstoneRecordV1 = z.infer<typeof TombstoneRecordSchemaV1>;
 // Color migration helpers
 // ---------------------------------------------------------------------------
 
+// Align legacy color remap with the v7 design handoff palette
+// (docs/designs/handoff/tandem/project/calm-v7.css):
+// - red → pink (warm-family remap; the prior red→yellow remap predated the
+//   v7 palette decision and silently collapsed two visually distinct
+//   highlights into one)
+// - purple → blue (cool-family remap; unchanged)
 const LEGACY_COLOR_MAP: Record<"red" | "purple", HighlightColor> = {
-  red: "yellow",
+  red: "pink",
   purple: "blue",
 };
 
