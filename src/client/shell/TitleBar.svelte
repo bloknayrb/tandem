@@ -540,15 +540,16 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     flex-shrink: 0;
   }
 
+  /* Wave A: matches calm-v7 .c7-icbtn — 30×30 circular soft-fill chip,
+     not transparent-until-hover. */
   .icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
     border: 1px solid transparent;
-    border-radius: var(--tandem-r-2);
-    background: transparent;
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-surface-sunk);
     color: var(--tandem-fg-muted);
     cursor: pointer;
     padding: 0;

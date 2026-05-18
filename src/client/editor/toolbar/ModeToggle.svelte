@@ -9,53 +9,63 @@ interface Props {
 const { tandemMode, onModeChange }: Props = $props();
 </script>
 
+<!-- Wave A: matches calm-v7 .c7-seg — rounded soft pill, two buttons,
+     `.on` state with subtle shadow. The Claude-active dot moved to the
+     status bar (no longer duplicated on the mode toggle). -->
 <div
   data-testid="mode-toggle"
+  class="mode-toggle"
   role="group"
   aria-label="AI collaboration mode"
-  style="display: inline-flex; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); padding: 2px; gap: 2px;"
 >
   <button
     data-testid="mode-solo-btn"
+    class={tandemMode === "solo" ? "on" : ""}
     title="Write undisturbed — your AI only responds when you message"
     aria-pressed={tandemMode === "solo"}
     onclick={() => onModeChange("solo")}
-    style="height: 24px; padding: 0 10px; font-size: 12px; border: none; border-radius: var(--tandem-r-1); cursor: pointer;
-      background: {tandemMode === 'solo' ? 'var(--tandem-surface)' : 'transparent'};
-      color: {tandemMode === 'solo' ? 'var(--tandem-fg)' : 'var(--tandem-fg-muted)'};
-      font-weight: 500;
-      display: flex; align-items: center; gap: 5px;"
-  >
-    {#if tandemMode === "solo"}
-      <span
-        style="width: 6px; height: 6px; border-radius: var(--tandem-r-circle); background: var(--tandem-fg-subtle); display: inline-block;"
-      ></span>
-    {/if}
-    Solo
-  </button>
+  >Solo</button>
   <button
     data-testid="mode-tandem-btn"
+    class={tandemMode === "tandem" ? "on" : ""}
     title="Full collaboration — your AI reacts to selections and document changes"
     aria-pressed={tandemMode === "tandem"}
     onclick={() => onModeChange("tandem")}
-    style="height: 24px; padding: 0 10px; font-size: 12px; border: none; border-radius: var(--tandem-r-1); cursor: pointer;
-      background: {tandemMode === 'tandem' ? 'var(--tandem-surface)' : 'transparent'};
-      color: {tandemMode === 'tandem' ? 'var(--tandem-fg)' : 'var(--tandem-fg-muted)'};
-      font-weight: 500;
-      display: flex; align-items: center; gap: 5px;"
-  >
-    {#if tandemMode === "tandem"}
-      <span
-        style="width: 6px; height: 6px; border-radius: var(--tandem-r-circle); background: var(--tandem-success); display: inline-block;"
-      ></span>
-    {/if}
-    Tandem
-  </button>
+  >Tandem</button>
 </div>
 
 <style>
+  .mode-toggle {
+    display: inline-flex;
+    padding: 3px;
+    background: var(--tandem-surface-sunk);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    font-size: 12px;
+    gap: 0;
+  }
+  .mode-toggle button {
+    padding: 4px 12px;
+    border-radius: var(--tandem-r-pill);
+    color: var(--tandem-fg-muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 500;
+    line-height: 1;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .mode-toggle button:hover:not(.on) {
+    color: var(--tandem-fg);
+  }
+  .mode-toggle button.on {
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
   @media (forced-colors: active) {
-    button[aria-pressed="true"] {
+    .mode-toggle button[aria-pressed="true"] {
       outline: 2px solid ButtonText;
     }
   }
