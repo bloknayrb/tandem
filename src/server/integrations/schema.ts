@@ -29,13 +29,49 @@ const AbsolutePath = z.string().min(1).refine(path.isAbsolute, {
   message: "configPath must be an absolute path",
 });
 
+/**
+ * Tandem's MCP HTTP endpoint is always loopback by design — the server
+ * binds to `127.0.0.1` by default, and LAN binding (`TANDEM_BIND_HOST`)
+ * still leaves Claude / other MCP clients connecting to a loopback URL
+ * because they share the host. There is no legitimate Tandem integration
+ * whose `url` field points to a remote host. Constraining `url` to
+ * loopback prevents a maliciously planted `~/.claude.json` entry
+ * (`url: "http://evil.example/mcp"`) from being preserved into Tandem's
+ * `integrations.json` via the wizard's "already configured" path.
+ *
+ * Accepts `http://127.0.0.1[:port][/path]` or `http://localhost[:port][/path]`.
+ * Rejects: non-`http` schemes, any other hostname, IP-literal forms other
+ * than `127.0.0.1` (which would also be loopback but are not used by Tandem
+ * and add attack surface — `127.0.0.2` etc. are valid loopback addresses
+ * but reaching them implies someone configured an alternate bind).
+ */
+const LoopbackUrl = z
+  .string()
+  .url()
+  .refine(
+    (value) => {
+      let parsed: URL;
+      try {
+        parsed = new URL(value);
+      } catch {
+        return false;
+      }
+      if (parsed.protocol !== "http:") return false;
+      return parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+    },
+    {
+      message:
+        "url must be an http loopback URL (http://127.0.0.1 or http://localhost) — Tandem's MCP endpoint is always loopback",
+    },
+  );
+
 const ClaudeCodeIntegration = z.object({
   kind: z.literal("claude-code"),
   id: z.string().min(1),
   label: z.string().min(1),
   configPath: AbsolutePath,
   transport: z.literal("http"),
-  url: z.string().url(),
+  url: LoopbackUrl,
   tokenSecretRef: z.string().min(1).optional(),
 });
 
@@ -66,7 +102,7 @@ const OtherMcpIntegration = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   transport: z.union([z.literal("http"), z.literal("stdio")]),
-  url: z.string().url().optional(),
+  url: LoopbackUrl.optional(),
   configPath: AbsolutePath.optional(),
   tokenSecretRef: z.string().min(1).optional(),
 });
@@ -137,7 +173,7 @@ const ClaudeCodeIntegrationV1 = z
     label: z.string().min(1),
     configPath: AbsolutePath,
     transport: z.literal("http"),
-    url: z.string().url(),
+    url: LoopbackUrl,
   })
   .strict();
 
