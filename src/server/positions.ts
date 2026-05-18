@@ -257,15 +257,20 @@ export function validateRange(
 
 /**
  * Validate a range and create both flat and CRDT-anchored positions in one call.
- *
+ * Pass `opts.rejectHeadingOverlap: true` to also reject ranges that overlap
+ * heading prefixes (same guard used by `tandem_edit`).
  */
 export function anchoredRange(
   ydoc: Y.Doc,
   from: FlatOffset,
   to: FlatOffset,
   textSnapshot?: string,
+  opts?: { rejectHeadingOverlap?: boolean },
 ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
-  const validation = validateRange(ydoc, from, to, { textSnapshot });
+  const validation = validateRange(ydoc, from, to, {
+    textSnapshot,
+    rejectHeadingOverlap: opts?.rejectHeadingOverlap,
+  });
   if (!validation.ok) return validation;
 
   const range: DocumentRange = { from, to };

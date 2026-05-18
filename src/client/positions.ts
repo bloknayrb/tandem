@@ -313,6 +313,10 @@ export function annotationToPmRange(
       console.warn(
         `[positions] annotationToPmRange: inverted rel range for ${ann.id}, falling back to flat`,
       );
+    } else {
+      console.warn(
+        `[positions] annotationToPmRange: relRange resolved to null for ${ann.id}, falling back to flat`,
+      );
     }
   }
   // Fall back to flat offsets

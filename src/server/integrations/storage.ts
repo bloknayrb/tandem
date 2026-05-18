@@ -79,7 +79,13 @@ async function readIntegrationsFile(filePath: string): Promise<IntegrationsFile>
   }
 
   const migrated = migrateUp(parsed, version, INTEGRATIONS_SCHEMA_VERSION);
-  const result = IntegrationsFileSchema.safeParse(migrated);
+  // Normalize legacy http://localhost URLs to http://127.0.0.1 before schema
+  // validation. The LoopbackUrl validator accepts only 127.0.0.1; files written
+  // before this tightening may carry localhost URLs (auto-config always wrote
+  // 127.0.0.1, but manual edits could differ). Normalize silently here; the
+  // corrected value is persisted on the next write.
+  const normalized = normalizeLocalhostUrls(migrated);
+  const result = IntegrationsFileSchema.safeParse(normalized);
   if (!result.success) {
     throw new Error(
       `integrations.json failed validation after migration (${result.error.message}). Original file preserved at ${filePath}.`,
@@ -223,6 +229,29 @@ function readSchemaVersion(parsed: unknown): number | null {
     return (parsed as { schemaVersion: number }).schemaVersion;
   }
   return null;
+}
+
+/**
+ * Replace `http://localhost` with `http://127.0.0.1` in any `url` field across
+ * all integration records. Operates on the raw unknown post-migration shape so
+ * it runs before Zod validation (which now rejects localhost). Safe to call on
+ * any value — non-object / non-array inputs are returned unchanged.
+ */
+function normalizeLocalhostUrls(data: unknown): unknown {
+  if (Array.isArray(data)) return data.map(normalizeLocalhostUrls);
+  if (data === null || typeof data !== "object") return data;
+  const obj = data as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    if (key === "url" && typeof obj[key] === "string") {
+      result[key] = (obj[key] as string).replace(/^http:\/\/localhost([:\/]|$)/, (m) =>
+        m.replace("localhost", "127.0.0.1"),
+      );
+    } else {
+      result[key] = normalizeLocalhostUrls(obj[key]);
+    }
+  }
+  return result;
 }
 
 function enforceReferentialIntegrity(file: IntegrationsFile): IntegrationsFile {

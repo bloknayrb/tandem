@@ -379,7 +379,9 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!da) return noDocumentError();
         const from = toFlatOffset(rawFrom);
         const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot);
+        const result = anchoredRange(da.ydoc, from, to, textSnapshot, {
+          rejectHeadingOverlap: true,
+        });
         if (!result.ok) {
           notifyRangeFailure(result, "tandem_comment", documentId);
           return rangeFailureToError(result);

@@ -305,14 +305,12 @@ $effect(() => {
   const validIds = new Set(
     filteredData.pending.filter((a) => a.author === "import" && a.type === "note").map((a) => a.id),
   );
-  let dirty = false;
-  for (const id of selectedImportIds) {
-    if (!validIds.has(id)) {
-      selectedImportIds.delete(id);
-      dirty = true;
-    }
-  }
-  if (dirty) selectedImportIds = new Set(selectedImportIds);
+  // Read+write of selectedImportIds is wrapped in untrack() so the reactive
+  // write doesn't re-trigger this effect and cause a double-run loop.
+  untrack(() => {
+    const pruned = new Set([...selectedImportIds].filter((id) => validIds.has(id)));
+    if (pruned.size !== selectedImportIds.size) selectedImportIds = pruned;
+  });
 });
 
 function toggleImportSelection(id: string) {
