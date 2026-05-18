@@ -173,14 +173,6 @@ function handleKeyDown(e: KeyboardEvent, id: string) {
   }
 }
 
-function scrollLeft() {
-  scrollEl?.scrollBy({ left: -150, behavior: scrollBehavior });
-}
-
-function scrollRight() {
-  scrollEl?.scrollBy({ left: 150, behavior: scrollBehavior });
-}
-
 const singleTab = $derived(tabs.length <= 1);
 
 $effect(() => {
@@ -201,25 +193,27 @@ $effect(() => {
 </script>
 
 <!-- Transparent container so pill TabItems read as standalone chips against
-     the canvas behind TitleBar's center cluster (the only host). -->
+     the canvas behind TitleBar's center cluster (the only host).
+
+     Mask-fade overflow: when the scroller has hidden content on either side
+     we apply `.has-overflow` (both sides) or `.overflow-left` / `.overflow-right`
+     (one side) modifier classes on `.tab-scroll-mask`. The mask is a 22px
+     linear-gradient fade matching the v7 design recipe — replaces the prior
+     left/right arrow buttons, which became redundant with native trackpad
+     scroll + the visual cue from the fade. -->
 <div
   style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base);"
 >
-  {#if canScrollLeft}
-    <button
-      data-testid="tab-scroll-left"
-      onclick={scrollLeft}
-      style="display: flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; background: linear-gradient(to right, var(--tandem-bg) 70%, transparent); border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); padding: 0; z-index: 1;"
-      title="Scroll tabs left"
-    >
-      ◀
-    </button>
-  {/if}
-
   <div
     bind:this={scrollEl}
     data-testid="tab-scroll-container"
-    class="tab-scroll-hide"
+    class={[
+      "tab-scroll-hide",
+      "tab-scroll-mask",
+      canScrollLeft && canScrollRight && "has-overflow",
+      canScrollLeft && !canScrollRight && "overflow-left",
+      !canScrollLeft && canScrollRight && "overflow-right",
+    ]}
     role="tablist"
     aria-label="Open documents"
     style="display: flex; align-items: stretch; gap: 2px; flex: 1; overflow-x: auto; overflow-y: hidden;"
@@ -244,7 +238,8 @@ $effect(() => {
 
   <!-- The "+" button lives OUTSIDE role="tablist" — a tablist is only allowed to contain
        role="tab" children (axe `aria-required-children`). Keeping it adjacent to the
-       scroll container preserves the visual placement at the end of the tab strip. -->
+       scroll container preserves the visual placement at the end of the tab strip.
+       28×28 floating-pill recipe matches the v7 .c7-tab-add design. -->
   <button
     bind:this={openBtnEl}
     onclick={() => {
@@ -252,30 +247,12 @@ $effect(() => {
       showRecent = !showRecent;
     }}
     data-testid="open-file-btn"
+    class="tandem-floating-pill tab-add-pill"
     title="Open file"
-    style="background: none; border: none; border-radius: var(--tandem-r-2); cursor: pointer; font-size: 16px; line-height: 1; color: var(--tandem-fg-subtle); padding: 0 8px; margin-left: 4px; flex-shrink: 0;"
-    onmouseenter={(e) => {
-      (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-accent)";
-      (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-accent)";
-    }}
-    onmouseleave={(e) => {
-      (e.currentTarget as HTMLButtonElement).style.color = "var(--tandem-fg-muted)";
-      (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tandem-border-strong)";
-    }}
+    aria-label="Open file"
   >
     +
   </button>
-
-  {#if canScrollRight}
-    <button
-      data-testid="tab-scroll-right"
-      onclick={scrollRight}
-      style="display: flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; background: linear-gradient(to left, var(--tandem-bg) 70%, transparent); border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); padding: 0; z-index: 1;"
-      title="Scroll tabs right"
-    >
-      ▶
-    </button>
-  {/if}
 
   {#if showRecent}
     <NewTabMenu
@@ -310,5 +287,79 @@ $effect(() => {
   }
   :global(.tab-scroll-hide::-webkit-scrollbar) {
     display: none;
+  }
+
+  /* Mask-fade overflow: 22px linear-gradient fade on whichever edge has
+     hidden content. Matches the v7 .c7-tabs design recipe (calm-v7.css). */
+  :global(.tab-scroll-mask.has-overflow) {
+    mask-image: linear-gradient(
+      90deg,
+      transparent 0,
+      #000 22px,
+      #000 calc(100% - 22px),
+      transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      transparent 0,
+      #000 22px,
+      #000 calc(100% - 22px),
+      transparent 100%
+    );
+  }
+  :global(.tab-scroll-mask.overflow-right) {
+    mask-image: linear-gradient(
+      90deg,
+      #000 0,
+      #000 calc(100% - 22px),
+      transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      #000 0,
+      #000 calc(100% - 22px),
+      transparent 100%
+    );
+  }
+  :global(.tab-scroll-mask.overflow-left) {
+    mask-image: linear-gradient(
+      90deg,
+      transparent 0,
+      #000 22px,
+      #000 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      transparent 0,
+      #000 22px,
+      #000 100%
+    );
+  }
+
+  /* 28×28 floating-pill `+` add-tab button. Inherits the white/dark/warm
+     background + border + shadow from `.tandem-floating-pill`; this rule
+     only sets the size/shape/hover. */
+  .tab-add-pill {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    margin-left: var(--tandem-space-2);
+    border-radius: var(--tandem-r-circle);
+    color: var(--tandem-fg-subtle);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .tab-add-pill:hover {
+    color: var(--tandem-accent);
+    border-color: var(--tandem-accent-border);
+  }
+  .tab-add-pill:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 </style>

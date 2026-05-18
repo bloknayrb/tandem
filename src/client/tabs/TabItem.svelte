@@ -191,7 +191,8 @@ function handleMouseLeaveClose() {
 
   {#if tab.readOnly}
     <span
-      style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-2xs); color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); padding: 0 4px; border-radius: var(--tandem-r-pill);"
+      class="tab-ro-badge"
+      aria-label="Read-only"
     >
       RO
     </span>
@@ -220,3 +221,17 @@ function handleMouseLeaveClose() {
     ×
   </button>
 </div>
+
+<style>
+  .tab-ro-badge {
+    font-family: var(--tandem-font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--tandem-fg-faint);
+    background: color-mix(in srgb, var(--tandem-fg) 5%, transparent);
+    padding: 1px 5px;
+    border-radius: var(--tandem-r-1);
+    flex-shrink: 0;
+  }
+</style>

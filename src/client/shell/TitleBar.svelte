@@ -354,7 +354,7 @@ $effect(() => {
   </div>
 
   {#if isTauriRuntime()}
-    <div class="title-bar-controls">
+    <div class="title-bar-controls tandem-floating-pill">
       <button
         type="button"
         class="title-bar-btn"
@@ -616,9 +616,17 @@ $effect(() => {
     }
   }
 
+  /* Wincontrols pill: 30×30 buttons inside a single rounded clip.
+     `.tandem-floating-pill` (from index.html) supplies the bg/border/shadow;
+     this rule sets the pill shape + size and ensures buttons clip to the
+     rounded edges. Margin pulls the cluster slightly clear of the gear so
+     it reads as a separate group. */
   .title-bar-controls {
-    display: flex;
-    height: 100%;
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    margin: 0 var(--tandem-space-2) 0 var(--tandem-space-1);
+    overflow: hidden;
     flex-shrink: 0;
   }
 
@@ -626,17 +634,18 @@ $effect(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 46px;
-    height: 100%;
+    width: 36px;
+    height: 30px;
     border: none;
     background: transparent;
     color: var(--tandem-fg-muted);
     cursor: pointer;
-    transition: background 0.1s;
+    padding: 0;
+    transition: background 0.1s, color 0.1s;
   }
 
   .title-bar-btn:hover:not(:disabled) {
-    background: var(--tandem-surface);
+    background: color-mix(in srgb, var(--tandem-fg) 6%, transparent);
     color: var(--tandem-fg);
   }
 
