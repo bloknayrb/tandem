@@ -42,9 +42,13 @@ type Props =
 
 let { kind, visible, ...rest }: Props = $props();
 
+// Outline rail hugs content + reserves bottom space for the floating status
+// pill (W5). Other kinds fill the full vertical space inside the rail.
 const wrapStyle = $derived(
   visible !== undefined
-    ? `display: ${visible ? "flex" : "none"}; flex-direction: column; flex: 1; min-height: 0;`
+    ? `display: ${visible ? "flex" : "none"}; flex-direction: column; flex: 1; min-height: 0;${
+        kind === "outline" ? " padding-bottom: var(--tandem-status-clearance-total, 88px);" : ""
+      }`
     : undefined,
 );
 </script>
