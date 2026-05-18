@@ -117,8 +117,8 @@ describe("LayoutModel.toggleRight", () => {
   });
 });
 
-describe("LayoutModel.moveTabs orphan-rail rule", () => {
-  it("reordering within the same side commits without touching the other rail", () => {
+describe("LayoutModel.moveTabs (Wave D: left is locked, right-only)", () => {
+  it("reordering within the right rail commits", () => {
     const settings = makeSettingsState({
       leftRailTabs: ["outline"],
       rightRailTabs: ["annotations", "chat"],
@@ -130,35 +130,18 @@ describe("LayoutModel.moveTabs orphan-rail rule", () => {
     expect(settings.settings.leftRailTabs).toEqual(["outline"]);
   });
 
-  it("moves a tab across rails when the source still has remaining tabs", () => {
+  it("rejects any update targeting the left rail", () => {
     const settings = makeSettingsState({
       leftRailTabs: ["outline"],
       rightRailTabs: ["annotations", "chat"],
     });
     const model = createLayoutModel(settings, { tandemMode: "tandem" });
-    // Move "chat" to left — right still has "annotations".
-    const ok = model.moveTabs("left", ["outline", "chat"]);
-    expect(ok).toBe(true);
-    expect(settings.settings.leftRailTabs).toEqual(["outline", "chat"]);
-    expect(settings.settings.rightRailTabs).toEqual(["annotations"]);
-  });
-
-  it("BLOCKS a move that would empty the other rail (orphan-rail rule)", () => {
-    const settings = makeSettingsState({
-      leftRailTabs: ["outline"],
-      rightRailTabs: ["annotations"],
-    });
-    const model = createLayoutModel(settings, { tandemMode: "tandem" });
-    // Move "annotations" to left would leave right empty.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const ok = model.moveTabs("left", ["outline", "annotations"]);
+    const ok = model.moveTabs("left", ["outline", "chat"]);
     expect(ok).toBe(false);
     expect(settings.settings.leftRailTabs).toEqual(["outline"]);
-    expect(settings.settings.rightRailTabs).toEqual(["annotations"]);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("blocked"),
-      expect.stringContaining("right"),
-    );
+    expect(settings.settings.rightRailTabs).toEqual(["annotations", "chat"]);
+    expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 });

@@ -403,19 +403,7 @@ $effect(() => {
 let activeRailTab = $state<"annotations" | "chat" | "outline">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
-let activeLeftRailTab = $state<"annotations" | "chat" | "outline">(
-  settingsState.settings.leftRailTabs[0] ?? "annotations",
-);
-
-// `untrack` so the write doesn't form a self-dep with the includes() read.
-$effect(() => {
-  const leftTabs = settingsState.settings.leftRailTabs;
-  if (!leftTabs.includes(activeLeftRailTab)) {
-    untrack(() => {
-      activeLeftRailTab = leftTabs[0] ?? "annotations";
-    });
-  }
-});
+// Left rail is locked to outline-only post-Wave-D; no active-tab state needed.
 $effect(() => {
   const rightTabs = settingsState.settings.rightRailTabs;
   if (!rightTabs.includes(activeRailTab)) {
@@ -478,14 +466,6 @@ const moveTabsBetweenRails = (
   side: "left" | "right",
   newTabsForSide: ("annotations" | "chat" | "outline")[],
 ): boolean => layoutModel.moveTabs(side, newTabsForSide);
-
-function handleFilterChange(
-  type: (typeof activeAnnotationFilter)["type"],
-  author: (typeof activeAnnotationFilter)["author"],
-  status: (typeof activeAnnotationFilter)["status"],
-) {
-  activeAnnotationFilter = { type, author, status };
-}
 
 // Margin annotation view reserves a column + edge inset + breathing-room gap
 // per side. Subtract from available width so the editor text never sits
@@ -657,8 +637,7 @@ $effect(() => {
         return;
       }
       const isOutlineVisible =
-        (effectiveLeftVisible && activeLeftRailTab === "outline") ||
-        (effectiveRightVisible && activeRailTab === "outline");
+        effectiveLeftVisible || (effectiveRightVisible && activeRailTab === "outline");
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
@@ -939,91 +918,18 @@ const tutorial = createTutorial(
          Left and right rails are independently shown/hidden around the stable editor column. -->
     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
       {#if effectiveLeftVisible}
-        {@const leftTabs = settingsState.settings.leftRailTabs}
-        {@const iconOnlyLeft = leftTabs.length > 3}
-        {@const disabledLeftTabs = settingsState.settings.rightRailTabs.length === 1 ? settingsState.settings.rightRailTabs : []}
-        <!-- v7 floating chrome (Wave 2): see matching comment on tabbedPanel snippet. -->
+        <!-- Left rail = outline only (Wave D). No tab bar, no picker; the
+             redesign V7OutlineRail is anchored outline + heading list. -->
         <div
+          data-testid="left-outline-rail"
           style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); overflow: hidden;`}
         >
-          <div
-            style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
-          >
-            {#if leftTabs.includes("annotations")}
-              <button
-                data-testid="left-annotations-tab"
-                onclick={() => { activeLeftRailTab = "annotations"; }}
-                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "annotations" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "annotations" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
-                title={iconOnlyLeft ? "Annotations" : undefined}
-              >{iconOnlyLeft ? "◨" : "Annotations"}</button>
-            {/if}
-            {#if leftTabs.includes("chat")}
-              <button
-                data-testid="left-chat-tab"
-                onclick={() => { activeLeftRailTab = "chat"; }}
-                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "chat" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "chat" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
-                title={iconOnlyLeft ? "Chat" : undefined}
-              >{iconOnlyLeft ? "💬" : "Chat"}</button>
-            {/if}
-            {#if leftTabs.includes("outline")}
-              <button
-                data-testid="left-outline-tab"
-                onclick={() => { activeLeftRailTab = "outline"; }}
-                style={`flex: 1; padding: 0 var(--tandem-space-2); font-size: 12px; font-weight: 500; border: none; border-bottom: ${activeLeftRailTab === "outline" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}; background: transparent; cursor: pointer; color: ${activeLeftRailTab === "outline" ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}; white-space: nowrap;`}
-                title={iconOnlyLeft ? "Outline" : undefined}
-              >{iconOnlyLeft ? "≡" : "Outline"}</button>
-            {/if}
-            <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
-              <RailTabPicker
-                enabledTabs={leftTabs}
-                disabledTabs={disabledLeftTabs}
-                testIdPrefix="left-"
-                onTabsChange={(tabs) => { moveTabsBetweenRails("left", tabs); }}
-              />
-            </div>
-          </div>
-          <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-            <PanelSlot
-              kind="chat"
-              ctrlYdoc={yjsSync.bootstrapYdoc}
-              {editor}
-              activeDocId={yjsSync.activeTabId}
-              {openDocs}
-              claudeActive={yjsSync.claudeActive}
-              claudeStatus={yjsSync.claudeStatus}
-              {capturedAnchor}
-              onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-              reduceMotion={settingsState.settings.reduceMotion}
-              visible={activeLeftRailTab === "chat" && leftTabs.includes("chat")}
-            />
-            <PanelSlot
-              kind="side"
-              annotations={modeGate.visibleAnnotations}
-              activeFilterType={activeAnnotationFilter.type}
-              activeFilterAuthor={activeAnnotationFilter.author}
-              activeFilterStatus={activeAnnotationFilter.status}
-              onFilterChange={handleFilterChange}
-              {editor}
-              ydoc={activeTab?.ydoc ?? null}
-              heldCount={modeGate.heldCount}
-              tandemMode={modeState.tandemMode}
-              onModeChange={modeState.setTandemMode}
-              activeDocFormat={activeTab?.format}
-              documentId={activeTab?.id}
-              {activeAnnotationId}
-              onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-              reduceMotion={settingsState.settings.reduceMotion}
-              storeReadOnly={yjsSync.storeReadOnly}
-              {review}
-              visible={activeLeftRailTab === "annotations" && leftTabs.includes("annotations")}
-            />
-            <PanelSlot
-              kind="outline"
-              focusTrigger={outlineFocusTrigger}
-              {editor}
-              visible={activeLeftRailTab === "outline" && leftTabs.includes("outline")}
-            />
-          </div>
+          <PanelSlot
+            kind="outline"
+            focusTrigger={outlineFocusTrigger}
+            {editor}
+            visible={true}
+          />
         </div>
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
       {/if}
@@ -1351,7 +1257,6 @@ const tutorial = createTutorial(
       <div style="display: flex; align-items: center; margin-left: auto; padding-right: var(--tandem-space-1);">
         <RailTabPicker
           enabledTabs={settingsState.settings.rightRailTabs}
-          disabledTabs={settingsState.settings.leftRailTabs.length === 1 ? settingsState.settings.leftRailTabs : []}
           onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
         />
       </div>

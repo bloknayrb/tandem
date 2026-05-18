@@ -53,7 +53,7 @@ describe("loadSettings — migration chain", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
   }
 
-  it("v1 blob (layout=three-panel) climbs to v3 with models=[]", () => {
+  it("v1 blob (layout=three-panel) climbs to v4 with models=[] and left=[outline]", () => {
     writeRaw({
       schemaVersion: 1,
       layout: "three-panel",
@@ -61,17 +61,18 @@ describe("loadSettings — migration chain", () => {
       textSize: "l",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(3);
+    expect(s.schemaVersion).toBe(4);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(true);
     expect(s.textSize).toBe("l");
     expect(s.models).toEqual([]);
+    expect(s.leftRailTabs).toEqual(["outline"]);
   });
 
-  it("v1 blob (panelHidden=true) climbs to v3 with both panels hidden", () => {
+  it("v1 blob (panelHidden=true) climbs to v4 with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(3);
+    expect(s.schemaVersion).toBe(4);
     expect(s.leftPanelVisible).toBe(false);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.models).toEqual([]);
@@ -86,7 +87,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(3);
+    expect(s.schemaVersion).toBe(4);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.editorWidthPercent).toBe(80);
@@ -161,14 +162,14 @@ describe("loadSettings — migration chain", () => {
     expect(s.selectionDwellMs).toBeGreaterThanOrEqual(200);
   });
 
-  it("forward-compat preserves legacy leftSlot.kind=outline → leftRailTabs", () => {
-    // Regression for the helper-extraction bug: leftSlot derivation
-    // MUST live inside `normalizeKnownFields` so forward-compat blobs
-    // don't silently lose outline-first ordering.
-    writeRaw({ schemaVersion: 99, leftSlot: { kind: "outline" } });
+  it("forward-compat hard-clamps leftRailTabs to [outline] (Wave D)", () => {
+    // The legacy leftSlot.kind→leftRailTabs derivation was dropped when the
+    // left rail became outline-only. Forward-compat blobs that try to set
+    // leftRailTabs to anything else are clamped in normalizeKnownFields.
+    writeRaw({ schemaVersion: 99, leftRailTabs: ["chat", "annotations"] });
     const s = loadSettings();
     expect(s._readOnly).toBe(true);
-    expect(s.leftRailTabs).toEqual(["outline", "annotations"]);
+    expect(s.leftRailTabs).toEqual(["outline"]);
   });
 
   it("v3 round-trips models[] through load with shape filter", () => {

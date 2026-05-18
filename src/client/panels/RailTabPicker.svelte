@@ -15,10 +15,13 @@ let open = $state(false);
 let btnEl: HTMLButtonElement | null = $state(null);
 let dropdownPos = $state<{ top: number; right: number } | null>(null);
 
+// Outline is exclusively a left-rail concept post-Wave-D. The picker only
+// runs on the right rail, so it offers Annotations + Chat. Existing blobs
+// with outline on the right rail keep rendering it (the migration doesn't
+// strip — defensive), but new selections can't add it.
 const ALL_TABS: { id: RailTab; label: string }[] = [
   { id: "annotations", label: "Annotations" },
   { id: "chat", label: "Chat" },
-  { id: "outline", label: "Outline" },
 ];
 
 function toggle(tab: RailTab) {

@@ -69,34 +69,14 @@ export function createLayoutModel(
   }
 
   function moveTabs(side: "left" | "right", newTabsForSide: ReadonlyArray<RailTab>): boolean {
-    const leftTabs = settingsState.settings.leftRailTabs;
-    const rightTabs = settingsState.settings.rightRailTabs;
-    const currentSide = side === "left" ? leftTabs : rightTabs;
-    const otherTabs = side === "left" ? rightTabs : leftTabs;
-    const next = [...newTabsForSide];
-
-    const newlyAdded = next.filter((t) => !currentSide.includes(t));
-    if (newlyAdded.length === 0) {
-      settingsState.updateSettings(
-        side === "left" ? { leftRailTabs: next } : { rightRailTabs: next },
-      );
-      return true;
-    }
-
-    const prunedOther = otherTabs.filter((t) => !newlyAdded.includes(t));
-    if (prunedOther.length === 0) {
-      console.warn(
-        "[tandem] cross-rail tab move blocked — would leave the %s rail empty",
-        side === "left" ? "right" : "left",
-      );
+    // Left rail is locked to outline-only (Wave D). Updates targeting the left
+    // rail are rejected; the picker is right-only and the right-rail picker
+    // can't add outline either, so no cross-rail transfer is possible.
+    if (side === "left") {
+      console.warn("[tandem] left rail is locked to outline-only; moveTabs rejected");
       return false;
     }
-
-    settingsState.updateSettings(
-      side === "left"
-        ? { leftRailTabs: next, rightRailTabs: prunedOther }
-        : { rightRailTabs: next, leftRailTabs: prunedOther },
-    );
+    settingsState.updateSettings({ rightRailTabs: [...newTabsForSide] });
     return true;
   }
 
