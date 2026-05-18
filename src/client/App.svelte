@@ -74,6 +74,7 @@ import {
 } from "./panels/annotation-actions";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
+import PeekStrip from "./panels/PeekStrip.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
@@ -921,10 +922,11 @@ const tutorial = createTutorial(
       {#if effectiveLeftVisible}
         <!-- Left rail = outline only (Wave D). No tab bar, no picker; the
              redesign V7OutlineRail is anchored outline + heading list.
-             Wave A: rail stops above the floating status pill (#7). -->
+             Wave A: rail stops above the floating status pill (#7).
+             Wave E: outermost 8px is the edge-click collapse zone. -->
         <div
           data-testid="left-outline-rail"
-          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
         >
           <PanelSlot
             kind="outline"
@@ -932,8 +934,27 @@ const tutorial = createTutorial(
             {editor}
             visible={true}
           />
+          <!-- Wave E: edge-click collapse zone — outermost 8px at the
+               window edge. Sibling to the panel content, not a parent, so
+               descendant clicks never bubble into it. -->
+          <div
+            class="panel-edge-collapse panel-edge-collapse-left"
+            data-testid="panel-edge-collapse-left"
+            role="button"
+            tabindex="0"
+            aria-label="Hide left panel"
+            onclick={toggleLeftPanel}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleLeftPanel();
+              }
+            }}
+          ></div>
         </div>
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
+      {:else}
+        <PeekStrip side="left" onActivate={toggleLeftPanel} />
       {/if}
 
       {@render editorColumn()}
@@ -941,6 +962,8 @@ const tutorial = createTutorial(
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
         {@render tabbedPanel(dragResizeRight.width, "right")}
+      {:else}
+        <PeekStrip side="right" onActivate={toggleRightPanel} />
       {/if}
     </div>
 
@@ -1214,8 +1237,25 @@ const tutorial = createTutorial(
        --tandem-rail-top-clearance var defaults to 0; Wave 3 will raise it
        to ~52px when the fmtbar lifts out of the in-flow layout. -->
   <div
-    style={`display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+    style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
   >
+    {#if borderSide === "right"}
+      <!-- Wave E: edge-click collapse zone on the right rail. -->
+      <div
+        class="panel-edge-collapse panel-edge-collapse-right"
+        data-testid="panel-edge-collapse-right"
+        role="button"
+        tabindex="0"
+        aria-label="Hide right panel"
+        onclick={toggleRightPanel}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleRightPanel();
+          }
+        }}
+      ></div>
+    {/if}
     <!-- Wave A: rail-tab header restyled to match calm-v7 .c7-rail-tabs —
          inset pill track with rounded segment buttons. Active segment gets
          soft background + tiny shadow; underline-bottom pattern is gone. -->
@@ -1365,5 +1405,35 @@ const tutorial = createTutorial(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  /* Wave E: edge-click collapse zone. An 8px-wide hit strip absolutely
+     positioned at the window-facing edge of a visible panel. Sibling to
+     panel content (not a parent) so descendant clicks never bubble in.
+     Cursor differentiates from the inboard drag-to-resize handle. */
+  .panel-edge-collapse {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: e-resize;
+    z-index: 1;
+    background: transparent;
+    transition: background 140ms ease;
+  }
+  .panel-edge-collapse-left {
+    left: 0;
+  }
+  .panel-edge-collapse-right {
+    right: 0;
+    cursor: w-resize;
+  }
+  .panel-edge-collapse:hover {
+    background: var(--tandem-accent-bg);
+  }
+  .panel-edge-collapse:focus-visible {
+    background: var(--tandem-accent-bg);
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
   }
 </style>
