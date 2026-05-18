@@ -1058,6 +1058,7 @@ const tutorial = createTutorial(
       heldCount={modeGate.heldCount}
       mode={modeState.tandemMode}
       onShowHeld={() => modeState.setTandemMode("tandem")}
+      {editor}
     />
 
     <SettingsPopover
