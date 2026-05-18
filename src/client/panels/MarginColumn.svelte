@@ -229,7 +229,7 @@ function recordHeight(id: string, h: number): void {
     transition: filter 140ms ease;
   }
   .margin-bubble:hover {
-    filter: drop-shadow(0 0 0 var(--tandem-accent-border))
+    filter: drop-shadow(0 0 6px var(--tandem-accent-border))
       drop-shadow(0 1px 3px rgba(0, 0, 0, 0.06));
   }
   /* Make the inner edit-button reveal on hover of the bubble, even when
