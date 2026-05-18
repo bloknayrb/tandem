@@ -5,7 +5,7 @@ import {
   type DetectedTarget,
   detectTargets,
   installSkill,
-} from "../../../cli/setup.js";
+} from "../../integrations/apply.js";
 import type { Handler } from "./_shared.js";
 import { isValidChannelPath, isValidNodeBinary } from "./_shared.js";
 
