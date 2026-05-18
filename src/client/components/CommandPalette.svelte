@@ -3,6 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import type { Annotation } from "../../shared/types.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
 import { walkHeadings } from "../utils/headings.js";
 
@@ -304,6 +305,8 @@ function handleBackdropClick(e: MouseEvent) {
         id="palette-results"
         role="listbox"
         aria-label="Results"
+        class="tandem-scroll-fade-y"
+        use:scrollFade={"y"}
         style="max-height: 400px; overflow-y: auto; padding: var(--tandem-space-1) 0; list-style: none; margin: 0;"
       >
         {#if allResults.length === 0}

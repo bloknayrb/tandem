@@ -1,0 +1,116 @@
+/**
+ * Mask-fade scrollable surfaces (Wave B).
+ *
+ * Pair with the `scrollFade` Svelte action in
+ * `src/client/actions/scrollFade.svelte.ts`. The action toggles
+ * `data-overflow-{top,bottom,left,right}` attrs on the scrollable
+ * element; this stylesheet hides the native scrollbar and renders a
+ * mask-image fade on whichever edges have hidden content.
+ *
+ * Defaults: 24px fade band per axis. Override per surface via
+ * `--tandem-fade-edge` on the element if it needs a different value.
+ */
+
+.tandem-scroll-fade-y,
+.tandem-scroll-fade-x {
+  --tandem-fade-edge: 24px;
+}
+
+/* Gate scrollbar hiding behind mask-image support. On unsupported
+   browsers we fall back to the native scrollbar so overflow is never
+   invisibly clipped. */
+@supports (mask-image: linear-gradient(#000, #000)) or
+  (-webkit-mask-image: linear-gradient(#000, #000)) {
+  .tandem-scroll-fade-y,
+  .tandem-scroll-fade-x {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .tandem-scroll-fade-y::-webkit-scrollbar,
+  .tandem-scroll-fade-x::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Vertical fades. Composed: both edges → top+bottom; one edge → that side. */
+.tandem-scroll-fade-y[data-overflow-top="true"][data-overflow-bottom="true"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--tandem-fade-edge),
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--tandem-fade-edge),
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+}
+.tandem-scroll-fade-y[data-overflow-top="true"]:not([data-overflow-bottom="true"]) {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--tandem-fade-edge), #000 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--tandem-fade-edge),
+    #000 100%
+  );
+}
+.tandem-scroll-fade-y[data-overflow-bottom="true"]:not([data-overflow-top="true"]) {
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+}
+
+/* Horizontal fades. */
+.tandem-scroll-fade-x[data-overflow-left="true"][data-overflow-right="true"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--tandem-fade-edge),
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--tandem-fade-edge),
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+}
+.tandem-scroll-fade-x[data-overflow-left="true"]:not([data-overflow-right="true"]) {
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--tandem-fade-edge), #000 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--tandem-fade-edge),
+    #000 100%
+  );
+}
+.tandem-scroll-fade-x[data-overflow-right="true"]:not([data-overflow-left="true"]) {
+  mask-image: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--tandem-fade-edge)),
+    transparent 100%
+  );
+}

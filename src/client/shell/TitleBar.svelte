@@ -485,13 +485,19 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   }
 
   /* Cap at 60% so brand + actions stay readable when the center fills with
-     many tabs; DocumentTabs handles its own horizontal scroll past the cap. */
+     many tabs; DocumentTabs handles its own horizontal scroll past the cap.
+     `position: relative; z-index` lifts the tab strip above tauri-plugin-decorum's
+     overlay drag-region (which is full-width and would otherwise intercept all
+     clicks on the tabs). The drag-region gaps on either side stay at the default
+     z so decorum's overlay handles window drag in those zones. */
   .title-bar-center {
     display: flex;
     align-items: center;
     flex: 0 1 auto;
     min-width: 0;
     max-width: 60%;
+    position: relative;
+    z-index: 99999;
   }
 
   .brand {
@@ -520,6 +526,10 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     gap: var(--tandem-space-2);
     padding: 0 var(--tandem-space-2);
     flex-shrink: 0;
+    /* Same z-index lift reason as .title-bar-center — buttons need to sit
+       above decorum's overlay drag-region to receive clicks. */
+    position: relative;
+    z-index: 99999;
   }
 
   .status-dot {

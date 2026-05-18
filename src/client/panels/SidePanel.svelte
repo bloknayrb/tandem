@@ -5,6 +5,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../shared/constants";
 import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
 import { warningStateColors } from "../utils/colors";
 import AnnotationCard from "./AnnotationCard.svelte";
@@ -334,6 +335,8 @@ function handleClearSelection() {
 <div
   bind:this={scrollContainerEl}
   data-testid="annotation-list-scroll-container"
+  class="tandem-scroll-fade-y"
+  use:scrollFade={"y"}
   style="width: 100%; background: var(--tandem-surface-muted); display: flex; flex-direction: column; overflow-y: auto;"
 >
   <!-- Store read-only banner: shown when the annotation store is locked by another Tandem instance -->

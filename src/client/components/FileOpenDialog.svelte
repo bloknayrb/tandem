@@ -1,5 +1,6 @@
 <script lang="ts">
 import { API_UPLOAD } from "../../shared/api-paths.js";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -195,6 +196,8 @@ function handleFileSelect(e: Event) {
               </button>
             </div>
             <div
+              class="tandem-scroll-fade-y"
+              use:scrollFade={"y"}
               style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;"
             >
               {#each recentFiles as p, i (p)}

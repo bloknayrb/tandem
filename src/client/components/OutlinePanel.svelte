@@ -3,6 +3,7 @@ import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { type HeadingEntry, walkHeadings } from "../utils/headings";
@@ -235,10 +236,10 @@ function handleKeyDown(e: KeyboardEvent) {
       aria-label="Search document"
       style="
         width: 100%; box-sizing: border-box;
-        padding: var(--tandem-space-1) var(--tandem-space-2);
+        padding: var(--tandem-space-1) var(--tandem-space-3);
         font-size: var(--tandem-text-xs);
         border: 1px solid var(--tandem-border);
-        border-radius: var(--tandem-r-2);
+        border-radius: var(--tandem-r-pill);
         background: var(--tandem-surface);
         color: var(--tandem-fg);
         outline: none;
@@ -247,7 +248,11 @@ function handleKeyDown(e: KeyboardEvent) {
   </div>
 
   <!-- Headings list -->
-  <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;">
+  <div
+    class="tandem-scroll-fade-y"
+    use:scrollFade={"y"}
+    style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;"
+  >
     {#if headings.length === 0}
       <div
         style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-style: italic;"

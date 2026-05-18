@@ -6,6 +6,7 @@ import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { flatOffsetToPmPos } from "../positions";
 import { renderMarkdown } from "./chat-markdown";
 
@@ -193,7 +194,11 @@ function toggleAnchorExpand(msgId: string) {
   </div>
 
   <!-- Messages -->
-  <div style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;">
+  <div
+    class="tandem-scroll-fade-y"
+    use:scrollFade={"y"}
+    style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;"
+  >
     {#if messages.length === 0}
       <div
         style="color: var(--tandem-fg-subtle); font-size: 13px; text-align: center; margin-top: 24px;"
@@ -300,30 +305,40 @@ function toggleAnchorExpand(msgId: string) {
 
   <!-- Input area -->
   <div
-    style="padding: var(--tandem-space-2) var(--tandem-space-3); border-top: 1px solid var(--tandem-border); display: flex; gap: var(--tandem-space-2);"
+    style="padding: var(--tandem-space-2) var(--tandem-space-3); border-top: 1px solid var(--tandem-border); display: flex; flex-direction: column; gap: var(--tandem-space-2);"
   >
-    <textarea
-      bind:this={internalInputEl}
-      value={inputText}
-      oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
-      onkeydown={handleKeyDown}
-      placeholder="Message your AI..."
-      rows={2}
-      style="flex: 1; padding: var(--tandem-space-2); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-3); font-size: var(--tandem-text-base); resize: none; outline: none; font-family: inherit; background: var(--tandem-surface); color: var(--tandem-fg);"
-    ></textarea>
-    <button
-      onclick={sendMessage}
-      disabled={!inputText.trim()}
-      style="padding: var(--tandem-space-2) var(--tandem-space-3); background: {inputText.trim()
-        ? 'var(--tandem-accent)'
-        : 'var(--tandem-border-strong)'}; color: {inputText.trim()
-        ? 'var(--tandem-accent-fg)'
-        : 'var(--tandem-fg-subtle)'}; border: none; border-radius: var(--tandem-r-3); cursor: {inputText.trim()
-        ? 'pointer'
-        : 'default'}; font-size: var(--tandem-text-base); font-weight: 500; align-self: flex-end;"
+    <div
+      style="display: flex; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-4); background: var(--tandem-surface); overflow: hidden;"
     >
-      Send
-    </button>
+      <textarea
+        bind:this={internalInputEl}
+        value={inputText}
+        oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
+        onkeydown={handleKeyDown}
+        placeholder="Message your AI..."
+        rows={4}
+        class="tandem-scroll-fade-y"
+        use:scrollFade={"y"}
+        style="--tandem-fade-edge: 8px; flex: 1; padding: var(--tandem-space-2); border: none; font-size: var(--tandem-text-base); resize: none; outline: none; font-family: inherit; background: transparent; color: var(--tandem-fg);"
+      ></textarea>
+    </div>
+    <div style="display: flex; justify-content: flex-end;">
+      <button
+        onclick={sendMessage}
+        disabled={!inputText.trim()}
+        style="padding: var(--tandem-space-1) var(--tandem-space-4); background: {inputText.trim()
+          ? 'var(--tandem-accent)'
+          : 'var(--tandem-surface-muted)'}; color: {inputText.trim()
+          ? 'var(--tandem-accent-fg)'
+          : 'var(--tandem-fg-subtle)'}; border: 1px solid {inputText.trim()
+          ? 'var(--tandem-accent)'
+          : 'var(--tandem-border)'}; border-radius: var(--tandem-r-pill); cursor: {inputText.trim()
+          ? 'pointer'
+          : 'default'}; font-size: var(--tandem-text-sm); font-weight: 500;"
+      >
+        Send
+      </button>
+    </div>
   </div>
 </div>
 
