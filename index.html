@@ -140,14 +140,15 @@
         --tandem-z-toast: 1100;
         --tandem-z-tooltip: 10000;
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
-           rails, fmtbar, status pill. The defaults below match the layout
-           with the TitleBar (40px) + in-flow DocumentTabs (32px) above the
-           editor area, totalling ~72px of header chrome. Once W4 lifts the
-           tabs into the floating titlebar (no in-flow strip), these
-           defaults drop to 52px to match calm-v7.css. --tandem-fmtbar-top
-           is the fmtbar pill's anchor in the absolute overlay layer. */
-        --tandem-fmtbar-top: 80px;
-        --tandem-rail-top-clearance: 80px;
+           rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
+           into the floating TitleBar (44px tall, no in-flow tabs row), so
+           these drop to 52px per the calm-v7.css target. The fmtbar pill
+           sits at top: 52px, height 36px → bottom 88px, then 8px breathing
+           lands the editor content at viewport y=96 (rail-top-clearance is
+           computed inside the editor area, so its 52 lines up with the
+           fmtbar's bottom edge). */
+        --tandem-fmtbar-top: 52px;
+        --tandem-rail-top-clearance: 52px;
         --tandem-status-clearance: 36px;
         /* Bottom inset that any "hugs-content" rail (outline) reserves
            below itself so the floating status pill (W5) renders into
