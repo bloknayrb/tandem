@@ -10,12 +10,12 @@
  * "already configured" state.
  *
  * This reader is intentionally **non-mutating** — it only reads the
- * existing Claude config files via `detectTargets` from `src/cli/setup.ts`
+ * existing Claude config files via `detectTargets` from `./apply.ts`
  * and parses out the `tandem` / `tandem-channel` MCP entries if present.
  * ADR-038 §2b removal of the auto-writer is owned by PR 3c, not this
  * module.
  *
- * Error semantics mirror `src/cli/setup.ts:applyConfig` — ENOENT means
+ * Error semantics mirror `src/server/integrations/apply.ts:applyConfig` — ENOENT means
  * the user has never run that Claude variant; malformed JSON means we
  * cannot trust the file (caller decides whether to surface a recovery
  * prompt or proceed as if the entry is absent).
@@ -23,12 +23,7 @@
 
 import { readFile } from "node:fs/promises";
 
-import {
-  type DetectedTarget,
-  type DetectOptions,
-  detectTargets,
-  type McpEntry,
-} from "../../cli/setup.js";
+import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
 
 export type ExistingConfigReadStatus = "ok" | "missing" | "malformed" | "error";
 
