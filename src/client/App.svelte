@@ -462,8 +462,26 @@ const dragResizeRight = createDragResize({
 // toggling the right panel back on in solo mode.
 const effectiveLeftVisible = $derived(layoutModel.leftVisible);
 const effectiveRightVisible = $derived(layoutModel.rightVisible);
-const toggleLeftPanel = () => layoutModel.toggleLeft();
-const toggleRightPanel = () => layoutModel.toggleRight();
+// After a keyboard-driven toggle the activated element unmounts (collapse
+// zone → peek strip and vice versa). Without explicit focus restoration the
+// browser drops focus to <body> and the user loses their tab position.
+// queueMicrotask defers until after Svelte mounts the replacement element.
+function focusToggleTarget(side: "left" | "right", nextVisible: boolean) {
+  queueMicrotask(() => {
+    const id = nextVisible ? `panel-edge-collapse-${side}` : `peek-strip-${side}`;
+    document.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+  });
+}
+const toggleLeftPanel = () => {
+  const nextVisible = !layoutModel.leftVisible;
+  layoutModel.toggleLeft();
+  focusToggleTarget("left", nextVisible);
+};
+const toggleRightPanel = () => {
+  const nextVisible = !layoutModel.rightVisible;
+  layoutModel.toggleRight();
+  focusToggleTarget("right", nextVisible);
+};
 const moveTabsBetweenRails = (
   side: "left" | "right",
   newTabsForSide: ("annotations" | "chat" | "outline")[],
@@ -1080,23 +1098,30 @@ const tutorial = createTutorial(
   ></div>
 {/snippet}
 
-<!-- Edge-click collapse zone: outermost 8px sibling of panel content (not
-     a parent), so descendant clicks never bubble in. -->
+<!-- Edge-click collapse zones: two thin strips (top + bottom) at the outer
+     edge of the rail, leaving the middle uncovered. The middle is where the
+     native scrollbar and the RailTabPicker trigger live; the previous full-
+     height zone occluded both. Each strip is an 8px-wide sibling of panel
+     content (not a parent), so descendant clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
-  <div
-    class={`panel-edge-collapse panel-edge-collapse-${side}`}
-    data-testid={`panel-edge-collapse-${side}`}
-    role="button"
-    tabindex="0"
-    aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
-    onclick={onToggle}
-    onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onToggle();
-      }
-    }}
-  ></div>
+  {#each ["top", "bottom"] as const as edge (edge)}
+    <div
+      class={`panel-edge-collapse panel-edge-collapse-${side} panel-edge-collapse-${edge}`}
+      data-testid={edge === "top"
+        ? `panel-edge-collapse-${side}`
+        : `panel-edge-collapse-${side}-bottom`}
+      role="button"
+      tabindex="0"
+      aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
+      onclick={onToggle}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+    ></div>
+  {/each}
 {/snippet}
 
 {#snippet editorColumn()}
@@ -1385,25 +1410,30 @@ const tutorial = createTutorial(
     font-weight: 700;
   }
 
-  /* Edge-click collapse zone. Sibling to panel content (not a parent) so
-     descendant clicks never bubble in. Cursor differentiates from the
-     inboard drag-to-resize handle. */
+  /* Edge-click collapse zones. Two strips per rail (top + bottom) leave
+     the middle uncovered so the native scrollbar and the RailTabPicker
+     trigger stay reachable. Sibling to panel content (not a parent) so
+     descendant clicks never bubble in. */
   .panel-edge-collapse {
     position: absolute;
-    top: 0;
-    bottom: 0;
     width: 8px;
-    cursor: e-resize;
+    height: 16px;
+    cursor: pointer;
     z-index: 1;
     background: transparent;
     transition: background 140ms ease;
+  }
+  .panel-edge-collapse-top {
+    top: 0;
+  }
+  .panel-edge-collapse-bottom {
+    bottom: 0;
   }
   .panel-edge-collapse-left {
     left: 0;
   }
   .panel-edge-collapse-right {
     right: 0;
-    cursor: w-resize;
   }
   .panel-edge-collapse:hover {
     background: var(--tandem-accent-bg);

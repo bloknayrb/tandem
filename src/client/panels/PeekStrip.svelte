@@ -22,6 +22,7 @@ function handleKey(e: KeyboardEvent) {
   role="button"
   tabindex="0"
   aria-label={side === "left" ? "Show left panel" : "Show right panel"}
+  aria-expanded="false"
   onclick={onActivate}
   onkeydown={handleKey}
 ></div>
@@ -33,7 +34,7 @@ function handleKey(e: KeyboardEvent) {
     bottom: var(--tandem-status-clearance-total, 60px);
     width: 6px;
     background: var(--tandem-surface-muted);
-    cursor: e-resize;
+    cursor: pointer;
     opacity: 0.35;
     transition: opacity 160ms ease, background 160ms ease, width 160ms ease;
     z-index: var(--tandem-z-sticky);
@@ -44,7 +45,6 @@ function handleKey(e: KeyboardEvent) {
   }
   .peek-strip-right {
     right: 0;
-    cursor: w-resize;
     border-radius: var(--tandem-r-2) 0 0 var(--tandem-r-2);
   }
   .peek-strip:hover,
