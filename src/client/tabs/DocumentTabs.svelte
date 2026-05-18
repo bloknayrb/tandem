@@ -200,11 +200,8 @@ $effect(() => {
 });
 </script>
 
-<!-- v7 floating chrome (Wave 4a maximalist): DocumentTabs renders inside
-     the TitleBar's center cluster via a snippet. The bar drops its surface
-     background and bottom border so the floating-pill TabItems read as
-     standalone chips against the canvas. Horizontal padding is also dropped
-     since the titlebar gap dividers already provide it. -->
+<!-- Transparent container so pill TabItems read as standalone chips against
+     whatever surface hosts the strip (canvas when nested in TitleBar). -->
 <div
   style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base);"
 >

@@ -8,13 +8,9 @@ import { THEME_LABEL, type ThemePreference } from "../hooks/useTandemSettings.sv
 
 interface Props {
   /**
-   * v7 floating chrome (Wave 4a maximalist): optional center cluster snippet,
-   * rendered between the brand and action clusters. App.svelte passes
-   * `<DocumentTabs>` here so the tabs visually float over the canvas at the
-   * same Y as the titlebar. The gap divs on either side carry
-   * `data-tauri-drag-region` so the window remains draggable through the
-   * inter-cluster gaps; the center cluster itself does NOT carry the
-   * attribute so child tab pills receive clicks normally.
+   * Optional center cluster, rendered between brand and actions. The wrap
+   * sits outside the surrounding drag region so interactive children stay
+   * clickable.
    */
   center?: Snippet;
   /** Current Tandem collaboration mode. */
@@ -196,14 +192,7 @@ $effect(() => {
     </span>
   </div>
 
-  <!-- v7 floating chrome (Wave 4a maximalist): left gap drag, center cluster
-       slot (typically DocumentTabs), right gap drag. The gaps carry
-       data-tauri-drag-region so window dragging survives; the center cluster
-       is left attribute-free so child interactive elements (tab pills, close
-       buttons) receive clicks. Center cluster has flex: 0 1 auto + max-width
-       so few-tabs stay visually centered, many-tabs scroll internally via
-       DocumentTabs' built-in scroll affordance. -->
-  <div class="title-bar-gap title-bar-gap-left" data-tauri-drag-region></div>
+  <div class="title-bar-gap" data-tauri-drag-region></div>
 
   {#if center}
     <div class="title-bar-center">
@@ -211,7 +200,7 @@ $effect(() => {
     </div>
   {/if}
 
-  <div class="title-bar-gap title-bar-gap-right" data-tauri-drag-region></div>
+  <div class="title-bar-gap" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
     {#if tandemMode && onModeChange}
@@ -509,8 +498,8 @@ $effect(() => {
     min-width: var(--tandem-space-2);
   }
 
-  /* Center cluster: intrinsic width with a cap so few tabs visually center
-     while many tabs trigger DocumentTabs' internal horizontal scroll. */
+  /* Cap at 60% so brand + actions stay readable when the center fills with
+     many tabs; DocumentTabs handles its own horizontal scroll past the cap. */
   .title-bar-center {
     display: flex;
     align-items: center;
