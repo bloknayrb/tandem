@@ -4,7 +4,15 @@ import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { onDestroy, onMount, type Snippet } from "svelte";
 import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
-import { THEME_LABEL, type ThemePreference } from "../hooks/useTandemSettings.svelte";
+import { type ThemePreference } from "../hooks/useTandemSettings.svelte";
+import { onOutsideEvent } from "../utils/dismiss-outside";
+
+const THEME_OPTIONS = [
+  { value: "system", label: "Match system" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "warm", label: "Warm" },
+] as const satisfies readonly { value: ThemePreference; label: string }[];
 
 interface Props {
   /**
@@ -18,15 +26,10 @@ interface Props {
   onModeChange?: (mode: TandemMode) => void;
   /** Whether Claude is currently active — drives the small status dot. */
   claudeActive?: boolean;
-  /** Left rail panel visibility + toggle. */
-  leftPanelVisible?: boolean;
-  onToggleLeftPanel?: () => void;
-  /** Right rail panel visibility + toggle. */
-  rightPanelVisible?: boolean;
-  onToggleRightPanel?: () => void;
-  /** Theme preference + cycle callback (system → dark → light → system). */
+  /** Theme preference (rendered with a checkmark in the brand menu). */
   theme?: ThemePreference;
-  onCycleTheme?: () => void;
+  /** Set theme directly — wired from the brand menu's Color scheme section. */
+  onSetTheme?: (theme: ThemePreference) => void;
   /** Authorship-color visibility toggle. */
   showAuthorship?: boolean;
   onAuthorshipChange?: (visible: boolean) => void;
@@ -39,9 +42,10 @@ interface Props {
    * from `onOpenSettings` so the existing gear keeps invoking the popover
    * until Wave 2 retires it. Triggered today via the command palette /
    * `Ctrl+Shift+,` shortcut registered in `actions/builtin.svelte.ts`.
-   * Intentionally unused inside this component — destructured as
-   * `_onOpenSettingsModal` so the compiler treats it as an acknowledged
-   * no-op rather than an oversight. Intentionally NOT wired to
+   * Intentionally unused inside this component — read inside `$effect` below
+   * so svelte-check sees a live reference and stays quiet about both the
+   * "declared but never read" error and the `state_referenced_locally`
+   * warning. Intentionally NOT wired to
    * `aria-keyshortcuts` on the gear (that attribute describes shortcuts
    * activating the labelled element; Ctrl+Shift+, opens a different surface).
    */
@@ -63,17 +67,13 @@ let {
   tandemMode,
   onModeChange,
   claudeActive = false,
-  leftPanelVisible = false,
-  onToggleLeftPanel,
-  rightPanelVisible = false,
-  onToggleRightPanel,
   theme = "system",
-  onCycleTheme,
+  onSetTheme,
   showAuthorship = false,
   onAuthorshipChange,
   onOpenHelp,
   onOpenSettings,
-  onOpenSettingsModal: _onOpenSettingsModal,
+  onOpenSettingsModal,
   settingsBtn = $bindable(null),
   updateAvailable = false,
 }: Props = $props();
@@ -169,37 +169,174 @@ async function closeWindow() {
   }
 }
 
-const themeLabel = $derived(THEME_LABEL[theme]);
+let brandMenuOpen = $state(false);
+let brandBtnEl = $state<HTMLButtonElement | null>(null);
+let brandMenuEl = $state<HTMLDivElement | null>(null);
+
+$effect(() => {
+  if (!brandMenuOpen) return;
+  return onOutsideEvent(
+    () => brandMenuEl ?? brandBtnEl,
+    ["mousedown"],
+    () => {
+      brandMenuOpen = false;
+    },
+  );
+});
+
+function toggleBrandMenu() {
+  brandMenuOpen = !brandMenuOpen;
+}
+
+function closeBrandMenu() {
+  brandMenuOpen = false;
+  brandBtnEl?.focus();
+}
+
+function handleBrandMenuKey(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeBrandMenu();
+  }
+}
+
+function selectTheme(t: ThemePreference) {
+  onSetTheme?.(t);
+  closeBrandMenu();
+}
+
+function chooseSettings() {
+  onOpenSettings?.();
+  brandMenuOpen = false;
+}
+
+function chooseHelp() {
+  onOpenHelp?.();
+  brandMenuOpen = false;
+}
+
+/**
+ * `onOpenSettingsModal` is a Wave 1 stable prop slot, declared so Wave 2 can
+ * retire `SettingsPopover` by replacing the gear's `onOpenSettings` wiring
+ * with this prop without re-touching `TitleBar.svelte`. Today the trigger is
+ * the `settings-modal` action (Ctrl+Shift+,) wired in
+ * `actions/builtin.svelte.ts`, so the prop is intentionally unused inside
+ * this component. Read it inside `$effect` (not a top-level expression) so
+ * svelte-check sees a live reference and stays quiet about both the
+ * "declared but never read" error and the `state_referenced_locally`
+ * warning. Intentionally NOT exposed via `aria-keyshortcuts` on the gear
+ * button — that attribute describes shortcuts that activate the labelled
+ * element, and Ctrl+Shift+, opens a different surface.
+ */
+$effect(() => {
+  void onOpenSettingsModal;
+});
 </script>
 
-<!-- data-tauri-drag-region lives on the three sibling spacer divs
-     (.title-bar-left + two .title-bar-gap) so action buttons remain
-     siblings of the drag region, never descendants. Putting the
-     attribute on the root div makes the action buttons descendants of
-     the drag region; per feedback_tauri_drag_region_structure.md the
-     repo has been bitten by that pattern in production. -->
-<div class="title-bar" data-testid="title-bar">
-  <div class="title-bar-left" data-tauri-drag-region>
-    <span class="brand">
-      <span class="brand-frame">
-        <img class="brand-mark" src="/favicon.png" alt="Tandem" width="32" height="32" />
-      </span>
-    </span>
+<!-- Root carries the drag region; every interactive descendant
+     opts back out with `data-tauri-drag-region="false"`. This is the
+     documented Tauri 2 inverse-opt-out pattern. It gives the user every
+     non-button pixel of the titlebar as a grab surface. DocumentTabs and
+     NewTabMenu's bail-out guards honor the opt-out so menu dismissal
+     still works on clicks inside opted-out children. -->
+<div class="title-bar" data-testid="title-bar" data-tauri-drag-region>
+  <div class="title-bar-left">
+    <button
+      bind:this={brandBtnEl}
+      type="button"
+      class="brand-btn"
+      data-testid="titlebar-brand-menu"
+      data-tauri-drag-region="false"
+      aria-label="Tandem menu"
+      aria-haspopup="menu"
+      aria-expanded={brandMenuOpen}
+      onclick={toggleBrandMenu}
+    >
+      <!-- 256×256 source displayed at 32×32 — gives ~8× density so the
+           hover scale-up stays inside native resolution and stays crisp. -->
+      <img class="brand-mark" src="/logo.png" alt="" width="32" height="32" />
+      {#if isTauriRuntime() && updateAvailable}
+        <span
+          class="titlebar-settings-dot"
+          data-testid="titlebar-update-available-dot"
+          aria-hidden="true"
+        ></span>
+      {/if}
+    </button>
+    {#if brandMenuOpen}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        bind:this={brandMenuEl}
+        class="brand-menu tandem-floating-pill"
+        data-testid="titlebar-brand-menu-popover"
+        data-tauri-drag-region="false"
+        role="menu"
+        tabindex="-1"
+        aria-label="Tandem menu"
+        onkeydown={handleBrandMenuKey}
+      >
+        {#if onOpenSettings}
+          <button
+            type="button"
+            class="brand-menu-item"
+            data-testid="brand-menu-settings"
+            role="menuitem"
+            onclick={chooseSettings}
+          >
+            <span>Settings…</span>
+            <kbd class="brand-menu-kbd">Ctrl+,</kbd>
+          </button>
+        {/if}
+        {#if onOpenHelp}
+          <button
+            type="button"
+            class="brand-menu-item"
+            data-testid="brand-menu-shortcuts"
+            role="menuitem"
+            onclick={chooseHelp}
+          >
+            <span>Keyboard Shortcuts</span>
+            <kbd class="brand-menu-kbd">?</kbd>
+          </button>
+        {/if}
+        {#if onSetTheme}
+          <div class="brand-menu-divider" role="separator"></div>
+          <div class="brand-menu-heading">Color scheme</div>
+          {#each THEME_OPTIONS as opt (opt.value)}
+            <button
+              type="button"
+              class="brand-menu-item"
+              data-testid="brand-menu-theme-{opt.value}"
+              role="menuitemradio"
+              aria-checked={theme === opt.value}
+              onclick={() => selectTheme(opt.value)}
+            >
+              <span class="brand-menu-check" aria-hidden="true">
+                {theme === opt.value ? "●" : "○"}
+              </span>
+              <span>{opt.label}</span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
   </div>
 
-  <div class="title-bar-gap" data-tauri-drag-region></div>
+  <div class="title-bar-spacer" data-tauri-drag-region></div>
 
   {#if center}
-    <div class="title-bar-center">
+    <div class="title-bar-center" data-tauri-drag-region="false">
       {@render center()}
     </div>
   {/if}
 
-  <div class="title-bar-gap" data-tauri-drag-region></div>
+  <div class="title-bar-spacer" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
     {#if tandemMode && onModeChange}
-      <ModeToggle {tandemMode} {onModeChange} />
+      <span data-tauri-drag-region="false">
+        <ModeToggle {tandemMode} {onModeChange} />
+      </span>
     {/if}
 
     {#if claudeActive}
@@ -216,6 +353,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
         class="icon-btn"
         class:active={showAuthorship}
         data-testid="toolbar-authorship-toggle"
+        data-tauri-drag-region="false"
         aria-label={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
         aria-pressed={showAuthorship}
         title={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
@@ -227,129 +365,11 @@ const themeLabel = $derived(THEME_LABEL[theme]);
         </svg>
       </button>
     {/if}
-
-    <span class="actions-divider" aria-hidden="true"></span>
-
-    {#if onToggleLeftPanel}
-      {@render panelToggleBtn("left", leftPanelVisible, onToggleLeftPanel)}
-    {/if}
-
-    {#if onToggleRightPanel}
-      {@render panelToggleBtn("right", rightPanelVisible, onToggleRightPanel)}
-    {/if}
-
-    {#if onCycleTheme}
-      <button
-        type="button"
-        class="icon-btn"
-        data-testid="titlebar-theme-toggle"
-        aria-label={themeLabel}
-        title={themeLabel}
-        onclick={onCycleTheme}
-      >
-        {#if theme === "light"}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.4" fill="none" />
-            <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-              <line x1="8" y1="1.5" x2="8" y2="3" />
-              <line x1="8" y1="13" x2="8" y2="14.5" />
-              <line x1="1.5" y1="8" x2="3" y2="8" />
-              <line x1="13" y1="8" x2="14.5" y2="8" />
-              <line x1="3.2" y1="3.2" x2="4.3" y2="4.3" />
-              <line x1="11.7" y1="11.7" x2="12.8" y2="12.8" />
-              <line x1="3.2" y1="12.8" x2="4.3" y2="11.7" />
-              <line x1="11.7" y1="4.3" x2="12.8" y2="3.2" />
-            </g>
-          </svg>
-        {:else if theme === "dark"}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M13.5 10A5.5 5.5 0 0 1 6 2.5a6 6 0 1 0 7.5 7.5Z"
-              fill="currentColor"
-            />
-          </svg>
-        {:else if theme === "warm"}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx="8" cy="8" r="3.2" fill="currentColor" />
-            <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-              <line x1="8" y1="1.5" x2="8" y2="3" />
-              <line x1="8" y1="13" x2="8" y2="14.5" />
-              <line x1="1.5" y1="8" x2="3" y2="8" />
-              <line x1="13" y1="8" x2="14.5" y2="8" />
-            </g>
-          </svg>
-        {:else}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M8 1.5a6.5 6.5 0 1 0 0 13Z"
-              fill="currentColor"
-            />
-            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4" fill="none" />
-          </svg>
-        {/if}
-      </button>
-    {/if}
-
-    {#if onOpenHelp}
-      <button
-        type="button"
-        class="icon-btn"
-        data-testid="titlebar-help-btn"
-        aria-label="Help (?)"
-        aria-keyshortcuts="?"
-        title="Help (?)"
-        onclick={onOpenHelp}
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.4" fill="none" />
-          <path
-            d="M6 6.2A2 2 0 0 1 10 6.2c0 1.2-2 1.4-2 2.6"
-            stroke="currentColor"
-            stroke-width="1.4"
-            stroke-linecap="round"
-            fill="none"
-          />
-          <circle cx="8" cy="11.5" r="0.85" fill="currentColor" />
-        </svg>
-      </button>
-    {/if}
-
-    {#if onOpenSettings}
-      <span class="settings-btn-wrap">
-      <button
-        bind:this={settingsBtn}
-        type="button"
-        class="icon-btn"
-        data-testid="settings-btn"
-        aria-label={updateAvailable ? "Settings (update available)" : "Settings"}
-        aria-keyshortcuts="Control+Comma"
-        title="Settings (Ctrl+,)"
-        onclick={onOpenSettings}
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M8.97 1.5h-1.94a.6.6 0 0 0-.59.49l-.22 1.18a4.7 4.7 0 0 0-1.18.68l-1.13-.42a.6.6 0 0 0-.72.27l-.97 1.68a.6.6 0 0 0 .13.76l.91.77a4.7 4.7 0 0 0 0 1.36l-.91.77a.6.6 0 0 0-.13.76l.97 1.68a.6.6 0 0 0 .72.27l1.13-.42c.36.28.76.51 1.18.68l.22 1.18a.6.6 0 0 0 .59.49h1.94a.6.6 0 0 0 .59-.49l.22-1.18a4.7 4.7 0 0 0 1.18-.68l1.13.42a.6.6 0 0 0 .72-.27l.97-1.68a.6.6 0 0 0-.13-.76l-.91-.77a4.7 4.7 0 0 0 0-1.36l.91-.77a.6.6 0 0 0 .13-.76l-.97-1.68a.6.6 0 0 0-.72-.27l-1.13.42a4.7 4.7 0 0 0-1.18-.68l-.22-1.18A.6.6 0 0 0 8.97 1.5Z"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linejoin="round"
-            fill="none"
-          />
-          <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3" fill="none" />
-        </svg>
-      </button>
-      {#if isTauriRuntime() && updateAvailable}
-        <span
-          class="titlebar-settings-dot"
-          data-testid="titlebar-update-available-dot"
-          aria-hidden="true"
-        ></span>
-      {/if}
-      </span>
-    {/if}
   </div>
 
   {#if isTauriRuntime()}
-    <div class="title-bar-controls">
+    <div class="title-bar-spacer-sm" data-tauri-drag-region></div>
+    <div class="title-bar-controls" data-tauri-drag-region="false">
       <button
         type="button"
         class="title-bar-btn"
@@ -423,43 +443,6 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   {/if}
 </div>
 
-{#snippet panelToggleBtn(side: "left" | "right", visible: boolean, onToggle: () => void)}
-  {@const label = visible
-    ? `Hide ${side} panel`
-    : `Show ${side} panel`}
-  <button
-    type="button"
-    class="icon-btn"
-    class:active={visible}
-    data-testid={`titlebar-toggle-${side}`}
-    aria-label={label}
-    aria-pressed={visible}
-    title={label}
-    onclick={onToggle}
-  >
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect
-        x="1.5"
-        y="2.5"
-        width="13"
-        height="11"
-        rx="1.5"
-        stroke="currentColor"
-        stroke-width="1.4"
-        fill="none"
-      />
-      <rect
-        x={side === "left" ? 1.5 : 9.5}
-        y="2.5"
-        width="5"
-        height="11"
-        fill="currentColor"
-        opacity="0.55"
-      />
-    </svg>
-  </button>
-{/snippet}
-
 <style>
   /* 3-cluster floating chrome: brand left, center snippet (DocumentTabs),
      actions right. The bar is transparent so each cluster reads as floating
@@ -476,16 +459,23 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     flex-shrink: 0;
   }
 
-  /* drag region — left brand area + the two gap dividers around the center
-     cluster carry data-tauri-drag-region. The center cluster itself is
-     attribute-free so child pills are clickable. */
+  /* Sibling drag spacers wrap the center + sit before the win controls.
+     `.title-bar-left` is `position: relative` so the absolutely-positioned
+     brand-menu anchors to it. */
   .title-bar-left {
+    position: relative;
     display: flex;
     align-items: center;
     flex-shrink: 0;
   }
 
-  .title-bar-gap {
+  /* Flex-grow drag spacers. The wide pair flanks the center cluster
+     (DocumentTabs); a narrow one sits between actions and win controls so
+     even with a tab fill close to the cap there's a draggable column right
+     of the icon buttons. align-self defaults to inherit `align-items`, so
+     stretching to the full bar height happens automatically — explicitly
+     setting align-self: stretch breaks the flex-grow in some browsers. */
+  .title-bar-spacer {
     flex: 1 1 0;
     min-width: var(--tandem-space-2);
     /* Stretch to the title-bar's full content height so the drag region
@@ -493,6 +483,11 @@ const themeLabel = $derived(THEME_LABEL[theme]);
        collapses to 0px tall under flex `align-items: center`. */
     align-self: stretch;
   }
+
+  .title-bar-spacer-sm {
+    flex: 0 0 var(--tandem-space-4);
+  }
+
 
   /* Cap at 60% so brand + actions stay readable when the center fills with
      many tabs; DocumentTabs handles its own horizontal scroll past the cap.
@@ -510,27 +505,117 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     z-index: 99999;
   }
 
-  .brand {
-    display: inline-flex;
-    align-items: center;
+  /* The Tandem icon IS the menu trigger — no chrome around it. The button is
+     sized to the icon; hover scales it up slightly for affordance. The
+     update-available dot pins to the top-right corner of the icon itself. */
+  .brand-btn {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    margin: -6px 0 0 -6px;
+    border: none;
+    background: transparent;
     color: var(--tandem-fg);
-    pointer-events: none;
+    cursor: pointer;
+    transition: transform 140ms ease;
+    -webkit-tap-highlight-color: transparent;
   }
 
-  /* 40×40 frame with negative margin nudges the icon up + left toward the
-     window corner, matching `.c7-brand` in calm-v7.css. The inner 32×32
-     icon centers within the frame. */
-  .brand-frame {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    margin: -6px 0 0 -6px;
+  .brand-btn:hover {
+    transform: scale(1.08);
+  }
+
+  .brand-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
+    border-radius: var(--tandem-r-2);
+  }
+
+  .brand-btn:active {
+    transform: scale(0.96);
   }
 
   .brand-mark {
-    display: inline-block;
+    display: block;
     flex-shrink: 0;
+  }
+
+  /* Dropdown anchored to the icon. `tandem-floating-pill` supplies the
+     surface treatment; this rule positions + sizes the menu and packs the
+     items + heading + divider. */
+  .brand-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 220px;
+    padding: var(--tandem-space-1);
+    border-radius: var(--tandem-r-3);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: var(--tandem-z-modal);
+  }
+
+  .brand-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--tandem-space-3);
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    color: var(--tandem-fg);
+    font: inherit;
+    font-size: var(--tandem-text-sm);
+    text-align: left;
+    cursor: pointer;
+    border-radius: var(--tandem-r-2);
+  }
+
+  .brand-menu-item:hover,
+  .brand-menu-item:focus-visible {
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
+
+  .brand-menu-item[aria-checked="true"] {
+    color: var(--tandem-accent);
+  }
+
+  .brand-menu-check {
+    display: inline-block;
+    width: 14px;
+    margin-right: var(--tandem-space-2);
+    color: var(--tandem-fg-subtle);
+    font-size: var(--tandem-text-xs);
+  }
+
+  .brand-menu-item[aria-checked="true"] .brand-menu-check {
+    color: var(--tandem-accent);
+  }
+
+  .brand-menu-kbd {
+    color: var(--tandem-fg-subtle);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+  }
+
+  .brand-menu-divider {
+    height: 1px;
+    background: var(--tandem-border);
+    margin: 4px 6px;
+  }
+
+  .brand-menu-heading {
+    padding: 6px 10px 2px;
+    color: var(--tandem-fg-subtle);
+    font-size: var(--tandem-text-2xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .title-bar-actions {
@@ -553,14 +638,6 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     display: inline-block;
     flex-shrink: 0;
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-author-claude) 18%, transparent);
-  }
-
-  .actions-divider {
-    width: 1px;
-    height: 18px;
-    background: var(--tandem-border);
-    margin: 0 var(--tandem-space-1);
-    flex-shrink: 0;
   }
 
   /* 30×30 circular soft-fill chip — always visible, not transparent-until-hover. */
@@ -593,21 +670,11 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     color: var(--tandem-accent);
   }
 
-  /* Wraps the gear button so the update-available dot can position absolute
-     against it without restructuring the button. The wrap is otherwise
-     transparent (inherits inline-flex from .title-bar-actions). */
-  .settings-btn-wrap {
-    position: relative;
-    display: inline-flex;
-    flex-shrink: 0;
-  }
-
-  /* Issue #660 — small colored dot at top-right of the gear icon when an
-     updater event has fired and not yet been acknowledged. WCAG AA against
-     --tandem-surface-muted in both themes; 2px contrasting ring matches the
-     existing .status-dot pattern. No animation: spec calls for
-     reduced-motion-aware design and a static dot is the simplest path that
-     satisfies both reduced-motion users and the WCAG AA contrast bar. */
+  /* Update-available dot — pinned to the top-right corner of the brand
+     icon when a Tauri updater event has fired and not been acknowledged
+     yet (issue #660). The brand-btn is `position: relative` so this
+     absolute positioning targets the button's box. WCAG AA against
+     --tandem-bg in both themes via the contrasting ring. */
   .titlebar-settings-dot {
     position: absolute;
     top: 3px;
