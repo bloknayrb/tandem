@@ -118,7 +118,7 @@ Handled in 3c-ii-b: wizard's detect step surfaces existing entries with re-valid
 
 ## Sequencing
 
-- 3c-ii-a (server-only library factor) — **starts now**.
+- 3c-ii-a (server-only library factor) — **SHIPPED PR #747 (2026-05-18)**.
 - 3c-ii-b (wizard apply + first-run auto-open) — gated on redesign wave settling.
 - 3c-ii-c (deletion + CLI rewrite + doc sweep) — gated on a + b.
 
