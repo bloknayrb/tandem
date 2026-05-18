@@ -70,19 +70,21 @@ describe("AR1: audience derivation for legacy annotations (no audience field)", 
     expect(events.some((e) => e.kind === "unknown-type")).toBe(true);
   });
 
-  it("import annotation gets audience:private (user triages before Claude sees them)", () => {
-    // import-note-to-comment rewrites type to "comment" per ADR-027,
-    // but audience stays "private" — the new routing signal for AR1.
+  it("W8: import-author notes pass through as private notes (not rewritten to comments)", () => {
+    // W8 (PR #756) reverses the #482 policy — imports stay as private notes
+    // until the user batch-promotes them. Sanitize must NOT silently rewrite
+    // type or it leaks un-promoted imports to Claude via tandem_getAnnotations.
     const { result, events } = collect({ ...baseAnn, author: "import", type: "note" });
-    expect(result.type).toBe("comment");
+    expect(result.type).toBe("note");
     expect(result.audience).toBe("private");
-    expect(events.some((e) => e.kind === "import-note-to-comment")).toBe(true);
-    expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);
+    expect(events.some((e) => e.kind === "import-note-to-comment")).toBe(false);
   });
 
-  it("import comment annotation gets audience:private (not yet promoted by user)", () => {
-    // An import annotation already stored as type:"comment" (after ADR-027 migration)
-    // should still be private until the user explicitly promotes it.
+  it("legacy import comment annotation gets audience:private (not yet promoted by user)", () => {
+    // An import annotation stored as type:"comment" under the pre-W8 model
+    // is still private — the docx-comments injector migrates it back to a
+    // note on next re-import, but until that happens AR1 must mark it private
+    // so Claude's view at least respects audience.
     const { result, events } = collect({ ...baseAnn, author: "import", type: "comment" });
     expect(result.audience).toBe("private");
     expect(events.some((e) => e.kind === ("audience-derived" as string))).toBe(false);

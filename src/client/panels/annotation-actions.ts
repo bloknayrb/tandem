@@ -34,23 +34,44 @@ export function editAnnotation(ydoc: Y.Doc | null, id: string, newContent: strin
   map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
 }
 
+/**
+ * Build the promotion payload — shared between the single-card
+ * `sendNoteToClaude` path and the batch `promoteNotesToComments` helper so
+ * the two can't drift on the channel-event gate's invariants (note→comment,
+ * author "import" → "user", audience → "outbound", `promotedFrom: "note"`).
+ */
+function promotedAnnotation(ann: Annotation): Annotation {
+  // Strip note/highlight-specific fields when collapsing to the comment
+  // variant — the discriminated union rejects a `color` on a comment.
+  const {
+    color: _color,
+    suggestedText: _suggestedText,
+    ...rest
+  } = ann as Annotation & {
+    color?: unknown;
+    suggestedText?: unknown;
+  };
+  return {
+    ...rest,
+    type: "comment" as const,
+    author: ann.author === "import" ? ("user" as const) : ann.author,
+    audience: "outbound" as const,
+    promotedFrom: "note" as const,
+  };
+}
+
 export function sendNoteToClaude(ydoc: Y.Doc | null, annotationId: string): void {
   if (!ydoc) return;
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const raw = map.get(annotationId) as Annotation | undefined;
   if (!raw) return;
   const ann = sanitizeAnnotation(raw, warn);
-  // Promote note → comment, audience → outbound, and re-author import-sourced
-  // notes as user (the user is endorsing the imported reviewer comment as
-  // their own ask to Claude). The annotations observer's note→comment add-
-  // event path gates on `author === "user"`, so keeping `author: "import"`
-  // here would silently fail to surface the new comment to the channel.
-  map.set(annotationId, {
-    ...ann,
-    type: "comment" as const,
-    author: ann.author === "import" ? ("user" as const) : ann.author,
-    audience: "outbound" as const,
-    promotedFrom: "note" as const,
+  // withBrowser tags the transact as user-originated so the channel queue
+  // emits the note→comment promotion event. A bare map.set produces an
+  // undefined-origin transact that the skip set's evolution could quietly
+  // start dropping.
+  withBrowser(ydoc, () => {
+    map.set(annotationId, promotedAnnotation(ann));
   });
 }
 
@@ -70,13 +91,7 @@ export function promoteNotesToComments(ydoc: Y.Doc | null, annotationIds: string
       if (!raw) continue;
       const ann = sanitizeAnnotation(raw, warn);
       if (ann.type !== "note") continue;
-      map.set(id, {
-        ...ann,
-        type: "comment" as const,
-        author: ann.author === "import" ? ("user" as const) : ann.author,
-        audience: "outbound" as const,
-        promotedFrom: "note" as const,
-      });
+      map.set(id, promotedAnnotation(ann));
       promoted++;
     }
   });
