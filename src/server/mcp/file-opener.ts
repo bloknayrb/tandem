@@ -429,7 +429,7 @@ async function prepareContent(format: string, source: string | Buffer): Promise<
  */
 function applyPreparedContent(doc: Y.Doc, prepared: Prepared, ctx: PopulateContext): void {
   const adapter = getAdapter(prepared.format);
-  const applyIssues = adapter.apply(doc, prepared);
+  const applyIssues = adapter.apply(doc, prepared, { fileName: ctx.displayName });
   for (const issue of prepared.issues) notifyIssue(issue, ctx);
   for (const issue of applyIssues) notifyIssue(issue, ctx);
 }
@@ -872,7 +872,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // not a user-initiated open; surfacing inject failures via toast on
       // every file-watcher reload would be noisy. The original surface in
       // openFileByPath catches inject failures during the initial open.
-      reloadAdapter.apply(doc, reloadPrepared);
+      reloadAdapter.apply(doc, reloadPrepared, { fileName: path.basename(filePath) });
     });
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)

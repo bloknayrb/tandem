@@ -175,12 +175,31 @@ export function calculateCommentRanges(
  * Inject extracted comments into a Y.Doc's annotation map.
  * Must be called AFTER htmlToYDoc has populated the document content,
  * so that anchoredRange can create CRDT-anchored positions.
+ *
+ * Imports land as **private notes** (`type: "note"`, `audience: "private"`,
+ * `author: "import"`) per the v7 W8 batch-promote flow. They carry the
+ * reviewer attribution in `importSource: { author, file }` rather than
+ * inlining `[author]` in the content body, so the UI can render a "From:
+ * <author>" byline. The user batch-promotes notes to comments via
+ * `BatchPromoteBar`, which flips `audience: "private"` → `"outbound"`,
+ * `author: "import"` → `"user"`, and `type: "note"` → `"comment"`. Only
+ * after that promotion do they surface to Claude via channel events or
+ * `tandem_getAnnotations`.
+ *
+ * The fileName argument is best-effort — uploads and force-reload paths
+ * that don't have a meaningful file name fall back to "unknown".
  */
-export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[]): number {
+export function injectCommentsAsAnnotations(
+  doc: Y.Doc,
+  comments: DocxComment[],
+  fileName?: string,
+): number {
   if (comments.length === 0) return 0;
 
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
+  const sourceFile = fileName ?? "unknown";
   let injected = 0;
+  let migrated = 0;
 
   withInternal(doc, () => {
     for (const comment of comments) {
@@ -194,37 +213,42 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
 
       const id = importAnnotationId(comment.commentId, comment.from, comment.to, comment.bodyText);
 
-      // Dedup: idempotent re-import. Same .docx → same id → skip the write,
-      // but if a pre-existing record was stored under the prior PR #474 model
-      // as `type: "note"`, rewrite it in place to `type: "comment"`. The
-      // rewrite triggers the sync observer and lets the on-disk durable
-      // record catch up to the corrected ADR-027 model (#482).
+      // Dedup: idempotent re-import. Same .docx → same id → skip the write.
+      // Legacy records stored under the pre-W8 model as `type: "comment"`
+      // with content prefix `[author] ` are migrated in place to the new
+      // private-note shape. This lets users opening an existing import-
+      // populated file get the batch-promote UX without re-importing.
       if (map.has(id)) {
         const existing = map.get(id) as Annotation | undefined;
-        if (existing && existing.type === "note" && existing.author === "import") {
+        if (
+          existing &&
+          existing.author === "import" &&
+          (existing.type === "comment" || existing.audience !== "private")
+        ) {
           map.set(id, {
             ...existing,
-            type: "comment" as const,
+            type: "note" as const,
+            audience: "private" as const,
+            content: comment.bodyText,
+            importSource: { author: comment.authorName, file: sourceFile },
             rev: nextRev(existing),
           });
+          migrated++;
         }
         continue;
       }
 
-      const content =
-        comment.authorName !== "Unknown"
-          ? `[${comment.authorName}] ${comment.bodyText}`
-          : comment.bodyText;
-
       const annotation: Annotation = {
         id,
         author: "import" as const,
-        type: "comment" as const,
+        type: "note" as const,
+        audience: "private" as const,
         range: { from: result.range.from, to: result.range.to },
-        content,
+        content: comment.bodyText,
         status: "pending" as const,
         timestamp: comment.date ? new Date(comment.date).getTime() : Date.now(),
         rev: nextRev(),
+        importSource: { author: comment.authorName, file: sourceFile },
         ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
       };
 
@@ -233,8 +257,11 @@ export function injectCommentsAsAnnotations(doc: Y.Doc, comments: DocxComment[])
     }
   });
 
-  if (injected > 0 || comments.length > 0) {
-    console.error(`[docx-comments] Imported ${injected}/${comments.length} Word comments`);
+  if (injected > 0 || migrated > 0 || comments.length > 0) {
+    console.error(
+      `[docx-comments] Imported ${injected}/${comments.length} Word comments as private notes` +
+        (migrated > 0 ? ` (migrated ${migrated} legacy records to note shape)` : ""),
+    );
   }
 
   return injected;

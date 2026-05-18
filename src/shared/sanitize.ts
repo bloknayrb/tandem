@@ -139,14 +139,12 @@ export function sanitizeAnnotation(
     } as Annotation;
   }
 
-  // Imported Word reviewer comments stored under the unreleased PR #474
-  // model as `type: "note"` need to surface to Claude as comments per
-  // ADR-027 (#482). MUST run before the flag/note clause below — otherwise
-  // the `type === "note"` branch shadows this rewrite into a no-op.
-  if (ann.author === "import" && ann.type === "note") {
-    emit({ kind: "import-note-to-comment", id: ann.id });
-    return { ...base, type: "comment" } as Annotation;
-  }
+  // W8 (PR #756) reverses the #482 policy: imported Word reviewer comments
+  // are now first-class private notes (`author: "import", type: "note",
+  // audience: "private"`) until the user batch-promotes them via the
+  // BatchPromoteBar. The previous import-note→comment rewrite leaked
+  // un-promoted imports to Claude on every MCP read; falling through to
+  // the note branch below keeps them in the private bucket.
 
   if (ann.type === "flag" || ann.type === "note") {
     if (ann.type === "flag") {

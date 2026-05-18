@@ -378,7 +378,7 @@ describe("injectCommentsAsAnnotations", () => {
     htmlToYDoc(doc, "<p>Hello World</p>");
   });
 
-  it("injects comments as annotations with correct fields", () => {
+  it("injects comments as private notes with importSource attribution (W8)", () => {
     const comments: DocxComment[] = [
       {
         commentId: "1",
@@ -390,7 +390,7 @@ describe("injectCommentsAsAnnotations", () => {
       },
     ];
 
-    const count = injectCommentsAsAnnotations(doc, comments);
+    const count = injectCommentsAsAnnotations(doc, comments, "review.docx");
     expect(count).toBe(1);
 
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
@@ -402,14 +402,16 @@ describe("injectCommentsAsAnnotations", () => {
 
     expect(key).toMatch(/^import-[0-9a-f]{12}$/);
     expect(ann.author).toBe("import");
-    expect(ann.type).toBe("comment");
+    expect(ann.type).toBe("note");
+    expect(ann.audience).toBe("private");
     expect(ann.status).toBe("pending");
-    expect(ann.content).toBe("[Alice] Good point");
+    expect(ann.content).toBe("Good point");
+    expect(ann.importSource).toEqual({ author: "Alice", file: "review.docx" });
     expect(ann.range).toEqual({ from: 0, to: 5 });
     expect(ann.timestamp).toBe(new Date("2026-01-15T10:30:00Z").getTime());
   });
 
-  it("omits author prefix when authorName is Unknown", () => {
+  it('falls back to "unknown" file when fileName is omitted', () => {
     const comments: DocxComment[] = [
       {
         commentId: "2",
@@ -425,6 +427,7 @@ describe("injectCommentsAsAnnotations", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     const ann = Array.from(map.values())[0] as Record<string, unknown>;
     expect(ann.content).toBe("Just a note");
+    expect(ann.importSource).toEqual({ author: "Unknown", file: "unknown" });
   });
 
   it("returns 0 for empty comments array", () => {
@@ -506,6 +509,44 @@ describe("injectCommentsAsAnnotations", () => {
     const idsAfterSecond = Array.from(doc.getMap(Y_MAP_ANNOTATIONS).keys()).sort();
     expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(2);
     expect(idsAfterSecond).toEqual(idsAfterFirst);
+  });
+
+  it('migrates legacy `type: "comment"` import records to the W8 private-note shape', () => {
+    // Simulate a pre-W8 record: an import-author comment with `[author] ` content prefix
+    // and no importSource. Re-importing the same .docx should rewrite it in place to
+    // `type: "note"`, `audience: "private"` with the bodyText content + importSource.
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const comment: DocxComment = {
+      commentId: "legacy",
+      authorName: "Carol",
+      bodyText: "Original body",
+      from: 0,
+      to: 5,
+    };
+    // Stand in for a real importAnnotationId by writing directly under the id
+    // we'll compute on re-import — the function is deterministic, so we mirror it:
+    const reimportComments = [comment];
+    injectCommentsAsAnnotations(doc, reimportComments, "old.docx");
+    const realId = Array.from(map.keys())[0];
+    const real = map.get(realId) as Record<string, unknown>;
+    expect(real.type).toBe("note");
+
+    // Now stomp the in-doc record back to the legacy shape and re-import:
+    map.set(realId, {
+      ...(real as Record<string, unknown>),
+      type: "comment",
+      content: "[Carol] Original body",
+      audience: undefined,
+      importSource: undefined,
+    } as never);
+
+    const migrated = injectCommentsAsAnnotations(doc, reimportComments, "new.docx");
+    expect(migrated).toBe(0); // dedup hits — but migration runs
+    const after = map.get(realId) as Record<string, unknown>;
+    expect(after.type).toBe("note");
+    expect(after.audience).toBe("private");
+    expect(after.content).toBe("Original body");
+    expect(after.importSource).toEqual({ author: "Carol", file: "new.docx" });
   });
 });
 
