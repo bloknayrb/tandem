@@ -187,6 +187,58 @@
           0 22px 38px -22px rgba(0, 0, 0, 0.50);
       }
 
+      /* Slash command menu — v7 floating-card variant.
+         Inherits floating-pill bg/border/shadow then overrides border-radius
+         to a card shape (menus aren't pill-shaped) and stacks an item list
+         with a keyboard-hint footer. */
+      .tandem-slash-menu {
+        border-radius: var(--tandem-r-4);
+        min-width: 200px;
+        padding: var(--tandem-space-1);
+        z-index: var(--tandem-z-popover, 1100);
+      }
+      .tandem-slash-menu__item {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        padding: var(--tandem-space-1) var(--tandem-space-3);
+        border: 1px solid transparent;
+        border-radius: var(--tandem-r-2);
+        background: transparent;
+        color: var(--tandem-fg);
+        font: inherit;
+        font-size: var(--tandem-text-sm);
+        text-align: left;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tandem-slash-menu__item:hover {
+        background: color-mix(in srgb, var(--tandem-fg) 5%, transparent);
+      }
+      .tandem-slash-menu__item[aria-selected="true"] {
+        background: var(--tandem-accent-bg);
+        color: var(--tandem-accent-fg-strong);
+        border-color: var(--tandem-accent-border);
+      }
+      .tandem-slash-menu__hint {
+        display: flex;
+        gap: var(--tandem-space-3);
+        padding: var(--tandem-space-1) var(--tandem-space-3);
+        margin-top: var(--tandem-space-1);
+        border-top: 1px solid var(--tandem-border);
+        font-size: var(--tandem-text-2xs);
+        color: var(--tandem-fg-faint);
+      }
+      .tandem-slash-menu__hint kbd {
+        font-family: var(--tandem-font-mono);
+        font-size: var(--tandem-text-2xs);
+        padding: 0 4px;
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-1);
+        background: var(--tandem-surface-muted);
+        color: var(--tandem-fg-subtle);
+      }
+
       [data-theme="dark"] {
         --tandem-bg: oklch(0.18 0.012 270);
         --tandem-fg: oklch(0.94 0.005 80);

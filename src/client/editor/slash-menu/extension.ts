@@ -91,6 +91,25 @@ function clearChildren(element: HTMLDivElement) {
   while (element.firstChild) element.removeChild(element.firstChild);
 }
 
+function buildHintRow(): HTMLDivElement {
+  const hint = document.createElement("div");
+  hint.className = "tandem-slash-menu__hint";
+  const groups: Array<[string, string]> = [
+    ["↑↓", "navigate"],
+    ["↵", "insert"],
+    ["esc", "close"],
+  ];
+  for (const [key, label] of groups) {
+    const span = document.createElement("span");
+    const kbd = document.createElement("kbd");
+    kbd.textContent = key;
+    span.appendChild(kbd);
+    span.appendChild(document.createTextNode(` ${label}`));
+    hint.appendChild(span);
+  }
+  return hint;
+}
+
 function renderSlashCommandMenu(
   element: HTMLDivElement,
   active: ActiveSlashCommand,
@@ -100,49 +119,42 @@ function renderSlashCommandMenu(
 ) {
   const commands = filterSlashCommands(active.query);
   clearChildren(element);
-  element.setAttribute("role", "listbox");
-  element.setAttribute("aria-label", "Slash commands");
+  element.className = "tandem-floating-pill tandem-slash-menu";
 
+  // Listbox holds ONLY the option buttons so ARIA's "listbox children must
+  // be options" rule isn't violated by the hint footer.
+  const listbox = document.createElement("div");
+  listbox.setAttribute("role", "listbox");
+  listbox.setAttribute("aria-label", "Slash commands");
+
+  // Empty results are filtered upstream by resolveActiveSlashCommand (the
+  // menu closes), so commands.length is always > 0 by the time we render.
   commands.forEach((command, index) => {
     const button = document.createElement("button");
     button.type = "button";
     button.role = "option";
     button.id = `slash-command-${command.id}`;
+    button.className = "tandem-slash-menu__item";
     button.setAttribute("aria-selected", String(index === active.selectedIndex));
     button.textContent = command.label;
     button.dataset.commandId = command.id;
-    button.style.cssText =
-      "display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--tandem-r-2); " +
-      "background: transparent; color: var(--tandem-fg); font: inherit; font-size: 13px; " +
-      "text-align: left; cursor: pointer;";
-
-    if (index === active.selectedIndex) {
-      button.style.background = "var(--tandem-accent-bg)";
-      button.style.color = "var(--tandem-accent)";
-    }
 
     button.addEventListener("mouseenter", () => dispatchSelection(index));
     button.addEventListener("mousedown", (e) => {
       e.preventDefault();
       executeCommand(command);
     });
-    element.appendChild(button);
+    listbox.appendChild(button);
   });
+
+  element.appendChild(listbox);
+  element.appendChild(buildHintRow());
 
   const coords = editor.view.coordsAtPos(active.from);
   element.style.display = "block";
   element.style.position = "fixed";
   element.style.left = `${Math.max(8, coords.left)}px`;
   element.style.top = `${coords.bottom + 8}px`;
-  element.style.zIndex = "1100";
-  element.style.minWidth = "180px";
-  element.style.padding = "4px";
-  element.style.border = "1px solid var(--tandem-border)";
-  element.style.borderRadius = "6px";
-  element.style.background = "var(--tandem-surface)";
-  element.style.boxShadow =
-    "0 1px 2px color-mix(in srgb, var(--tandem-fg) 4%, transparent), " +
-    "0 8px 28px color-mix(in srgb, var(--tandem-fg) 10%, transparent)";
 }
 
 function executeSlashCommand(editor: TiptapEditor, active: ActiveSlashCommand) {
