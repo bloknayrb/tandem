@@ -53,14 +53,14 @@ Three layers: Editor (Tiptap in Tauri desktop or browser) <-> Tandem Server (Hoc
 
 Key files for navigation:
 - `src/cli/index.ts` -- CLI entrypoint (`tandem` command), arg parsing, dispatches to start/setup
-- `src/cli/setup.ts` -- `tandem setup`: auto-detect Claude installs, write MCP config atomically
+- `src/cli/setup.ts` -- `tandem setup` orchestration; auto-config helpers (`detectTargets`, `applyConfig`, `installSkill`, `buildMcpEntries`) live in `src/server/integrations/apply.ts` since #477 PR 3c-ii-a
 - `src/cli/start.ts` -- `tandem start`: spawn server (browser distribution deprecated in #477 PR 2; Tauri sidecar sets `TANDEM_TAURI_SIDECAR=1`)
 - `src/server/index.ts` -- Entry point, port binding, console redirect
 - `src/server/open-browser.ts` -- Cross-platform browser launcher for npm-install path (execFile-based)
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
-- `src/server/integrations/` -- `IntegrationConfig` schema, atomic storage, migration framework (#477 PR 1; no production consumer yet — wizard PR 3 wires it up)
+- `src/server/integrations/` -- `IntegrationConfig` schema (`schema.ts`), atomic storage (`storage.ts`), migration framework (`migrations.ts`), keychain backend (`keychain.ts`), existing-config reader (`existing-config.ts`), auto-config helpers (`apply.ts`), HTTP routes (`api-routes.ts`). Wired into the integration setup wizard (PR 3c-i) and `tandem setup` / `tandem rotate-token` via `apply.ts`.
 - `src/client/` -- Tiptap editor, Svelte 5 components, `.svelte.ts` rune-based hooks, types (`types.ts`)
 - `src/shared/` -- Types (`types.ts`), constants (`constants.ts`), offsets (`offsets.ts`), position types (`positions/`)
 
