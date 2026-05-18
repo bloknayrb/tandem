@@ -679,7 +679,7 @@ Public surface (sketch):
 - Future features (rail collapse, density modes affecting rail width, additional `RailTab` values like `'search'` or `'history'`) land as model extensions, not as changes propagated across four files.
 - This is a client-only refactor; no ADR or memory entries about server architecture change. Pairs with no other ADR in this grilling pass — independent.
 
-**Wave D amendment (2026-05-18):** The left rail is now locked to outline-only. `leftRailTabs` is hard-clamped to `["outline"]` in `normalizeKnownFields` and `mergeAndClampSettings`, and a v3→v4 migration in `loadSettings` moves any displaced left tabs (Chat, Annotations) over to `rightRailTabs` (append, dedupe) so user intent is preserved. `LayoutModel.moveTabs("left", …)` returns `false` with a warning; the `RailTabPicker` is right-rail-only and offers Annotations + Chat (outline is left-exclusive). The orphan-rail rule from §3 is moot for the left side — the left rail never empties. Right-side semantics from this ADR are unchanged.
+**Wave I amendment (2026-05-18):** The cross-rail tab picker is retired entirely. The left rail is hard-coded to the outline; the right rail is hard-coded to Annotations + Chat. The `leftRailTabs` / `rightRailTabs` settings fields are removed from the schema (v4→v5 migration strips them), the `RailTab` type is gone, and `LayoutModel.moveTabs` + the `leftTabs` / `rightTabs` getters are deleted. Layout-model surface narrows to visibility helpers (`leftVisible`, `rightVisible`, `toggleLeft`, `toggleRight`). The orphan-rail rule from §3 no longer applies; neither rail can empty because its tab set is fixed.
 
 ## ADR-038: MCP-First Integration Policy; Claude as Default Integration
 

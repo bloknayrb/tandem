@@ -172,11 +172,12 @@ async function closeWindow() {
 const themeLabel = $derived(THEME_LABEL[theme]);
 </script>
 
-<div class="title-bar" data-testid="title-bar">
+<div class="title-bar" data-testid="title-bar" data-tauri-drag-region>
   <div class="title-bar-left" data-tauri-drag-region>
     <span class="brand" aria-label="Tandem">
-      <img class="brand-mark" src="/favicon.png" alt="" width="20" height="20" />
-      <span class="brand-wordmark">Tandem</span>
+      <span class="brand-frame">
+        <img class="brand-mark" src="/favicon.png" alt="" width="32" height="32" />
+      </span>
     </span>
   </div>
 
@@ -461,9 +462,9 @@ const themeLabel = $derived(THEME_LABEL[theme]);
      interactive children (tab pills, close buttons) stay clickable. */
   .title-bar {
     display: flex;
-    align-items: stretch;
-    height: 44px;
-    min-height: 44px;
+    align-items: center;
+    padding: 14px 14px 4px;
+    box-sizing: border-box;
     background: transparent;
     user-select: none;
     flex-shrink: 0;
@@ -475,7 +476,6 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .title-bar-left {
     display: flex;
     align-items: center;
-    padding-left: var(--tandem-space-3);
     flex-shrink: 0;
   }
 
@@ -503,21 +503,24 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: var(--tandem-space-2);
     color: var(--tandem-fg);
-    font-weight: 700;
-    font-size: var(--tandem-text-sm);
-    letter-spacing: 0;
     pointer-events: none;
+  }
+
+  /* 40×40 frame with negative margin nudges the icon up + left toward the
+     window corner, matching `.c7-brand` in calm-v7.css. The inner 32×32
+     icon centers within the frame. */
+  .brand-frame {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    margin: -6px 0 0 -6px;
   }
 
   .brand-mark {
     display: inline-block;
     flex-shrink: 0;
-  }
-
-  .brand-wordmark {
-    white-space: nowrap;
   }
 
   .title-bar-actions {
@@ -623,7 +626,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     display: inline-flex;
     align-items: center;
     height: 30px;
-    margin: 0 var(--tandem-space-2) 0 var(--tandem-space-1);
+    margin-left: 6px;
     overflow: hidden;
     flex-shrink: 0;
   }

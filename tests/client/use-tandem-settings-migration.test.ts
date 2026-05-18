@@ -61,18 +61,17 @@ describe("loadSettings — migration chain", () => {
       textSize: "l",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
+    expect(s.schemaVersion).toBe(5);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(true);
     expect(s.textSize).toBe("l");
     expect(s.models).toEqual([]);
-    expect(s.leftRailTabs).toEqual(["outline"]);
   });
 
-  it("v1 blob (panelHidden=true) climbs to v4 with both panels hidden", () => {
+  it("v1 blob (panelHidden=true) climbs to v5 with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
+    expect(s.schemaVersion).toBe(5);
     expect(s.leftPanelVisible).toBe(false);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.models).toEqual([]);
@@ -87,7 +86,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
+    expect(s.schemaVersion).toBe(5);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.editorWidthPercent).toBe(80);
@@ -162,14 +161,22 @@ describe("loadSettings — migration chain", () => {
     expect(s.selectionDwellMs).toBeGreaterThanOrEqual(200);
   });
 
-  it("forward-compat hard-clamps leftRailTabs to [outline] (Wave D)", () => {
-    // The legacy leftSlot.kind→leftRailTabs derivation was dropped when the
-    // left rail became outline-only. Forward-compat blobs that try to set
-    // leftRailTabs to anything else are clamped in normalizeKnownFields.
-    writeRaw({ schemaVersion: 99, leftRailTabs: ["chat", "annotations"] });
-    const s = loadSettings();
+  it("forward-compat drops leftRailTabs/rightRailTabs fields (Wave I)", () => {
+    // Wave I removed both rail-tab settings fields from the schema. A
+    // forward-compat blob that still carries them must not surface them
+    // via the typed return.
+    writeRaw({
+      schemaVersion: 99,
+      leftRailTabs: ["chat", "annotations"],
+      rightRailTabs: ["outline"],
+    });
+    const s = loadSettings() as Record<string, unknown>;
     expect(s._readOnly).toBe(true);
-    expect(s.leftRailTabs).toEqual(["outline"]);
+    // Future fields are preserved verbatim via the `...futureFields` spread.
+    // The point is that `normalizeKnownFields` no longer surfaces them as
+    // typed/clamped fields.
+    expect(s.leftRailTabs).toEqual(["chat", "annotations"]);
+    expect(s.rightRailTabs).toEqual(["outline"]);
   });
 
   it("v3→v4: displaced left tabs move to right rail (chat alone)", () => {

@@ -1,9 +1,10 @@
 /**
  * Tests for the ADR-037 LayoutModel.
  *
- * Verifies that the model encapsulates the layout invariants (panel
- * visibility derivation with solo-mode suppression, toggle behaviour,
- * orphan-rail rule on cross-rail tab moves).
+ * Verifies that the model encapsulates the layout invariants: panel
+ * visibility derivation with solo-mode suppression and toggle behaviour.
+ * Wave I removed the cross-rail tab picker; the corresponding `moveTabs`
+ * tests are gone with it.
  *
  * The model takes a settings store + a mode-state-like shape; we stub
  * both with plain Svelte 5 `$state` so the test exercises the reactive
@@ -12,7 +13,6 @@
 
 import { describe, expect, it } from "vitest";
 import type {
-  RailTab,
   TandemSettings,
   TandemSettingsState,
 } from "../../src/client/hooks/useTandemSettings.svelte.js";
@@ -24,8 +24,6 @@ function makeSettingsState(initial: Partial<TandemSettings>): TandemSettingsStat
     leftPanelVisible: true,
     rightPanelVisible: true,
     soloRailHidden: false,
-    leftRailTabs: ["outline"] as RailTab[],
-    rightRailTabs: ["annotations", "chat"] as RailTab[],
     primaryTab: "annotations",
     showAuthorship: true,
     theme: "system",
@@ -116,35 +114,3 @@ describe("LayoutModel.toggleRight", () => {
     expect(settings.settings.soloRailHidden).toBe(true);
   });
 });
-
-describe("LayoutModel.moveTabs (Wave D: left is locked, right-only)", () => {
-  it("reordering within the right rail commits", () => {
-    const settings = makeSettingsState({
-      leftRailTabs: ["outline"],
-      rightRailTabs: ["annotations", "chat"],
-    });
-    const model = createLayoutModel(settings, { tandemMode: "tandem" });
-    const ok = model.moveTabs("right", ["chat", "annotations"]);
-    expect(ok).toBe(true);
-    expect(settings.settings.rightRailTabs).toEqual(["chat", "annotations"]);
-    expect(settings.settings.leftRailTabs).toEqual(["outline"]);
-  });
-
-  it("rejects any update targeting the left rail", () => {
-    const settings = makeSettingsState({
-      leftRailTabs: ["outline"],
-      rightRailTabs: ["annotations", "chat"],
-    });
-    const model = createLayoutModel(settings, { tandemMode: "tandem" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const ok = model.moveTabs("left", ["outline", "chat"]);
-    expect(ok).toBe(false);
-    expect(settings.settings.leftRailTabs).toEqual(["outline"]);
-    expect(settings.settings.rightRailTabs).toEqual(["annotations", "chat"]);
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
-  });
-});
-
-// vi.spyOn is referenced above
-import { vi } from "vitest";

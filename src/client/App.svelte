@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { cubicOut } from "svelte/easing";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -72,10 +73,8 @@ import {
   replyToAnnotation as marginReplyToAnnotation,
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
-import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import PeekStrip from "./panels/PeekStrip.svelte";
-import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
@@ -402,18 +401,11 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-let activeRailTab = $state<"annotations" | "chat" | "outline">(
+// Right rail tabs are hard-coded to Annotations + Chat post-Wave-I. The
+// initial selection still respects the user's `primaryTab` preference.
+let activeRailTab = $state<"annotations" | "chat">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
-// Left rail is locked to the outline tab; no active-tab state needed.
-$effect(() => {
-  const rightTabs = settingsState.settings.rightRailTabs;
-  if (!rightTabs.includes(activeRailTab)) {
-    untrack(() => {
-      activeRailTab = rightTabs[0] ?? "chat";
-    });
-  }
-});
 
 const pendingAnnotationBadge = $derived(
   activeRailTab === "annotations"
@@ -431,15 +423,6 @@ let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
-let activeAnnotationFilter = $state<{
-  type: FilterType;
-  author: FilterAuthor;
-  status: FilterStatus;
-}>({
-  type: "all",
-  author: "all",
-  status: "all",
-});
 
 const leftPanelWidth = loadPanelWidth("left");
 const rightPanelWidth = loadPanelWidth("right");
@@ -482,10 +465,28 @@ const toggleRightPanel = () => {
   layoutModel.toggleRight();
   focusToggleTarget("right", nextVisible);
 };
-const moveTabsBetweenRails = (
-  side: "left" | "right",
-  newTabsForSide: ("annotations" | "chat" | "outline")[],
-): boolean => layoutModel.moveTabs(side, newTabsForSide);
+
+/**
+ * Slide transition for the rail containers. Translates the rail off the
+ * window edge so showing/hiding the rail reads as a slide rather than a
+ * snap. Reduced-motion users get a zero-duration no-op (collapses to a
+ * snap, the existing behavior).
+ *
+ * Known limitation: while the rail's outro is running, its DOM is still
+ * mounted alongside the PeekStrip (Svelte default). The editor column
+ * briefly reflows around both. Margin-annotation positions catch up via
+ * the existing ResizeObserver-driven layout effect; brief lag during the
+ * ~220ms transition is acceptable per Bryan, 2026-05-18.
+ */
+function railSlide(_node: HTMLElement, params: { side: "left" | "right"; reduceMotion: boolean }) {
+  if (params.reduceMotion) return { duration: 0, css: () => "" };
+  const dir = params.side === "left" ? -1 : 1;
+  return {
+    duration: 220,
+    easing: cubicOut,
+    css: (t: number) => `transform: translateX(${(1 - t) * 100 * dir}%);`,
+  };
+}
 
 // Margin annotation view reserves a column + edge inset + breathing-room gap
 // per side. Subtract from available width so the editor text never sits
@@ -651,8 +652,7 @@ $effect(() => {
         findBarOpen = true;
         return;
       }
-      const isOutlineVisible =
-        effectiveLeftVisible || (effectiveRightVisible && activeRailTab === "outline");
+      const isOutlineVisible = effectiveLeftVisible;
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
@@ -954,7 +954,8 @@ const tutorial = createTutorial(
              has no tab bar. Outermost 8px is the edge-click collapse zone. -->
         <div
           data-testid="left-outline-rail"
-          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+          transition:railSlide={{ side: "left", reduceMotion: settingsState.settings.reduceMotion }}
+          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-left);`}
         >
           <PanelSlot
             kind="outline"
@@ -1264,57 +1265,40 @@ const tutorial = createTutorial(
 {/snippet}
 
 {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
-  {@const enabledTabs = settingsState.settings.rightRailTabs}
   <!-- Rail anchored to the window edge; outer corners flat, inner corners
-       rounded so it reads as a floating panel peeking past the canvas. -->
-  <!-- `outline` may appear here only when a stale settings blob carried it
-       on the right; the picker doesn't surface it as a new selection. -->
+       rounded so it reads as a floating panel peeking past the canvas. The
+       right rail now has a fixed two-tab header (Annotations + Chat) —
+       the cross-rail picker was removed in Wave I. -->
   <div
-    style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+    transition:railSlide={{ side: borderSide, reduceMotion: settingsState.settings.reduceMotion }}
+    style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: ${borderSide === "right" ? "var(--tandem-rail-shadow-right)" : "var(--tandem-rail-shadow-left)"};`}
   >
     {#if borderSide === "right"}
       {@render edgeCollapse("right", toggleRightPanel)}
     {/if}
     <div class="rail-tabs-row">
       <div class="rail-tabs-track">
-        {#if enabledTabs.includes("annotations")}
-          <button
-            data-testid="annotations-tab"
-            class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
-            onclick={() => { activeRailTab = "annotations"; }}
-          >
-            Annotations
-            {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
-              <span class="rail-tab-badge">
-                {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
-              </span>
-            {/if}
-          </button>
-        {/if}
-        {#if enabledTabs.includes("chat")}
-          <button
-            data-testid="chat-tab"
-            class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
-            onmousedown={captureSelectionForChat}
-            onclick={() => { activeRailTab = "chat";  }}
-          >
-            Chat
-          </button>
-        {/if}
-        {#if enabledTabs.includes("outline")}
-          <button
-            data-testid="outline-tab"
-            class={"rail-tab" + (activeRailTab === "outline" ? " on" : "")}
-            onclick={() => { activeRailTab = "outline"; }}
-          >
-            Outline
-          </button>
-        {/if}
+        <button
+          data-testid="annotations-tab"
+          class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
+          onclick={() => { activeRailTab = "annotations"; }}
+        >
+          Annotations
+          {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
+            <span class="rail-tab-badge">
+              {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+            </span>
+          {/if}
+        </button>
+        <button
+          data-testid="chat-tab"
+          class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
+          onmousedown={captureSelectionForChat}
+          onclick={() => { activeRailTab = "chat";  }}
+        >
+          Chat
+        </button>
       </div>
-      <RailTabPicker
-        enabledTabs={settingsState.settings.rightRailTabs}
-        onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
-      />
     </div>
     <PanelSlot
       kind="chat"
@@ -1327,7 +1311,7 @@ const tutorial = createTutorial(
       {capturedAnchor}
       onCapturedAnchorChange={(a) => (capturedAnchor = a)}
       reduceMotion={settingsState.settings.reduceMotion}
-      visible={activeRailTab === "chat" && enabledTabs.includes("chat")}
+      visible={activeRailTab === "chat"}
     />
     <PanelSlot
       kind="side"
@@ -1344,21 +1328,8 @@ const tutorial = createTutorial(
       reduceMotion={settingsState.settings.reduceMotion}
       storeReadOnly={yjsSync.storeReadOnly}
       {review}
-      onFilterChange={(type, author, status) => {
-        activeAnnotationFilter = { type, author, status };
-      }}
-      visible={activeRailTab === "annotations" && enabledTabs.includes("annotations")}
+      visible={activeRailTab === "annotations"}
     />
-    {#if enabledTabs.includes("outline")}
-      <PanelSlot
-        kind="outline"
-        {editor}
-        annotations={modeGate.visibleAnnotations}
-        focusTrigger={outlineFocusTrigger}
-        activeFilterType={activeAnnotationFilter.type}
-        visible={activeRailTab === "outline"}
-      />
-    {/if}
   </div>
 {/snippet}
 

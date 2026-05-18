@@ -29,7 +29,6 @@ export const THEME_LABEL: Record<ThemePreference, string> = {
   system: "Switch to dark theme",
 };
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
-export type RailTab = "annotations" | "chat" | "outline";
 
 /**
  * Provider tag for entries in the local Models registry (#659).
@@ -96,8 +95,6 @@ export interface TandemSettings {
   annotationPatterns: boolean;
   selectionToolbar: boolean;
   soloRailHidden: boolean;
-  leftRailTabs: RailTab[];
-  rightRailTabs: RailTab[];
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
   sidecarRetryStrategy: SidecarRetryStrategy;
@@ -140,7 +137,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 3,
+  schemaVersion: 5,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -157,12 +154,6 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   soloRailHidden: true,
-  // Left rail is locked to outline-only. The loader migration +
-  // normalizeKnownFields + mergeAndClampSettings all enforce this; the field
-  // stays mutable in the type only so existing call sites and forward-compat
-  // blobs don't need to change shape.
-  leftRailTabs: ["outline"],
-  rightRailTabs: ["annotations", "chat"],
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
@@ -170,18 +161,6 @@ const DEFAULTS: TandemSettings = {
   showIntegrationWizard: false,
   models: [],
 };
-
-const VALID_RAIL_TABS: RailTab[] = ["annotations", "chat", "outline"];
-
-function parseRailTabs(raw: unknown, fallback: RailTab[]): RailTab[] {
-  if (Array.isArray(raw)) {
-    const filtered = raw.filter((t: unknown) =>
-      VALID_RAIL_TABS.includes(t as RailTab),
-    ) as RailTab[];
-    return filtered.length > 0 ? filtered : fallback;
-  }
-  return fallback;
-}
 
 /**
  * Strip a corrupt or hand-edited `models` array down to entries that match
@@ -256,8 +235,11 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  * v3→v4: left rail is locked to outline-only. Non-outline tabs in
  *   `leftRailTabs` move to `rightRailTabs` (append, dedupe) so the user's
  *   intent is preserved instead of silently discarded.
+ * v4→v5: the cross-rail picker is gone. Both `leftRailTabs` and
+ *   `rightRailTabs` are dropped from the schema. Left is locked to outline;
+ *   right is hard-coded to Annotations + Chat in the UI.
  */
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -270,10 +252,9 @@ const CURRENT_SCHEMA_VERSION = 4;
  * — otherwise a forward-compat load could leak garbage values
  * (`editorWidthPercent: -999`, `theme: "neon"`) into the running UI.
  *
- * Post-Wave-D: `leftRailTabs` is hard-clamped to `["outline"]` here as
- * defence in depth. The v3→v4 migration in `loadSettings` is the
- * intent-preserving path that moves displaced tabs to the right rail; this
- * clamp guards the forward-compat branch and any direct call site.
+ * v5 (Wave I): `leftRailTabs` and `rightRailTabs` no longer exist. The
+ * `loadSettings` migration strips them on read; this helper does not
+ * surface them.
  */
 function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
   return {
@@ -346,8 +327,6 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       typeof parsed.holdAnnotationsWhileOffline === "boolean"
         ? parsed.holdAnnotationsWhileOffline
         : DEFAULTS.holdAnnotationsWhileOffline,
-    leftRailTabs: ["outline"],
-    rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
     marginView: parsed.marginView === true,
     showIntegrationWizard: parsed.showIntegrationWizard === true,
     models: parseModels(parsed.models),
@@ -397,21 +376,20 @@ export function loadSettings(): TandemSettings {
         parsed = { ...parsed, models: [], schemaVersion: 3 };
       }
       if (parsed.schemaVersion === 3) {
-        // v3→v4: left rail locked to outline-only. Intent-preserving
-        // migration: any non-outline tab in `leftRailTabs` moves to
-        // `rightRailTabs` (append, dedupe). A user who'd moved Chat to the
-        // left rail keeps Chat — just on the right.
-        const rawLeft = Array.isArray(parsed.leftRailTabs) ? parsed.leftRailTabs : [];
-        const rawRight = Array.isArray(parsed.rightRailTabs) ? parsed.rightRailTabs : [];
-        const displaced = rawLeft.filter(
-          (t): t is RailTab => (t === "annotations" || t === "chat") && !rawRight.includes(t),
-        );
-        parsed = {
-          ...parsed,
-          leftRailTabs: ["outline"],
-          rightRailTabs: [...rawRight, ...displaced],
-          schemaVersion: 4,
-        };
+        // v3→v4 (historical): left rail was locked to outline-only via a
+        // migration that moved displaced tabs to the right rail. v5 strips
+        // both fields entirely; this step is now a no-op intermediate.
+        parsed = { ...parsed, schemaVersion: 4 };
+      }
+      if (parsed.schemaVersion === 4) {
+        // v4→v5: drop both `leftRailTabs` and `rightRailTabs`. The cross-rail
+        // picker is gone; the left rail is hard-coded to outline, the right
+        // rail is hard-coded to Annotations + Chat. Field strip is unconditional
+        // (intent isn't recoverable — both surfaces are now fixed).
+        const next: Record<string, unknown> = { ...parsed, schemaVersion: 5 };
+        delete next.leftRailTabs;
+        delete next.rightRailTabs;
+        parsed = next;
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
@@ -473,11 +451,6 @@ export function mergeAndClampSettings(
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
-    // Left rail is locked to outline-only. Updates that try to set it to
-    // something else are ignored; the migration in `loadSettings` is the
-    // only intent-preserving path for legacy blobs.
-    leftRailTabs: ["outline"],
-    rightRailTabs: merged.rightRailTabs.length > 0 ? merged.rightRailTabs : DEFAULTS.rightRailTabs,
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.
     // hand-rolled call site that pushes an object missing `enabled`) can't
     // corrupt the array between persisted reads.

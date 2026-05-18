@@ -54,8 +54,6 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): {
     annotationPatterns: false,
     selectionToolbar: true,
     soloRailHidden: true,
-    leftRailTabs: ["outline"],
-    rightRailTabs: ["annotations", "chat"],
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,

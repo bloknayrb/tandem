@@ -56,7 +56,7 @@ describe("loadSettings — selectionDwellMs clamping", () => {
     const settings = loadSettings();
     expect(settings.leftPanelVisible).toBe(false);
     expect(settings.rightPanelVisible).toBe(true);
-    expect(settings.schemaVersion).toBe(3);
+    expect(settings.schemaVersion).toBe(5);
     expect(settings.editorWidthPercent).toBe(100);
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
@@ -107,7 +107,10 @@ describe("loadSettings — selectionDwellMs clamping", () => {
     store.set(TANDEM_SETTINGS_KEY, "null");
     const warnSpy = vi.spyOn(console, "warn");
     const settings = loadSettings();
-    expect(settings.leftRailTabs).toEqual(["outline"]);
+    // The original guard returned the default panel layout — assert against
+    // a defaults field that doesn't change with each schema bump.
+    expect(settings.leftPanelVisible).toBe(false);
+    expect(settings.rightPanelVisible).toBe(true);
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("corrupt"));
     warnSpy.mockRestore();
   });
@@ -340,8 +343,6 @@ describe("useTandemSettings — updateSettings write path", () => {
     annotationPatterns: false,
     selectionToolbar: true,
     soloRailHidden: true,
-    leftRailTabs: ["outline"],
-    rightRailTabs: ["annotations", "chat"],
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
@@ -531,7 +532,7 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
   });
 });
 
-describe("leftRailTabs and rightRailTabs (Wave D: left = outline only)", () => {
+describe("v4→v5 picker teardown migration", () => {
   let store: Map<string, string>;
 
   beforeEach(() => {
@@ -546,110 +547,32 @@ describe("leftRailTabs and rightRailTabs (Wave D: left = outline only)", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
   }
 
-  it("defaults leftRailTabs to [outline]", () => {
-    expect(loadSettings().leftRailTabs).toEqual(["outline"]);
+  it("strips leftRailTabs and rightRailTabs from a v4 blob", () => {
+    writeRawSettings({
+      schemaVersion: 4,
+      leftRailTabs: ["outline"],
+      rightRailTabs: ["annotations", "chat"],
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(5);
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("defaults rightRailTabs to [annotations, chat]", () => {
-    expect(loadSettings().rightRailTabs).toEqual(["annotations", "chat"]);
-  });
-
-  it("hard-clamps any saved leftRailTabs to [outline]", () => {
-    // Direct localStorage poke with schemaVersion=4 bypasses the migration
-    // and exercises the normalizeKnownFields clamp.
-    writeRawSettings({ schemaVersion: 4, leftRailTabs: ["chat", "annotations"] });
-    expect(loadSettings().leftRailTabs).toEqual(["outline"]);
-  });
-
-  it("falls back to [outline] when leftRailTabs is absent", () => {
-    writeRawSettings({ schemaVersion: 4 });
-    expect(loadSettings().leftRailTabs).toEqual(["outline"]);
-  });
-
-  it("v3→v4 migration moves displaced left tabs to the right rail", () => {
+  it("strips leftRailTabs and rightRailTabs from a v3 blob (full chain)", () => {
     writeRawSettings({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
       rightRailTabs: ["annotations"],
     });
-    const s = loadSettings();
-    expect(s.leftRailTabs).toEqual(["outline"]);
-    // Chat was on the left; it migrates to the right (append, dedupe).
-    expect(s.rightRailTabs).toEqual(["annotations", "chat"]);
-    expect(s.schemaVersion).toBe(4);
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(5);
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v3→v4 migration dedupes tabs already on the right rail", () => {
-    writeRawSettings({
-      schemaVersion: 3,
-      leftRailTabs: ["chat", "annotations", "outline"],
-      rightRailTabs: ["chat"],
-    });
-    const s = loadSettings();
-    expect(s.leftRailTabs).toEqual(["outline"]);
-    // chat is already on the right; only annotations gets appended.
-    expect(s.rightRailTabs).toEqual(["chat", "annotations"]);
-  });
-
-  it("v3→v4 migration with outline-only left is a no-op for right", () => {
-    writeRawSettings({
-      schemaVersion: 3,
-      leftRailTabs: ["outline"],
-      rightRailTabs: ["annotations", "chat"],
-    });
-    const s = loadSettings();
-    expect(s.leftRailTabs).toEqual(["outline"]);
-    expect(s.rightRailTabs).toEqual(["annotations", "chat"]);
-  });
-});
-
-describe("mergeAndClampSettings — rail array clamps", () => {
-  const BASE: TandemSettings = {
-    leftPanelVisible: true,
-    rightPanelVisible: true,
-    schemaVersion: 2,
-    primaryTab: "chat",
-    panelOrder: "chat-editor-annotations",
-    editorWidthPercent: 75,
-    selectionDwellMs: 1000,
-    showAuthorship: true,
-    reduceMotion: false,
-    textSize: "m",
-    theme: "system",
-    accentHue: 275,
-    editorFont: "serif",
-    density: "cozy",
-    defaultMode: "tandem",
-    highContrast: false,
-    annotationPatterns: false,
-    selectionToolbar: true,
-    soloRailHidden: true,
-    leftRailTabs: ["outline"],
-    rightRailTabs: ["annotations", "chat"],
-    degradedBannerDelayMs: 30000,
-    sidecarRetryStrategy: "exponential",
-    holdAnnotationsWhileOffline: true,
-    marginView: false,
-  };
-
-  it("hard-clamps any leftRailTabs update back to [outline] (Wave D)", () => {
-    const next = mergeAndClampSettings(BASE, { leftRailTabs: ["chat", "annotations"] });
-    expect(next.leftRailTabs).toEqual(["outline"]);
-  });
-
-  it("clamps leftRailTabs [] to [outline]", () => {
-    const next = mergeAndClampSettings(BASE, { leftRailTabs: [] });
-    expect(next.leftRailTabs).toEqual(["outline"]);
-  });
-
-  it("clamps rightRailTabs [] to default", () => {
-    const next = mergeAndClampSettings(BASE, { rightRailTabs: [] });
-    expect(next.rightRailTabs).toEqual(["annotations", "chat"]);
-  });
-
-  it("passes non-empty rightRailTabs through unchanged", () => {
-    const next = mergeAndClampSettings(BASE, { rightRailTabs: ["chat"] });
-    expect(next.rightRailTabs).toEqual(["chat"]);
+  it("default load reports schemaVersion 5", () => {
+    expect(loadSettings().schemaVersion).toBe(5);
   });
 });
 

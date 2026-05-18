@@ -12,6 +12,7 @@ import type { Annotation, AnnotationType, HighlightColor } from "../../../shared
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
+import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
 import { toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
@@ -52,6 +53,13 @@ let toolbarHeight = $state(0);
 let toolbarWidth = $state(0);
 let viewportHeight = $state(window.innerHeight);
 let viewportWidth = $state(window.innerWidth);
+
+// Link input — toggled inline by the Link button. The popup is intentionally
+// kept lightweight; the FormattingToolbar carries the fuller link UI for
+// in-context editing. Inputs use the same submit-on-Enter / Esc-to-dismiss
+// shape as the FormattingToolbar's input.
+let showLinkInput = $state(false);
+let linkInputValue = $state("");
 
 const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
@@ -301,7 +309,33 @@ function dismissPopup() {
   selectionPosition = null;
   capturedRange = null;
   annotationText = "";
+  showLinkInput = false;
+  linkInputValue = "";
   editor?.chain().focus().run();
+}
+
+function openLinkInput() {
+  if (!editor) return;
+  linkInputValue = getInitialLinkHref(editor);
+  showLinkInput = true;
+}
+
+function submitLinkInput() {
+  if (!editor) return;
+  applyLink(editor, linkInputValue);
+  showLinkInput = false;
+  linkInputValue = "";
+}
+
+function handleLinkInputKeyDown(e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    submitLinkInput();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    showLinkInput = false;
+    linkInputValue = "";
+  }
 }
 
 function submitAsComment() {
@@ -335,22 +369,42 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     role="toolbar"
     aria-label="Selection tools"
     class="tandem-floating-pill"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-4); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-pill); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 360px;`}
   >
-    <div style="display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--tandem-border);">
+    <!-- Row 1: inline-mark formatting + highlight swatches. Buttons bind to
+         mousedown via withPreventDefault so the editor selection survives
+         the click — see handlers.ts for the rationale (avoids the
+         "format-before-type" symptom). -->
+    <div style="display: flex; align-items: center; gap: 1px; padding: 4px;">
       <ToolbarButton
         label="B"
         ariaLabel="Bold"
         style="font-weight: 700; min-width: 28px;"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => editor?.chain().focus().toggleBold().run()}
+        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleBold().run())}
       />
       <ToolbarButton
         label="I"
         ariaLabel="Italic"
         style="font-style: italic; min-width: 28px;"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => editor?.chain().focus().toggleItalic().run()}
+        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleItalic().run())}
+      />
+      <ToolbarButton
+        label="S"
+        ariaLabel="Strikethrough"
+        style="text-decoration: line-through; min-width: 28px;"
+        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleStrike().run())}
+      />
+      <ToolbarButton
+        label="<>"
+        ariaLabel="Inline code"
+        style="font-family: var(--tandem-font-mono, monospace); min-width: 30px;"
+        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleCode().run())}
+      />
+      <ToolbarButton
+        label="↗"
+        ariaLabel="Link"
+        style="min-width: 28px;"
+        onMouseDown={withPreventDefault(openLinkInput)}
       />
       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
@@ -374,6 +428,20 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         {/each}
       </div>
     </div>
+
+    {#if showLinkInput}
+      <div style="padding: 0 8px 6px;">
+        <input
+          type="url"
+          data-testid="popup-link-input"
+          aria-label="Link URL"
+          bind:value={linkInputValue}
+          onkeydown={handleLinkInputKeyDown}
+          placeholder="https://…"
+          style="width: 100%; box-sizing: border-box; height: 28px; padding: 0 8px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; outline: none;"
+        />
+      </div>
+    {/if}
 
     <div style="padding: 6px 8px;">
       <textarea

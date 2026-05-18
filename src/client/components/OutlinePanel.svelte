@@ -223,35 +223,49 @@ function handleKeyDown(e: KeyboardEvent) {
   onkeydown={handleKeyDown}
   style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;"
 >
-  <!-- Search field -->
-  <div style="padding: var(--tandem-space-2) var(--tandem-space-3); border-bottom: 1px solid var(--tandem-border);">
-    <input
-      bind:this={searchInput}
-      bind:value={searchQuery}
-      oninput={handleSearchInput}
-      onkeydown={handleSearchKeydown}
-      type="search"
-      placeholder="Search in document…"
-      data-testid="outline-search-input"
-      aria-label="Search document"
-      style="
-        width: 100%; box-sizing: border-box;
-        padding: var(--tandem-space-1) var(--tandem-space-3);
-        font-size: var(--tandem-text-xs);
-        border: 1px solid var(--tandem-border);
-        border-radius: var(--tandem-r-pill);
-        background: var(--tandem-surface);
-        color: var(--tandem-fg);
-        outline: none;
-      "
-    />
+  <!-- Search pill — no container border; surface-sunk background carries the
+       shape per calm-v7 outline rail pattern. Inline magnifying-glass icon
+       sits inside the input padding. -->
+  <div style="padding: var(--tandem-space-3) var(--tandem-space-3) var(--tandem-space-2);">
+    <div class="outline-search-pill">
+      <svg
+        class="outline-search-icon"
+        width="14"
+        height="14"
+        viewBox="0 0 16 16"
+        fill="none"
+        aria-hidden="true"
+      >
+        <circle cx="7" cy="7" r="4.3" stroke="currentColor" stroke-width="1.4" fill="none" />
+        <line
+          x1="10.2"
+          y1="10.2"
+          x2="13.5"
+          y2="13.5"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+        />
+      </svg>
+      <input
+        bind:this={searchInput}
+        bind:value={searchQuery}
+        oninput={handleSearchInput}
+        onkeydown={handleSearchKeydown}
+        type="search"
+        placeholder="Search in document…"
+        data-testid="outline-search-input"
+        aria-label="Search document"
+        class="outline-search-input"
+      />
+    </div>
   </div>
 
   <!-- Headings list -->
   <div
     class="tandem-scroll-fade-y"
     use:scrollFade={"y"}
-    style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;"
+    style="flex: 1; overflow-y: auto; padding: var(--tandem-space-3) var(--tandem-space-3);"
   >
     {#if headings.length === 0}
       <div
@@ -323,3 +337,35 @@ function handleKeyDown(e: KeyboardEvent) {
     {/if}
   </div>
 </nav>
+
+<style>
+  .outline-search-pill {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-1);
+    padding: 0 var(--tandem-space-2);
+    background: var(--tandem-surface-sunk);
+    border-radius: var(--tandem-r-pill);
+    height: 28px;
+  }
+  .outline-search-icon {
+    color: var(--tandem-fg-subtle);
+    flex-shrink: 0;
+  }
+  .outline-search-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--tandem-fg);
+    font-size: var(--tandem-text-xs);
+    padding: 0;
+  }
+  .outline-search-input::placeholder {
+    color: var(--tandem-fg-subtle);
+  }
+  .outline-search-pill:focus-within {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-accent) 30%, transparent);
+  }
+</style>
