@@ -6,6 +6,7 @@ import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { flatOffsetToPmPos } from "../positions";
 import { renderMarkdown } from "./chat-markdown";
 
@@ -193,7 +194,11 @@ function toggleAnchorExpand(msgId: string) {
   </div>
 
   <!-- Messages -->
-  <div style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;">
+  <div
+    class="tandem-scroll-fade-y"
+    use:scrollFade={{ axis: "y" }}
+    style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;"
+  >
     {#if messages.length === 0}
       <div
         style="color: var(--tandem-fg-subtle); font-size: 13px; text-align: center; margin-top: 24px;"

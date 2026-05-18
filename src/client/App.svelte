@@ -11,6 +11,7 @@ import {
   triggerSave,
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
+import { scrollFade } from "./actions/scrollFade.svelte.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -1076,7 +1077,8 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
-    class="editor-scroll"
+    class="editor-scroll tandem-scroll-fade-y"
+    use:scrollFade={{ axis: "y" }}
     role="region"
     aria-label="Document editor"
     style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}

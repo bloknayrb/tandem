@@ -51,6 +51,7 @@ export interface SettingsTab {
 <script lang="ts">
 import { onMount, untrack } from "svelte";
 import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
+import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
@@ -392,7 +393,11 @@ async function handleViewChangelog(): Promise<void> {
     class="settings-modal"
     data-narrow-sidebar-open={narrowSidebarOpen ? "true" : "false"}
   >
-    <aside class="settings-modal-sidebar" inert={isNarrow && !narrowSidebarOpen}>
+    <aside
+      class="settings-modal-sidebar tandem-scroll-fade-y"
+      use:scrollFade={{ axis: "y" }}
+      inert={isNarrow && !narrowSidebarOpen}
+    >
       <div class="settings-modal-sidebar-head">
         <div id={HEADING_ID} class="settings-modal-sidebar-title">Settings</div>
         {#if appInfo.info}
@@ -535,7 +540,7 @@ async function handleViewChangelog(): Promise<void> {
         </button>
       </header>
 
-      <div class="settings-modal-content-body">
+      <div class="settings-modal-content-body tandem-scroll-fade-y" use:scrollFade={{ axis: "y" }}>
         <div class="settings-modal-content-inner">
           {#key activeTab.id}
             <activeTab.component {...tabContext} />

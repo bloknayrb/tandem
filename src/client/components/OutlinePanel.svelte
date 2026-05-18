@@ -3,6 +3,7 @@ import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { type HeadingEntry, walkHeadings } from "../utils/headings";
@@ -247,7 +248,11 @@ function handleKeyDown(e: KeyboardEvent) {
   </div>
 
   <!-- Headings list -->
-  <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;">
+  <div
+    class="tandem-scroll-fade-y"
+    use:scrollFade={{ axis: "y" }}
+    style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;"
+  >
     {#if headings.length === 0}
       <div
         style="padding: var(--tandem-space-3) var(--tandem-space-4); font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-style: italic;"

@@ -1,6 +1,7 @@
 <script lang="ts">
 import { untrack } from "svelte";
 import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
+import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
 
 // Registry-derived sections — same source as Settings → Shortcuts tab
@@ -69,6 +70,8 @@ $effect(() => {
       aria-label="Keyboard Shortcuts"
       tabindex="-1"
       bind:this={dialogEl}
+      class="tandem-scroll-fade-y"
+      use:scrollFade={{ axis: "y" }}
       style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
