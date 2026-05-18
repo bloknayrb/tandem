@@ -56,20 +56,28 @@ function handleHighlight(color: HighlightColor) {
 }
 </script>
 
+<!-- v7 floating chrome (Wave 3): the persistent format bar is now a floating
+     pill centered over the editor at top: var(--tandem-fmtbar-top, 52px).
+     The wrapper is pointer-events: none so clicks pass through to the editor
+     where the pill is not; the pill itself is pointer-events: auto. The wrap
+     is also -webkit-app-region: drag (Tauri) so the strip above/around the
+     pill remains drag-region, while the pill is no-drag for button clicks. -->
 <div
-  data-testid="formatting-bar"
-  style="display: flex; align-items: center; height: var(--tandem-h-fmtbar, 36px);
-    padding: 0 var(--tandem-space-3);
-    border-bottom: 1px solid var(--tandem-border);
-    background: var(--tandem-surface-muted);
-    user-select: none; position: relative; z-index: 4;"
+  class="tandem-fmtbar-wrap"
+  style="position: absolute; top: var(--tandem-fmtbar-top, 52px); left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; z-index: var(--tandem-z-sticky); -webkit-app-region: drag;"
 >
-  <div style="flex: 1; display: flex; align-items: center; gap: 2px; overflow: hidden; min-width: 0;">
-    <FormattingToolbar {editor} />
-    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px; flex-shrink: 0;"></div>
-    <HighlightColorPicker
-      disabled={!canHighlight}
-      onHighlight={handleHighlight}
-    />
+  <div
+    data-testid="formatting-bar"
+    class="tandem-floating-pill"
+    style="display: inline-flex; align-items: center; height: var(--tandem-h-fmtbar, 36px); padding: 0 var(--tandem-space-3); user-select: none; pointer-events: auto; -webkit-app-region: no-drag; max-width: calc(100% - var(--tandem-space-6));"
+  >
+    <div style="display: flex; align-items: center; gap: 2px; overflow: hidden; min-width: 0;">
+      <FormattingToolbar {editor} />
+      <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px; flex-shrink: 0;"></div>
+      <HighlightColorPicker
+        disabled={!canHighlight}
+        onHighlight={handleHighlight}
+      />
+    </div>
   </div>
 </div>

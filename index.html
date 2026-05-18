@@ -139,6 +139,43 @@
         --tandem-z-modal: 1000;
         --tandem-z-toast: 1100;
         --tandem-z-tooltip: 10000;
+        /* v7 floating chrome clearance/position vars — consumed by W2-W6
+           rails, fmtbar, status pill. The defaults below match the layout
+           with the TitleBar (40px) + in-flow DocumentTabs (32px) above the
+           editor area, totalling ~72px of header chrome. Once W4 lifts the
+           tabs into the floating titlebar (no in-flow strip), these
+           defaults drop to 52px to match calm-v7.css. --tandem-fmtbar-top
+           is the fmtbar pill's anchor in the absolute overlay layer. */
+        --tandem-fmtbar-top: 80px;
+        --tandem-rail-top-clearance: 80px;
+        --tandem-status-clearance: 36px;
+        /* Light-mode floating-pill stack (matches v7 calm-v7.css). Warm/dark
+           override --c7-pill-shadow inside their own theme blocks. */
+        --c7-pill-shadow:
+          0 1px 1px rgba(0, 0, 0, 0.04),
+          0 6px 14px -6px rgba(0, 0, 0, 0.10),
+          0 22px 38px -22px rgba(0, 0, 0, 0.16);
+      }
+
+      /* Shared white-mode floating-pill recipe. Applied to every floating
+         chrome surface introduced by Waves 3-6: fmtbar, titlebar clusters,
+         tab pills, +/add pill, mode segment, status pill, mini-toolbar,
+         wincontrols. Surfaces only need .tandem-floating-pill + a sensible
+         border-radius (pill or 14px). Surface-specific overrides (padding,
+         max-width, drag-region) layer on top. */
+      .tandem-floating-pill {
+        background: var(--tandem-surface);
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-pill);
+        box-shadow: var(--c7-pill-shadow);
+        backdrop-filter: saturate(140%) blur(8px);
+        -webkit-backdrop-filter: saturate(140%) blur(8px);
+      }
+      [data-theme="dark"] .tandem-floating-pill {
+        --c7-pill-shadow:
+          0 1px 1px rgba(0, 0, 0, 0.30),
+          0 6px 14px -6px rgba(0, 0, 0, 0.40),
+          0 22px 38px -22px rgba(0, 0, 0, 0.50);
       }
 
       [data-theme="dark"] {
