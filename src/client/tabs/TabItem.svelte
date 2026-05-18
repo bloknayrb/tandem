@@ -172,7 +172,7 @@ function handleMouseLeaveClose() {
   <!-- Format badge: decorative pill; file name is the accessible label via aria-label on the tab.
        No inactive-tab opacity dimming — the badge color must stay at full strength so axe-core
        WCAG AA contrast passes; visual active/inactive distinction comes from the tab background
-       and bottom-border instead. -->
+       fill and the 1px pill border instead. -->
   <span
     data-testid={`tab-format-badge-${tab.id}`}
     aria-label={`Format: ${tab.format}`}
