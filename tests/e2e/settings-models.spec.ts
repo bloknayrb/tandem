@@ -227,14 +227,14 @@ test("delete with confirm flow", async ({ page }) => {
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 });
 
-test("v2→v3 migration boot — Models tab renders with empty list, settings survive", async ({
+test("v2→v4 migration boot — Models tab renders with empty list, settings survive", async ({
   page,
 }) => {
   // Pre-seed a v2 blob (no `models` field, schemaVersion: 2). The loader
-  // walks v2→v3 in memory; persistence happens only when something calls
+  // walks v2→v3→v4 in memory; persistence happens only when something calls
   // updateSettings. So we trigger a real write (add a model) which forces
   // mergeAndClampSettings to persist the migrated shape, then assert the
-  // persisted blob carries schemaVersion: 3 + the seeded theme/textSize.
+  // persisted blob carries schemaVersion: 4 + the seeded theme/textSize.
   await page.evaluate((key) => {
     localStorage.setItem(
       key,
@@ -263,14 +263,15 @@ test("v2→v3 migration boot — Models tab renders with empty list, settings su
   await expect(page.locator(MODAL)).toHaveCount(0);
 
   // Now inspect the persisted shape — the migration must have preserved
-  // the v2 fields (theme, textSize) and added schemaVersion: 3.
+  // the v2 fields (theme, textSize) and climbed to schemaVersion: 4 (v3
+  // added `models`, v4 hard-clamps left rail to outline-only).
   const settings = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, TANDEM_SETTINGS_KEY);
   expect(settings?.theme).toBe("dark");
   expect(settings?.textSize).toBe("l");
-  expect(settings?.schemaVersion).toBe(3);
+  expect(settings?.schemaVersion).toBe(4);
   expect(settings?.models?.length).toBe(1);
   expect(settings?.models?.[0]?.displayName).toBe("Migration sentinel");
 });
