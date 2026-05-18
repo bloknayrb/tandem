@@ -1,7 +1,7 @@
 # Marketplace Install Spike (F2 — ADR-038 Phase 3 gate)
 
-**Status:** Spike complete — **NO-GO on marketplace one-command monitor activation in v2.1.143.**
-**Date:** 2026-05-17
+**Status:** Spike complete — **NO-GO on marketplace one-command monitor activation in v2.1.143.** Re-validated 2026-05-18 against current master (`.claude-plugin/plugin.json` + `marketplace.json` unchanged since the spike; Claude Code still v2.1.143). Verdict holds.
+**Date:** 2026-05-17 (initial); 2026-05-18 (re-validation)
 **Claude Code version tested:** 2.1.143
 **Refs:** [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration), [Plugin Monitor Viability Spike (Spike B)](./plugin-monitor-viability-spike.md), [#477](https://github.com/bloknayrb/tandem/issues/477).
 
