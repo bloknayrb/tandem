@@ -211,6 +211,103 @@ describe("IntegrationConfigSchema", () => {
   });
 });
 
+describe("LoopbackUrl constraint", () => {
+  const baseClaudeCode = {
+    kind: "claude-code" as const,
+    id: "cc-1",
+    label: "Claude Code",
+    configPath: "/home/user/.claude.json",
+    transport: "http" as const,
+  };
+
+  it("accepts http://127.0.0.1", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://127.0.0.1:3479",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts http://localhost", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://localhost:3479",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an http loopback URL with a path", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://127.0.0.1:3479/mcp",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a non-loopback URL that would otherwise pass z.string().url()", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://evil.example/mcp",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an https URL even on loopback (Tandem's MCP endpoint is plain http)", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "https://127.0.0.1:3479",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a file:// URL", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "file:///etc/passwd",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an alternate loopback IP (127.0.0.2)", () => {
+    // 127.0.0.2 is technically loopback (127.0.0.0/8) but Tandem never binds
+    // there — accepting it would expand attack surface for no legitimate use.
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://127.0.0.2:3479",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a bracketed IPv6 loopback (Tandem's HTTP server binds IPv4 only)", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://[::1]:3479",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-loopback url on an other-mcp integration too", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      kind: "other-mcp",
+      id: "om-1",
+      label: "Cursor",
+      transport: "http",
+      url: "http://10.0.0.1:8080",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an other-mcp integration with an absent url (stdio transport or default)", () => {
+    const result = IntegrationConfigSchema.safeParse({
+      kind: "other-mcp",
+      id: "om-1",
+      label: "Cursor",
+      transport: "stdio",
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("IntegrationsFileSchema", () => {
   it("accepts an empty integrations file", () => {
     const result = IntegrationsFileSchema.safeParse(emptyIntegrationsFile());
