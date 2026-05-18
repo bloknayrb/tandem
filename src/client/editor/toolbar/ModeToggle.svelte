@@ -9,9 +9,8 @@ interface Props {
 const { tandemMode, onModeChange }: Props = $props();
 </script>
 
-<!-- Wave A: matches calm-v7 .c7-seg — rounded soft pill, two buttons,
-     `.on` state with subtle shadow. The Claude-active dot moved to the
-     status bar (no longer duplicated on the mode toggle). -->
+<!-- Rounded soft pill, two buttons; `.on` state has a subtle shadow.
+     The Claude-active dot lives on the status bar, not duplicated here. -->
 <div
   data-testid="mode-toggle"
   class="mode-toggle"

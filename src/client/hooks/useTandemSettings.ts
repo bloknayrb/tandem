@@ -157,10 +157,10 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   soloRailHidden: true,
-  // Left rail is locked to outline-only post-Wave-D. Right rail hosts everything
-  // else. The loader migration + normalizeKnownFields + mergeAndClampSettings all
-  // enforce this; the field stays mutable in the type only so existing call sites
-  // and forward-compat blobs don't need to change shape.
+  // Left rail is locked to outline-only. The loader migration +
+  // normalizeKnownFields + mergeAndClampSettings all enforce this; the field
+  // stays mutable in the type only so existing call sites and forward-compat
+  // blobs don't need to change shape.
   leftRailTabs: ["outline"],
   rightRailTabs: ["annotations", "chat"],
   degradedBannerDelayMs: 30000,
@@ -473,9 +473,9 @@ export function mergeAndClampSettings(
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
-    // Left rail is locked to outline-only (Wave D). Ignore any update that
-    // tries to set it to something else — the migration in `loadSettings`
-    // is the only intent-preserving path for legacy blobs.
+    // Left rail is locked to outline-only. Updates that try to set it to
+    // something else are ignored; the migration in `loadSettings` is the
+    // only intent-preserving path for legacy blobs.
     leftRailTabs: ["outline"],
     rightRailTabs: merged.rightRailTabs.length > 0 ? merged.rightRailTabs : DEFAULTS.rightRailTabs,
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.

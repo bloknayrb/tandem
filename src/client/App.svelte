@@ -405,7 +405,7 @@ $effect(() => {
 let activeRailTab = $state<"annotations" | "chat" | "outline">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
-// Left rail is locked to outline-only post-Wave-D; no active-tab state needed.
+// Left rail is locked to the outline tab; no active-tab state needed.
 $effect(() => {
   const rightTabs = settingsState.settings.rightRailTabs;
   if (!rightTabs.includes(activeRailTab)) {
@@ -920,10 +920,8 @@ const tutorial = createTutorial(
          Left and right rails are independently shown/hidden around the stable editor column. -->
     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
       {#if effectiveLeftVisible}
-        <!-- Left rail = outline only (Wave D). No tab bar, no picker; the
-             redesign V7OutlineRail is anchored outline + heading list.
-             Wave A: rail stops above the floating status pill (#7).
-             Wave E: outermost 8px is the edge-click collapse zone. -->
+        <!-- Left rail is locked to the outline; the redesign V7OutlineRail
+             has no tab bar. Outermost 8px is the edge-click collapse zone. -->
         <div
           data-testid="left-outline-rail"
           style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
@@ -934,23 +932,7 @@ const tutorial = createTutorial(
             {editor}
             visible={true}
           />
-          <!-- Wave E: edge-click collapse zone — outermost 8px at the
-               window edge. Sibling to the panel content, not a parent, so
-               descendant clicks never bubble into it. -->
-          <div
-            class="panel-edge-collapse panel-edge-collapse-left"
-            data-testid="panel-edge-collapse-left"
-            role="button"
-            tabindex="0"
-            aria-label="Hide left panel"
-            onclick={toggleLeftPanel}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleLeftPanel();
-              }
-            }}
-          ></div>
+          {@render edgeCollapse("left", toggleLeftPanel)}
         </div>
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
       {:else}
@@ -1098,6 +1080,25 @@ const tutorial = createTutorial(
   ></div>
 {/snippet}
 
+<!-- Edge-click collapse zone: outermost 8px sibling of panel content (not
+     a parent), so descendant clicks never bubble in. -->
+{#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
+  <div
+    class={`panel-edge-collapse panel-edge-collapse-${side}`}
+    data-testid={`panel-edge-collapse-${side}`}
+    role="button"
+    tabindex="0"
+    aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
+    onclick={onToggle}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onToggle();
+      }
+    }}
+  ></div>
+{/snippet}
+
 {#snippet editorColumn()}
   <div
     class="editor-scroll tandem-scroll-fade-y"
@@ -1230,35 +1231,16 @@ const tutorial = createTutorial(
 
 {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
   {@const enabledTabs = settingsState.settings.rightRailTabs}
-  {@const iconOnly = enabledTabs.length > 3}
-  <!-- v7 floating chrome (Wave 2): rail is anchored to the window edge with
-       the OUTER corners flat and the INNER (editor-facing) corners rounded,
-       so it reads as a floating panel peeking past the canvas. The
-       --tandem-rail-top-clearance var defaults to 0; Wave 3 will raise it
-       to ~52px when the fmtbar lifts out of the in-flow layout. -->
+  <!-- Rail anchored to the window edge; outer corners flat, inner corners
+       rounded so it reads as a floating panel peeking past the canvas. -->
+  <!-- `outline` may appear here only when a stale settings blob carried it
+       on the right; the picker doesn't surface it as a new selection. -->
   <div
     style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
   >
     {#if borderSide === "right"}
-      <!-- Wave E: edge-click collapse zone on the right rail. -->
-      <div
-        class="panel-edge-collapse panel-edge-collapse-right"
-        data-testid="panel-edge-collapse-right"
-        role="button"
-        tabindex="0"
-        aria-label="Hide right panel"
-        onclick={toggleRightPanel}
-        onkeydown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggleRightPanel();
-          }
-        }}
-      ></div>
+      {@render edgeCollapse("right", toggleRightPanel)}
     {/if}
-    <!-- Wave A: rail-tab header restyled to match calm-v7 .c7-rail-tabs —
-         inset pill track with rounded segment buttons. Active segment gets
-         soft background + tiny shadow; underline-bottom pattern is gone. -->
     <div class="rail-tabs-row">
       <div class="rail-tabs-track">
         {#if enabledTabs.includes("annotations")}
@@ -1266,9 +1248,8 @@ const tutorial = createTutorial(
             data-testid="annotations-tab"
             class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
             onclick={() => { activeRailTab = "annotations"; }}
-            title={iconOnly ? "Annotations" : undefined}
           >
-            {#if iconOnly}◨{:else}Annotations{/if}
+            Annotations
             {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
               <span class="rail-tab-badge">
                 {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
@@ -1282,9 +1263,8 @@ const tutorial = createTutorial(
             class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
             onmousedown={captureSelectionForChat}
             onclick={() => { activeRailTab = "chat";  }}
-            title={iconOnly ? "Chat" : undefined}
           >
-            {#if iconOnly}💬{:else}Chat{/if}
+            Chat
           </button>
         {/if}
         {#if enabledTabs.includes("outline")}
@@ -1292,9 +1272,8 @@ const tutorial = createTutorial(
             data-testid="outline-tab"
             class={"rail-tab" + (activeRailTab === "outline" ? " on" : "")}
             onclick={() => { activeRailTab = "outline"; }}
-            title={iconOnly ? "Outline" : undefined}
           >
-            {#if iconOnly}≡{:else}Outline{/if}
+            Outline
           </button>
         {/if}
       </div>
@@ -1350,8 +1329,7 @@ const tutorial = createTutorial(
 {/snippet}
 
 <style>
-  /* Wave A: rail-tab pill (matches calm-v7 .c7-rail-tabs).
-     Inset track + rounded segments + soft active fill. No underline. */
+  /* Rail-tab pill: inset track, rounded segments, soft active fill. */
   .rail-tabs-row {
     display: flex;
     align-items: center;
@@ -1407,10 +1385,9 @@ const tutorial = createTutorial(
     font-weight: 700;
   }
 
-  /* Wave E: edge-click collapse zone. An 8px-wide hit strip absolutely
-     positioned at the window-facing edge of a visible panel. Sibling to
-     panel content (not a parent) so descendant clicks never bubble in.
-     Cursor differentiates from the inboard drag-to-resize handle. */
+  /* Edge-click collapse zone. Sibling to panel content (not a parent) so
+     descendant clicks never bubble in. Cursor differentiates from the
+     inboard drag-to-resize handle. */
   .panel-edge-collapse {
     position: absolute;
     top: 0;

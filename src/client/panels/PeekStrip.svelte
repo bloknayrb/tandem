@@ -1,22 +1,10 @@
 <script lang="ts">
-import { onMount } from "svelte";
-
 interface Props {
   side: "left" | "right";
   onActivate: () => void;
 }
 
 const { side, onActivate }: Props = $props();
-
-// Ref captured via onMount (avoids the bind:this + $effect reactive loop
-// that has bitten this codebase before — see feedback_svelte_state_bind_this_loop).
-let stripEl: HTMLDivElement | null = null;
-onMount(() => {
-  if (stripEl) {
-    // Nothing to wire here today — keyboard activation is handled inline
-    // via onkeydown below. Reserved for any future side-effect wiring.
-  }
-});
 
 function handleKey(e: KeyboardEvent) {
   if (e.key === "Enter" || e.key === " ") {
@@ -26,13 +14,9 @@ function handleKey(e: KeyboardEvent) {
 }
 </script>
 
-<!-- Peek strip: faint vertical bar at the window edge that brightens on
-     hover and toggles the panel visible on click or Enter/Space. The plan
-     calls for a smooth translateX slide on activation; the slide is
-     deferred until the full panel-edge architecture lands. Today the
-     panel snaps in via the existing show/hide branch. -->
+<!-- Faint vertical bar at the window edge; brightens on hover and toggles
+     the panel visible on click or Enter/Space. -->
 <div
-  bind:this={stripEl}
   class="peek-strip peek-strip-{side}"
   data-testid={`peek-strip-${side}`}
   role="button"
