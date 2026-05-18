@@ -173,6 +173,27 @@ let modalEl: HTMLDivElement | undefined = $state();
 const appInfo = createAppInfo(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
+// W9: narrow-viewport sidebar drawer. At <860px the sidebar collapses out
+// of the grid into an absolute drawer toggled by the header hamburger.
+// Reset to closed each time the modal opens.
+let narrowSidebarOpen = $state(false);
+$effect(() => {
+  if (open) narrowSidebarOpen = false;
+});
+// Track the 860px breakpoint via matchMedia so we can mark the closed drawer
+// `inert` — without that, the off-canvas nav buttons remain in the tab order
+// and a11y tree, dropping focus off-screen at narrow widths.
+let isNarrow = $state(false);
+$effect(() => {
+  if (typeof window === "undefined" || !window.matchMedia) return;
+  const mql = window.matchMedia("(max-width: 860px)");
+  isNarrow = mql.matches;
+  const onChange = (e: MediaQueryListEvent) => {
+    isNarrow = e.matches;
+  };
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+});
 
 const resolvedTabs = $derived(tabs.length > 0 ? tabs : DEFAULT_SETTINGS_TABS);
 // Kept as `$state` (not `$derived`) because user clicks must mutate it
@@ -269,6 +290,12 @@ onMount(() => {
     // from unrelated surfaces that share the document.
     if (!modalEl || !target || !modalEl.contains(target)) return;
     e.stopPropagation();
+    // W9: at narrow widths, Escape closes the drawer first instead of
+    // killing the whole modal — matches drawer UX expectations.
+    if (isNarrow && narrowSidebarOpen) {
+      narrowSidebarOpen = false;
+      return;
+    }
     onClose();
   };
   document.addEventListener("keydown", escapeHandler);
@@ -363,8 +390,9 @@ async function handleViewChangelog(): Promise<void> {
     aria-labelledby={HEADING_ID}
     tabindex={-1}
     class="settings-modal"
+    data-narrow-sidebar-open={narrowSidebarOpen ? "true" : "false"}
   >
-    <aside class="settings-modal-sidebar">
+    <aside class="settings-modal-sidebar" inert={isNarrow && !narrowSidebarOpen}>
       <div class="settings-modal-sidebar-head">
         <div id={HEADING_ID} class="settings-modal-sidebar-title">Settings</div>
         {#if appInfo.info}
@@ -384,7 +412,12 @@ async function handleViewChangelog(): Promise<void> {
             aria-current={activeTabId === tab.id ? "page" : undefined}
             data-active={activeTabId === tab.id ? "true" : "false"}
             data-testid={`settings-modal-tab-${tab.id}`}
-            onclick={() => (activeTabId = tab.id)}
+            onclick={() => {
+              activeTabId = tab.id;
+              // Auto-close the narrow drawer on selection so the user lands
+              // on the chosen tab without a manual second tap.
+              narrowSidebarOpen = false;
+            }}
             class="settings-modal-nav-btn"
           >
             <svg
@@ -465,6 +498,31 @@ async function handleViewChangelog(): Promise<void> {
 
     <section class="settings-modal-content" data-testid="settings-modal-content">
       <header class="settings-modal-content-head">
+        <button
+          type="button"
+          class="settings-modal-narrow-hamburger"
+          data-testid="settings-modal-narrow-hamburger"
+          aria-label={narrowSidebarOpen ? "Hide sections" : "Show sections"}
+          aria-expanded={narrowSidebarOpen}
+          onclick={() => {
+            narrowSidebarOpen = !narrowSidebarOpen;
+          }}
+        >
+          <svg
+            aria-hidden="true"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          >
+            <line x1="4" y1="7" x2="20" y2="7" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="17" x2="20" y2="17" />
+          </svg>
+        </button>
         <h2 class="settings-modal-content-title">{activeTabLabel}</h2>
         <button
           type="button"
@@ -724,16 +782,64 @@ async function handleViewChangelog(): Promise<void> {
     letter-spacing: 0.5px;
   }
 
-  @media (max-width: 640px) {
+  /* W9: narrow viewports collapse the persistent sidebar grid column into a
+     slide-in drawer toggled by the header hamburger. The drawer is
+     absolutely positioned so it overlays the content rather than pushing
+     it; the hamburger button is hidden by default and shown here. */
+  .settings-modal-narrow-hamburger {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-right: var(--tandem-space-2);
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--tandem-fg-muted);
+    cursor: pointer;
+    border-radius: var(--tandem-r-3);
+  }
+  .settings-modal-narrow-hamburger:hover {
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg);
+  }
+  .settings-modal-narrow-hamburger:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+
+  @media (max-width: 860px) {
     .settings-modal {
       grid-template-columns: 1fr;
-      grid-template-rows: minmax(auto, 45%) 1fr;
+    }
+
+    .settings-modal-narrow-hamburger {
+      display: inline-flex;
     }
 
     .settings-modal-sidebar {
-      border-right: none;
-      border-bottom: 1px solid var(--tandem-border);
-      padding: var(--tandem-space-3);
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: min(260px, 80vw);
+      border-right: 1px solid var(--tandem-border);
+      transform: translateX(-100%);
+      transition: transform 0.18s ease;
+      z-index: 2;
+      box-shadow: var(--tandem-shadow-3);
+    }
+
+    .settings-modal[data-narrow-sidebar-open="true"] .settings-modal-sidebar {
+      transform: translateX(0);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .settings-modal-sidebar {
+      width: 100%;
+      box-shadow: none;
     }
   }
 </style>
