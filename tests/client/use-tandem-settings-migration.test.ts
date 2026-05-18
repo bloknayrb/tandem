@@ -161,10 +161,12 @@ describe("loadSettings — migration chain", () => {
     expect(s.selectionDwellMs).toBeGreaterThanOrEqual(200);
   });
 
-  it("forward-compat drops leftRailTabs/rightRailTabs fields (Wave I)", () => {
+  it("forward-compat strips leftRailTabs/rightRailTabs fields (Wave I)", () => {
     // Wave I removed both rail-tab settings fields from the schema. A
     // forward-compat blob that still carries them must not surface them
-    // via the typed return.
+    // anywhere — not as typed fields, not as future-field leak via the
+    // `...futureFields` spread. Otherwise a future schema that re-uses
+    // either name silently inherits stale state from older clients.
     writeRaw({
       schemaVersion: 99,
       leftRailTabs: ["chat", "annotations"],
@@ -172,11 +174,44 @@ describe("loadSettings — migration chain", () => {
     });
     const s = loadSettings() as Record<string, unknown>;
     expect(s._readOnly).toBe(true);
-    // Future fields are preserved verbatim via the `...futureFields` spread.
-    // The point is that `normalizeKnownFields` no longer surfaces them as
-    // typed/clamped fields.
-    expect(s.leftRailTabs).toEqual(["chat", "annotations"]);
-    expect(s.rightRailTabs).toEqual(["outline"]);
+    // Both names are stripped — neither stays as a typed field nor leaks
+    // through the future-field passthrough.
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
+  });
+
+  it("v4→v5 idempotency: an already-v5 blob loads without re-running migrations", () => {
+    writeRaw({
+      schemaVersion: 5,
+      theme: "dark",
+      models: [],
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(5);
+    expect(s.theme).toBe("dark");
+    // The migration chain's `=== N` gates are exclusive — re-running on
+    // an already-v5 blob is a no-op. _readOnly is reserved for the v99+
+    // forward-compat path; an in-bounds v5 should never set it.
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("v2 seed with rail-tabs climbs to v5 with both fields absent (realistic prod-upgrade path)", () => {
+    // A v2 blob from before Wave D where the user had Chat on the left
+    // rail. After climbing v2→v3 (models added) → v3→v4 (Chat displaced
+    // to right) → v4→v5 (both fields stripped) the typed return must
+    // carry neither name.
+    writeRaw({
+      schemaVersion: 2,
+      leftRailTabs: ["chat", "outline"],
+      rightRailTabs: [],
+      leftPanelVisible: true,
+      rightPanelVisible: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(5);
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
+    expect(s._readOnly).toBeUndefined();
   });
 
   it("v3→v4: displaced left tabs move to right rail (chat alone)", () => {

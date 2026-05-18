@@ -414,9 +414,18 @@ export function loadSettings(): TandemSettings {
         // garbage like `editorWidthPercent: -999` doesn't leak into the
         // running UI.
         const knownKeys = new Set(Object.keys(normalized));
+        // Explicitly-removed schema fields. Without this set, fields that
+        // were stripped by a migration step (e.g. v4→v5 dropped
+        // leftRailTabs / rightRailTabs) would leak through as "future
+        // fields" on a v99 forward-compat blob, silently pinning a
+        // contract the migration intends to retire and inheriting stale
+        // state into any future schema that reuses the names.
+        const REMOVED_FIELDS = new Set(["leftRailTabs", "rightRailTabs"]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {
-          if (!knownKeys.has(k) && k !== "_readOnly") futureFields[k] = v;
+          if (!knownKeys.has(k) && k !== "_readOnly" && !REMOVED_FIELDS.has(k)) {
+            futureFields[k] = v;
+          }
         }
         return { ...normalized, ...futureFields, _readOnly: true };
       }

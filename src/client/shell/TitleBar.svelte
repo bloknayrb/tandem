@@ -172,7 +172,13 @@ async function closeWindow() {
 const themeLabel = $derived(THEME_LABEL[theme]);
 </script>
 
-<div class="title-bar" data-testid="title-bar" data-tauri-drag-region>
+<!-- data-tauri-drag-region lives on the three sibling spacer divs
+     (.title-bar-left + two .title-bar-gap) so action buttons remain
+     siblings of the drag region, never descendants. Putting the
+     attribute on the root div makes the action buttons descendants of
+     the drag region; per feedback_tauri_drag_region_structure.md the
+     repo has been bitten by that pattern in production. -->
+<div class="title-bar" data-testid="title-bar">
   <div class="title-bar-left" data-tauri-drag-region>
     <span class="brand" aria-label="Tandem">
       <span class="brand-frame">
