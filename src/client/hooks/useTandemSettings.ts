@@ -157,7 +157,11 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   soloRailHidden: true,
-  leftRailTabs: ["annotations", "outline"],
+  // Left rail is locked to outline-only post-Wave-D. Right rail hosts everything
+  // else. The loader migration + normalizeKnownFields + mergeAndClampSettings all
+  // enforce this; the field stays mutable in the type only so existing call sites
+  // and forward-compat blobs don't need to change shape.
+  leftRailTabs: ["outline"],
   rightRailTabs: ["annotations", "chat"],
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
@@ -249,12 +253,11 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *
  * v1→v2: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
  * v2→v3: introduce `models: []`. No legacy shape to migrate from.
- *
- * In addition to the version chain, this loader runs an in-place
- * `leftSlot.kind` → `leftRailTabs` fallback that has been in place since
- * before the schema was versioned.
+ * v3→v4: left rail is locked to outline-only. Non-outline tabs in
+ *   `leftRailTabs` move to `rightRailTabs` (append, dedupe) so the user's
+ *   intent is preserved instead of silently discarded.
  */
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -267,20 +270,12 @@ const CURRENT_SCHEMA_VERSION = 3;
  * — otherwise a forward-compat load could leak garbage values
  * (`editorWidthPercent: -999`, `theme: "neon"`) into the running UI.
  *
- * Owns the `leftSlot.kind → leftRailTabs` derivation so both paths
- * preserve outline-first ordering when the user had it selected.
+ * Post-Wave-D: `leftRailTabs` is hard-clamped to `["outline"]` here as
+ * defence in depth. The v3→v4 migration in `loadSettings` is the
+ * intent-preserving path that moves displaced tabs to the right rail; this
+ * clamp guards the forward-compat branch and any direct call site.
  */
 function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
-  let leftRailTabsFallback = DEFAULTS.leftRailTabs;
-  if (!Array.isArray(parsed.leftRailTabs)) {
-    const ls = parsed.leftSlot as { kind?: unknown } | undefined;
-    if (ls?.kind === "outline") {
-      console.warn("[tandem] migrating legacy leftSlot.kind=outline → leftRailTabs");
-      leftRailTabsFallback = ["outline", "annotations"];
-    } else if (ls?.kind === "side") {
-      console.warn("[tandem] migrating legacy leftSlot.kind=side → leftRailTabs");
-    }
-  }
   return {
     leftPanelVisible: parsed.leftPanelVisible === true,
     rightPanelVisible: parsed.rightPanelVisible !== false,
@@ -351,7 +346,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       typeof parsed.holdAnnotationsWhileOffline === "boolean"
         ? parsed.holdAnnotationsWhileOffline
         : DEFAULTS.holdAnnotationsWhileOffline,
-    leftRailTabs: parseRailTabs(parsed.leftRailTabs, leftRailTabsFallback),
+    leftRailTabs: ["outline"],
     rightRailTabs: parseRailTabs(parsed.rightRailTabs, DEFAULTS.rightRailTabs),
     marginView: parsed.marginView === true,
     showIntegrationWizard: parsed.showIntegrationWizard === true,
@@ -375,7 +370,7 @@ export function loadSettings(): TandemSettings {
         parsed = { leftPanelVisible: false, rightPanelVisible: true, schemaVersion: 1 };
       }
       // Migration chain — fall-through per step. Each step's guard is
-      // `=== N`, not `!== N+1`, so v1 data climbs v1→v2→v3 in one load.
+      // `=== N`, not `!== N+1`, so v1 data climbs v1→v2→v3→v4 in one load.
       const startingVersion = typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : 1;
       if (startingVersion === 1) {
         // v1→v2: derive per-side visibility from old layout+panelHidden.
@@ -400,6 +395,23 @@ export function loadSettings(): TandemSettings {
       if (parsed.schemaVersion === 2) {
         // v2→v3: introduce empty models registry. No legacy shape to read.
         parsed = { ...parsed, models: [], schemaVersion: 3 };
+      }
+      if (parsed.schemaVersion === 3) {
+        // v3→v4: left rail locked to outline-only. Intent-preserving
+        // migration: any non-outline tab in `leftRailTabs` moves to
+        // `rightRailTabs` (append, dedupe). A user who'd moved Chat to the
+        // left rail keeps Chat — just on the right.
+        const rawLeft = Array.isArray(parsed.leftRailTabs) ? parsed.leftRailTabs : [];
+        const rawRight = Array.isArray(parsed.rightRailTabs) ? parsed.rightRailTabs : [];
+        const displaced = rawLeft.filter(
+          (t): t is RailTab => (t === "annotations" || t === "chat") && !rawRight.includes(t),
+        );
+        parsed = {
+          ...parsed,
+          leftRailTabs: ["outline"],
+          rightRailTabs: [...rawRight, ...displaced],
+          schemaVersion: 4,
+        };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
@@ -461,7 +473,10 @@ export function mergeAndClampSettings(
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
-    leftRailTabs: merged.leftRailTabs.length > 0 ? merged.leftRailTabs : DEFAULTS.leftRailTabs,
+    // Left rail is locked to outline-only (Wave D). Ignore any update that
+    // tries to set it to something else — the migration in `loadSettings`
+    // is the only intent-preserving path for legacy blobs.
+    leftRailTabs: ["outline"],
     rightRailTabs: merged.rightRailTabs.length > 0 ? merged.rightRailTabs : DEFAULTS.rightRailTabs,
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.
     // hand-rolled call site that pushes an object missing `enabled`) can't
