@@ -1,8 +1,10 @@
 <script lang="ts">
+import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import { USER_NAME_MAX_LEN } from "../../shared/constants";
 import { createUserName } from "../hooks/useUserName.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
+import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
 interface Props {
   connected: boolean;
@@ -17,6 +19,8 @@ interface Props {
   heldCount?: number;
   mode?: import("../../shared/types").TandemMode;
   onShowHeld?: () => void;
+  /** Editor for the active document — drives the word-count cycle. */
+  editor?: TiptapEditor | null;
 }
 
 let {
@@ -32,6 +36,7 @@ let {
   heldCount,
   mode,
   onShowHeld,
+  editor,
 }: Props = $props();
 
 const RECONNECTED_FLASH_MS = 2_000;
@@ -111,10 +116,45 @@ const showHeld = $derived((heldCount ?? 0) > 0 && mode === "solo");
 function commitName() {
   userNameState.setUserName(nameInput);
 }
+
+// Word-count cycle (W5). Mode persists in localStorage. The chip click
+// advances the cycle; count is derived live from editor doc state via
+// the per-update tick handler so the chip stays accurate as the user types.
+let wordMode = $state(loadMode());
+let editorTick = $state(0);
+$effect(() => {
+  const ed = editor;
+  if (!ed || ed.isDestroyed) return;
+  const handler = () => {
+    if (!ed.isDestroyed) editorTick++;
+  };
+  ed.on("update", handler);
+  ed.on("transaction", handler);
+  return () => {
+    ed.off("update", handler);
+    ed.off("transaction", handler);
+  };
+});
+const wordCount = $derived.by(() => {
+  void editorTick;
+  return getCount(editor ?? null, wordMode);
+});
+function cycleWordMode() {
+  const next = nextMode(wordMode);
+  wordMode = next;
+  saveMode(next);
+}
 </script>
 
+<!-- v7 floating chrome (Wave 5): the in-flow status bar lifts into a small
+     floating pill anchored bottom-left, applying the shared
+     .tandem-floating-pill recipe. The pill keeps every field the in-flow
+     bar carried (display name, connection, count, saving, held badge,
+     Review-Only, Claude state) plus a new word-count chip that cycles
+     through words / chars / sentences / paragraphs on click. -->
 <div
-  style="display: flex; align-items: center; justify-content: space-between; padding: 0 var(--tandem-space-4); height: 28px; border-top: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3);"
+  class="tandem-floating-pill"
+  style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 4px var(--tandem-space-3); height: var(--tandem-h-statusbar, 28px); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
 >
   <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
     <span
@@ -126,6 +166,18 @@ function commitName() {
       <span style="color: var(--tandem-fg-subtle);">
         {documentCount} doc{documentCount !== 1 ? "s" : ""} open
       </span>
+    {/if}
+    {#if editor}
+      <button
+        type="button"
+        data-testid="status-word-count"
+        onclick={cycleWordMode}
+        title={`Click to cycle: ${modeLabel(nextMode(wordMode))}`}
+        aria-label={`${wordCount} ${modeLabel(wordMode)} (click to change unit)`}
+        style="background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--tandem-fg-subtle); font: inherit; font-family: var(--tandem-font-mono);"
+      >
+        {wordCount.toLocaleString()} {modeLabel(wordMode)}
+      </button>
     {/if}
     {#if saving}
       <span
