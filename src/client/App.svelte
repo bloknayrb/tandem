@@ -951,8 +951,9 @@ const tutorial = createTutorial(
         {@const leftTabs = settingsState.settings.leftRailTabs}
         {@const iconOnlyLeft = leftTabs.length > 3}
         {@const disabledLeftTabs = settingsState.settings.rightRailTabs.length === 1 ? settingsState.settings.rightRailTabs : []}
+        <!-- v7 floating chrome (Wave 2): see matching comment on tabbedPanel snippet. -->
         <div
-          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; border-right: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
+          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); overflow: hidden;`}
         >
           <div
             style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
@@ -1294,8 +1295,13 @@ const tutorial = createTutorial(
 {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
   {@const enabledTabs = settingsState.settings.rightRailTabs}
   {@const iconOnly = enabledTabs.length > 3}
+  <!-- v7 floating chrome (Wave 2): rail is anchored to the window edge with
+       the OUTER corners flat and the INNER (editor-facing) corners rounded,
+       so it reads as a floating panel peeking past the canvas. The
+       --tandem-rail-top-clearance var defaults to 0; Wave 3 will raise it
+       to ~52px when the fmtbar lifts out of the in-flow layout. -->
   <div
-    style={`display: flex; flex-direction: column; width: ${width}px; ${borderSide === "left" ? "border-right" : "border-left"}: 1px solid var(--tandem-border); background: var(--tandem-surface-muted);`}
+    style={`display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); overflow: hidden;`}
   >
     <div
       style="display: flex; border-bottom: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); min-height: 38px; align-items: stretch; padding: 0 var(--tandem-space-2); gap: 2px;"
