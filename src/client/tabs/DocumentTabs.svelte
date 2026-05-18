@@ -201,7 +201,7 @@ $effect(() => {
 </script>
 
 <!-- Transparent container so pill TabItems read as standalone chips against
-     whatever surface hosts the strip (canvas when nested in TitleBar). -->
+     the canvas behind TitleBar's center cluster (the only host). -->
 <div
   style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base);"
 >
