@@ -17,21 +17,24 @@ export function editAnnotation(ydoc: Y.Doc | null, id: string, newContent: strin
   if (!raw) return;
   const ann = sanitizeAnnotation(raw, warn);
 
-  if (ann.suggestedText !== undefined) {
-    try {
-      const parsed = JSON.parse(newContent) as { suggestedText: string; content: string };
-      map.set(id, {
-        ...ann,
-        suggestedText: parsed.suggestedText,
-        content: parsed.content,
-        editedAt: Date.now(),
-      });
-    } catch {
-      console.warn(`[annotation-actions] Failed to parse edit payload for annotation ${id}`);
+  withBrowser(ydoc, () => {
+    if (ann.suggestedText !== undefined) {
+      try {
+        const parsed = JSON.parse(newContent) as { suggestedText: string; content: string };
+        map.set(id, {
+          ...ann,
+          suggestedText: parsed.suggestedText,
+          content: parsed.content,
+          editedAt: Date.now(),
+          rev: (ann.rev ?? 0) + 1,
+        });
+      } catch {
+        console.warn(`[annotation-actions] Failed to parse edit payload for annotation ${id}`);
+      }
+      return;
     }
-    return;
-  }
-  map.set(id, { ...ann, content: newContent, editedAt: Date.now() });
+    map.set(id, { ...ann, content: newContent, editedAt: Date.now(), rev: (ann.rev ?? 0) + 1 });
+  });
 }
 
 /**
@@ -57,6 +60,7 @@ function promotedAnnotation(ann: Annotation): Annotation {
     author: ann.author === "import" ? ("user" as const) : ann.author,
     audience: "outbound" as const,
     promotedFrom: "note" as const,
+    rev: (ann.rev ?? 0) + 1,
   };
 }
 

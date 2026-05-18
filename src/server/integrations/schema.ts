@@ -57,11 +57,13 @@ const LoopbackUrl = z
         return false;
       }
       if (parsed.protocol !== "http:") return false;
-      return parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+      // Reject URLs with embedded credentials (userinfo bypass: http://evil.com@127.0.0.1/)
+      if (parsed.username !== "" || parsed.password !== "") return false;
+      return parsed.hostname === "127.0.0.1";
     },
     {
       message:
-        "url must be an http loopback URL (http://127.0.0.1 or http://localhost) — Tandem's MCP endpoint is always loopback",
+        "url must be an http loopback URL (http://127.0.0.1) — Tandem's MCP endpoint is always loopback",
     },
   );
 

@@ -201,6 +201,12 @@ export function injectCommentsAsAnnotations(
   let injected = 0;
   let migrated = 0;
 
+  // `withInternal` here is the authoritative origin. When callers invoke
+  // this function inside an outer `withInternal` or `withReload` transact
+  // (as file-opener.ts does), Y.js nested transactions inherit the outermost
+  // origin — so the effective origin becomes whatever the outer call used.
+  // This is intentional: a reload path calling this inside `withReload` wants
+  // reload semantics (durable-sync persists, channel skips).
   withInternal(doc, () => {
     for (const comment of comments) {
       const result = anchoredRange(doc, toFlatOffset(comment.from), toFlatOffset(comment.to));

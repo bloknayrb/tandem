@@ -35,10 +35,15 @@ interface Props {
   /** Open Settings popover. */
   onOpenSettings?: () => void;
   /**
-   * Open the new SettingsModal (Wave 1 sibling component). Wired separately
+   * Open the new SettingsModal (Wave 1 stable prop slot). Wired separately
    * from `onOpenSettings` so the existing gear keeps invoking the popover
    * until Wave 2 retires it. Triggered today via the command palette /
    * `Ctrl+Shift+,` shortcut registered in `actions/builtin.svelte.ts`.
+   * Intentionally unused inside this component — destructured as
+   * `_onOpenSettingsModal` so the compiler treats it as an acknowledged
+   * no-op rather than an oversight. Intentionally NOT wired to
+   * `aria-keyshortcuts` on the gear (that attribute describes shortcuts
+   * activating the labelled element; Ctrl+Shift+, opens a different surface).
    */
   onOpenSettingsModal?: () => void;
   /** Bindable settings button reference (used for keyboard shortcut anchoring). */
@@ -68,7 +73,7 @@ let {
   onAuthorshipChange,
   onOpenHelp,
   onOpenSettings,
-  onOpenSettingsModal,
+  onOpenSettingsModal: _onOpenSettingsModal,
   settingsBtn = $bindable(null),
   updateAvailable = false,
 }: Props = $props();
@@ -165,23 +170,6 @@ async function closeWindow() {
 }
 
 const themeLabel = $derived(THEME_LABEL[theme]);
-
-/**
- * `onOpenSettingsModal` is a Wave 1 stable prop slot, declared so Wave 2 can
- * retire `SettingsPopover` by replacing the gear's `onOpenSettings` wiring
- * with this prop without re-touching `TitleBar.svelte`. Today the trigger is
- * the `settings-modal` action (Ctrl+Shift+,) wired in
- * `actions/builtin.svelte.ts`, so the prop is intentionally unused inside
- * this component. Read it inside `$effect` (not a top-level expression) so
- * svelte-check sees a live reference and stays quiet about both the
- * "declared but never read" error and the `state_referenced_locally`
- * warning. Intentionally NOT exposed via `aria-keyshortcuts` on the gear
- * button — that attribute describes shortcuts that activate the labelled
- * element, and Ctrl+Shift+, opens a different surface.
- */
-$effect(() => {
-  void onOpenSettingsModal;
-});
 </script>
 
 <div class="title-bar" data-testid="title-bar">

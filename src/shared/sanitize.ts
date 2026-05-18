@@ -18,6 +18,12 @@ export type SanitizationEvent =
   | { kind: "question-to-comment"; id: string }
   | { kind: "malformed-suggestion-json"; id: string }
   | { kind: "unknown-type"; id: string; rawType: string }
+  /**
+   * @deprecated Never emitted by `sanitizeAnnotation` since Wave 8 (PR #756)
+   * reversed the import-note→comment rewrite. Retained in the union so that
+   * log-parsing tools and `relaySanitizationEvent` don't break on event streams
+   * that pre-date W8. Do not add new call sites.
+   */
   | { kind: "import-note-to-comment"; id: string }
   | { kind: "audience-conflict-resolved"; id: string };
 

@@ -228,12 +228,12 @@ describe("LoopbackUrl constraint", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts http://localhost", () => {
+  it("rejects http://localhost (schema now requires http://127.0.0.1 to match API middleware)", () => {
     const result = IntegrationConfigSchema.safeParse({
       ...baseClaudeCode,
       url: "http://localhost:3479",
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("accepts an http loopback URL with a path", () => {
@@ -264,6 +264,15 @@ describe("LoopbackUrl constraint", () => {
     const result = IntegrationConfigSchema.safeParse({
       ...baseClaudeCode,
       url: "file:///etc/passwd",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a userinfo-bypass URL (http://evil.com@127.0.0.1/)", () => {
+    // URL.hostname resolves to "127.0.0.1" but the effective host is evil.com.
+    const result = IntegrationConfigSchema.safeParse({
+      ...baseClaudeCode,
+      url: "http://evil.com@127.0.0.1:3479",
     });
     expect(result.success).toBe(false);
   });
