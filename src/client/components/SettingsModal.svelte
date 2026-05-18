@@ -180,6 +180,20 @@ let narrowSidebarOpen = $state(false);
 $effect(() => {
   if (open) narrowSidebarOpen = false;
 });
+// Track the 860px breakpoint via matchMedia so we can mark the closed drawer
+// `inert` — without that, the off-canvas nav buttons remain in the tab order
+// and a11y tree, dropping focus off-screen at narrow widths.
+let isNarrow = $state(false);
+$effect(() => {
+  if (typeof window === "undefined" || !window.matchMedia) return;
+  const mql = window.matchMedia("(max-width: 860px)");
+  isNarrow = mql.matches;
+  const onChange = (e: MediaQueryListEvent) => {
+    isNarrow = e.matches;
+  };
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+});
 
 const resolvedTabs = $derived(tabs.length > 0 ? tabs : DEFAULT_SETTINGS_TABS);
 // Kept as `$state` (not `$derived`) because user clicks must mutate it
@@ -276,6 +290,12 @@ onMount(() => {
     // from unrelated surfaces that share the document.
     if (!modalEl || !target || !modalEl.contains(target)) return;
     e.stopPropagation();
+    // W9: at narrow widths, Escape closes the drawer first instead of
+    // killing the whole modal — matches drawer UX expectations.
+    if (isNarrow && narrowSidebarOpen) {
+      narrowSidebarOpen = false;
+      return;
+    }
     onClose();
   };
   document.addEventListener("keydown", escapeHandler);
@@ -372,7 +392,7 @@ async function handleViewChangelog(): Promise<void> {
     class="settings-modal"
     data-narrow-sidebar-open={narrowSidebarOpen ? "true" : "false"}
   >
-    <aside class="settings-modal-sidebar">
+    <aside class="settings-modal-sidebar" inert={isNarrow && !narrowSidebarOpen}>
       <div class="settings-modal-sidebar-head">
         <div id={HEADING_ID} class="settings-modal-sidebar-title">Settings</div>
         {#if appInfo.info}
