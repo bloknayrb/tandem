@@ -306,7 +306,7 @@ function handleBackdropClick(e: MouseEvent) {
         role="listbox"
         aria-label="Results"
         class="tandem-scroll-fade-y"
-        use:scrollFade={{ axis: "y" }}
+        use:scrollFade={"y"}
         style="max-height: 400px; overflow-y: auto; padding: var(--tandem-space-1) 0; list-style: none; margin: 0;"
       >
         {#if allResults.length === 0}

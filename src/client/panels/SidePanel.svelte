@@ -336,7 +336,7 @@ function handleClearSelection() {
   bind:this={scrollContainerEl}
   data-testid="annotation-list-scroll-container"
   class="tandem-scroll-fade-y"
-  use:scrollFade={{ axis: "y" }}
+  use:scrollFade={"y"}
   style="width: 100%; background: var(--tandem-surface-muted); display: flex; flex-direction: column; overflow-y: auto;"
 >
   <!-- Store read-only banner: shown when the annotation store is locked by another Tandem instance -->

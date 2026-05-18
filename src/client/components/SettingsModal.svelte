@@ -395,7 +395,7 @@ async function handleViewChangelog(): Promise<void> {
   >
     <aside
       class="settings-modal-sidebar tandem-scroll-fade-y"
-      use:scrollFade={{ axis: "y" }}
+      use:scrollFade={"y"}
       inert={isNarrow && !narrowSidebarOpen}
     >
       <div class="settings-modal-sidebar-head">
@@ -540,7 +540,7 @@ async function handleViewChangelog(): Promise<void> {
         </button>
       </header>
 
-      <div class="settings-modal-content-body tandem-scroll-fade-y" use:scrollFade={{ axis: "y" }}>
+      <div class="settings-modal-content-body tandem-scroll-fade-y" use:scrollFade={"y"}>
         <div class="settings-modal-content-inner">
           {#key activeTab.id}
             <activeTab.component {...tabContext} />

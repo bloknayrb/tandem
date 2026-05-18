@@ -71,7 +71,7 @@ $effect(() => {
       tabindex="-1"
       bind:this={dialogEl}
       class="tandem-scroll-fade-y"
-      use:scrollFade={{ axis: "y" }}
+      use:scrollFade={"y"}
       style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {

@@ -250,7 +250,7 @@ function handleKeyDown(e: KeyboardEvent) {
   <!-- Headings list -->
   <div
     class="tandem-scroll-fade-y"
-    use:scrollFade={{ axis: "y" }}
+    use:scrollFade={"y"}
     style="flex: 1; overflow-y: auto; padding: var(--tandem-space-2) 0;"
   >
     {#if headings.length === 0}

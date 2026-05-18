@@ -197,7 +197,7 @@ function handleFileSelect(e: Event) {
             </div>
             <div
               class="tandem-scroll-fade-y"
-              use:scrollFade={{ axis: "y" }}
+              use:scrollFade={"y"}
               style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;"
             >
               {#each recentFiles as p, i (p)}

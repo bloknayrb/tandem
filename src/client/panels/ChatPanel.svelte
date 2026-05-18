@@ -196,7 +196,7 @@ function toggleAnchorExpand(msgId: string) {
   <!-- Messages -->
   <div
     class="tandem-scroll-fade-y"
-    use:scrollFade={{ axis: "y" }}
+    use:scrollFade={"y"}
     style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;"
   >
     {#if messages.length === 0}

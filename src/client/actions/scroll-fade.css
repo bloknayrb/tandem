@@ -14,13 +14,23 @@
 .tandem-scroll-fade-y,
 .tandem-scroll-fade-x {
   --tandem-fade-edge: 24px;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
 
-.tandem-scroll-fade-y::-webkit-scrollbar,
-.tandem-scroll-fade-x::-webkit-scrollbar {
-  display: none;
+/* Gate scrollbar hiding behind mask-image support. On unsupported
+   browsers we fall back to the native scrollbar so overflow is never
+   invisibly clipped. */
+@supports (mask-image: linear-gradient(#000, #000)) or
+  (-webkit-mask-image: linear-gradient(#000, #000)) {
+  .tandem-scroll-fade-y,
+  .tandem-scroll-fade-x {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .tandem-scroll-fade-y::-webkit-scrollbar,
+  .tandem-scroll-fade-x::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* Vertical fades. Composed: both edges → top+bottom; one edge → that side. */
