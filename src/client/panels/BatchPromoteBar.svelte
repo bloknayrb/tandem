@@ -1,0 +1,36 @@
+<script lang="ts">
+interface Props {
+  selectedCount: number;
+  onPromote: () => void;
+  onClear: () => void;
+}
+
+let { selectedCount, onPromote, onClear }: Props = $props();
+</script>
+
+{#if selectedCount > 0}
+  <div
+    data-testid="batch-promote-bar"
+    role="region"
+    aria-label="Batch promote imported notes"
+    style="position: sticky; top: 0; z-index: var(--tandem-z-base); display: flex; align-items: center; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-accent-bg); border-bottom: 1px solid var(--tandem-accent-border); font-size: var(--tandem-text-xs); color: var(--tandem-accent-fg-strong);"
+  >
+    <span data-testid="batch-promote-count" style="flex: 1; font-weight: 500;">
+      {selectedCount} selected
+    </span>
+    <button
+      data-testid="batch-promote-clear"
+      onclick={onClear}
+      style="padding: 3px 10px; border: 1px solid transparent; background: none; color: var(--tandem-fg-subtle); border-radius: var(--tandem-r-pill); cursor: pointer; font-size: var(--tandem-text-xs);"
+    >
+      Clear
+    </button>
+    <button
+      data-testid="batch-promote-confirm"
+      onclick={onPromote}
+      style="padding: 3px 12px; border: 1px solid var(--tandem-accent); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill); cursor: pointer; font-size: var(--tandem-text-xs); font-weight: 500;"
+    >
+      Send {selectedCount} to Claude
+    </button>
+  </div>
+{/if}

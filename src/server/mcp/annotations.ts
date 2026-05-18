@@ -434,7 +434,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_getAnnotations",
-    'Read all annotations, optionally filtered by author/type/status. User notes are always excluded — they are private to the user (ADR-027). For checking new user actions, prefer tandem_checkInbox. Imported Word reviewer comments surface as comments (`author: "import", type: "comment"`) by default — filter via `author: "import"` if you want to scope to them. The `notesExcluded` field in the response reports how many notes were filtered out.',
+    'Read all annotations, optionally filtered by author/type/status. User notes are always excluded — they are private to the user (ADR-027). For checking new user actions, prefer tandem_checkInbox. Imported Word reviewer comments land as **private notes** (`author: "import", type: "note", audience: "private"`) and are excluded by default; the user batch-promotes them via the side rail before Claude sees them, at which point they become `author: "user", type: "comment"`. The `notesExcluded` field in the response reports how many notes were filtered out (including any not-yet-promoted imports).',
     {
       author: AuthorSchema.optional().describe("Filter by author"),
       type: z.enum(["highlight", "comment"]).optional().describe("Filter by type"),

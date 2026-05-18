@@ -10,10 +10,12 @@ import { warningStateColors } from "../utils/colors";
 import AnnotationCard from "./AnnotationCard.svelte";
 import {
   editAnnotation,
+  promoteNotesToComments,
   removeAnnotation,
   replyToAnnotation,
   sendNoteToClaude,
 } from "./annotation-actions";
+import BatchPromoteBar from "./BatchPromoteBar.svelte";
 import BulkActions from "./BulkActions.svelte";
 import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar.svelte";
 import FilterBar from "./FilterBar.svelte";
@@ -289,6 +291,46 @@ function handleBulk(status: "accepted" | "dismissed") {
   for (const ann of filteredData.reviewPending) review.resolveAnnotation(ann.id, status);
   bulkConfirm = null;
 }
+
+// Batch-promote selection for imported notes (W8). Set lives in SidePanel
+// so cards stay presentational; the promoted set re-renders on every
+// annotation list change but we prune stale ids in an effect rather than
+// inline so prune isn't a render-time side effect.
+let selectedImportIds = $state(new Set<string>());
+
+$effect(() => {
+  // Prune against the FILTERED visible list, not the raw annotations list:
+  // if FilterBar hides imports, the BatchPromoteBar must clear too, otherwise
+  // the user sees "N selected / Send N to Claude" with no visible cards.
+  const validIds = new Set(
+    filteredData.pending.filter((a) => a.author === "import" && a.type === "note").map((a) => a.id),
+  );
+  let dirty = false;
+  for (const id of selectedImportIds) {
+    if (!validIds.has(id)) {
+      selectedImportIds.delete(id);
+      dirty = true;
+    }
+  }
+  if (dirty) selectedImportIds = new Set(selectedImportIds);
+});
+
+function toggleImportSelection(id: string) {
+  const next = new Set(selectedImportIds);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedImportIds = next;
+}
+
+function handleBatchPromote() {
+  const ids = Array.from(selectedImportIds);
+  promoteNotesToComments(ydoc, ids);
+  selectedImportIds = new Set();
+}
+
+function handleClearSelection() {
+  selectedImportIds = new Set();
+}
 </script>
 
 <div
@@ -389,6 +431,13 @@ function handleBulk(status: "accepted" | "dismissed") {
     <ApplyChangesButton {annotations} {activeDocFormat} {documentId} />
   </div>
 
+  <!-- Batch-promote bar: appears when one or more imported notes are checked. -->
+  <BatchPromoteBar
+    selectedCount={selectedImportIds.size}
+    onPromote={handleBatchPromote}
+    onClear={handleClearSelection}
+  />
+
   <!-- Bulk actions -->
   <BulkActions
     {bulkConfirm}
@@ -430,6 +479,10 @@ function handleBulk(status: "accepted" | "dismissed") {
           onEdit={handleEdit}
           onReply={handleReply}
           onClick={() => review.scrollToAnnotation(ann)}
+          selected={selectedImportIds.has(ann.id)}
+          onToggleSelect={ann.author === "import" && ann.type === "note"
+            ? toggleImportSelection
+            : undefined}
         />
       {/each}
       {#if filteredData.resolved.length > 0}

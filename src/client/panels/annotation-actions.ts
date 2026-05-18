@@ -1,6 +1,7 @@
 import type * as Y from "yjs";
 import { API_ANNOTATION_REPLY, API_REMOVE_ANNOTATION } from "../../shared/api-paths";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { withBrowser } from "../../shared/origins";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
 import { API_BASE } from "../utils/fileUpload";
@@ -39,7 +40,47 @@ export function sendNoteToClaude(ydoc: Y.Doc | null, annotationId: string): void
   const raw = map.get(annotationId) as Annotation | undefined;
   if (!raw) return;
   const ann = sanitizeAnnotation(raw, warn);
-  map.set(annotationId, { ...ann, type: "comment" });
+  // Promote note → comment, audience → outbound, and re-author import-sourced
+  // notes as user (the user is endorsing the imported reviewer comment as
+  // their own ask to Claude). The annotations observer's note→comment add-
+  // event path gates on `author === "user"`, so keeping `author: "import"`
+  // here would silently fail to surface the new comment to the channel.
+  map.set(annotationId, {
+    ...ann,
+    type: "comment" as const,
+    author: ann.author === "import" ? ("user" as const) : ann.author,
+    audience: "outbound" as const,
+    promotedFrom: "note" as const,
+  });
+}
+
+/**
+ * Batch variant of `sendNoteToClaude`. Single Y.Doc transact so the durable
+ * sync observer sees one batched write per submission rather than N inflight
+ * mutations. The observer fans out to per-annotation channel events on its
+ * own — batching here is purely a write-coalescing optimization.
+ */
+export function promoteNotesToComments(ydoc: Y.Doc | null, annotationIds: string[]): number {
+  if (!ydoc || annotationIds.length === 0) return 0;
+  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  let promoted = 0;
+  withBrowser(ydoc, () => {
+    for (const id of annotationIds) {
+      const raw = map.get(id) as Annotation | undefined;
+      if (!raw) continue;
+      const ann = sanitizeAnnotation(raw, warn);
+      if (ann.type !== "note") continue;
+      map.set(id, {
+        ...ann,
+        type: "comment" as const,
+        author: ann.author === "import" ? ("user" as const) : ann.author,
+        audience: "outbound" as const,
+        promotedFrom: "note" as const,
+      });
+      promoted++;
+    }
+  });
+  return promoted;
 }
 
 export async function removeAnnotation(

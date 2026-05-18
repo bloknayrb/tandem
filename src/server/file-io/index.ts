@@ -18,7 +18,7 @@ export {
   type ApplyOutput,
   applyTrackedChanges,
 } from "./docx-apply.js";
-export type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
+export type { ApplyContext, FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
 // -- Adapter implementations (ADR-036 two-phase parse/apply) --
 
@@ -80,7 +80,7 @@ const docxAdapter: FormatAdapter = {
     ]);
     return { format: "docx", html, comments, issues };
   },
-  apply(doc, prepared) {
+  apply(doc, prepared, ctx) {
     if (prepared.format !== "docx") return [];
     htmlToYDoc(doc, prepared.html);
     const out: LoadIssue[] = [];
@@ -93,7 +93,7 @@ const docxAdapter: FormatAdapter = {
       const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
       const before = new Set(annotMap.keys());
       try {
-        injectCommentsAsAnnotations(doc, prepared.comments);
+        injectCommentsAsAnnotations(doc, prepared.comments, ctx?.fileName);
       } catch (err) {
         for (const k of annotMap.keys()) {
           if (!before.has(k)) annotMap.delete(k);

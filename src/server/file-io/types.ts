@@ -75,6 +75,18 @@ export type Prepared =
  * `save` entirely — callers check `if (adapter.save)` instead of a
  * boolean flag.
  */
+/**
+ * Optional apply-time context. Adapters that need source metadata (e.g. the
+ * docx adapter stamps `importSource.file` on imported comments so the UI can
+ * render "From: <author>" bylines) read it here. Adapters that don't need it
+ * ignore it. Optional so the format-adapter contract stays narrow for
+ * call sites that don't have a meaningful fileName (uploads / scratchpads
+ * pass `undefined` which makes the docx adapter fall back to "unknown").
+ */
+export interface ApplyContext {
+  fileName?: string;
+}
+
 export interface FormatAdapter {
   /** Async pre-parse — no doc dependency. */
   parse(content: string | Buffer): Promise<Prepared>;
@@ -84,7 +96,7 @@ export interface FormatAdapter {
    * Returns `LoadIssue`s discovered during apply (e.g. mid-transact inject-
    * failed); combine with `prepared.issues` for the full set.
    */
-  apply(doc: Y.Doc, prepared: Prepared): LoadIssue[];
+  apply(doc: Y.Doc, prepared: Prepared, ctx?: ApplyContext): LoadIssue[];
 
   /**
    * Serialize a Y.Doc back to file content. Optional — formats that

@@ -26,6 +26,9 @@ interface Props {
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
   onClick?: () => void;
+  /** Batch-selection state — forwarded to ImportedCard only. */
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
 let {
@@ -41,6 +44,8 @@ let {
   onSendToClaude,
   undoable,
   onClick,
+  selected = false,
+  onToggleSelect,
 }: Props = $props();
 
 // Shared edit-mode state owned by the dispatcher; variants are presentational
@@ -123,6 +128,8 @@ function handleKeyDown(e: KeyboardEvent) {
       {isEditing}
       {canEdit}
       onEnterEdit={enterEditMode}
+      {selected}
+      {onToggleSelect}
     />
   {:else if annotation.type === "highlight"}
     <HighlightCard
