@@ -197,6 +197,7 @@ function recordHeight(id: string, h: number): void {
     <div
       data-testid="margin-bubble-{ann.id}"
       data-margin-bubble-reply-count={visibleReplies.length}
+      class="margin-bubble"
       style="position: absolute; top: {top}px; {side}: 0; width: {width}px; pointer-events: auto;"
       bind:clientHeight={
         () => heights.get(ann.id) ?? 0,
@@ -218,3 +219,27 @@ function recordHeight(id: string, h: number): void {
     </div>
   {/each}
 </div>
+
+<style>
+  /* Wave F #4: hover affordance for margin bubbles. The inner AnnotationCard
+     already shows ✎ Edit for pending cards, but the affordance was too
+     subtle in margin view. A faint outline halo on hover signals "this is
+     interactive" without competing with the card's own border. */
+  .margin-bubble {
+    transition: filter 140ms ease;
+  }
+  .margin-bubble:hover {
+    filter: drop-shadow(0 0 0 var(--tandem-accent-border))
+      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.06));
+  }
+  /* Make the inner edit-button reveal on hover of the bubble, even when
+     the cursor is not directly on the button. `:global()` so the
+     selector pierces the AnnotationCard child component boundary. */
+  .margin-bubble :global([data-testid^="edit-btn-"]) {
+    opacity: 0.55;
+    transition: opacity 140ms ease;
+  }
+  .margin-bubble:hover :global([data-testid^="edit-btn-"]) {
+    opacity: 1;
+  }
+</style>
