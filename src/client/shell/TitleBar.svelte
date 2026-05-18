@@ -1,12 +1,18 @@
 <script lang="ts">
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, type Snippet } from "svelte";
 import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
 import { THEME_LABEL, type ThemePreference } from "../hooks/useTandemSettings.svelte";
 
 interface Props {
+  /**
+   * Optional center cluster, rendered between brand and actions. The wrap
+   * sits outside the surrounding drag region so interactive children stay
+   * clickable.
+   */
+  center?: Snippet;
   /** Current Tandem collaboration mode. */
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
@@ -48,6 +54,7 @@ interface Props {
 }
 
 let {
+  center,
   tandemMode,
   onModeChange,
   claudeActive = false,
@@ -185,7 +192,15 @@ $effect(() => {
     </span>
   </div>
 
-  <div class="title-bar-drag" data-tauri-drag-region></div>
+  <div class="title-bar-gap" data-tauri-drag-region></div>
+
+  {#if center}
+    <div class="title-bar-center">
+      {@render center()}
+    </div>
+  {/if}
+
+  <div class="title-bar-gap" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
     {#if tandemMode && onModeChange}
@@ -451,29 +466,44 @@ $effect(() => {
 {/snippet}
 
 <style>
-  /* v7 floating chrome (Wave 4a, minimal): the titlebar drops its bottom
-     seam and surface background so the chrome melts into the canvas. The
-     brand on the left and action icons on the right then read as floating
-     over the document area, matching the v7 silhouette without DOM
-     restructure. The full 3-cluster pill rewrite (which would lift
-     DocumentTabs into the titlebar) is deferred — it touches the Tauri
-     drag-region + decorum hit-test surface and warrants a dedicated wave. */
+  /* 3-cluster floating chrome: brand left, center snippet (DocumentTabs),
+     actions right. The bar is transparent so each cluster reads as floating
+     over the canvas. Drag region is carried by the brand cluster and the
+     two flex gaps around the center — the center wrap is attribute-free so
+     interactive children (tab pills, close buttons) stay clickable. */
   .title-bar {
     display: flex;
     align-items: stretch;
-    height: 40px;
-    min-height: 40px;
+    height: 44px;
+    min-height: 44px;
     background: transparent;
     user-select: none;
     flex-shrink: 0;
   }
 
-  /* drag region — left brand area + center spacer carry data-tauri-drag-region */
+  /* drag region — left brand area + the two gap dividers around the center
+     cluster carry data-tauri-drag-region. The center cluster itself is
+     attribute-free so child pills are clickable. */
   .title-bar-left {
     display: flex;
     align-items: center;
     padding-left: var(--tandem-space-3);
     flex-shrink: 0;
+  }
+
+  .title-bar-gap {
+    flex: 1 1 0;
+    min-width: var(--tandem-space-2);
+  }
+
+  /* Cap at 60% so brand + actions stay readable when the center fills with
+     many tabs; DocumentTabs handles its own horizontal scroll past the cap. */
+  .title-bar-center {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 60%;
   }
 
   .brand {
@@ -494,11 +524,6 @@ $effect(() => {
 
   .brand-wordmark {
     white-space: nowrap;
-  }
-
-  .title-bar-drag {
-    flex: 1;
-    min-width: 0;
   }
 
   .title-bar-actions {

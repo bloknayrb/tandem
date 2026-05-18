@@ -888,6 +888,7 @@ const tutorial = createTutorial(
     onOpenSettingsModal={openSettingsModalWithAck}
     updateAvailable={updateAvailable.showDot}
     bind:settingsBtn={settingsBtnEl}
+    center={titleBarTabs}
   />
   {#if !yjsSync.ready}
     <div
@@ -926,16 +927,6 @@ const tutorial = createTutorial(
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
       requestCommentFocus={commentFocusTrigger}
-    />
-
-    <DocumentTabs
-      tabs={tabOrder.orderedTabs}
-      activeTabId={yjsSync.activeTabId}
-      onTabSwitch={yjsSync.setActiveTabId}
-      onTabClose={closeTabAndRecord}
-      reorder={tabOrder.reorder}
-      reduceMotion={settingsState.settings.reduceMotion}
-      onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
     />
 
     <FormattingBar
@@ -1121,6 +1112,18 @@ const tutorial = createTutorial(
   {/if}
 </div>
 
+{#snippet titleBarTabs()}
+  <DocumentTabs
+    tabs={tabOrder.orderedTabs}
+    activeTabId={yjsSync.activeTabId}
+    onTabSwitch={yjsSync.setActiveTabId}
+    onTabClose={closeTabAndRecord}
+    reorder={tabOrder.reorder}
+    reduceMotion={settingsState.settings.reduceMotion}
+    onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
+  />
+{/snippet}
+
 {#snippet resizeHandle(side: "left" | "right", onmousedown: (e: MouseEvent) => void, testId?: string, widthPx?: number)}
   <div
     data-testid={testId ?? `${side}-panel-resize-handle`}
@@ -1169,7 +1172,7 @@ const tutorial = createTutorial(
     class="editor-scroll"
     role="region"
     aria-label="Document editor"
-    style={`position: relative; flex: 1; overflow: auto; padding: var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+    style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}
