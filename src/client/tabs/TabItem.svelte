@@ -99,23 +99,27 @@ $effect(() => {
   };
 });
 
-// Derived styles
+// Derived styles. v7 floating chrome (Wave 4b minimal): drop the rectangular
+// tab + accent-underline pattern in favor of a soft pill. Active tab gets a
+// surface fill + subtle border; inactive tabs stay transparent. Drop-indicator
+// borders are kept on left/right only (vertical wedges) — bottom underline
+// removed since the pill no longer reads as a "tab attached to a strip".
 const tabStyle = $derived(
   [
     "display: flex",
     "align-items: center",
     "gap: 8px",
     "padding: 0 12px",
-    "height: 100%",
+    "height: 26px",
+    "margin: 3px 0",
     "font-size: var(--tandem-text-sm)",
     "cursor: pointer",
     `background: ${isActive ? "var(--tandem-surface)" : "transparent"}`,
     `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}`,
-    "border-top: 0",
-    `border-bottom: ${isActive ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-    `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-    `border-right: ${dropIndicator === "right" ? "2px solid var(--tandem-accent)" : "2px solid transparent"}`,
-    "margin-bottom: -1px",
+    `border: 1px solid ${isActive ? "var(--tandem-border)" : "transparent"}`,
+    `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : isActive ? "1px solid var(--tandem-border)" : "2px solid transparent"}`,
+    `border-right: ${dropIndicator === "right" ? "2px solid var(--tandem-accent)" : isActive ? "1px solid var(--tandem-border)" : "2px solid transparent"}`,
+    "border-radius: var(--tandem-r-pill)",
     "user-select: none",
     "white-space: nowrap",
     "transition: background 0.15s, color 0.15s, border-color 0.15s",
