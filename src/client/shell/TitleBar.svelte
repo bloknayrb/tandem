@@ -1,12 +1,22 @@
 <script lang="ts">
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, type Snippet } from "svelte";
 import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
 import { THEME_LABEL, type ThemePreference } from "../hooks/useTandemSettings.svelte";
 
 interface Props {
+  /**
+   * v7 floating chrome (Wave 4a maximalist): optional center cluster snippet,
+   * rendered between the brand and action clusters. App.svelte passes
+   * `<DocumentTabs>` here so the tabs visually float over the canvas at the
+   * same Y as the titlebar. The gap divs on either side carry
+   * `data-tauri-drag-region` so the window remains draggable through the
+   * inter-cluster gaps; the center cluster itself does NOT carry the
+   * attribute so child tab pills receive clicks normally.
+   */
+  center?: Snippet;
   /** Current Tandem collaboration mode. */
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
@@ -48,6 +58,7 @@ interface Props {
 }
 
 let {
+  center,
   tandemMode,
   onModeChange,
   claudeActive = false,
@@ -185,7 +196,22 @@ $effect(() => {
     </span>
   </div>
 
-  <div class="title-bar-drag" data-tauri-drag-region></div>
+  <!-- v7 floating chrome (Wave 4a maximalist): left gap drag, center cluster
+       slot (typically DocumentTabs), right gap drag. The gaps carry
+       data-tauri-drag-region so window dragging survives; the center cluster
+       is left attribute-free so child interactive elements (tab pills, close
+       buttons) receive clicks. Center cluster has flex: 0 1 auto + max-width
+       so few-tabs stay visually centered, many-tabs scroll internally via
+       DocumentTabs' built-in scroll affordance. -->
+  <div class="title-bar-gap title-bar-gap-left" data-tauri-drag-region></div>
+
+  {#if center}
+    <div class="title-bar-center">
+      {@render center()}
+    </div>
+  {/if}
+
+  <div class="title-bar-gap title-bar-gap-right" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
     {#if tandemMode && onModeChange}
@@ -461,19 +487,36 @@ $effect(() => {
   .title-bar {
     display: flex;
     align-items: stretch;
-    height: 40px;
-    min-height: 40px;
+    height: 44px;
+    min-height: 44px;
     background: transparent;
     user-select: none;
     flex-shrink: 0;
   }
 
-  /* drag region — left brand area + center spacer carry data-tauri-drag-region */
+  /* drag region — left brand area + the two gap dividers around the center
+     cluster carry data-tauri-drag-region. The center cluster itself is
+     attribute-free so child pills are clickable. */
   .title-bar-left {
     display: flex;
     align-items: center;
     padding-left: var(--tandem-space-3);
     flex-shrink: 0;
+  }
+
+  .title-bar-gap {
+    flex: 1 1 0;
+    min-width: var(--tandem-space-2);
+  }
+
+  /* Center cluster: intrinsic width with a cap so few tabs visually center
+     while many tabs trigger DocumentTabs' internal horizontal scroll. */
+  .title-bar-center {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 60%;
   }
 
   .brand {
@@ -494,11 +537,6 @@ $effect(() => {
 
   .brand-wordmark {
     white-space: nowrap;
-  }
-
-  .title-bar-drag {
-    flex: 1;
-    min-width: 0;
   }
 
   .title-bar-actions {

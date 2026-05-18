@@ -200,14 +200,19 @@ $effect(() => {
 });
 </script>
 
+<!-- v7 floating chrome (Wave 4a maximalist): DocumentTabs renders inside
+     the TitleBar's center cluster via a snippet. The bar drops its surface
+     background and bottom border so the floating-pill TabItems read as
+     standalone chips against the canvas. Horizontal padding is also dropped
+     since the titlebar gap dividers already provide it. -->
 <div
-  style="position: relative; display: flex; align-items: stretch; background: var(--tandem-surface-muted); border-bottom: 1px solid var(--tandem-border); min-height: 32px; padding: 0 var(--tandem-space-3); z-index: var(--tandem-z-base);"
+  style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base);"
 >
   {#if canScrollLeft}
     <button
       data-testid="tab-scroll-left"
       onclick={scrollLeft}
-      style="display: flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; background: linear-gradient(to right, var(--tandem-surface-muted) 70%, transparent); border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); padding: 0; z-index: 1;"
+      style="display: flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; background: linear-gradient(to right, var(--tandem-bg) 70%, transparent); border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); padding: 0; z-index: 1;"
       title="Scroll tabs left"
     >
       ◀
@@ -268,7 +273,7 @@ $effect(() => {
     <button
       data-testid="tab-scroll-right"
       onclick={scrollRight}
-      style="display: flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; background: linear-gradient(to left, var(--tandem-surface-muted) 70%, transparent); border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); padding: 0; z-index: 1;"
+      style="display: flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; background: linear-gradient(to left, var(--tandem-bg) 70%, transparent); border: none; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); padding: 0; z-index: 1;"
       title="Scroll tabs right"
     >
       ▶
