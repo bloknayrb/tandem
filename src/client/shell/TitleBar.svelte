@@ -466,13 +466,11 @@ $effect(() => {
 {/snippet}
 
 <style>
-  /* v7 floating chrome (Wave 4a, minimal): the titlebar drops its bottom
-     seam and surface background so the chrome melts into the canvas. The
-     brand on the left and action icons on the right then read as floating
-     over the document area, matching the v7 silhouette without DOM
-     restructure. The full 3-cluster pill rewrite (which would lift
-     DocumentTabs into the titlebar) is deferred — it touches the Tauri
-     drag-region + decorum hit-test surface and warrants a dedicated wave. */
+  /* 3-cluster floating chrome: brand left, center snippet (DocumentTabs),
+     actions right. The bar is transparent so each cluster reads as floating
+     over the canvas. Drag region is carried by the brand cluster and the
+     two flex gaps around the center — the center wrap is attribute-free so
+     interactive children (tab pills, close buttons) stay clickable. */
   .title-bar {
     display: flex;
     align-items: stretch;

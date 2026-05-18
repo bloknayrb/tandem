@@ -142,11 +142,14 @@
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
            rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
            into the floating TitleBar (44px tall, no in-flow tabs row), so
-           these drop to 52px per the calm-v7.css target. The fmtbar pill
-           sits at top: 52px, height 36px → bottom 88px, then 8px breathing
-           lands the editor content at viewport y=96 (rail-top-clearance is
-           computed inside the editor area, so its 52 lines up with the
-           fmtbar's bottom edge). */
+           these drop to 52px per the calm-v7.css target. The fmtbar pill is
+           fixed-positioned at top: 52px, height 36px → bottom at viewport
+           y=88. Editor-scroll lives below the titlebar in the flex column,
+           so its top edge is at viewport y=44; an editor padding-top of at
+           least 52px (max(--tandem-space-7, 52px)) lands content at y≥96,
+           clearing the fmtbar with ≥8px breathing. Rails use
+           rail-top-clearance as margin-top inside the editor row → rail top
+           also at y=96, in line with the editor content. */
         --tandem-fmtbar-top: 52px;
         --tandem-rail-top-clearance: 52px;
         --tandem-status-clearance: 36px;
