@@ -12,7 +12,7 @@ sources:
 
 # Rule: Origin-tag every Y.Doc write
 
-Raw `doc.transact(...)` is forbidden anywhere in `src/`. Every write must go through one of the five wrappers in `src/shared/origins.ts`: `withMcp`, `withFileSync`, `withInternal`, `withReload`, `withBrowser`. See `concept-origin-contract` for the decision table.
+Raw `doc.transact(...)` should not appear in `src/` — every write must go through one of the five wrappers in `src/shared/origins.ts`: `withMcp`, `withFileSync`, `withInternal`, `withReload`, `withBrowser`. See `concept-origin-contract` for the decision table.
 
 **Why this matters:** the origin determines which observers react (channel events, durable-sync, tombstone ledger). Picking the wrong wrapper is a silent bug — no exception thrown, just the wrong side-effects (or no side-effects).
 

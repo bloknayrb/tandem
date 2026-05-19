@@ -9,6 +9,9 @@ const ROOT = join(import.meta.dirname, "..");
 const NODES_DIR = join(ROOT, ".claude/knowledge-graph/nodes");
 const EDGES_PATH = join(ROOT, ".claude/knowledge-graph/edges.json");
 
+// Minimal YAML subset: handles `key: value` and `- item` only. Does not handle
+// quoted strings with colons, multi-line scalars, or nested maps. Sufficient
+// for the current node schema; swap for the `yaml` package if the schema grows.
 function parseFrontmatter(text) {
   const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (!match) return null;

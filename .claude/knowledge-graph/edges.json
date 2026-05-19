@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_note": "Edge types: governs | decided_by | supersedes | implemented_in | refines | related | enforced_by",
+  "_note": "In-use: governs | decided_by | refines | related. Reserved: supersedes | implemented_in | enforced_by.",
   "edges": [
     { "from": "rule-ymap-key-constants", "to": "concept-y-doc", "type": "governs" },
     { "from": "rule-origin-helpers", "to": "concept-origin-contract", "type": "governs" },
@@ -21,6 +21,11 @@
     { "from": "concept-file-watcher", "to": "adr-034", "type": "decided_by" },
     { "from": "concept-mcp-transport", "to": "adr-038", "type": "decided_by" },
     { "from": "concept-channel-events", "to": "adr-038", "type": "decided_by" },
+
+    { "from": "adr-032", "to": "adr-018", "type": "refines", "note": "Tagged-variant return types for the modules ADR-018 consolidated" },
+    { "from": "adr-035", "to": "adr-027", "type": "refines", "note": "Lifecycle module makes the audience-based privacy contract un-bypassable" },
+    { "from": "adr-035", "to": "adr-031", "type": "related", "note": "Lifecycle invokes withMcp / withInternal exclusively" },
+    { "from": "adr-035", "to": "adr-032", "type": "related", "note": "LifecycleResult uses tagged variants per ADR-032" },
 
     { "from": "concept-channel-events", "to": "concept-origin-contract", "type": "refines", "note": "Channel emission is a property of the origin contract" },
     { "from": "concept-awareness", "to": "concept-y-doc", "type": "refines", "note": "Awareness lives in a Y.Map subkey" },
