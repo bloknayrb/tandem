@@ -78,11 +78,16 @@ export interface ApplyOps {
  * use this to preserve back-compat without re-implementing the diff. The
  * wizard never calls this — it builds `ApplyOps` from the user's diff
  * confirmation.
+ *
+ * Options object intentional: the boolean-flag `withChannelShim` is the
+ * only state, but exposing it as a named field at every call site avoids
+ * the boolean-trap antipattern (the previous positional signature read as
+ * `applyOpsForCli(entries, true)` with no clue what the boolean meant).
  */
-export function applyOpsForCli(create: McpEntries, withChannelShim: boolean): ApplyOps {
+export function applyOpsForCli(create: McpEntries, opts: { withChannelShim: boolean }): ApplyOps {
   return {
     create,
-    remove: withChannelShim ? [] : ["tandem-channel"],
+    remove: opts.withChannelShim ? [] : ["tandem-channel"],
   };
 }
 
@@ -518,7 +523,10 @@ export async function applyConfigWithToken(
       targetKind: t.kind,
     });
     try {
-      await applyConfig(t.configPath, applyOpsForCli(entries, !!opts.withChannelShim));
+      await applyConfig(
+        t.configPath,
+        applyOpsForCli(entries, { withChannelShim: !!opts.withChannelShim }),
+      );
       updated++;
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);

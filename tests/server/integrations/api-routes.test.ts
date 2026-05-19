@@ -218,7 +218,7 @@ describe("integrations API routes", () => {
     it("rejects an invalid integrations file with 400", async () => {
       const app = makeApp(deps);
       const res = await request(app, "POST", API_INTEGRATIONS, {
-        schemaVersion: 1, // wrong (current is 2)
+        schemaVersion: 1, // wrong (current is 3)
         integrations: [],
       });
       expect(res.status).toBe(400);

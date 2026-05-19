@@ -81,7 +81,10 @@ export async function runSetup(
       targetKind: t.kind,
     });
     try {
-      await applyConfig(t.configPath, applyOpsForCli(entries, !!opts.withChannelShim));
+      await applyConfig(
+        t.configPath,
+        applyOpsForCli(entries, { withChannelShim: !!opts.withChannelShim }),
+      );
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
     } catch (err) {
       failures++;

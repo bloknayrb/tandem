@@ -70,7 +70,7 @@ export async function runSetupHandler(
       // /api/integrations/apply uses an explicit confirmation diff.
       // /api/setup itself dies in 3c-ii-c — once it's gone, this
       // call site goes with it.
-      await applyConfig(target.configPath, applyOpsForCli(entries, false));
+      await applyConfig(target.configPath, applyOpsForCli(entries, { withChannelShim: false }));
       configured.push(target.label);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
