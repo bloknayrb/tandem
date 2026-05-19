@@ -22,6 +22,8 @@ Because Tandem connects through MCP, it isn't a stripped-down editor with a mode
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
+> **Integration setup** runs through the integration setup wizard (#477 PR 3). Today's transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — is **deprecated when the wizard ships**. Going forward, every integration (Claude included) is configured via the wizard, never silently.
+>
 > See [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) for the full policy.
 
 ## See it in action
@@ -58,13 +60,13 @@ Screenshots reflect the current UI; redesign chrome continues to land through re
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |
 | **Non-MCP AIs** (ChatGPT direct, Gemini direct, etc.) | Not supported today. Multi-provider support is in progress via the Agent SDK adapter ([ADR-038 §3](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)); not yet shippable. |
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> The default integration is **Claude**; other MCP-capable clients connect via the same MCP HTTP endpoint and the same 26 tools but don't get the Claude-specific transports. See [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) for the full policy.
 
 **Compatibility is a goal, not an accommodation.** Tandem is built MCP-first specifically so the integration surface stays open. If your client isn't on this list and you'd like it to work, [open an issue](https://github.com/bloknayrb/tandem/issues) — describe the client, what it speaks, and how you'd like to use it with Tandem. Patches that don't regress the Claude default are welcome. *Best-effort* describes our test discipline, not our intent — it doesn't mean we won't help.
 
 ### Requirements
 
-- **Windows 10 22H2 or Windows 11.** The installer is signed via Azure Trusted Signing ([ADR-030](docs/decisions.md)) and bundles WebView2 Runtime — Win 11 already has it; the NSIS installer auto-installs it on Win 10 if missing. First launch may briefly show a SmartScreen *Unknown publisher* notice while Microsoft's reputation system catches up.
+- **Windows 10 22H2 or Windows 11.** The installer is signed via Azure Trusted Signing ([ADR-030](docs/decisions.md)) and bundles WebView2 Runtime — Win 11 already has it; the NSIS installer auto-installs it on Win 10 if missing. Until SmartScreen reputation accumulates for the signing certificate, first launch may show a *"Windows protected your PC"* warning — see [troubleshooting](docs/troubleshooting.md#windows-smartscreen-warning) for the bypass.
 - **macOS 12 (Monterey) or later.** The `.app` is notarized; no Gatekeeper warning expected.
 - **Linux:** `.AppImage` (any glibc 2.31+) or `.deb` (Ubuntu 22.04+) / `.rpm` (Fedora 39+).
 - **Node.js 22+** — only required for the npm install path.
@@ -80,7 +82,7 @@ The desktop app bundles everything: server, sidecar, and OS-keychain storage for
 
 **Connecting Claude.** Today the desktop app auto-configures whichever Claude integration it detects on launch: Claude Code, Claude Desktop, or both. Install Claude, install Tandem, and Claude's MCP entry is written for you. Open Claude Code (or Claude Desktop with Cowork) and the Tandem tools are available immediately.
 
-> An opt-in **integration setup wizard** for fine-grained control of the integration list — including non-Claude MCP clients — is available behind a Settings toggle (Settings → Advanced). The wizard's audience is non-Claude clients and users who want to manage configuration explicitly; if you only use Claude, the silent auto-config path is the recommended one until the wizard becomes default-on.
+> An opt-in **integration setup wizard** for fine-grained control of the integration list — including non-Claude MCP clients — is available behind a Settings toggle (**Settings → AI Assistant → Show integration setup wizard (preview)**). The wizard's audience is non-Claude clients and users who want to manage configuration explicitly; if you only use Claude, the silent auto-config path is the recommended one until the wizard becomes default-on.
 
 ### npm + Claude Code
 
@@ -137,7 +139,7 @@ The minimum config that works in most MCP clients:
 }
 ```
 
-For setting up non-Claude integrations interactively, enable the **integration setup wizard** in the desktop app (Settings → Advanced). It walks through MCP entry writing, auth token provisioning, and the `/api/events` subscription path per client.
+For setting up non-Claude integrations interactively, enable the **integration setup wizard** in the desktop app (**Settings → AI Assistant → Show integration setup wizard (preview)**). It walks through MCP entry writing, auth token provisioning, and the `/api/events` subscription path per client.
 
 **Tried Tandem with a client that's not in the table?** [File an issue](https://github.com/bloknayrb/tandem/issues) with the working config — we'll add it to the examples so the next person doesn't have to figure it out.
 
@@ -147,7 +149,7 @@ Check the server is up:
 
 ```bash
 curl http://127.0.0.1:3479/health
-# → {"status":"ok","transport":"http","hasSession":false}
+# → {"status":"ok","version":"x.y.z","transport":"http","hasSession":false}
 ```
 
 `hasSession` becomes `true` once an MCP client connects. (Source checkouts also get `npm run doctor` — see [docs/cli.md](docs/cli.md).)
@@ -208,7 +210,7 @@ CRDT-anchored annotations — highlight, comment, suggestion, flag — that surv
 
 ### Distribution and operations
 
-Tauri desktop app for Windows (code-signed via Azure Trusted Signing), macOS (notarized universal), and Linux (`.AppImage` / `.deb` / `.rpm`). `tandem-editor` on npm for a global install. OS-keychain-backed per-client auth token storage. LAN binding (`TANDEM_BIND_HOST=0.0.0.0`) with auto-generated tokens and `tandem rotate-token` for in-place rotation with a 60-second grace window. Session persistence across restarts. Settings panel (Network, Appearance, Accessibility, Editor, Models).
+Tauri desktop app for Windows (code-signed via Azure Trusted Signing), macOS (notarized universal), and Linux (`.AppImage` / `.deb` / `.rpm`). `tandem-editor` on npm for a global install. OS-keychain-backed per-client auth token storage. LAN binding (`TANDEM_BIND_HOST=0.0.0.0`) with auto-generated tokens and `tandem rotate-token` for in-place rotation with a 60-second grace window. Session persistence across restarts. Settings panel (Appearance, Editor, Network, Accessibility, Collaboration, AI Assistant, Models).
 
 ## MCP tools at a glance
 

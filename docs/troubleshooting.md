@@ -17,6 +17,14 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 
 For desktop-app installs, `npm run doctor` isn't available — use `curl http://127.0.0.1:3479/health` instead. A `{"status":"ok",...}` response means the server is up.
 
+## Windows SmartScreen warning
+
+The Tandem installer is signed via Azure Trusted Signing ([ADR-030](decisions.md)), but Windows SmartScreen also gates new signing certificates on a reputation system that takes time to accumulate. Until reputation builds, first launch may show a *"Windows protected your PC"* dialog with the verified publisher name displayed.
+
+To proceed: click **More info**, then **Run anyway**. The warning stops appearing once SmartScreen reputation accrues for the signing certificate (typically several weeks of installs across Windows machines).
+
+This is a SmartScreen-side delay, not a code-signing failure — the installer is signed and the publisher name will be shown in the dialog. If the publisher reads as *"Unknown publisher"* instead of the Tandem signing-cert identity, that's a real signature problem; please [file an issue](https://github.com/bloknayrb/tandem/issues).
+
 ## Claude Code says "MCP failed to connect"
 
 The server must be running before Claude Code probes the MCP URL. Start it first:
