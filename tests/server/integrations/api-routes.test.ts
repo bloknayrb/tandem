@@ -41,6 +41,26 @@ function makeApp(deps: IntegrationsRoutesDeps): Express {
   return app;
 }
 
+/**
+ * Build an Express app whose request `req.socket.remoteAddress` is
+ * overridden to the given value before our routes see it. Used to test
+ * the LAN-fail-closed branch — the test client always connects via
+ * 127.0.0.1, so we have to spoof remoteAddress at the middleware layer.
+ */
+function makeAppWithRemoteAddress(deps: IntegrationsRoutesDeps, addr: string): Express {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    Object.defineProperty(req.socket, "remoteAddress", {
+      value: addr,
+      configurable: true,
+    });
+    next();
+  });
+  registerIntegrationsRoutes(app, passthrough, passthrough, deps);
+  return app;
+}
+
 function memoryBackend(): KeychainBackend & { entries: Map<string, string> } {
   const entries = new Map<string, string>();
   const key = (service: string, account: string) => `${service}::${account}`;
@@ -587,6 +607,414 @@ describe("integrations API routes", () => {
       expect(res.status).toBe(200);
       const body = res.body as { results: unknown[] };
       expect(body.results).toHaveLength(0);
+    });
+
+    it("returns INVALID_PERSISTED_FILE when the on-disk file fails schema validation", async () => {
+      // Persist a garbage shape directly via the store.write (bypassing the
+      // route's IntegrationsFileSchema gate) so the apply path's
+      // defense-in-depth re-validation is exercised.
+      const garbage = { schemaVersion: 99, integrations: [{ no: "shape" }] };
+      deps.store.read = async () =>
+        garbage as unknown as Awaited<ReturnType<typeof deps.store.read>>;
+      const app = makeApp(deps);
+      const nonce = await freshNonce(app);
+      const res = await request(
+        app,
+        "POST",
+        API_INTEGRATIONS_APPLY,
+        { ids: ["cc-1"], confirmationNonce: nonce },
+        TAURI_ORIGIN,
+      );
+      expect(res.status).toBe(400);
+      expect((res.body as { code: string }).code).toBe("INVALID_PERSISTED_FILE");
+    });
+
+    describe("removals body field", () => {
+      it("rejects non-array removals value with 400", async () => {
+        const app = makeApp(deps);
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          {
+            ids: ["cc-1"],
+            confirmationNonce: nonce,
+            removals: { "cc-1": "tandem" },
+          },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(400);
+        expect((res.body as { code: string }).code).toBe("INVALID_APPLY_REQUEST");
+      });
+
+      it("rejects removals entries not in {tandem, tandem-channel}", async () => {
+        const app = makeApp(deps);
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          {
+            ids: ["cc-1"],
+            confirmationNonce: nonce,
+            removals: { "cc-1": ["other-vendor"] },
+          },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(400);
+        expect((res.body as { code: string }).code).toBe("INVALID_APPLY_REQUEST");
+      });
+    });
+
+    describe("apply: with stubbed detectTargets (real applyConfig)", () => {
+      it("removes tandem-channel from the target config when listed in removals", async () => {
+        const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+        fs.writeFileSync(
+          tmpClaudeJson,
+          JSON.stringify({
+            mcpServers: {
+              "tandem-channel": { command: "node", args: ["/path/to/shim.js"] },
+            },
+          }),
+        );
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: tmpClaudeJson,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        // Inject a detector that returns the tmpdir path so applyConfig
+        // writes there (and assertPathSafe accepts the tmpdir prefix).
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+          ],
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          {
+            ids: ["cc-1"],
+            confirmationNonce: nonce,
+            removals: { "cc-1": ["tandem-channel"] },
+          },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(200);
+        const body = res.body as { results: Array<{ status: string }>; nextNonce: string };
+        expect(body.results[0]?.status).toBe("applied");
+        const after = JSON.parse(fs.readFileSync(tmpClaudeJson, "utf-8"));
+        expect(after.mcpServers["tandem-channel"]).toBeUndefined();
+        expect(after.mcpServers.tandem).toBeDefined();
+        // The nonce rotated because a write occurred.
+        expect(body.nextNonce).not.toBe(nonce);
+      });
+
+      it("nonce rotates after an applied result (not just any 200 response)", async () => {
+        const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+        fs.writeFileSync(tmpClaudeJson, JSON.stringify({ mcpServers: {} }));
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: tmpClaudeJson,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+          ],
+        });
+        const nonce1 = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce1 },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(200);
+        const body = res.body as { results: Array<{ status: string }>; nextNonce: string };
+        expect(body.results[0]?.status).toBe("applied");
+        expect(body.nextNonce).not.toBe(nonce1);
+      });
+    });
+
+    describe("error sanitization (Phase 2b)", () => {
+      it("PATH_REJECTED message does not leak the realpath", async () => {
+        // assertPathSafe runs inside applyConfig and throws PathRejectedError
+        // with the resolved realpath in `.message`. The handler must strip
+        // it before responding.
+        // Trigger via a configPath outside the allowed roots — e.g. a
+        // sentinel under root.
+        const outside = "/__tandem-outside-roots__";
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: outside,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [{ label: "Claude Code", configPath: outside, kind: "claude-code" }],
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(200);
+        const body = res.body as {
+          results: Array<{ id: string; code?: string; message?: string }>;
+        };
+        expect(body.results[0]?.code).toBe("PATH_REJECTED");
+        // The static message must not contain "realpath=" or the outside path.
+        expect(body.results[0]?.message).not.toMatch(/realpath=/);
+        expect(body.results[0]?.message).not.toContain(outside);
+      });
+
+      it("SECRET_MISSING message does not echo the tokenSecretRef value", async () => {
+        const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+        fs.writeFileSync(tmpClaudeJson, JSON.stringify({ mcpServers: {} }));
+        const secretRefValue = "secret-ref-correlation-target-12345";
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: tmpClaudeJson,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+              tokenSecretRef: secretRefValue,
+            },
+          ],
+        });
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+          ],
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(200);
+        const body = res.body as {
+          results: Array<{ id: string; code?: string; message?: string }>;
+        };
+        expect(body.results[0]?.code).toBe("SECRET_MISSING");
+        expect(body.results[0]?.message).not.toContain(secretRefValue);
+      });
+    });
+
+    describe("concurrency (apply mutex)", () => {
+      it("returns 429 APPLY_IN_PROGRESS when a second apply overlaps the first", async () => {
+        const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+        fs.writeFileSync(tmpClaudeJson, JSON.stringify({ mcpServers: {} }));
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: tmpClaudeJson,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+              tokenSecretRef: "ref-slow",
+            },
+          ],
+        });
+        // Slow keychain.getSecret — holds the gate while we send the second.
+        let resolveSlow: ((s: string | null) => void) | undefined;
+        const slow = new Promise<string | null>((res) => {
+          resolveSlow = res;
+        });
+        const app = makeApp({
+          ...deps,
+          keychain: {
+            ...deps.keychain,
+            getSecret: () => slow,
+          },
+          detectTargets: () => [
+            { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+          ],
+        });
+        const nonce = await freshNonce(app);
+        const first = request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+        // Yield to the event loop so `first` reaches gate.inFlight = true.
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+        const second = request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+        // Let the second response come back before unblocking the first.
+        const secondRes = await second;
+        expect(secondRes.status).toBe(429);
+        expect((secondRes.body as { code: string }).code).toBe("APPLY_IN_PROGRESS");
+        // Release the first and let it finish so the test cleanly tears down.
+        resolveSlow?.("fake-token");
+        const firstRes = await first;
+        expect(firstRes.status).toBe(200);
+      });
+    });
+
+    describe("LAN-fail-closed (Phase 2g) — apply endpoint", () => {
+      it("rejects non-loopback callers with TANDEM_ALLOW_UNAUTHENTICATED_LAN=1", async () => {
+        const prev = process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
+        process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = "1";
+        try {
+          const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
+          const res = await request(
+            app,
+            "POST",
+            API_INTEGRATIONS_APPLY,
+            { ids: ["cc-1"], confirmationNonce: "any" },
+            TAURI_ORIGIN,
+          );
+          expect(res.status).toBe(403);
+          expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
+        } finally {
+          if (prev === undefined) delete process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
+          else process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = prev;
+        }
+      });
+    });
+  });
+
+  describe("LAN-fail-closed on mutating routes (Phase 2g)", () => {
+    let prevAllow: string | undefined;
+
+    beforeEach(() => {
+      prevAllow = process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
+      process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = "1";
+    });
+
+    afterEach(() => {
+      if (prevAllow === undefined) delete process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
+      else process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = prevAllow;
+    });
+
+    it("POST /api/integrations rejects non-loopback callers", async () => {
+      const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
+      const res = await request(app, "POST", API_INTEGRATIONS, {
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [],
+      });
+      expect(res.status).toBe(403);
+      expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
+    });
+
+    it("POST /api/integrations/secrets/:ref rejects non-loopback callers", async () => {
+      const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
+      const res = await request(app, "POST", "/api/integrations/secrets/ref-1", {
+        secret: "shhh",
+      });
+      expect(res.status).toBe(403);
+      expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
+    });
+
+    it("DELETE /api/integrations/secrets/:ref rejects non-loopback callers", async () => {
+      const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
+      const res = await request(app, "DELETE", "/api/integrations/secrets/ref-1");
+      expect(res.status).toBe(403);
+      expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
+    });
+
+    it("read-only GET routes remain accessible (verifies the gate is mutation-only)", async () => {
+      const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
+      const get1 = await request(app, "GET", API_INTEGRATIONS);
+      expect(get1.status).toBe(200);
+      const get2 = await request(app, "GET", API_INTEGRATIONS_FIRST_RUN);
+      expect(get2.status).toBe(200);
+    });
+  });
+
+  describe("POST /api/integrations nonce rotation", () => {
+    beforeEach(() => {
+      _resetApplyGateForTests();
+    });
+
+    it("rotates confirmationNonce on each successful persist", async () => {
+      const file = {
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [
+          {
+            kind: "claude-code" as const,
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http" as const,
+            url: "http://127.0.0.1:3479",
+          },
+        ],
+      };
+      const app = makeApp(deps);
+      const r1 = await request(app, "POST", API_INTEGRATIONS, file);
+      const r2 = await request(app, "POST", API_INTEGRATIONS, file);
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      const n1 = (r1.body as { confirmationNonce: string }).confirmationNonce;
+      const n2 = (r2.body as { confirmationNonce: string }).confirmationNonce;
+      expect(typeof n1).toBe("string");
+      expect(n2).not.toBe(n1);
+    });
+  });
+
+  describe("_resetApplyGateForTests guard (Phase 2e)", () => {
+    it("throws when VITEST env var is not 'true'", () => {
+      const prev = process.env.VITEST;
+      delete process.env.VITEST;
+      try {
+        expect(() => _resetApplyGateForTests()).toThrow(/test-only/);
+      } finally {
+        if (prev !== undefined) process.env.VITEST = prev;
+      }
     });
   });
 });

@@ -99,3 +99,40 @@ test("Escape closes the wizard", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.locator(WIZARD)).toHaveCount(0);
 });
+
+// Phase 3d coverage: dismiss-then-reopen-fresh. Exercises the same Svelte
+// `{#if shouldShowWizard}` mount property that auto-open uses — closing the
+// wizard must fully unmount it so a subsequent open starts at step=detect
+// with no carry-over state (the SidePanel's pick array, the secret form
+// values, etc.). Auto-open E2E is structurally untestable today because
+// Playwright's `webServer.env` is process-spawn-time only; this manual-
+// reopen variant covers the equivalent mount lifecycle.
+test("Reopen → close → reopen lands fresh at step=detect", async ({ page }) => {
+  await openSettingsModal(page);
+  await page.locator(AI_TAB).click();
+  await page.locator(OPEN_WIZARD_BTN).click();
+  await expect(page.locator(WIZARD)).toBeVisible();
+  await expect(page.locator("[data-testid='integration-wizard-step-detect']")).toBeVisible();
+
+  // Close, reopen — must come back to the same fresh step rather than
+  // remembering the previous session.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(WIZARD)).toHaveCount(0);
+
+  await openSettingsModal(page);
+  await page.locator(AI_TAB).click();
+  await page.locator(OPEN_WIZARD_BTN).click();
+  await expect(page.locator(WIZARD)).toBeVisible();
+  await expect(page.locator("[data-testid='integration-wizard-step-detect']")).toBeVisible();
+});
+
+// The pre-3c-ii-b preview toggle has been removed (the wizard now
+// auto-opens via server-side first-run detection). Pin its absence so a
+// future Settings tab refactor doesn't accidentally resurrect it.
+test("settings-modal-show-integration-wizard-toggle no longer exists", async ({ page }) => {
+  await openSettingsModal(page);
+  await page.locator(AI_TAB).click();
+  await expect(
+    page.locator("[data-testid='settings-modal-show-integration-wizard-toggle']"),
+  ).toHaveCount(0);
+});

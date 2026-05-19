@@ -244,7 +244,7 @@ export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string
 }
 
 /** MSIX package families that match Claude's installer. Anchored on both ends. */
-const MSIX_PACKAGE_PATTERN = /^Claude_[A-Za-z0-9]+$/;
+export const MSIX_PACKAGE_PATTERN = /^Claude_[A-Za-z0-9]+$/;
 
 export interface DetectOptions {
   homeOverride?: string;

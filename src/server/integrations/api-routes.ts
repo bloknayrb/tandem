@@ -98,6 +98,13 @@ export interface IntegrationsRoutesDeps {
   readExisting: typeof readExistingTandemEntries;
   /** Server `package.json` version — surfaced in first-run-needed responses. */
   serverVersion: string;
+  /**
+   * Optional target detector override. Production routes leave this undefined
+   * and call the real `detectTargets()` (reads ~/.claude.json etc). Tests
+   * inject a stub that returns tmpdir-anchored paths so apply-path coverage
+   * doesn't require the test process to own a real Claude install.
+   */
+  detectTargets?: typeof detectTargets;
 }
 
 /**
@@ -461,7 +468,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       const persisted = parsed.data;
 
       // Server-side detection — request body never controls write paths.
-      const targets = detectTargets();
+      const targets = (deps.detectTargets ?? detectTargets)();
       const targetByKind = new Map<string, (typeof targets)[number]>();
       for (const t of targets) {
         // Detected paths are server-built; assertPathSafe will run again
