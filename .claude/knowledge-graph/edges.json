@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "_note": "Edge types: governs | decided_by | supersedes | implemented_in | refines | related | enforced_by",
+  "edges": [
+    { "from": "rule-ymap-key-constants", "to": "concept-y-doc", "type": "governs" },
+    { "from": "rule-origin-helpers", "to": "concept-origin-contract", "type": "governs" },
+    { "from": "rule-origin-helpers", "to": "concept-y-doc", "type": "governs" },
+    { "from": "rule-stdout-reserved", "to": "concept-mcp-transport", "type": "governs" },
+    { "from": "rule-validate-range", "to": "concept-coord-flat-offset", "type": "governs" },
+    { "from": "rule-validate-range", "to": "concept-coord-yjs-relative", "type": "governs" },
+    { "from": "rule-extract-text-not-markdown", "to": "concept-coord-flat-offset", "type": "governs" },
+    { "from": "rule-edit-rejects-heading-markup", "to": "concept-coord-flat-offset", "type": "governs" },
+
+    { "from": "concept-y-doc", "to": "adr-031", "type": "decided_by" },
+    { "from": "concept-origin-contract", "to": "adr-031", "type": "decided_by" },
+    { "from": "concept-coord-flat-offset", "to": "adr-018", "type": "decided_by" },
+    { "from": "concept-coord-prosemirror", "to": "adr-018", "type": "decided_by" },
+    { "from": "concept-coord-yjs-relative", "to": "adr-018", "type": "decided_by" },
+    { "from": "concept-annotation-lifecycle", "to": "adr-027", "type": "decided_by" },
+    { "from": "concept-multi-doc", "to": "adr-033", "type": "decided_by" },
+    { "from": "concept-file-watcher", "to": "adr-034", "type": "decided_by" },
+    { "from": "concept-mcp-transport", "to": "adr-038", "type": "decided_by" },
+    { "from": "concept-channel-events", "to": "adr-038", "type": "decided_by" },
+
+    { "from": "concept-channel-events", "to": "concept-origin-contract", "type": "refines", "note": "Channel emission is a property of the origin contract" },
+    { "from": "concept-awareness", "to": "concept-y-doc", "type": "refines", "note": "Awareness lives in a Y.Map subkey" },
+    { "from": "concept-annotation-lifecycle", "to": "concept-y-doc", "type": "refines", "note": "Annotations live in Y.Map('annotations')" },
+    { "from": "concept-multi-doc", "to": "concept-y-doc", "type": "refines", "note": "One Y.Doc per documentId" },
+
+    { "from": "concept-file-watcher", "to": "concept-origin-contract", "type": "related", "note": "reloadFromDisk uses withReload origin" },
+    { "from": "concept-coord-flat-offset", "to": "concept-coord-yjs-relative", "type": "related", "note": "AnchoredRange pairs them" },
+    { "from": "concept-coord-flat-offset", "to": "concept-coord-prosemirror", "type": "related", "note": "Converted at client/server boundary" },
+    { "from": "adr-033", "to": "adr-034", "type": "related", "note": "Registry exposes the file-open named entry points" },
+    { "from": "concept-solo-tandem-mode", "to": "concept-annotation-lifecycle", "type": "related", "note": "Mode gates whether Claude surfaces annotations" },
+    { "from": "concept-annotation-lifecycle", "to": "concept-coord-yjs-relative", "type": "related", "note": "Annotation ranges use AnchoredRange (flat + Y.RelativePosition)" }
+  ]
+}

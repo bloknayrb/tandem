@@ -26,6 +26,7 @@
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-038)
 - [Lessons Learned](docs/lessons-learned.md) -- 73 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, DOM-nested scroll sync for content-anchored overlays, and schema-backed palette migrations
+- [Knowledge Graph](.claude/knowledge-graph/README.md) -- **PILOT (review 2026-06-01).** 25 hand-curated concept/rule/ADR nodes with cross-edges. Query via `npm run kg neighbors <id>` / `npm run kg rules-for <id-or-file>`. Validate via `npm run kg:lint`. Kill if no surprising query in two weeks.
 
 ## Development Workflow
 
