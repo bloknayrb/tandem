@@ -12,8 +12,8 @@
  * | Origin     | Channel event queue | Durable-sync observer | Tombstone observer |
  * |------------|---------------------|-----------------------|--------------------|
  * | `mcp`      | skip                | persist               | record             |
- * | `file-sync`| skip                | skip                  | skip               |
- * | `internal` | skip                | skip                  | skip               |
+ * | `file-sync`| skip                | skip                  | record             |
+ * | `internal` | skip                | skip                  | record             |
  * | `reload`   | skip                | persist               | record             |
  * | `browser`  | emit                | persist               | record             |
  *
@@ -77,19 +77,12 @@ const CHANNEL_SKIP: ReadonlySet<unknown> = new Set([
 /** Origins that the durable-annotation sync observer must skip. */
 const DURABLE_SKIP: ReadonlySet<unknown> = new Set([FILE_SYNC_ORIGIN, INTERNAL_ORIGIN]);
 
-/** Origins that the tombstone observer must skip. */
-const TOMBSTONE_SKIP: ReadonlySet<unknown> = new Set([FILE_SYNC_ORIGIN, INTERNAL_ORIGIN]);
-
 export function shouldSkipChannel(origin: unknown): boolean {
   return CHANNEL_SKIP.has(origin);
 }
 
 export function shouldSkipDurableSync(origin: unknown): boolean {
   return DURABLE_SKIP.has(origin);
-}
-
-export function shouldSkipTombstone(origin: unknown): boolean {
-  return TOMBSTONE_SKIP.has(origin);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,8 +110,8 @@ export function withMcp<T>(doc: Y.Doc, fn: () => T): T {
 }
 
 /** Wrap echoes from the durable-annotation file-writer / file-watcher
- * reload path. The channel skips, the durable-sync observer skips, the
- * tombstone observer skips. */
+ * reload path. The channel skips, the durable-sync observer skips. The
+ * tombstone observer RECORDS (not skips) — see sync.ts observer comment. */
 export function withFileSync<T>(doc: Y.Doc, fn: () => T): T {
   return runTransact(doc, fn, FILE_SYNC_ORIGIN);
 }

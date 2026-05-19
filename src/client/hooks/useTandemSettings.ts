@@ -180,10 +180,14 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
     if (
       typeof e.id !== "string" ||
       e.id.length === 0 ||
+      e.id.length > 64 ||
       typeof e.provider !== "string" ||
       !VALID_MODEL_PROVIDERS.includes(e.provider as ModelProvider) ||
       typeof e.displayName !== "string" ||
+      e.displayName.length > 256 ||
       typeof e.modelId !== "string" ||
+      e.modelId.length === 0 ||
+      e.modelId.length > 256 ||
       typeof e.enabled !== "boolean"
     ) {
       continue;
@@ -195,8 +199,8 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
       modelId: e.modelId,
       enabled: e.enabled,
     };
-    if (typeof e.apiKey === "string") cleaned.apiKey = e.apiKey;
-    if (typeof e.endpoint === "string") cleaned.endpoint = e.endpoint;
+    if (typeof e.apiKey === "string" && e.apiKey.length <= 512) cleaned.apiKey = e.apiKey;
+    if (typeof e.endpoint === "string" && e.endpoint.length <= 2048) cleaned.endpoint = e.endpoint;
     if (e.params && typeof e.params === "object" && !Array.isArray(e.params)) {
       const params: Record<string, number | string | boolean> = {};
       for (const [k, v] of Object.entries(e.params)) {
