@@ -634,11 +634,6 @@ $effect(() => {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
-      } else if (e.code === "Backslash") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        if (e.shiftKey) toggleRightPanel();
-        else toggleLeftPanel();
       } else if (e.altKey && e.code === "KeyT") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
@@ -678,6 +673,23 @@ $effect(() => {
       } else {
         findBarForceScope = "doc";
         findBarOpen = true;
+      }
+    }
+    // Alt+Shift+Left / Alt+Shift+Right — toggle left / right panel. No ctrl/meta
+    // so the browser's Alt+Arrow history navigation is unaffected (history nav
+    // doesn't use Shift). Outside the ctrl/meta block above on purpose.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (e.code === "ArrowLeft") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        toggleLeftPanel();
+        return;
+      }
+      if (e.code === "ArrowRight") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        toggleRightPanel();
+        return;
       }
     }
     // Alt+] / Alt+[ — next / previous annotation. Plain Alt (no ctrl/meta/shift)
