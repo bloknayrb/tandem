@@ -219,9 +219,13 @@ test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
 
   await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).not.toBe(initial);
+  // focusToggleTarget queues focus via microtask to the activated element's
+  // replacement (peek strip on collapse, edge zone on re-expand).
+  await expect(page.getByTestId("peek-strip-left")).toBeFocused();
 
   await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).toBe(initial);
+  await expect(page.getByTestId("panel-edge-collapse-left")).toBeFocused();
 });
 
 test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
@@ -234,9 +238,11 @@ test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
 
   await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).not.toBe(initial);
+  await expect(page.getByTestId("peek-strip-right")).toBeFocused();
 
   await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).toBe(initial);
+  await expect(page.getByTestId("panel-edge-collapse-right")).toBeFocused();
 });
 
 test("Ctrl+Alt+T reopens the most recently closed tab", async ({ page }) => {
