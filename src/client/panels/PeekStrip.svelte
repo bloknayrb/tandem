@@ -14,47 +14,71 @@ function handleKey(e: KeyboardEvent) {
 }
 </script>
 
-<!-- Faint vertical bar at the window edge; brightens on hover and toggles
-     the panel visible on click or Enter/Space. -->
-<div
+<!-- A sliver of the collapsed panel pokes out from the window edge so the
+     user can see where to click to bring it back. Matches the rail's
+     surface-muted background, inner-corner radius, and top/bottom insets so
+     it visually reads as "the same card, mostly tucked away." -->
+<button
   class="peek-strip peek-strip-{side}"
   data-testid={`peek-strip-${side}`}
-  role="button"
-  tabindex="0"
+  type="button"
   aria-label={side === "left" ? "Show left panel" : "Show right panel"}
   aria-expanded="false"
   onclick={onActivate}
   onkeydown={handleKey}
-></div>
+>
+  <span class="peek-chevron" aria-hidden="true">
+    {side === "left" ? "›" : "‹"}
+  </span>
+</button>
 
 <style>
   .peek-strip {
     position: fixed;
     top: var(--tandem-rail-top-clearance, 52px);
     bottom: var(--tandem-status-clearance-total, 60px);
-    width: 6px;
+    width: 14px;
+    padding: 0;
+    border: 1px solid var(--tandem-border);
     background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-faint);
     cursor: pointer;
-    opacity: 0.35;
-    transition: opacity 160ms ease, background 160ms ease, width 160ms ease;
     z-index: var(--tandem-z-sticky);
+    box-shadow: var(--tandem-shadow-1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: width 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
   }
   .peek-strip-left {
     left: 0;
-    border-radius: 0 var(--tandem-r-2) var(--tandem-r-2) 0;
+    border-left: none;
+    border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
   }
   .peek-strip-right {
     right: 0;
-    border-radius: var(--tandem-r-2) 0 0 var(--tandem-r-2);
+    border-right: none;
+    border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
+  }
+  .peek-chevron {
+    font-size: var(--tandem-text-sm);
+    line-height: 1;
+    opacity: 0.7;
+    transition: opacity 160ms ease;
   }
   .peek-strip:hover,
   .peek-strip:focus-visible {
-    opacity: 1;
+    width: 20px;
     background: var(--tandem-accent-bg);
-    width: 10px;
+    color: var(--tandem-accent);
+    box-shadow: var(--tandem-shadow-2);
     outline: none;
   }
+  .peek-strip:hover .peek-chevron,
+  .peek-strip:focus-visible .peek-chevron {
+    opacity: 1;
+  }
   .peek-strip:focus-visible {
-    box-shadow: inset 0 0 0 2px var(--tandem-accent);
+    box-shadow: var(--tandem-shadow-2), inset 0 0 0 2px var(--tandem-accent);
   }
 </style>
