@@ -401,8 +401,8 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-// Right rail tabs are hard-coded to Annotations + Chat post-Wave-I. The
-// initial selection still respects the user's `primaryTab` preference.
+// Right rail tabs are hard-coded to Annotations + Chat. The initial
+// selection still respects the user's `primaryTab` preference.
 let activeRailTab = $state<"annotations" | "chat">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
@@ -481,7 +481,7 @@ const toggleRightPanel = () => {
  * mounted alongside the PeekStrip (Svelte default). The editor column
  * briefly reflows around both. Margin-annotation positions catch up via
  * the existing ResizeObserver-driven layout effect; brief lag during the
- * ~220ms transition is acceptable per Bryan, 2026-05-18.
+ * ~220ms transition is acceptable.
  */
 function railSlide(_node: HTMLElement, params: { side: "left" | "right"; reduceMotion: boolean }) {
   if (params.reduceMotion) return { duration: 0, css: () => "" };
@@ -958,14 +958,25 @@ const tutorial = createTutorial(
          focus lands on the (now-offscreen) edge-collapse button and the browser
          auto-scrolls the container by 300px to bring it into view, causing the
          whole row to "pop" -300px and slide back over the transition window.
-         Pinning scrollLeft to 0 cancels that without affecting layout. -->
+         Pinning scrollLeft to 0 cancels that without affecting layout.
+
+         DO NOT change `overflow: hidden` to `overflow: clip` without restoring
+         the focus-pop fix some other way. `clip` suppresses `scroll` events
+         entirely, so the onscroll handler below would never fire and the
+         focus-driven auto-scroll into the off-stage rail would resurface. -->
     <div
       style="position: relative; display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);"
-      onscroll={(e) => { e.currentTarget.scrollLeft = 0; }}
+      onscroll={(e) => {
+        // TODO: if a future child needs horizontal scroll (overflowing table,
+        // inline overflow toolbar), scope this reset to the railSlide transition
+        // window (~250ms) or move it to a focus listener. Today the row has no
+        // horizontally-scrollable children, so the unconditional reset is safe.
+        e.currentTarget.scrollLeft = 0;
+      }}
     >
       {#if effectiveLeftVisible}
-        <!-- Left rail is locked to the outline; the redesign V7OutlineRail
-             has no tab bar. Outermost 8px is the edge-click collapse zone. -->
+        <!-- Left rail is locked to the outline; the outline rail has no tab
+             bar. Outermost 8px is the edge-click collapse zone. -->
         <div
           data-testid="left-outline-rail"
           transition:railSlide={{ side: "left", reduceMotion: settingsState.settings.reduceMotion }}
@@ -1186,13 +1197,12 @@ const tutorial = createTutorial(
 {/snippet}
 
 <!-- Edge-click collapse zone: full-height 8px strip at the outer edge of the
-     rail. The right rail insets the top by 40px so the RailTabPicker trigger
-     (top-inner corner of rail-tabs-row, ~36px tall) stays clickable; the
-     left rail has no picker so it runs edge-to-edge. The right rail's
-     scrollbar shares the outer edge — a known minor conflict; the strip
-     stays 8px so a Windows scrollbar (~17px) remains grabbable from the
-     inside half. Sibling of panel content (not a parent) so descendant
-     clicks never bubble in. -->
+     rail. The right rail insets the top by 40px to clear the rail-tabs-row
+     tab buttons (~36px tall); the left rail has no tab bar and runs edge-
+     to-edge. The right rail's scrollbar shares the outer edge — a known
+     minor conflict; the strip stays 8px so a Windows scrollbar (~17px)
+     remains grabbable from the inside half. Sibling of panel content (not
+     a parent) so descendant clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
   <!-- Not in the Tab sequence: keyboard users have Alt+Shift+Arrow for
        the same action, and tab-reachable edge zones would push other
@@ -1339,7 +1349,6 @@ const tutorial = createTutorial(
 {/snippet}
 
 <style>
-  /* Rail-tab pill: inset track, rounded segments, soft active fill. */
   .rail-tabs-row {
     display: flex;
     align-items: center;
@@ -1397,8 +1406,9 @@ const tutorial = createTutorial(
 
   /* Edge-click collapse zone. Full-height 8px strip on the rail's outer
      edge. Left rail goes edge-to-edge; right rail starts below the
-     rail-tabs-row (40px) so the RailTabPicker stays clickable. Sibling
-     to panel content so descendant clicks don't bubble in. */
+     rail-tabs-row (40px) to clear the rail-tabs-row tab buttons (right
+     rail only). Sibling to panel content so descendant clicks don't
+     bubble in. */
   .panel-edge-collapse {
     position: absolute;
     width: 8px;

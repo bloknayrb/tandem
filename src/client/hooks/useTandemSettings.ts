@@ -424,6 +424,9 @@ export function loadSettings(): TandemSettings {
         // fields" on a v99 forward-compat blob, silently pinning a
         // contract the migration intends to retire and inheriting stale
         // state into any future schema that reuses the names.
+        // One-way ratchet: removing an entry from this set requires bumping
+        // CURRENT_SCHEMA_VERSION such that no older client ever observes
+        // the resurrected field name on a write-through round-trip.
         const REMOVED_FIELDS = new Set(["leftRailTabs", "rightRailTabs"]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {
