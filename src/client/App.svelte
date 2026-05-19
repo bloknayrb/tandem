@@ -1058,7 +1058,6 @@ const tutorial = createTutorial(
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
       readOnly={yjsSync.readOnly}
-      documentCount={yjsSync.tabs.length}
       saving={saveStore.saving}
       heldCount={modeGate.heldCount}
       mode={modeState.tandemMode}
