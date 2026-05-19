@@ -225,12 +225,8 @@ function recordHeight(id: string, h: number): void {
      already shows ✎ Edit for pending cards, but the affordance was too
      subtle in margin view. A faint outline halo on hover signals "this is
      interactive" without competing with the card's own border. */
-  .margin-bubble {
-    transition: filter 140ms ease;
-  }
-  .margin-bubble:hover {
-    filter: drop-shadow(0 0 6px var(--tandem-accent-border))
-      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.06));
+  .margin-bubble:hover :global([data-testid^="annotation-card-"]) {
+    box-shadow: 0 0 8px 2px var(--tandem-accent-border) !important;
   }
   /* Make the inner edit-button reveal on hover of the bubble, even when
      the cursor is not directly on the button. `:global()` so the
