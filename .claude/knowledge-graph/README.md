@@ -38,15 +38,22 @@ sources:                    # file paths and doc anchors
 
 The body is prose — short summary in the first sentence, expert-targeted detail below.
 
-## Edge types (7)
+## Edge types
+
+**In use today (4):**
 
 - `governs` — rule → concept it constrains
 - `decided_by` — concept → ADR that decided its design
-- `supersedes` — ADR → ADR it replaces (currently unused — add if I find verifiable cases)
-- `implemented_in` — concept → file or symbol
-- `refines` — child concept → parent concept
+- `refines` — child concept → parent concept (or ADR → ADR refinement)
 - `related` — bidirectional "see also"
+
+**Reserved (not yet used, validator still accepts them):**
+
+- `supersedes` — ADR → ADR it replaces
+- `implemented_in` — concept → file or symbol
 - `enforced_by` — rule → hook / script / lint that enforces it
+
+Reserved types are kept in `VALID_EDGES` so a contributor can add a single edge mid-trial without also editing the validator. Drop unused ones at the kill-date review if they're still unused.
 
 ## Maintenance
 
@@ -54,3 +61,4 @@ The body is prose — short summary in the first sentence, expert-targeted detai
 - Bump `last_verified` when you re-read a node's body and confirm it
 - If a node's `last_verified` is more than 60 days old, lint warns (not fails)
 - This is project memory for Claude, not user-facing docs — keep prose terse and current rather than comprehensive
+- **Prose `id` references inside a node body are not validated** — only edge endpoints in `edges.json` are. If you want a relationship enforced, add it to `edges.json`.
