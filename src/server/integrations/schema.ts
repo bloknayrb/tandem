@@ -95,13 +95,17 @@ const BaseIntegrationFields = z.object({
   tokenSecretRef: z.string().min(1).optional(),
 });
 
+// `.strict()` on every v3 variant + the top-level file schema mirrors the v1
+// and v2 migration schemas: a hand-edited or tampered file containing unknown
+// fields is rejected loudly rather than silently stripped, keeping the v3
+// shape contract honest against forward-compat drift.
 const ClaudeCodeIntegration = BaseIntegrationFields.extend({
   kind: z.literal("claude-code"),
   configPath: AbsolutePath,
   transport: z.literal("http"),
   url: LoopbackUrl,
   apply: ApplyIntent.optional(),
-});
+}).strict();
 
 const ClaudeDesktopIntegration = BaseIntegrationFields.extend({
   kind: z.literal("claude-desktop"),
@@ -109,7 +113,7 @@ const ClaudeDesktopIntegration = BaseIntegrationFields.extend({
   transport: z.literal("stdio"),
   nodeBinary: z.string().min(1).optional(),
   apply: ApplyIntent.optional(),
-});
+}).strict();
 
 /**
  * Generic MCP-capable client (Cursor, Continue.dev, LM Studio, Ollama, etc.).
@@ -135,7 +139,7 @@ const OtherMcpIntegration = BaseIntegrationFields.extend({
   url: LoopbackUrl.optional(),
   configPath: AbsolutePath.optional(),
   apply: z.literal("skip").optional(),
-});
+}).strict();
 
 /**
  * `discriminatedUnion` members must be plain `ZodObject`s, so the
@@ -166,11 +170,13 @@ export const IntegrationConfigSchema = z
 
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 
-export const IntegrationsFileSchema = z.object({
-  schemaVersion: z.literal(SHARED_SCHEMA_VERSION),
-  integrations: z.array(IntegrationConfigSchema),
-  defaultIntegrationId: z.string().min(1).optional(),
-});
+export const IntegrationsFileSchema = z
+  .object({
+    schemaVersion: z.literal(SHARED_SCHEMA_VERSION),
+    integrations: z.array(IntegrationConfigSchema),
+    defaultIntegrationId: z.string().min(1).optional(),
+  })
+  .strict();
 
 export type IntegrationsFile = z.infer<typeof IntegrationsFileSchema>;
 

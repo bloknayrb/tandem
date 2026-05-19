@@ -36,7 +36,7 @@
  * - Response never echoes entries / headers / tokens.
  */
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { Express, Request, Response } from "express";
 import {
@@ -196,6 +196,28 @@ function assertLoopbackForMutation(req: Request, res: Response): boolean {
   return false;
 }
 
+/**
+ * CSRF gate for mutating integration routes. A same-origin malicious page
+ * on loopback can otherwise drive POST /integrations and the secrets routes
+ * (it can't drive apply because apply already gates on origin, but it can
+ * stage a payload). The check is the same `isLocalhostOrigin` allowlist
+ * apply uses — loopback + Tauri WebView.
+ *
+ * Returns true if the response was sent (caller should `return`).
+ */
+function assertOriginAllowlisted(req: Request, res: Response, routeLabel: string): boolean {
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  if (!isLocalhostOrigin(origin)) {
+    res.status(403).json({
+      error: "FORBIDDEN",
+      code: ERROR_CODE_BAD_ORIGIN,
+      message: `Origin not allowlisted for ${routeLabel}`,
+    });
+    return true;
+  }
+  return false;
+}
+
 function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (_req: Request, res: Response) => {
     try {
@@ -220,6 +242,7 @@ function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
 
 function makePostIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS)) return;
     if (assertLoopbackForMutation(req, res)) return;
     const parsed = IntegrationsFileSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -379,12 +402,12 @@ function validateApplyBody(
  *
  * Writes the persisted entries (filtered by `ids`) to Claude's config.
  * Security gates run before any FS access:
- *   1. Origin allowlist (CSRF).
- *   2. Confirmation nonce equality.
- *   3. LAN unauth fail-closed (even with `TANDEM_ALLOW_UNAUTHENTICATED_LAN`).
- *   4. Concurrency mutex (in-flight check → 429).
- *   5. `homeOverride` forbidden in body.
- *   6. Persisted file re-validated through `IntegrationsFileSchema`.
+ *   - Origin allowlist (CSRF).
+ *   - LAN unauth fail-closed (even with `TANDEM_ALLOW_UNAUTHENTICATED_LAN`).
+ *   - `homeOverride` forbidden in body (validated in `validateApplyBody`).
+ *   - Constant-time confirmation-nonce comparison.
+ *   - Concurrency mutex (in-flight check → 429).
+ *   - Persisted file re-validated through `IntegrationsFileSchema`.
  *
  * Per-integration loop:
  *   - `other-mcp` entries → status: "error", code: "OTHER_MCP_NOT_APPLICABLE".
@@ -399,21 +422,9 @@ function validateApplyBody(
  */
 function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
-    // 1. Origin allowlist.
-    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-    if (!isLocalhostOrigin(origin)) {
-      res.status(403).json({
-        error: "FORBIDDEN",
-        code: ERROR_CODE_BAD_ORIGIN,
-        message: "Origin not allowlisted for /api/integrations/apply",
-      });
-      return;
-    }
-
-    // 2. LAN unauth fail-closed.
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_APPLY)) return;
     if (assertLoopbackForMutation(req, res)) return;
 
-    // 3. Body validation (includes `homeOverride` rejection).
     const body = validateApplyBody(req.body);
     if (!body.ok) {
       res.status(400).json({
@@ -424,9 +435,14 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       return;
     }
 
-    // 4. Confirmation nonce.
+    // timingSafeEqual matches the auth-middleware precedent — string `!==`
+    // short-circuits at the first differing byte. The 256-bit randomness
+    // makes a realistic timing attack negligible; the constant-time compare
+    // is one line for consistency with `auth/middleware.ts`.
     const gate = getApplyGate();
-    if (body.data.confirmationNonce !== gate.nonce) {
+    const received = Buffer.from(body.data.confirmationNonce);
+    const expected = Buffer.from(gate.nonce);
+    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
       res.status(403).json({
         error: "FORBIDDEN",
         code: ERROR_CODE_INVALID_NONCE,
@@ -435,7 +451,6 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       return;
     }
 
-    // 5. Concurrency mutex.
     if (gate.inFlight) {
       res.status(429).json({
         error: "TOO_MANY_REQUESTS",
@@ -448,7 +463,8 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       // Set inside the try so a throw between `inFlight = true` and `try {`
       // can't strand the mutex.
       gate.inFlight = true;
-      // 6. Re-validate persisted file (defense-in-depth against disk tampering).
+      // Re-validate the persisted file at apply time: catches disk
+      // tampering or schema drift since the last persist.
       let file;
       try {
         file = await deps.store.read();
@@ -662,6 +678,7 @@ function isValidRef(ref: unknown): ref is string {
 
 function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_SECRET)) return;
     if (assertLoopbackForMutation(req, res)) return;
     if (!isValidRef(req.params.ref)) {
       res.status(400).json({ error: "BAD_REQUEST", message: "Invalid :ref" });
@@ -688,6 +705,7 @@ function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
 
 function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_SECRET)) return;
     if (assertLoopbackForMutation(req, res)) return;
     if (!isValidRef(req.params.ref)) {
       res.status(400).json({ error: "BAD_REQUEST", message: "Invalid :ref" });

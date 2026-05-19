@@ -401,19 +401,31 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       // an XDG_DATA_HOME-poisoning attacker can otherwise redirect the
       // backup target outside the home tree.
       assertPathSafe(backupDir);
-      mkdirSync(backupDir, { recursive: true });
-      const backupPath = join(backupDir, `${basename(configPath)}.broken-${Date.now()}`);
+      // mode: 0o700 on dir creation — the file mode is 0o600, but a
+      // world-readable parent dir lists sibling filenames (older backups
+      // carry other vendors' keys). Mode applies only when the dir is
+      // newly created; existing dirs retain their mode.
+      mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+      // randomUUID() in the path defeats path prediction by an attacker
+      // who might pre-create a file at the predicted location and have
+      // our mode-at-open inherit world-readable bits. `wx` (exclusive
+      // create) below is the second layer.
+      const backupPath = join(
+        backupDir,
+        `${basename(configPath)}.broken-${Date.now()}-${randomUUID()}`,
+      );
       try {
         if (process.platform === "win32") {
           // Windows doesn't honor POSIX modes — fall back to plain copy.
+          // The randomUUID-suffixed path makes collisions effectively impossible.
           await copyFile(configPath, backupPath);
         } else {
-          // Open with mode 0o600 so the file is never momentarily
-          // 0o644 (the copyFile + chmodSync sequence had a race window
-          // where the backup could be read by other local users between
-          // the two syscalls — backups may carry other vendors' API keys).
+          // Open with mode 0o600 + `wx` so the file is created exclusively
+          // at the right mode (no copyFile + chmodSync race window where
+          // the backup was briefly 0o644 with another vendor's API keys
+          // inside).
           const data = await readFile(configPath);
-          const fd = await open(backupPath, "w", 0o600);
+          const fd = await open(backupPath, "wx", 0o600);
           try {
             await fd.write(data);
           } finally {

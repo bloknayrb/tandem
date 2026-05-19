@@ -28,6 +28,7 @@ import { createIntegrationsStore } from "../../../src/server/integrations/storag
 import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
   TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV,
+  TAURI_HOSTNAME,
 } from "../../../src/shared/constants.js";
 import {
   ERROR_CODE_APPLY_IN_PROGRESS,
@@ -107,7 +108,11 @@ async function request(
       }
       const port = address.port;
       try {
+        // Default Origin to the Tauri WebView so every mutating route passes
+        // the CSRF allowlist by default — tests that want to exercise the
+        // bad-origin branch override via `extraHeaders`.
         const headers: Record<string, string> = {
+          Origin: `http://${TAURI_HOSTNAME}`,
           ...(body !== undefined ? { "content-type": "application/json" } : {}),
           ...(extraHeaders ?? {}),
         };
@@ -130,8 +135,10 @@ async function request(
   });
 }
 
-/** Origin header that satisfies the apply endpoint's CSRF check. */
-const TAURI_ORIGIN = { Origin: "http://tauri.localhost" };
+/** Origin header that satisfies the apply endpoint's CSRF check. The
+ * `request()` helper above injects this by default — this constant is kept
+ * for tests that pass it explicitly for clarity. */
+const TAURI_ORIGIN = { Origin: `http://${TAURI_HOSTNAME}` };
 
 describe("integrations API routes", () => {
   let tmpDir: string;
@@ -412,12 +419,20 @@ describe("integrations API routes", () => {
       return (res.body as { confirmationNonce: string }).confirmationNonce;
     }
 
-    it("rejects when Origin is missing", async () => {
+    it("rejects when Origin is missing / empty", async () => {
       const app = makeApp(deps);
-      const res = await request(app, "POST", API_INTEGRATIONS_APPLY, {
-        ids: ["cc-1"],
-        confirmationNonce: "any",
-      });
+      const res = await request(
+        app,
+        "POST",
+        API_INTEGRATIONS_APPLY,
+        {
+          ids: ["cc-1"],
+          confirmationNonce: "any",
+        },
+        // Override the helper's default Origin → empty (the allowlist
+        // refuses empty/absent values identically).
+        { Origin: "" },
+      );
       expect(res.status).toBe(403);
       expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
     });
@@ -977,6 +992,43 @@ describe("integrations API routes", () => {
       expect(get1.status).toBe(200);
       const get2 = await request(app, "GET", API_INTEGRATIONS_FIRST_RUN);
       expect(get2.status).toBe(200);
+    });
+  });
+
+  describe("origin allowlist on mutating routes (CSRF gate)", () => {
+    // Same table shape as the LAN-fail-closed describe — every mutating
+    // route gates on Origin BEFORE any state read or write. Adding a future
+    // mutator without a row here is a screaming omission.
+    it.each([
+      {
+        label: "POST /api/integrations",
+        method: "POST" as const,
+        url: API_INTEGRATIONS,
+        body: { schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] },
+      },
+      {
+        label: "POST /api/integrations/apply",
+        method: "POST" as const,
+        url: API_INTEGRATIONS_APPLY,
+        body: { ids: ["cc-1"], confirmationNonce: "x" },
+      },
+      {
+        label: "POST /api/integrations/secrets/:ref",
+        method: "POST" as const,
+        url: "/api/integrations/secrets/ref-1",
+        body: { secret: "shhh" },
+      },
+      {
+        label: "DELETE /api/integrations/secrets/:ref",
+        method: "DELETE" as const,
+        url: "/api/integrations/secrets/ref-1",
+        body: undefined,
+      },
+    ])("$label rejects evil origin with 403 BAD_ORIGIN", async ({ method, url, body }) => {
+      const app = makeApp(deps);
+      const res = await request(app, method, url, body, { Origin: "http://evil.com" });
+      expect(res.status).toBe(403);
+      expect((res.body as { code: string }).code).toBe(ERROR_CODE_BAD_ORIGIN);
     });
   });
 

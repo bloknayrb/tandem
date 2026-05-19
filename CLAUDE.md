@@ -130,6 +130,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **Channel meta keys use underscores only.** The Channels API silently drops meta keys containing hyphens. Use `document_id`, `annotation_id`, `event_type` -- not `document-id`.
 - **`APP_VERSION` is baked at build time** via the `__APP_VERSION__` tsup define in `src/server/mcp/server.ts`. Falls back to `createRequire("../../package.json")` in tsx dev and vitest. `__MCP_SDK_VERSION__` follows the same pattern. `findChangelogPath()` in the same file walks up from `__dirname` to find `CHANGELOG.md` (handles both `src/server/mcp/` in dev and `dist/server/` in production).
 - **MCP must start before Hocuspocus** in stdio mode -- init timeout fires if order is reversed.
+- **Mutating integration routes (`POST /api/integrations`, `POST /api/integrations/apply`, `POST/DELETE /api/integrations/secrets/:ref`) require both `assertOriginAllowlisted` AND `assertLoopbackForMutation` at handler top, BEFORE any state mutation.** The apply route additionally gates on a constant-time nonce compare + in-process mutex + `IntegrationsFileSchema.safeParse` defense-in-depth. Read-only `GET` routes are intentionally exempt from the loopback gate; `GET /api/integrations/existing` scrubs `env`/`headers` so the bearer token in `~/.claude.json` never reaches the wire (`extractEntry` in `src/server/integrations/existing-config.ts`).
 
 ### Client / UI
 - **ChatPanel + SidePanel are always mounted** (CSS display toggle, not conditional rendering) so local state persists across panel switches.

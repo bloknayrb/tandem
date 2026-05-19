@@ -197,6 +197,47 @@ describe("readExistingTandemEntries", () => {
     expect(cc?.channelEntry?.command).toBe("node");
   });
 
+  it("scrubs env and headers from the returned entries (wire-leak regression)", async () => {
+    // The GET /api/integrations/existing route is accessible under
+    // TANDEM_ALLOW_UNAUTHENTICATED_LAN=1 — leaking the full McpEntry would
+    // expose Tandem's own bearer token (Authorization header) and third-
+    // party API keys (env vars on other-vendor MCP servers).
+    await fs.promises.writeFile(
+      path.join(tmpHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          tandem: {
+            type: "http",
+            url: "http://127.0.0.1:3479/mcp",
+            headers: { Authorization: "Bearer secret-token-do-not-leak" },
+          },
+          "tandem-channel": {
+            command: "node",
+            args: ["/path/to/channel.js"],
+            env: { TANDEM_AUTH_TOKEN: "secret-env-do-not-leak" },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.tandemEntry).toBeDefined();
+    expect(cc?.channelEntry).toBeDefined();
+    // env / headers stripped on extraction
+    expect((cc?.tandemEntry as { headers?: unknown }).headers).toBeUndefined();
+    expect((cc?.channelEntry as { env?: unknown }).env).toBeUndefined();
+    // Validation still runs on the scrubbed shape (validateTandemEntry /
+    // validateChannelEntry read command/args/url only).
+    expect(cc?.tandemValidation?.status).toBe("valid");
+    expect(cc?.channelValidation?.status).toBe("valid");
+    // No secret value appears anywhere in the JSON-serialized install.
+    const serialized = JSON.stringify(cc);
+    expect(serialized).not.toContain("secret-token-do-not-leak");
+    expect(serialized).not.toContain("secret-env-do-not-leak");
+    expect(serialized).not.toContain("Bearer");
+  });
+
   it("returns status: error with message on a non-ENOENT read failure (EACCES)", async () => {
     // Make ~/.claude.json unreadable. On Linux/macOS, chmod 000 denies even the
     // owner. Skipped on Windows where chmod is a no-op and on root (uid 0,

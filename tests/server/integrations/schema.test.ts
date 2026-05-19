@@ -357,6 +357,35 @@ describe("IntegrationsFileSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("rejects an unknown top-level field (.strict)", () => {
+    // Mirrors V1/V2 schemas: unknown fields are a tamper signal, not noise
+    // to silently strip. Catches forward-compat drift and hand-edited files.
+    const result = IntegrationsFileSchema.safeParse({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [],
+      bogusExtraField: "tamper",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown field on a claude-code integration variant (.strict)", () => {
+    const result = IntegrationsFileSchema.safeParse({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/home/user/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          bogusVariantField: "tamper",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("emptyIntegrationsFile", () => {

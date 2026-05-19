@@ -171,18 +171,24 @@ describe("applyConfig — malformed-JSON backup", () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it.skipIf(!POSIX_ONLY)("writes the backup with mode 0o600", async () => {
+  it.skipIf(!POSIX_ONLY)("writes the backup with mode 0o600 inside a 0o700 dir", async () => {
     fs.writeFileSync(configPath, "{ this is not json");
     await applyConfig(configPath, {
       create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
       remove: [],
     });
     const backupDir = path.join(appDataDir, ".broken-backups");
+    // Dir is created with 0o700 — defeats sibling-listing on multi-user
+    // POSIX (older backups can carry other vendors' API keys).
+    const dirStat = fs.statSync(backupDir);
+    expect(dirStat.mode & 0o777).toBe(0o700);
     const entries = fs.readdirSync(backupDir);
     expect(entries.length).toBeGreaterThan(0);
     const backupFile = path.join(backupDir, entries[0]);
+    // File mode 0o600 + `wx` exclusive open closes the read-bits race
+    // (copyFile + chmodSync had a 0o644 window inside which another
+    // local user could read the API-key-bearing backup).
     const stat = fs.statSync(backupFile);
-    // mode & 0o777 isolates the permission bits.
     expect(stat.mode & 0o777).toBe(0o600);
   });
 

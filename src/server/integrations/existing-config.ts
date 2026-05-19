@@ -216,12 +216,22 @@ async function readOneTarget(target: DetectedTarget): Promise<ExistingMcpInstall
 function extractEntry(mcp: Record<string, unknown>, name: string): McpEntry | undefined {
   const raw = mcp[name];
   if (!raw || typeof raw !== "object") return undefined;
+  // Strip env/headers from the wire surface. `GET /api/integrations/existing`
+  // is intentionally accessible under TANDEM_ALLOW_UNAUTHENTICATED_LAN=1
+  // (read-only routes are exempt from the loopback gate), but the full
+  // entry would leak Tandem's own bearer token (mcpServers.tandem.headers
+  // .Authorization after rotate-token) and third-party API keys (env vars
+  // attached to other MCP servers' entries). Validation runs on this
+  // scrubbed shape because validateTandemEntry / validateChannelEntry only
+  // read command, args, url — never env/headers.
+  //
   // The object-shape guard rejects primitives and null, but does not validate
   // the McpEntry field types (e.g. a `command: null` would pass through). PR
   // 3c's wizard consumer MUST re-validate shape before trusting any field —
   // the cast here is "yes, this is something we extracted from mcpServers,"
   // not "this is a valid McpEntry."
-  return raw as McpEntry;
+  const { env: _env, headers: _headers, ...safe } = raw as Record<string, unknown>;
+  return safe as McpEntry;
 }
 
 /**
