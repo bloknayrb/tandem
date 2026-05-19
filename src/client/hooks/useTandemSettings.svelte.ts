@@ -10,7 +10,6 @@ export type {
   ModelRegistryEntry,
   PanelOrder,
   PrimaryTab,
-  RailTab,
   SidecarRetryStrategy,
   TandemSettings,
   TextSize,

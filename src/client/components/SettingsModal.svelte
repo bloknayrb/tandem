@@ -381,7 +381,7 @@ async function handleViewChangelog(): Promise<void> {
       }
     }}
     data-testid="settings-modal-scrim"
-    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 9998;"
+    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 100000;"
   ></div>
   <div
     bind:this={modalEl}
@@ -564,7 +564,10 @@ async function handleViewChangelog(): Promise<void> {
     border: 1px solid var(--tandem-border);
     border-radius: var(--tandem-r-4);
     box-shadow: var(--tandem-shadow-3);
-    z-index: 9999;
+    /* Sits above the title bar's z-index: 99999 lift (used to clear
+       tauri-plugin-decorum's overlay). Without this the title bar's tab
+       strip would intercept clicks targeting the modal content area. */
+    z-index: 100001;
     display: grid;
     grid-template-columns: 188px minmax(0, 1fr);
     outline: none;

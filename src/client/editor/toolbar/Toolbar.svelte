@@ -12,6 +12,7 @@ import type { Annotation, AnnotationType, HighlightColor } from "../../../shared
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
+import { withPreventDefault } from "./handlers.js";
 import { toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
@@ -296,6 +297,15 @@ function onKeyActivate(handler: (e: MouseEvent) => void) {
   };
 }
 
+// Keyboard activation (Enter / Space on a focused button) fires `click` with
+// `detail === 0`. The mouse path uses `mousedown` so the editor selection
+// survives. Pair `onMouseDown` (mouse) with `onClick={onKeyActivate(...)}`
+// (keyboard, filtered) so both routes apply the mark without double-firing.
+const boldHandler = $derived(withPreventDefault(() => editor?.chain().focus().toggleBold().run()));
+const italicHandler = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleItalic().run()),
+);
+
 function dismissPopup() {
   hasSelection = false;
   selectionPosition = null;
@@ -335,23 +345,33 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     role="toolbar"
     aria-label="Selection tools"
     class="tandem-floating-pill"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-4); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 320px;`}
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-pill); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 360px;`}
   >
-    <div style="display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--tandem-border);">
+    <!-- Row 1: inline-mark formatting + highlight swatches. Buttons bind to
+         mousedown via withPreventDefault so the editor selection survives
+         the click — see handlers.ts for the rationale (avoids the
+         "format-before-type" symptom). -->
+    <div style="display: flex; align-items: center; gap: 1px; padding: 4px;">
       <ToolbarButton
         label="B"
         ariaLabel="Bold"
         style="font-weight: 700; min-width: 28px;"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => editor?.chain().focus().toggleBold().run()}
+        onMouseDown={boldHandler}
+        onClick={onKeyActivate(boldHandler)}
       />
       <ToolbarButton
         label="I"
         ariaLabel="Italic"
         style="font-style: italic; min-width: 28px;"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => editor?.chain().focus().toggleItalic().run()}
+        onMouseDown={italicHandler}
+        onClick={onKeyActivate(italicHandler)}
       />
+      <!-- Strike, Inline code, and Link were intentionally removed from the
+           selection popup per docs/designs/handoff/tandem/project/
+           toolbar-ux-research.md ("Explicitly do NOT include in popup:
+           Strikethrough, code, link — too infrequent to justify space in the
+           reaction surface"). They remain on the persistent FormattingToolbar
+           and via keyboard shortcuts (Ctrl+Shift+X, Ctrl+E, Ctrl+K). -->
       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
         {#each MINI_HIGHLIGHT_COLORS as color}

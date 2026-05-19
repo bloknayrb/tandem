@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
+import { untrack } from "svelte";
 import * as Y from "yjs";
 import { API_CHAT } from "../../shared/api-paths";
 import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
@@ -78,7 +79,8 @@ let prevClaudeActive = false;
 $effect(() => {
   void messages; // track message changes
   const active = !!claudeActive;
-  const sb = scrollBehavior;
+  // untrack: reduceMotion pref change shouldn't re-trigger scroll.
+  const sb = untrack(() => scrollBehavior);
 
   if (!active && prevClaudeActive) {
     prevClaudeActive = false;
@@ -91,7 +93,7 @@ $effect(() => {
 // Scroll to bottom when panel becomes visible
 $effect(() => {
   const vis = visible;
-  const sb = scrollBehavior;
+  const sb = untrack(() => scrollBehavior);
   if (vis) {
     messagesEndEl?.scrollIntoView({ behavior: sb });
   }
@@ -303,38 +305,26 @@ function toggleAnchorExpand(msgId: string) {
     </div>
   {/if}
 
-  <!-- Input area -->
-  <div
-    style="padding: var(--tandem-space-2) var(--tandem-space-3); border-top: 1px solid var(--tandem-border); display: flex; flex-direction: column; gap: var(--tandem-space-2);"
-  >
-    <div
-      style="display: flex; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-4); background: var(--tandem-surface); overflow: hidden;"
-    >
+  <!-- Composer: textarea + Send share a single bordered wrapper. The
+       `:focus-within` accent ring lives on the wrapper (not the textarea)
+       so the Send button is part of the focused surface. Mirrors the
+       redesign `surfaces.css .thread-composer { border + :focus-within
+       accent ring }` pattern. -->
+  <div class="chat-composer-outer">
+    <div class="chat-composer">
       <textarea
         bind:this={internalInputEl}
         value={inputText}
         oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
         onkeydown={handleKeyDown}
         placeholder="Message your AI..."
-        rows={4}
-        class="tandem-scroll-fade-y"
-        use:scrollFade={"y"}
-        style="--tandem-fade-edge: 8px; flex: 1; padding: var(--tandem-space-2); border: none; font-size: var(--tandem-text-base); resize: none; outline: none; font-family: inherit; background: transparent; color: var(--tandem-fg);"
+        rows={2}
+        class="chat-composer-input"
       ></textarea>
-    </div>
-    <div style="display: flex; justify-content: flex-end;">
       <button
         onclick={sendMessage}
         disabled={!inputText.trim()}
-        style="padding: var(--tandem-space-1) var(--tandem-space-4); background: {inputText.trim()
-          ? 'var(--tandem-accent)'
-          : 'var(--tandem-surface-muted)'}; color: {inputText.trim()
-          ? 'var(--tandem-accent-fg)'
-          : 'var(--tandem-fg-subtle)'}; border: 1px solid {inputText.trim()
-          ? 'var(--tandem-accent)'
-          : 'var(--tandem-border)'}; border-radius: var(--tandem-r-pill); cursor: {inputText.trim()
-          ? 'pointer'
-          : 'default'}; font-size: var(--tandem-text-sm); font-weight: 500;"
+        class={"chat-composer-send" + (inputText.trim() ? " on" : "")}
       >
         Send
       </button>
@@ -383,5 +373,54 @@ function toggleAnchorExpand(msgId: string) {
   }
   .chat-markdown :global(em) {
     font-style: italic;
+  }
+
+  /* Composer surface — surfaces.css `.thread-composer` analog. */
+  .chat-composer-outer {
+    padding: var(--tandem-space-2) var(--tandem-space-3);
+    border-top: 1px solid var(--tandem-border);
+  }
+  .chat-composer {
+    display: flex;
+    align-items: stretch;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-2);
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .chat-composer:focus-within {
+    border-color: var(--tandem-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tandem-accent) 20%, transparent);
+  }
+  .chat-composer-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: var(--tandem-fg);
+    font-family: inherit;
+    font-size: var(--tandem-text-base);
+    padding: 0;
+  }
+  .chat-composer-send {
+    align-self: flex-end;
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+    border: none;
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg-muted);
+    font-size: var(--tandem-text-base);
+    font-weight: 500;
+    cursor: default;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .chat-composer-send.on {
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+    cursor: pointer;
   }
 </style>

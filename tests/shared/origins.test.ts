@@ -14,7 +14,6 @@ import {
   RELOAD_ORIGIN,
   shouldSkipChannel,
   shouldSkipDurableSync,
-  shouldSkipTombstone,
   transactForTest,
   withBrowser,
   withFileSync,
@@ -106,11 +105,8 @@ describe("skip-set predicates match the ADR-031 matrix", () => {
     expect(shouldSkipDurableSync(BROWSER_ORIGIN)).toBe(false);
   });
 
-  it("tombstone skip = {file-sync, internal}", () => {
-    expect(shouldSkipTombstone(MCP_ORIGIN)).toBe(false);
-    expect(shouldSkipTombstone(FILE_SYNC_ORIGIN)).toBe(true);
-    expect(shouldSkipTombstone(INTERNAL_ORIGIN)).toBe(true);
-    expect(shouldSkipTombstone(RELOAD_ORIGIN)).toBe(false);
-    expect(shouldSkipTombstone(BROWSER_ORIGIN)).toBe(false);
-  });
+  // Tombstone observer records for ALL origins — no skip predicate. The
+  // per-origin behavioral coverage lives in tests/server/annotations/sync.test.ts
+  // (FILE_SYNC: "FILE_SYNC-origin Y.Map.delete records a tombstone…",
+  //  INTERNAL: "INTERNAL-origin Y.Map.delete records a tombstone…").
 });

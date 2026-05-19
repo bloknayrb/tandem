@@ -82,14 +82,15 @@ describe("word-count-cycle — cycle order + persistence", () => {
 });
 
 describe("word-count-cycle — getCount derivations", () => {
-  function makeEditor(textContent: string, paragraphs: { text: string }[] = []) {
+  function makeEditor(textContent: string, nodes: { text: string; type?: string }[] = []) {
     return {
       isDestroyed: false,
       state: {
         doc: {
           textContent,
           forEach: (cb: (node: { type: { name: string }; textContent: string }) => void) => {
-            for (const p of paragraphs) cb({ type: { name: "paragraph" }, textContent: p.text });
+            for (const n of nodes)
+              cb({ type: { name: n.type ?? "paragraph" }, textContent: n.text });
           },
         },
       },
@@ -124,12 +125,25 @@ describe("word-count-cycle — getCount derivations", () => {
     expect(getCount(makeEditor("") as never, "sentences")).toBe(0);
   });
 
-  it("paragraphs = non-empty paragraph/heading/blockquote children", () => {
+  it("paragraphs = non-empty paragraph children only", () => {
     expect(
       getCount(
         makeEditor("body", [{ text: "first" }, { text: "" }, { text: "third" }]) as never,
         "paragraphs",
       ),
     ).toBe(2);
+  });
+
+  it("paragraphs excludes headings and blockquotes", () => {
+    expect(
+      getCount(
+        makeEditor("body", [
+          { text: "title", type: "heading" },
+          { text: "body para", type: "paragraph" },
+          { text: "quoted", type: "blockquote" },
+        ]) as never,
+        "paragraphs",
+      ),
+    ).toBe(1);
   });
 });

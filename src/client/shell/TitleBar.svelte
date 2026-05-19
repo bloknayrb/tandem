@@ -172,11 +172,18 @@ async function closeWindow() {
 const themeLabel = $derived(THEME_LABEL[theme]);
 </script>
 
+<!-- data-tauri-drag-region lives on the three sibling spacer divs
+     (.title-bar-left + two .title-bar-gap) so action buttons remain
+     siblings of the drag region, never descendants. Putting the
+     attribute on the root div makes the action buttons descendants of
+     the drag region; per feedback_tauri_drag_region_structure.md the
+     repo has been bitten by that pattern in production. -->
 <div class="title-bar" data-testid="title-bar">
   <div class="title-bar-left" data-tauri-drag-region>
-    <span class="brand" aria-label="Tandem">
-      <img class="brand-mark" src="/favicon.png" alt="" width="20" height="20" />
-      <span class="brand-wordmark">Tandem</span>
+    <span class="brand">
+      <span class="brand-frame">
+        <img class="brand-mark" src="/favicon.png" alt="Tandem" width="32" height="32" />
+      </span>
     </span>
   </div>
 
@@ -342,7 +349,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   </div>
 
   {#if isTauriRuntime()}
-    <div class="title-bar-controls tandem-floating-pill">
+    <div class="title-bar-controls">
       <button
         type="button"
         class="title-bar-btn"
@@ -461,9 +468,9 @@ const themeLabel = $derived(THEME_LABEL[theme]);
      interactive children (tab pills, close buttons) stay clickable. */
   .title-bar {
     display: flex;
-    align-items: stretch;
-    height: 44px;
-    min-height: 44px;
+    align-items: center;
+    padding: 14px 14px 4px;
+    box-sizing: border-box;
     background: transparent;
     user-select: none;
     flex-shrink: 0;
@@ -475,13 +482,16 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .title-bar-left {
     display: flex;
     align-items: center;
-    padding-left: var(--tandem-space-3);
     flex-shrink: 0;
   }
 
   .title-bar-gap {
     flex: 1 1 0;
     min-width: var(--tandem-space-2);
+    /* Stretch to the title-bar's full content height so the drag region
+       actually has a hit area; an empty div with no intrinsic content
+       collapses to 0px tall under flex `align-items: center`. */
+    align-self: stretch;
   }
 
   /* Cap at 60% so brand + actions stay readable when the center fills with
@@ -503,21 +513,24 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: var(--tandem-space-2);
     color: var(--tandem-fg);
-    font-weight: 700;
-    font-size: var(--tandem-text-sm);
-    letter-spacing: 0;
     pointer-events: none;
+  }
+
+  /* 40×40 frame with negative margin nudges the icon up + left toward the
+     window corner, matching `.c7-brand` in calm-v7.css. The inner 32×32
+     icon centers within the frame. */
+  .brand-frame {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    margin: -6px 0 0 -6px;
   }
 
   .brand-mark {
     display: inline-block;
     flex-shrink: 0;
-  }
-
-  .brand-wordmark {
-    white-space: nowrap;
   }
 
   .title-bar-actions {
@@ -614,18 +627,25 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     }
   }
 
-  /* Wincontrols pill: 30×30 buttons inside a single rounded clip.
-     `.tandem-floating-pill` (from index.html) supplies the bg/border/shadow;
-     this rule sets the pill shape + size and ensures buttons clip to the
-     rounded edges. Margin pulls the cluster slightly clear of the gear so
-     it reads as a separate group. */
+  /* Bare window controls — no pill chrome, flush with the window's top-right
+     corner so they read as OS chrome distinct from the in-app actions. The
+     titlebar has `padding: 14px 14px 4px`; negative margin-top/-right cancel
+     the top and right padding so the close button sits at (0, 0) relative to
+     the window corner. `position: relative; z-index` lifts the cluster above
+     tauri-plugin-decorum's overlay drag-region (same rationale as
+     .title-bar-center / .title-bar-actions) so the buttons receive clicks
+     instead of the overlay treating them as drag surface. */
   .title-bar-controls {
     display: inline-flex;
     align-items: center;
     height: 30px;
-    margin: 0 var(--tandem-space-2) 0 var(--tandem-space-1);
-    overflow: hidden;
+    margin-top: -14px;
+    margin-right: -14px;
+    margin-left: 6px;
+    align-self: flex-start;
     flex-shrink: 0;
+    position: relative;
+    z-index: 99999;
   }
 
   .title-bar-btn {

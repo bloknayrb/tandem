@@ -2,6 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
 import { clickOutside } from "../../actions/clickOutside.svelte";
+import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
 import ToolbarButton from "./ToolbarButton.svelte";
 
 interface Props {
@@ -115,13 +116,6 @@ const linkDisabled = $derived.by(() => {
 
 const headingLabel = $derived(activeHeading ? `H${activeHeading}` : "H");
 
-function withPreventDefault(command: () => void) {
-  return (e: MouseEvent) => {
-    e.preventDefault();
-    command();
-  };
-}
-
 function handleHeadingToggle(level: HeadingLevel) {
   return (e: MouseEvent) => {
     e.preventDefault();
@@ -134,19 +128,13 @@ function handleHeadingToggle(level: HeadingLevel) {
 function handleLinkMouseDown(e: MouseEvent) {
   e.preventDefault();
   if (!editor) return;
-  // Pre-populate with the existing href when editing a link
-  linkInputValue = editor.getAttributes("link").href ?? "";
+  linkInputValue = getInitialLinkHref(editor);
   showLinkInput = true;
 }
 
 function submitLinkInput() {
   if (!editor) return;
-  const url = linkInputValue.trim();
-  if (url) {
-    editor.chain().focus().setLink({ href: url }).run();
-  } else if (editor.isActive("link")) {
-    editor.chain().focus().unsetLink().run();
-  }
+  applyLink(editor, linkInputValue);
   dismissLinkInput();
 }
 

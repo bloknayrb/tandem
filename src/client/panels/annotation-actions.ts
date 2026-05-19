@@ -70,6 +70,7 @@ export function sendNoteToClaude(ydoc: Y.Doc | null, annotationId: string): void
   const raw = map.get(annotationId) as Annotation | undefined;
   if (!raw) return;
   const ann = sanitizeAnnotation(raw, warn);
+  if (ann.type !== "note") return;
   // withBrowser tags the transact as user-originated so the channel queue
   // emits the note→comment promotion event. A bare map.set produces an
   // undefined-origin transact that the skip set's evolution could quietly

@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { cubicOut } from "svelte/easing";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
@@ -72,10 +73,8 @@ import {
   replyToAnnotation as marginReplyToAnnotation,
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
-import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import PeekStrip from "./panels/PeekStrip.svelte";
-import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
@@ -402,18 +401,11 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-let activeRailTab = $state<"annotations" | "chat" | "outline">(
+// Right rail tabs are hard-coded to Annotations + Chat. The initial
+// selection still respects the user's `primaryTab` preference.
+let activeRailTab = $state<"annotations" | "chat">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
-// Left rail is locked to the outline tab; no active-tab state needed.
-$effect(() => {
-  const rightTabs = settingsState.settings.rightRailTabs;
-  if (!rightTabs.includes(activeRailTab)) {
-    untrack(() => {
-      activeRailTab = rightTabs[0] ?? "chat";
-    });
-  }
-});
 
 const pendingAnnotationBadge = $derived(
   activeRailTab === "annotations"
@@ -431,15 +423,6 @@ let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
-let activeAnnotationFilter = $state<{
-  type: FilterType;
-  author: FilterAuthor;
-  status: FilterStatus;
-}>({
-  type: "all",
-  author: "all",
-  status: "all",
-});
 
 const leftPanelWidth = loadPanelWidth("left");
 const rightPanelWidth = loadPanelWidth("right");
@@ -469,7 +452,12 @@ const effectiveRightVisible = $derived(layoutModel.rightVisible);
 function focusToggleTarget(side: "left" | "right", nextVisible: boolean) {
   queueMicrotask(() => {
     const id = nextVisible ? `panel-edge-collapse-${side}` : `peek-strip-${side}`;
-    document.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+    const el = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    if (el) {
+      el.focus();
+    } else {
+      console.warn(`[tandem] focusToggleTarget: ${id} not mounted; focus dropped to body`);
+    }
   });
 }
 const toggleLeftPanel = () => {
@@ -482,10 +470,28 @@ const toggleRightPanel = () => {
   layoutModel.toggleRight();
   focusToggleTarget("right", nextVisible);
 };
-const moveTabsBetweenRails = (
-  side: "left" | "right",
-  newTabsForSide: ("annotations" | "chat" | "outline")[],
-): boolean => layoutModel.moveTabs(side, newTabsForSide);
+
+/**
+ * Slide transition for the rail containers. Translates the rail off the
+ * window edge so showing/hiding the rail reads as a slide rather than a
+ * snap. Reduced-motion users get a zero-duration no-op (collapses to a
+ * snap, the existing behavior).
+ *
+ * Known limitation: while the rail's outro is running, its DOM is still
+ * mounted alongside the PeekStrip (Svelte default). The editor column
+ * briefly reflows around both. Margin-annotation positions catch up via
+ * the existing ResizeObserver-driven layout effect; brief lag during the
+ * ~220ms transition is acceptable.
+ */
+function railSlide(_node: HTMLElement, params: { side: "left" | "right"; reduceMotion: boolean }) {
+  if (params.reduceMotion) return { duration: 0, css: () => "" };
+  const dir = params.side === "left" ? -1 : 1;
+  return {
+    duration: 220,
+    easing: cubicOut,
+    css: (t: number) => `transform: translateX(${(1 - t) * 100 * dir}%);`,
+  };
+}
 
 // Margin annotation view reserves a column + edge inset + breathing-room gap
 // per side. Subtract from available width so the editor text never sits
@@ -651,8 +657,7 @@ $effect(() => {
         findBarOpen = true;
         return;
       }
-      const isOutlineVisible =
-        effectiveLeftVisible || (effectiveRightVisible && activeRailTab === "outline");
+      const isOutlineVisible = effectiveLeftVisible;
       if (isOutlineVisible) {
         outlineFocusTrigger += 1;
       } else {
@@ -947,14 +952,35 @@ const tutorial = createTutorial(
 
     <!-- Single persistent container — editor column is always rendered in the same
          DOM position so the Editor component never remounts on panel toggles.
-         Left and right rails are independently shown/hidden around the stable editor column. -->
-    <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
+         Left and right rails are independently shown/hidden around the stable editor column.
+         `onscroll` resets scrollLeft to 0: `overflow: hidden` makes this a scroll
+         container, and when the right rail mounts with `transform: translateX(100%)`,
+         focus lands on the (now-offscreen) edge-collapse button and the browser
+         auto-scrolls the container by 300px to bring it into view, causing the
+         whole row to "pop" -300px and slide back over the transition window.
+         Pinning scrollLeft to 0 cancels that without affecting layout.
+
+         DO NOT change `overflow: hidden` to `overflow: clip` without restoring
+         the focus-pop fix some other way. `clip` suppresses `scroll` events
+         entirely, so the onscroll handler below would never fire and the
+         focus-driven auto-scroll into the off-stage rail would resurface. -->
+    <div
+      style="position: relative; display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);"
+      onscroll={(e) => {
+        // TODO: if a future child needs horizontal scroll (overflowing table,
+        // inline overflow toolbar), scope this reset to the railSlide transition
+        // window (~250ms) or move it to a focus listener. Today the row has no
+        // horizontally-scrollable children, so the unconditional reset is safe.
+        e.currentTarget.scrollLeft = 0;
+      }}
+    >
       {#if effectiveLeftVisible}
-        <!-- Left rail is locked to the outline; the redesign V7OutlineRail
-             has no tab bar. Outermost 8px is the edge-click collapse zone. -->
+        <!-- Left rail is locked to the outline; the outline rail has no tab
+             bar. Outermost 8px is the edge-click collapse zone. -->
         <div
           data-testid="left-outline-rail"
-          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+          transition:railSlide={{ side: "left", reduceMotion: settingsState.settings.reduceMotion }}
+          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-left);`}
         >
           <PanelSlot
             kind="outline"
@@ -973,7 +999,68 @@ const tutorial = createTutorial(
 
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
-        {@render tabbedPanel(dragResizeRight.width, "right")}
+        <!-- Right rail: single node owns width + transition + styling, matching
+             the left rail's shape above so the two slide-in animations stay symmetric. -->
+        <div
+          transition:railSlide={{ side: "right", reduceMotion: settingsState.settings.reduceMotion }}
+          style={`position: relative; z-index: 1; display: flex; flex-direction: column; width: ${dragResizeRight.width}px; background: var(--tandem-surface-muted); border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px); margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-right);`}
+        >
+          {@render edgeCollapse("right", toggleRightPanel)}
+          <div class="rail-tabs-row">
+            <div class="rail-tabs-track">
+              <button
+                data-testid="annotations-tab"
+                class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
+                onclick={() => { activeRailTab = "annotations"; }}
+              >
+                Annotations
+                {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
+                  <span class="rail-tab-badge">
+                    {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+                  </span>
+                {/if}
+              </button>
+              <button
+                data-testid="chat-tab"
+                class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
+                onmousedown={captureSelectionForChat}
+                onclick={() => { activeRailTab = "chat"; }}
+              >
+                Chat
+              </button>
+            </div>
+          </div>
+          <PanelSlot
+            kind="chat"
+            ctrlYdoc={yjsSync.bootstrapYdoc}
+            {editor}
+            activeDocId={yjsSync.activeTabId}
+            {openDocs}
+            claudeActive={yjsSync.claudeActive}
+            claudeStatus={yjsSync.claudeStatus}
+            {capturedAnchor}
+            onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+            reduceMotion={settingsState.settings.reduceMotion}
+            visible={activeRailTab === "chat"}
+          />
+          <PanelSlot
+            kind="side"
+            annotations={modeGate.visibleAnnotations}
+            {editor}
+            ydoc={activeTab?.ydoc ?? null}
+            heldCount={modeGate.heldCount}
+            tandemMode={modeState.tandemMode}
+            onModeChange={modeState.setTandemMode}
+            activeDocFormat={activeTab?.format}
+            documentId={activeTab?.id}
+            {activeAnnotationId}
+            onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+            reduceMotion={settingsState.settings.reduceMotion}
+            storeReadOnly={yjsSync.storeReadOnly}
+            {review}
+            visible={activeRailTab === "annotations"}
+          />
+        </div>
       {:else}
         <PeekStrip side="right" onActivate={toggleRightPanel} />
       {/if}
@@ -987,7 +1074,6 @@ const tutorial = createTutorial(
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
       readOnly={yjsSync.readOnly}
-      documentCount={yjsSync.tabs.length}
       saving={saveStore.saving}
       heldCount={modeGate.heldCount}
       mode={modeState.tandemMode}
@@ -1111,13 +1197,12 @@ const tutorial = createTutorial(
 {/snippet}
 
 <!-- Edge-click collapse zone: full-height 8px strip at the outer edge of the
-     rail. The right rail insets the top by 40px so the RailTabPicker trigger
-     (top-inner corner of rail-tabs-row, ~36px tall) stays clickable; the
-     left rail has no picker so it runs edge-to-edge. The right rail's
-     scrollbar shares the outer edge — a known minor conflict; the strip
-     stays 8px so a Windows scrollbar (~17px) remains grabbable from the
-     inside half. Sibling of panel content (not a parent) so descendant
-     clicks never bubble in. -->
+     rail. The right rail insets the top by 40px to clear the rail-tabs-row
+     tab buttons (~36px tall); the left rail has no tab bar and runs edge-
+     to-edge. The right rail's scrollbar shares the outer edge — a known
+     minor conflict; the strip stays 8px so a Windows scrollbar (~17px)
+     remains grabbable from the inside half. Sibling of panel content (not
+     a parent) so descendant clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
   <!-- Not in the Tab sequence: keyboard users have Alt+Shift+Arrow for
        the same action, and tab-reachable edge zones would push other
@@ -1263,107 +1348,7 @@ const tutorial = createTutorial(
   </div>
 {/snippet}
 
-{#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
-  {@const enabledTabs = settingsState.settings.rightRailTabs}
-  <!-- Rail anchored to the window edge; outer corners flat, inner corners
-       rounded so it reads as a floating panel peeking past the canvas. -->
-  <!-- `outline` may appear here only when a stale settings blob carried it
-       on the right; the picker doesn't surface it as a new selection. -->
-  <div
-    style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
-  >
-    {#if borderSide === "right"}
-      {@render edgeCollapse("right", toggleRightPanel)}
-    {/if}
-    <div class="rail-tabs-row">
-      <div class="rail-tabs-track">
-        {#if enabledTabs.includes("annotations")}
-          <button
-            data-testid="annotations-tab"
-            class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
-            onclick={() => { activeRailTab = "annotations"; }}
-          >
-            Annotations
-            {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
-              <span class="rail-tab-badge">
-                {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
-              </span>
-            {/if}
-          </button>
-        {/if}
-        {#if enabledTabs.includes("chat")}
-          <button
-            data-testid="chat-tab"
-            class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
-            onmousedown={captureSelectionForChat}
-            onclick={() => { activeRailTab = "chat";  }}
-          >
-            Chat
-          </button>
-        {/if}
-        {#if enabledTabs.includes("outline")}
-          <button
-            data-testid="outline-tab"
-            class={"rail-tab" + (activeRailTab === "outline" ? " on" : "")}
-            onclick={() => { activeRailTab = "outline"; }}
-          >
-            Outline
-          </button>
-        {/if}
-      </div>
-      <RailTabPicker
-        enabledTabs={settingsState.settings.rightRailTabs}
-        onTabsChange={(tabs) => { moveTabsBetweenRails("right", tabs); }}
-      />
-    </div>
-    <PanelSlot
-      kind="chat"
-      ctrlYdoc={yjsSync.bootstrapYdoc}
-      {editor}
-      activeDocId={yjsSync.activeTabId}
-      {openDocs}
-      claudeActive={yjsSync.claudeActive}
-      claudeStatus={yjsSync.claudeStatus}
-      {capturedAnchor}
-      onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-      reduceMotion={settingsState.settings.reduceMotion}
-      visible={activeRailTab === "chat" && enabledTabs.includes("chat")}
-    />
-    <PanelSlot
-      kind="side"
-      annotations={modeGate.visibleAnnotations}
-      {editor}
-      ydoc={activeTab?.ydoc ?? null}
-      heldCount={modeGate.heldCount}
-      tandemMode={modeState.tandemMode}
-      onModeChange={modeState.setTandemMode}
-      activeDocFormat={activeTab?.format}
-      documentId={activeTab?.id}
-      {activeAnnotationId}
-      onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-      reduceMotion={settingsState.settings.reduceMotion}
-      storeReadOnly={yjsSync.storeReadOnly}
-      {review}
-      onFilterChange={(type, author, status) => {
-        activeAnnotationFilter = { type, author, status };
-      }}
-      visible={activeRailTab === "annotations" && enabledTabs.includes("annotations")}
-    />
-    {#if enabledTabs.includes("outline")}
-      <PanelSlot
-        kind="outline"
-        {editor}
-        annotations={modeGate.visibleAnnotations}
-        focusTrigger={outlineFocusTrigger}
-        activeFilterType={activeAnnotationFilter.type}
-        visible={activeRailTab === "outline"}
-      />
-    {/if}
-  </div>
-{/snippet}
-
 <style>
-  /* Rail-tab pill: inset track, rounded segments, soft active fill. */
   .rail-tabs-row {
     display: flex;
     align-items: center;
@@ -1421,8 +1406,9 @@ const tutorial = createTutorial(
 
   /* Edge-click collapse zone. Full-height 8px strip on the rail's outer
      edge. Left rail goes edge-to-edge; right rail starts below the
-     rail-tabs-row (40px) so the RailTabPicker stays clickable. Sibling
-     to panel content so descendant clicks don't bubble in. */
+     rail-tabs-row (40px) to clear the rail-tabs-row tab buttons (right
+     rail only). Sibling to panel content so descendant clicks don't
+     bubble in. */
   .panel-edge-collapse {
     position: absolute;
     width: 8px;

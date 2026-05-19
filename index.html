@@ -132,6 +132,13 @@
         --tandem-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.12);
         --tandem-shadow-3: 0 20px 60px rgba(0, 0, 0, 0.2);
         --tandem-shadow-4: 0 16px 48px rgba(0, 0, 0, 0.18);
+        /* Directional rail shadows — cast inward toward the editor only. The
+           rails sit flush to the window edge; an isotropic shadow would be
+           clipped on the outer side. Light theme. Dark-theme override below. */
+        --tandem-rail-shadow-left: 4px 0 16px -8px rgba(0, 0, 0, 0.18),
+          1px 0 1px rgba(0, 0, 0, 0.03);
+        --tandem-rail-shadow-right: -4px 0 16px -8px rgba(0, 0, 0, 0.18),
+          -1px 0 1px rgba(0, 0, 0, 0.03);
         --tandem-z-base: 1;
         --tandem-z-dropdown: 10;
         --tandem-z-sticky: 100;
@@ -296,6 +303,10 @@
         --tandem-page-bg: #2a2a2a;
         --tandem-page-paper: #1a1a1a;
         --tandem-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+        --tandem-rail-shadow-left: 4px 0 18px -6px rgba(0, 0, 0, 0.55),
+          1px 0 1px rgba(0, 0, 0, 0.25);
+        --tandem-rail-shadow-right: -4px 0 18px -6px rgba(0, 0, 0, 0.55),
+          -1px 0 1px rgba(0, 0, 0, 0.25);
       }
 
       /* Warm canvas theme — v7 floating chrome. OKLCH values come straight

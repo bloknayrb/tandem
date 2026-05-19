@@ -14,7 +14,6 @@ interface Props {
   claudeStatus: string | null;
   claudeActive: boolean;
   readOnly?: boolean;
-  documentCount?: number;
   saving?: boolean;
   heldCount?: number;
   mode?: import("../../shared/types").TandemMode;
@@ -31,7 +30,6 @@ let {
   claudeStatus,
   claudeActive,
   readOnly,
-  documentCount = 0,
   saving = false,
   heldCount,
   mode,
@@ -165,11 +163,6 @@ function cycleWordMode() {
       style="width: 8px; height: 8px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {isReconnecting ? 'tandem-reconnect-pulse 1.2s ease-in-out infinite' : 'none'};"
     ></span>
     <span>{connLabel}</span>
-    {#if documentCount > 0}
-      <span style="color: var(--tandem-fg-subtle);">
-        {documentCount} doc{documentCount !== 1 ? "s" : ""} open
-      </span>
-    {/if}
     {#if editor}
       <button
         type="button"

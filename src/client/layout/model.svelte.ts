@@ -1,19 +1,19 @@
 /**
  * Layout model (ADR-037).
  *
- * Encapsulates the panel-visibility + rail-tab invariants previously spread
- * across `App.svelte`: derived visibility (with solo-mode suppression),
- * toggle handlers, cross-rail tab moves with the orphan-rail rule.
+ * Encapsulates the panel-visibility invariants previously spread across
+ * `App.svelte`: derived visibility (with solo-mode suppression on the right)
+ * and toggle handlers.
  *
  * Returned shape uses getters so consumers see reactivity through the
  * settings store underneath — same pattern as `useTandemSettings.svelte.ts`.
  *
- * Orphan-rail rule (block-toggle): `moveTabs` returns `false` and emits a
- * console.warn if the proposed move would leave the *other* rail empty.
- * The current behaviour is preserved (no auto-swap, no silent drop).
+ * Wave I removed the cross-rail tab picker. The left rail is hard-coded to
+ * the outline; the right rail is hard-coded to Annotations + Chat. The
+ * `leftTabs` / `rightTabs` getters and `moveTabs` action are gone.
  */
 
-import type { RailTab, TandemSettingsState } from "../hooks/useTandemSettings.svelte.js";
+import type { TandemSettingsState } from "../hooks/useTandemSettings.svelte.js";
 
 /** Sliver of the mode store the layout model needs. */
 export interface LayoutModeStateLike {
@@ -25,20 +25,10 @@ export interface LayoutModel {
   readonly leftVisible: boolean;
   /** Effective visibility — `settings.rightPanelVisible && !(solo && soloRailHidden)`. */
   readonly rightVisible: boolean;
-  /** The settings-backed left rail tab ordering. */
-  readonly leftTabs: ReadonlyArray<RailTab>;
-  /** The settings-backed right rail tab ordering. */
-  readonly rightTabs: ReadonlyArray<RailTab>;
   /** Toggle the left panel's persisted visibility. */
   toggleLeft(): void;
   /** Toggle the right panel; on show, also clears `soloRailHidden` in solo mode. */
   toggleRight(): void;
-  /**
-   * Replace one rail's tab order. If the proposed move would empty the OTHER
-   * rail, the move is blocked and `false` is returned (block-toggle).
-   * Returns `true` if the update was applied.
-   */
-  moveTabs(side: "left" | "right", newTabsForSide: ReadonlyArray<RailTab>): boolean;
 }
 
 export function createLayoutModel(
@@ -68,18 +58,6 @@ export function createLayoutModel(
     });
   }
 
-  function moveTabs(side: "left" | "right", newTabsForSide: ReadonlyArray<RailTab>): boolean {
-    // Left rail is locked to outline-only. Updates targeting the left rail
-    // are rejected; the picker is right-only and the right-rail picker
-    // can't add outline either, so no cross-rail transfer is possible.
-    if (side === "left") {
-      console.warn("[tandem] left rail is locked to outline-only; moveTabs rejected");
-      return false;
-    }
-    settingsState.updateSettings({ rightRailTabs: [...newTabsForSide] });
-    return true;
-  }
-
   return {
     get leftVisible() {
       return leftVisible;
@@ -87,14 +65,7 @@ export function createLayoutModel(
     get rightVisible() {
       return rightVisible;
     },
-    get leftTabs() {
-      return settingsState.settings.leftRailTabs;
-    },
-    get rightTabs() {
-      return settingsState.settings.rightRailTabs;
-    },
     toggleLeft,
     toggleRight,
-    moveTabs,
   };
 }

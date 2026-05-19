@@ -49,9 +49,8 @@ export interface PerKeyObserverDeps<T> {
   /** Optional additional skip predicate composed with the channel-skip set.
    *  When provided, the observer skips a transaction if EITHER
    *  `shouldSkipChannel(origin)` OR `shouldSkip(origin)` is true. Lets
-   *  callers compose with `shouldSkipDurableSync` / `shouldSkipTombstone`
-   *  or supply a one-off origin filter without forcing array literals
-   *  at every call site. */
+   *  callers compose with `shouldSkipDurableSync` or supply a one-off
+   *  origin filter without forcing array literals at every call site. */
   shouldSkip?: (origin: unknown) => boolean;
 }
 

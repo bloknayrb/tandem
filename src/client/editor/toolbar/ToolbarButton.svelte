@@ -13,7 +13,7 @@ interface Props {
   disabledTitle?: string;
   active?: boolean;
   onMouseDown?: (e: MouseEvent) => void;
-  onClick?: () => void;
+  onClick?: (e: MouseEvent) => void;
   style?: string;
 }
 

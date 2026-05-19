@@ -95,6 +95,16 @@ export function buildAuthorshipDecorations(
 
     if (userChars === 0 && claudeChars === 0) return;
 
+    // Skip blocks whose content is empty. Authorship ranges can drift past
+    // the end of a paragraph after edits leave its content empty (the CRDT
+    // range still spans valid offsets but the block has no rendered
+    // content). A trailing gutter bar on an empty paragraph reads as a bug.
+    //
+    // `content.size === 0` covers truly-empty blocks. Inline atoms like
+    // `hardBreak` and `image` produce non-zero `content.size`, so paragraphs
+    // that exist to render a line break or embed still get attributed.
+    if (node.content.size === 0) return;
+
     const dominant: "user" | "claude" = userChars >= claudeChars ? "user" : "claude";
 
     try {

@@ -46,8 +46,9 @@ export function saveMode(mode: WordCountMode): void {
  * crashing on the empty-doc / pre-mount cases.
  *
  * Sentences uses a forgiving boundary regex: `[.!?]+` followed by whitespace
- * or end-of-string. Paragraphs counts top-level paragraph + heading +
- * blockquote children — the same set the outline panel walks.
+ * or end-of-string. Paragraphs counts non-empty top-level paragraph children
+ * only — headings and blockquote wrappers are excluded so the chip reflects
+ * prose body, not document structure.
  */
 export function getCount(editor: TiptapEditor | null, mode: WordCountMode): number {
   if (!editor || editor.isDestroyed) return 0;
@@ -67,14 +68,7 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
     case "paragraphs": {
       let count = 0;
       editor.state.doc.forEach((node) => {
-        if (
-          node.type.name === "paragraph" ||
-          node.type.name === "heading" ||
-          node.type.name === "blockquote"
-        ) {
-          // Skip blocks with zero text — empty paragraphs shouldn't count.
-          if (node.textContent.trim()) count++;
-        }
+        if (node.type.name === "paragraph" && node.textContent.trim()) count++;
       });
       return count;
     }
