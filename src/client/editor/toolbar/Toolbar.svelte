@@ -12,7 +12,7 @@ import type { Annotation, AnnotationType, HighlightColor } from "../../../shared
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
-import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
+import { withPreventDefault } from "./handlers.js";
 import { toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
@@ -53,13 +53,6 @@ let toolbarHeight = $state(0);
 let toolbarWidth = $state(0);
 let viewportHeight = $state(window.innerHeight);
 let viewportWidth = $state(window.innerWidth);
-
-// Link input — toggled inline by the Link button. The popup is intentionally
-// kept lightweight; the FormattingToolbar carries the fuller link UI for
-// in-context editing. Inputs use the same submit-on-Enter / Esc-to-dismiss
-// shape as the FormattingToolbar's input.
-let showLinkInput = $state(false);
-let linkInputValue = $state("");
 
 const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
@@ -304,38 +297,21 @@ function onKeyActivate(handler: (e: MouseEvent) => void) {
   };
 }
 
+// Keyboard activation (Enter / Space on a focused button) fires `click` with
+// `detail === 0`. The mouse path uses `mousedown` so the editor selection
+// survives. Pair `onMouseDown` (mouse) with `onClick={onKeyActivate(...)}`
+// (keyboard, filtered) so both routes apply the mark without double-firing.
+const boldHandler = $derived(withPreventDefault(() => editor?.chain().focus().toggleBold().run()));
+const italicHandler = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleItalic().run()),
+);
+
 function dismissPopup() {
   hasSelection = false;
   selectionPosition = null;
   capturedRange = null;
   annotationText = "";
-  showLinkInput = false;
-  linkInputValue = "";
   editor?.chain().focus().run();
-}
-
-function openLinkInput() {
-  if (!editor) return;
-  linkInputValue = getInitialLinkHref(editor);
-  showLinkInput = true;
-}
-
-function submitLinkInput() {
-  if (!editor) return;
-  applyLink(editor, linkInputValue);
-  showLinkInput = false;
-  linkInputValue = "";
-}
-
-function handleLinkInputKeyDown(e: KeyboardEvent) {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    submitLinkInput();
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    showLinkInput = false;
-    linkInputValue = "";
-  }
 }
 
 function submitAsComment() {
@@ -380,32 +356,22 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         label="B"
         ariaLabel="Bold"
         style="font-weight: 700; min-width: 28px;"
-        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleBold().run())}
+        onMouseDown={boldHandler}
+        onClick={onKeyActivate(boldHandler)}
       />
       <ToolbarButton
         label="I"
         ariaLabel="Italic"
         style="font-style: italic; min-width: 28px;"
-        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleItalic().run())}
+        onMouseDown={italicHandler}
+        onClick={onKeyActivate(italicHandler)}
       />
-      <ToolbarButton
-        label="S"
-        ariaLabel="Strikethrough"
-        style="text-decoration: line-through; min-width: 28px;"
-        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleStrike().run())}
-      />
-      <ToolbarButton
-        label="<>"
-        ariaLabel="Inline code"
-        style="font-family: var(--tandem-font-mono, monospace); min-width: 30px;"
-        onMouseDown={withPreventDefault(() => editor?.chain().focus().toggleCode().run())}
-      />
-      <ToolbarButton
-        label="↗"
-        ariaLabel="Link"
-        style="min-width: 28px;"
-        onMouseDown={withPreventDefault(openLinkInput)}
-      />
+      <!-- Strike, Inline code, and Link were intentionally removed from the
+           selection popup per docs/designs/handoff/tandem/project/
+           toolbar-ux-research.md ("Explicitly do NOT include in popup:
+           Strikethrough, code, link — too infrequent to justify space in the
+           reaction surface"). They remain on the persistent FormattingToolbar
+           and via keyboard shortcuts (Ctrl+Shift+X, Ctrl+E, Ctrl+K). -->
       <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
       <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
         {#each MINI_HIGHLIGHT_COLORS as color}
@@ -428,20 +394,6 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         {/each}
       </div>
     </div>
-
-    {#if showLinkInput}
-      <div style="padding: 0 8px 6px;">
-        <input
-          type="url"
-          data-testid="popup-link-input"
-          aria-label="Link URL"
-          bind:value={linkInputValue}
-          onkeydown={handleLinkInputKeyDown}
-          placeholder="https://…"
-          style="width: 100%; box-sizing: border-box; height: 28px; padding: 0 8px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; outline: none;"
-        />
-      </div>
-    {/if}
 
     <div style="padding: 6px 8px;">
       <textarea

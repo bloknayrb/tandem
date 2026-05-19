@@ -180,9 +180,9 @@ const themeLabel = $derived(THEME_LABEL[theme]);
      repo has been bitten by that pattern in production. -->
 <div class="title-bar" data-testid="title-bar">
   <div class="title-bar-left" data-tauri-drag-region>
-    <span class="brand" aria-label="Tandem">
+    <span class="brand">
       <span class="brand-frame">
-        <img class="brand-mark" src="/favicon.png" alt="" width="32" height="32" />
+        <img class="brand-mark" src="/favicon.png" alt="Tandem" width="32" height="32" />
       </span>
     </span>
   </div>
