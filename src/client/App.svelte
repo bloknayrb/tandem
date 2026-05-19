@@ -983,10 +983,8 @@ const tutorial = createTutorial(
 
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
-        <!-- Right rail mirrors the left rail's single-node shape (see :955):
-             one div owns width + transition + styling. Previously a snippet
-             with an outer/inner wrapper split — collapsed to remove an
-             unused indirection (one call site only). -->
+        <!-- Right rail: single node owns width + transition + styling, matching
+             the left rail's shape above so the two slide-in animations stay symmetric. -->
         <div
           transition:railSlide={{ side: "right", reduceMotion: settingsState.settings.reduceMotion }}
           style={`position: relative; z-index: 1; display: flex; flex-direction: column; width: ${dragResizeRight.width}px; background: var(--tandem-surface-muted); border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px); margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-right);`}

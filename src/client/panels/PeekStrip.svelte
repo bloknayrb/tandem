@@ -55,7 +55,7 @@ function handleKey(e: KeyboardEvent) {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: width 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    transition: width 160ms ease, box-shadow 160ms ease;
   }
   .peek-strip-left {
     left: 0;
