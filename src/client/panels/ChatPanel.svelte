@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
+import { untrack } from "svelte";
 import * as Y from "yjs";
 import { API_CHAT } from "../../shared/api-paths";
 import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
@@ -78,7 +79,8 @@ let prevClaudeActive = false;
 $effect(() => {
   void messages; // track message changes
   const active = !!claudeActive;
-  const sb = scrollBehavior;
+  // untrack: reduceMotion pref change shouldn't re-trigger scroll.
+  const sb = untrack(() => scrollBehavior);
 
   if (!active && prevClaudeActive) {
     prevClaudeActive = false;
@@ -91,7 +93,7 @@ $effect(() => {
 // Scroll to bottom when panel becomes visible
 $effect(() => {
   const vis = visible;
-  const sb = scrollBehavior;
+  const sb = untrack(() => scrollBehavior);
   if (vis) {
     messagesEndEl?.scrollIntoView({ behavior: sb });
   }
