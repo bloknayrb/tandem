@@ -342,6 +342,7 @@ $effect(() => {
     {#if claudeActive}
       <span
         class="status-dot"
+        data-tauri-drag-region="false"
         title="AI assistant is connected"
         aria-label="AI assistant is connected"
       ></span>
