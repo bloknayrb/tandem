@@ -81,11 +81,6 @@ function openWizard() {
   <span>Margin annotation view (Word-style)</span>
 </label>
 
-<!--
-  PR 3c-ii-b: the preview toggle is gone. The wizard auto-opens on first
-  run (server-driven via GET /api/integrations/first-run-needed); this
-  button manually reopens it after dismissal.
--->
 <button
   type="button"
   onclick={openWizard}

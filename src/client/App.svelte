@@ -230,9 +230,6 @@ if (isTauriRuntime()) {
 let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
 
-// PR 3c-ii-b: wizard open state is derived. The server says when the
-// wizard should auto-open (`firstRun.needed`); the user's dismissal +
-// manual reopen affordance flow through the two flags below.
 const firstRun = createFirstRunNeeded();
 const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
 let dismissedForVersion = $state<string | null>(readDismissed());
@@ -246,10 +243,8 @@ function readDismissed(): string | null {
   }
 }
 
-// shouldShowWizard is the single source of truth for the modal's
-// `{#if}` guard. The `&&` form (not `||`) ensures a stomped or absent
-// localStorage value still triggers the wizard when the server says
-// it's needed — failure-mode-safe.
+// `&&` (not `||`) so a stomped/absent localStorage value still triggers
+// the wizard when the server says it's needed — failure-mode-safe.
 const shouldShowWizard = $derived(
   manuallyReopened ||
     (firstRun.needed === true &&

@@ -1,40 +1,27 @@
 /**
  * Read existing Tandem MCP entries from the user's Claude config files.
  *
- * The integration setup wizard (#477 PR 3c) consumes this on first launch
- * to pre-populate its picker with whatever is already configured. Pre-PR-3
- * versions of Tandem wrote `mcpServers.tandem` (and optionally
- * `mcpServers.tandem-channel`) into `~/.claude.json` / the Claude Desktop
- * config silently on Tauri startup; the wizard needs to surface those
- * entries explicitly so the user is never surprised by a silent
- * "already configured" state.
+ * Pre-PR-3 Tandem silently wrote `mcpServers.tandem` (and optionally
+ * `mcpServers.tandem-channel`) into `~/.claude.json` / Claude Desktop's
+ * config on Tauri startup; the wizard surfaces those entries so the
+ * user is never blindsided by an "already configured" state. This
+ * reader is non-mutating — `detectTargets` enumerates config paths,
+ * we parse out the relevant keys, ADR-038 §2b removal lives elsewhere.
  *
- * This reader is intentionally **non-mutating** — it only reads the
- * existing Claude config files via `detectTargets` from `./apply.ts`
- * and parses out the `tandem` / `tandem-channel` MCP entries if present.
- * ADR-038 §2b removal of the auto-writer is owned by PR 3c, not this
- * module.
+ * Each surfaced entry is validated against the canonical shapes
+ * `buildMcpEntries` produces:
+ * - HTTP `tandem`: `LoopbackUrl.safeParse(url)` rejects credential URLs,
+ *   IPv6 loopback, decimal/hex IP obfuscation, NFC/NFD homoglyphs.
+ * - stdio `tandem`: tuple-equality with `npx -y tandem-editor mcp-stdio`.
+ * - stdio `tandem-channel`: `isValidNodeBinary` command + `.js` first arg.
  *
- * **PR 3c-ii-b re-validation:** each surfaced entry is validated against
- * the canonical shapes `buildMcpEntries` produces:
- * - HTTP `tandem` entries must pass `LoopbackUrl.safeParse(url)` — this
- *   rejects credential-bearing URLs (`http://evil.com@127.0.0.1`), IPv6
- *   loopback, decimal/hex IP obfuscation, NFC/NFD homoglyphs, etc. Any
- *   non-loopback URL means a third party has hijacked the entry.
- * - stdio `tandem` entries must be `npx -y tandem-editor mcp-stdio`
- *   tuple-equality. `command: "npx" + args: ["-y", "evil-package"]`
- *   fails.
- * - stdio `tandem-channel` entries must invoke a Node-shaped binary
- *   (`isValidNodeBinary`) with a `.js` first arg.
+ * Invalid entries are still surfaced (so the user sees what's on disk),
+ * but with `validationStatus !== "valid"` so the wizard pre-selects
+ * `apply: "skip"` instead of trusting them.
  *
- * Invalid entries are still surfaced (so the user can see what's on
- * disk), but with `validationStatus !== "valid"` so the wizard
- * pre-selects `apply: "skip"` instead of trusting them.
- *
- * Error semantics mirror `src/server/integrations/apply.ts:applyConfig` — ENOENT means
- * the user has never run that Claude variant; malformed JSON means we
- * cannot trust the file (caller decides whether to surface a recovery
- * prompt or proceed as if the entry is absent).
+ * Error semantics mirror `applyConfig`: ENOENT means the user has never
+ * run that Claude variant; malformed JSON means we cannot trust the
+ * file (caller decides whether to surface a recovery prompt).
  */
 
 import { readFile } from "node:fs/promises";

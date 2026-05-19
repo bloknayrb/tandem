@@ -1,18 +1,10 @@
 /**
  * Client-side fetcher for `GET /api/integrations/first-run-needed`.
  *
- * **Why a hook + not a component-level effect:** the wizard auto-open
- * decision must complete *before* the modal mounts. Putting the fetch
- * inside `IntegrationWizardModal.svelte`'s `$effect` would fire only
- * after mount — too late. This hook runs at App.svelte boot (next to
- * `createYjsSync()`) and exposes a derived-readable result.
- *
- * **Stale-fetch guard:** the `beginGen` monotonic counter (mirrored from
- * `useIntegrationWizard.svelte.ts`) ensures a fetch initiated during one
- * hook lifetime can't overwrite state after the hook is torn down or
- * re-fetched. Pattern: every fetch captures the counter value at start;
- * the result is only applied if the captured value still matches the
- * current counter at the time the promise resolves.
+ * Runs at App.svelte boot — the wizard auto-open decision must complete
+ * before the modal mounts, so a component-level `$effect` would be too
+ * late. The monotonic `gen` counter guards against late fetch resolves
+ * overwriting state after the hook is torn down or re-fetched.
  */
 
 import type { FirstRunNeededResponse } from "../../shared/integrations/contract";
@@ -49,11 +41,11 @@ export function createFirstRunNeeded(): FirstRunNeededState {
     const captured = ++gen;
     try {
       const res = await fetch(API_INTEGRATIONS_FIRST_RUN, { credentials: "same-origin" });
-      if (captured !== gen) return; // a newer fetch has started or hook torn down
       if (!res.ok) {
         // Treat network/server failure as "wizard not needed" — the safer
         // default is to NOT auto-open when we can't reach the server. The
         // user can still manually open via Settings → Reopen wizard.
+        if (captured !== gen) return;
         needed = false;
         settled = true;
         return;
@@ -72,10 +64,6 @@ export function createFirstRunNeeded(): FirstRunNeededState {
     }
   }
 
-  // Kick off the initial fetch. We deliberately do NOT wrap this in
-  // `$effect.root` — the hook caller's effect lifetime is the right
-  // anchor, and the captured-gen guard handles the stale-write case
-  // even when the hook outlives a component.
   void fetchOnce();
 
   return {

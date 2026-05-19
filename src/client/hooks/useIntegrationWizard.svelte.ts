@@ -1,5 +1,5 @@
 /**
- * Integration wizard state machine (#477 PR 3c-i).
+ * Integration wizard state machine.
  *
  * Drives the wizard modal through four steps:
  *   detect   — `GET /api/integrations/existing` populates the "we found these"
@@ -102,7 +102,7 @@ export interface IntegrationWizardOptions {
    */
   baseUrl?: string;
   /**
-   * Inject a custom keychain backend (#477 PR 3c-tauri-keychain). Defaults to
+   * Inject a custom keychain backend. Defaults to
    * `createDefaultKeychainBackend()` which picks Tauri commands when running
    * inside the desktop app and the HTTP loopback elsewhere. Tests pass a
    * stub backend so the wizard logic can be verified without either transport.
@@ -212,16 +212,9 @@ export function createIntegrationWizard(
   };
 
   /**
-   * Save: persist → apply.
-   *
-   * 1. POST /api/integrations writes the file and returns `{ ids, confirmationNonce }`.
-   * 2. POST /api/integrations/apply consumes the fresh nonce, iterates the
-   *    server-side file, and writes each entry to Claude's config.
-   *
-   * Two-call sequence cleanly separates intent (persist) from side-effect
-   * (apply). Per-integration apply outcomes flow back through
-   * `applyResults` so the wizard's done step can surface partial failures
-   * to the user without forcing a generic "saved!" message.
+   * Two-call sequence separating intent (persist) from side-effect (apply)
+   * — see ADR-038 §2b. The apply response flows back through
+   * `applyResults` so the done step can surface per-integration failures.
    */
   const save = async () => {
     step = "saving";

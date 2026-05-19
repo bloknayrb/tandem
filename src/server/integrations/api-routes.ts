@@ -1,17 +1,17 @@
 /**
- * HTTP API routes for the integration setup wizard (#477 PR 3c-i + 3c-ii-b).
+ * HTTP API routes for the integration setup wizard.
  *
  * Routes:
  *   GET    /api/integrations/existing            — list existing Tandem MCP entries
  *                                                  detected in `~/.claude.json` etc.
  *   GET    /api/integrations                     — read the persisted `integrations.json`.
  *   POST   /api/integrations                     — write a new integrations file (Zod-validated).
- *   GET    /api/integrations/first-run-needed    — (3c-ii-b) returns `{ needed, serverVersion,
- *                                                  confirmationNonce }`. Wizard auto-opens when
- *                                                  `needed === true`. Nonce is consumed by apply.
- *   POST   /api/integrations/apply               — (3c-ii-b) write persisted entries to Claude's
- *                                                  config. Separates intent (POST /api/integrations)
- *                                                  from side-effect (apply) per ADR-038 §2b.
+ *   GET    /api/integrations/first-run-needed    — `{ needed, serverVersion, confirmationNonce }`.
+ *                                                  Wizard auto-opens when `needed === true`.
+ *                                                  Nonce is consumed by apply.
+ *   POST   /api/integrations/apply               — write persisted entries to Claude's config.
+ *                                                  Separates intent (POST /api/integrations) from
+ *                                                  side-effect (apply) per ADR-038 §2b.
  *   POST   /api/integrations/secrets/:ref        — store a secret in the OS keychain under `ref`.
  *   DELETE /api/integrations/secrets/:ref        — remove a secret.
  *
@@ -39,7 +39,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { Express, Request, Response } from "express";
-import { TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, TAURI_HOSTNAME } from "../../shared/constants.js";
+import { TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV } from "../../shared/constants.js";
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
@@ -55,8 +55,14 @@ import {
   ERROR_CODE_INVALID_PERSISTED_FILE,
   ERROR_CODE_INVALID_SECRET,
   ERROR_CODE_KEYCHAIN_UNAVAILABLE,
+  ERROR_CODE_OTHER_MCP_NOT_APPLICABLE,
+  ERROR_CODE_PATH_REJECTED,
+  ERROR_CODE_SECRET_MISSING,
+  ERROR_CODE_TARGET_NOT_DETECTED,
+  ERROR_CODE_WRITE_FAILED,
 } from "../../shared/integrations/contract.js";
 import { isLoopback } from "../auth/middleware.js";
+import { isLocalhostOrigin } from "../mcp/api-routes.js";
 import type { Handler } from "../mcp/routes/_shared.js";
 import {
   type ApplyOps,
@@ -143,19 +149,6 @@ export function registerIntegrationsRoutes(
   app.options(API_INTEGRATIONS_SECRET, mw);
   app.post(API_INTEGRATIONS_SECRET, mw, largeBody, makePostSecretHandler(deps));
   app.delete(API_INTEGRATIONS_SECRET, mw, makeDeleteSecretHandler(deps));
-}
-
-/**
- * Origin allowlist for mutating wizard endpoints. Tighter than the global
- * CORS allowlist — apply writes to user files outside Tandem's data dir,
- * so we require either the Tauri origin or a localhost dev origin
- * explicitly.
- */
-function isOriginAllowed(origin: string | undefined): boolean {
-  if (origin === undefined) return false;
-  if (origin === `http://${TAURI_HOSTNAME}`) return true;
-  if (/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) return true;
-  return false;
 }
 
 /**
@@ -372,7 +365,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
     // 1. Origin allowlist.
     const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-    if (!isOriginAllowed(origin)) {
+    if (!isLocalhostOrigin(origin)) {
       res.status(403).json({
         error: "FORBIDDEN",
         code: ERROR_CODE_BAD_ORIGIN,
@@ -451,18 +444,25 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       const results: ApplyItemResult[] = [];
       let anyApplied = false;
 
+      const errorResult = (
+        id: string,
+        code: ApplyItemErrorCode,
+        message: string,
+      ): ApplyItemResult => ({ id, status: "error", code, message });
+
       for (const entry of persisted.integrations as IntegrationConfig[]) {
         if (!wantedIds.has(entry.id)) continue;
 
         // Server-side `other-mcp` filter — explicit even though the v3
         // schema already constrains other-mcp.apply to "skip".
         if (entry.kind === "other-mcp") {
-          results.push({
-            id: entry.id,
-            status: "error",
-            code: "OTHER_MCP_NOT_APPLICABLE",
-            message: "Tandem cannot apply third-party MCP configs",
-          });
+          results.push(
+            errorResult(
+              entry.id,
+              ERROR_CODE_OTHER_MCP_NOT_APPLICABLE,
+              "Tandem cannot apply third-party MCP configs",
+            ),
+          );
           continue;
         }
 
@@ -473,12 +473,13 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
 
         const target = targetByKind.get(entry.kind);
         if (!target) {
-          results.push({
-            id: entry.id,
-            status: "error",
-            code: "TARGET_NOT_DETECTED",
-            message: `${entry.kind} not installed on this machine`,
-          });
+          results.push(
+            errorResult(
+              entry.id,
+              ERROR_CODE_TARGET_NOT_DETECTED,
+              `${entry.kind} not installed on this machine`,
+            ),
+          );
           continue;
         }
 
@@ -489,32 +490,30 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           try {
             const secret = await deps.keychain.getSecret(entry.tokenSecretRef);
             if (secret === null) {
-              results.push({
-                id: entry.id,
-                status: "error",
-                code: "SECRET_MISSING",
-                message: `Keychain has no secret for tokenSecretRef=${entry.tokenSecretRef}`,
-              });
+              results.push(
+                errorResult(
+                  entry.id,
+                  ERROR_CODE_SECRET_MISSING,
+                  `Keychain has no secret for tokenSecretRef=${entry.tokenSecretRef}`,
+                ),
+              );
               continue;
             }
             token = secret;
           } catch (err) {
             if (err instanceof KeychainUnavailableError) {
-              results.push({
-                id: entry.id,
-                status: "error",
-                code: "SECRET_MISSING",
-                message: "Keychain unavailable",
-              });
+              results.push(
+                errorResult(entry.id, ERROR_CODE_SECRET_MISSING, "Keychain unavailable"),
+              );
               continue;
             }
-            const code: ApplyItemErrorCode = "WRITE_FAILED";
-            results.push({
-              id: entry.id,
-              status: "error",
-              code,
-              message: "Failed to resolve token from keychain",
-            });
+            results.push(
+              errorResult(
+                entry.id,
+                ERROR_CODE_WRITE_FAILED,
+                "Failed to resolve token from keychain",
+              ),
+            );
             console.error("[Tandem] apply: keychain error:", err);
             continue;
           }
@@ -536,21 +535,16 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           anyApplied = true;
         } catch (err) {
           if (err instanceof PathRejectedError) {
-            results.push({
-              id: entry.id,
-              status: "error",
-              code: "PATH_REJECTED",
-              message: err.message,
-            });
+            results.push(errorResult(entry.id, ERROR_CODE_PATH_REJECTED, err.message));
             continue;
           }
-          const code: ApplyItemErrorCode = "WRITE_FAILED";
-          results.push({
-            id: entry.id,
-            status: "error",
-            code,
-            message: err instanceof Error ? err.message : String(err),
-          });
+          results.push(
+            errorResult(
+              entry.id,
+              ERROR_CODE_WRITE_FAILED,
+              err instanceof Error ? err.message : String(err),
+            ),
+          );
           // Log full error server-side; response gets only the bare message.
           console.error(`[Tandem] apply: ${entry.id} → ${target.configPath} failed:`, err);
         }

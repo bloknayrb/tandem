@@ -1,5 +1,5 @@
 /**
- * Shared wire contract for the integration setup wizard (#477 PR 3c-i).
+ * Shared wire contract for the integration setup wizard.
  *
  * Both the client (wizard UI) and the server (`src/server/integrations/`)
  * import from here so:
@@ -166,13 +166,19 @@ export const ERROR_CODE_APPLY_IN_PROGRESS = "APPLY_IN_PROGRESS";
 /** Per-integration outcome from POST /api/integrations/apply. */
 export type ApplyItemStatus = "applied" | "skipped" | "error";
 
+export const ERROR_CODE_TARGET_NOT_DETECTED = "TARGET_NOT_DETECTED";
+export const ERROR_CODE_SECRET_MISSING = "SECRET_MISSING";
+export const ERROR_CODE_OTHER_MCP_NOT_APPLICABLE = "OTHER_MCP_NOT_APPLICABLE";
+export const ERROR_CODE_PATH_REJECTED = "PATH_REJECTED";
+export const ERROR_CODE_WRITE_FAILED = "WRITE_FAILED";
+
 /** Specific failure codes the wizard can branch on. */
 export type ApplyItemErrorCode =
-  | "TARGET_NOT_DETECTED"
-  | "SECRET_MISSING"
-  | "OTHER_MCP_NOT_APPLICABLE"
-  | "PATH_REJECTED"
-  | "WRITE_FAILED";
+  | typeof ERROR_CODE_TARGET_NOT_DETECTED
+  | typeof ERROR_CODE_SECRET_MISSING
+  | typeof ERROR_CODE_OTHER_MCP_NOT_APPLICABLE
+  | typeof ERROR_CODE_PATH_REJECTED
+  | typeof ERROR_CODE_WRITE_FAILED;
 
 export interface ApplyItemResult {
   id: string;

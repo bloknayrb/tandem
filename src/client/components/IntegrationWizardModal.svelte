@@ -1,16 +1,12 @@
 <script lang="ts">
 /**
- * Integration setup wizard modal (#477 PR 3c-i + 3c-ii-b).
+ * Integration setup wizard modal.
  *
- * Full-screen Svelte 5 modal driven by `createIntegrationWizard()` from
- * `../hooks/useIntegrationWizard.svelte.ts`. Four steps in a single file
- * (detect → pick → secrets → review → saving/done/error) — splitting into
- * sub-components added more indirection than value at this size.
- *
- * **PR 3c-ii-b**: opens automatically on first run when the server-side
- * `GET /api/integrations/first-run-needed` returns `needed: true`. App.svelte
- * mounts via `{#if shouldShowWizard}` (re-mount on close→reopen so the
- * state machine resets cleanly).
+ * Full-screen Svelte 5 modal driven by `createIntegrationWizard()`. All
+ * steps (detect → pick → secrets → review → saving/done/error) live in
+ * one file — splitting into sub-components added more indirection than
+ * value at this size. App.svelte mounts via `{#if shouldShowWizard}` so
+ * the state machine resets on close→reopen.
  */
 import { untrack } from "svelte";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
@@ -72,16 +68,9 @@ function close(): void {
 }
 
 /**
- * Build a default `PickedIntegration` from a detected install. PR 3c-i
- * only generates `claude-code` / `claude-desktop` records here — the
- * "add other-mcp" path is exposed via a separate button in step=pick.
- */
-/**
  * Build a stable id. `Date.now()` has only millisecond resolution and
  * `IntegrationsFileSchema` doesn't reject duplicate ids — two rapid picks
  * in the same tick would silently overwrite each other downstream.
- * `crypto.randomUUID()` is CSPRNG and collision-free for any human-scale
- * usage.
  */
 function newPickedId(kindPrefix: string): string {
   return `${kindPrefix}-${crypto.randomUUID().slice(0, 8)}`;
