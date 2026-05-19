@@ -18,10 +18,13 @@ function handleKey(e: KeyboardEvent) {
      user can see where to click to bring it back. Matches the rail's
      surface-muted background, inner-corner radius, and top/bottom insets so
      it visually reads as "the same card, mostly tucked away." -->
+<!-- tabindex="-1": Alt+Shift+Arrow is the keyboard equivalent; the strip
+     stays out of the Tab sequence to avoid cluttering the focus order. -->
 <button
   class="peek-strip peek-strip-{side}"
   data-testid={`peek-strip-${side}`}
   type="button"
+  tabindex="-1"
   aria-label={side === "left" ? "Show left panel" : "Show right panel"}
   aria-expanded="false"
   onclick={onActivate}

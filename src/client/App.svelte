@@ -1119,19 +1119,17 @@ const tutorial = createTutorial(
      inside half. Sibling of panel content (not a parent) so descendant
      clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
+  <!-- Not in the Tab sequence: keyboard users have Alt+Shift+Arrow for
+       the same action, and tab-reachable edge zones would push other
+       focusable elements past the tab-traversal budget. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class={`panel-edge-collapse panel-edge-collapse-${side}`}
     data-testid={`panel-edge-collapse-${side}`}
     role="button"
-    tabindex="0"
+    tabindex="-1"
     aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
     onclick={onToggle}
-    onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onToggle();
-      }
-    }}
   ></div>
 {/snippet}
 
