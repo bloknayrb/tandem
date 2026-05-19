@@ -76,6 +76,11 @@ export const LoopbackUrl = z
  * v3 `apply` intent. Constrained to `"skip"` on `other-mcp` (apply endpoint
  * cannot write arbitrary third-party MCP configs); free `"create" | "update"
  * | "skip"` on `claude-code` / `claude-desktop`.
+ *
+ * `"update"` is reserved for a planned diff-confirmation UX (wizard previews
+ * the merged config before commit). Today the apply handler treats `"update"`
+ * identically to `"create"`. Don't remove it as apparently-dead — the schema
+ * would have to bump to add it back when the UX ships.
  */
 const ApplyIntent = z.enum(["create", "update", "skip"]);
 

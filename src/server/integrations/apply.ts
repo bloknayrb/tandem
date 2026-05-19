@@ -17,16 +17,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-} from "node:fs";
-import { copyFile, mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -172,6 +164,10 @@ export interface DetectedTarget {
 // Realpath of OS roots changes only across process restart (and tmpdir is
 // stable for test fixtures). Memoize so per-integration apply loops and
 // MSIX detection don't re-syscall for every call.
+//
+// Lifetime: process. Tandem doesn't drop privileges and never mutates HOME
+// mid-process; if a future caller does either, the cache is stale and must
+// be invalidated.
 const DEFAULT_ROOTS_CACHE = new Map<string, string>();
 function realpathCached(p: string): string {
   const cached = DEFAULT_ROOTS_CACHE.get(p);
@@ -196,6 +192,12 @@ function realpathCached(p: string): string {
  * recursive)` walk into a protected dir. We reject both cases before any
  * read or write. The ancestor check is the closed-set boundary — any path
  * outside the allowed roots is refused even if it's not a symlink.
+ *
+ * Residual TOCTOU: the lstat-then-write window admits a same-uid attacker
+ * who swaps a regular file for a symlink between check and write. Node's
+ * `fs` doesn't expose `O_NOFOLLOW` / `openat`-style per-component
+ * traversal, so the window is unavoidable without native bindings. The
+ * realpath check shrinks the practical attack but doesn't close it.
  *
  * Defaults to `[homedir(), tmpdir()]`. Callers may nominate alternate
  * roots (e.g., test fixtures that operate inside a specific tmpdir).
@@ -394,12 +396,29 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       // location may inherit world-readable perms and leak co-tenant API
       // keys via the backup). Mode 0o600 hardens against the same.
       const backupDir = join(resolveAppDataDir(), ".broken-backups");
+      // Validate against default roots [homedir(), tmpdir()] rather than
+      // scoping to resolveAppDataDir() — the latter is tautological, and
+      // an XDG_DATA_HOME-poisoning attacker can otherwise redirect the
+      // backup target outside the home tree.
+      assertPathSafe(backupDir);
       mkdirSync(backupDir, { recursive: true });
       const backupPath = join(backupDir, `${basename(configPath)}.broken-${Date.now()}`);
       try {
-        await copyFile(configPath, backupPath);
-        if (process.platform !== "win32") {
-          chmodSync(backupPath, 0o600);
+        if (process.platform === "win32") {
+          // Windows doesn't honor POSIX modes — fall back to plain copy.
+          await copyFile(configPath, backupPath);
+        } else {
+          // Open with mode 0o600 so the file is never momentarily
+          // 0o644 (the copyFile + chmodSync sequence had a race window
+          // where the backup could be read by other local users between
+          // the two syscalls — backups may carry other vendors' API keys).
+          const data = await readFile(configPath);
+          const fd = await open(backupPath, "w", 0o600);
+          try {
+            await fd.write(data);
+          } finally {
+            await fd.close();
+          }
         }
         console.error(
           `  Warning: ${configPath} contains malformed JSON — backed up to ${backupPath}, replacing with fresh config`,

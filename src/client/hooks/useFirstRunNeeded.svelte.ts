@@ -58,6 +58,12 @@ export function createFirstRunNeeded(): FirstRunNeededState {
         typeof body.confirmationNonce === "string" ? body.confirmationNonce : null;
       settled = true;
     } catch {
+      // Intentional: server-unreachable / malformed-JSON → wizard does
+      // NOT auto-open. The safer default — auto-opening a wizard over an
+      // app the user is already working in is worse than a missing
+      // first-run on a one-off server hiccup. Manual reopen via
+      // Settings → Reopen wizard is always available. Don't "fix" this
+      // by flipping the default.
       if (captured !== gen) return;
       needed = false;
       settled = true;

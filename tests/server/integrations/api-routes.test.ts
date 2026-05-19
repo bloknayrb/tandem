@@ -25,6 +25,7 @@ import {
   INTEGRATIONS_SCHEMA_VERSION,
 } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
+import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../../src/shared/constants.js";
 
 /** No-op pass-through used for the `mw` parameter (DNS-rebinding middleware is not in scope). */
 const passthrough: IntegrationsRoutesDeps["store"] extends infer _T
@@ -334,15 +335,15 @@ describe("integrations API routes", () => {
 
     it("returns needed=false when TANDEM_DISABLE_FIRST_RUN_WIZARD=1 (E2E harness flag)", async () => {
       deps.readExisting = async () => [];
-      const prev = process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD;
-      process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD = "1";
+      const prev = process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV];
+      process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = "1";
       try {
         const app = makeApp(deps);
         const res = await request(app, "GET", API_INTEGRATIONS_FIRST_RUN);
         expect(res.body).toMatchObject({ needed: false });
       } finally {
-        if (prev === undefined) delete process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD;
-        else process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD = prev;
+        if (prev === undefined) delete process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV];
+        else process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = prev;
       }
     });
 

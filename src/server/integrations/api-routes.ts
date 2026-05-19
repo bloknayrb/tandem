@@ -39,7 +39,10 @@
 import { randomBytes } from "node:crypto";
 
 import type { Express, Request, Response } from "express";
-import { TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV } from "../../shared/constants.js";
+import {
+  TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
+  TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV,
+} from "../../shared/constants.js";
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
@@ -122,8 +125,16 @@ function getApplyGate(): ApplyGateState {
   return applyGate;
 }
 
-/** Test-only: reset the apply gate between cases. */
+/**
+ * Test-only: reset the apply gate between cases. Guarded on `VITEST`
+ * (set by Vitest itself, not user-controllable in production) rather
+ * than `NODE_ENV` — a misconfigured runner / container default should
+ * not be able to expose this surface.
+ */
 export function _resetApplyGateForTests(): void {
+  if (process.env.VITEST !== "true") {
+    throw new Error("_resetApplyGateForTests is test-only");
+  }
   applyGate = createApplyGate();
 }
 
@@ -153,17 +164,25 @@ export function registerIntegrationsRoutes(
 
 /**
  * Defense-in-depth: even with `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`,
- * /api/integrations/apply fails closed for non-loopback callers — this
- * endpoint mutates files outside Tandem's data dir.
+ * the mutating integration routes fail closed for non-loopback callers.
+ * These routes either touch files outside Tandem's data dir
+ * (`/api/integrations/apply`) or stage payloads a loopback user could
+ * later trigger (`POST /api/integrations`, secrets POST/DELETE) — both
+ * trade-offs the LAN-unauth opt-in did not consent to.
+ *
+ * Read-only routes (`GET /api/integrations`, `GET .../existing`,
+ * `GET .../first-run-needed`) remain reachable from LAN under the
+ * opt-in, on the basis that the user explicitly accepted exposing
+ * Tandem's read surface to the network.
  */
-function rejectUnauthLan(req: Request, res: Response): boolean {
+function assertLoopbackForMutation(req: Request, res: Response): boolean {
   const allowUnauthLan = process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV] === "1";
   if (allowUnauthLan && !isLoopback(req.socket.remoteAddress)) {
     res.status(403).json({
       error: "FORBIDDEN",
       code: ERROR_CODE_BAD_ORIGIN,
       message:
-        "/api/integrations/apply is loopback-only; TANDEM_ALLOW_UNAUTHENTICATED_LAN does not relax this endpoint",
+        "Mutating integration routes are loopback-only; TANDEM_ALLOW_UNAUTHENTICATED_LAN does not relax this surface",
     });
     return true;
   }
@@ -194,6 +213,7 @@ function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
 
 function makePostIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
+    if (assertLoopbackForMutation(req, res)) return;
     const parsed = IntegrationsFileSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
@@ -232,9 +252,11 @@ function makePostIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
  * localStorage value can never prevent the wizard from re-prompting when
  * the server says it's needed).
  *
- * Nonce in the response binds the *next* apply call to the user-visible
- * UI session that fetched it. The wizard caches this and passes it in
- * `POST /api/integrations/apply.confirmationNonce`.
+ * Nonce in the response binds the next apply call to the most recent
+ * persist or first-run-needed response. (A subsequent
+ * `POST /api/integrations` rotates the nonce, so persist → persist →
+ * apply uses the second persist's nonce.) The wizard caches the value
+ * and passes it in `POST /api/integrations/apply.confirmationNonce`.
  */
 function makeFirstRunHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (_req: Request, res: Response) => {
@@ -244,7 +266,7 @@ function makeFirstRunHandler(deps: IntegrationsRoutesDeps): Handler {
       // wizard auto-open would otherwise cover unrelated editor surfaces on
       // every `page.goto()`. The integration-wizard.spec.ts test does NOT
       // set this var (it explicitly exercises the manual-reopen affordance).
-      const forceDisable = process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD === "1";
+      const forceDisable = process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] === "1";
       const gate = getApplyGate();
       if (forceDisable) {
         res.json({
@@ -263,6 +285,13 @@ function makeFirstRunHandler(deps: IntegrationsRoutesDeps): Handler {
         confirmationNonce: gate.nonce,
       });
     } catch (err) {
+      // Intentional: a 500 here lets the client default to "wizard not
+      // needed" (see useFirstRunNeeded.svelte.ts's catch branch). The
+      // safer fail-mode is to NOT auto-open the wizard over the user's
+      // editor session when something on the server side is wedged.
+      // Manual reopen via Settings remains available. Don't "fix" this
+      // path by surfacing a structured `{ needed: false }` body — the
+      // client already gets that behaviour from any non-OK response.
       sendInternal(res, err, "Failed to compute first-run-needed");
     }
   };
@@ -375,7 +404,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
     }
 
     // 2. LAN unauth fail-closed.
-    if (rejectUnauthLan(req, res)) return;
+    if (assertLoopbackForMutation(req, res)) return;
 
     // 3. Body validation (includes `homeOverride` rejection).
     const body = validateApplyBody(req.body);
@@ -408,8 +437,10 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       });
       return;
     }
-    gate.inFlight = true;
     try {
+      // Set inside the try so a throw between `inFlight = true` and `try {`
+      // can't strand the mutex.
+      gate.inFlight = true;
       // 6. Re-validate persisted file (defense-in-depth against disk tampering).
       let file;
       try {
@@ -436,6 +467,11 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
         // Detected paths are server-built; assertPathSafe will run again
         // inside applyConfig as a final guard, but pre-checking here lets
         // us surface a clearer per-integration error if something is off.
+        //
+        // Duplicate-target collapse: when multiple MSIX packages match,
+        // only the first one wins per kind. The detector's label already
+        // disambiguates by suffixing `(${pkg.slice(0,12)}…)`, so the
+        // user-visible picker shows which install was selected.
         if (!targetByKind.has(t.kind)) targetByKind.set(t.kind, t);
       }
 
@@ -470,6 +506,11 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           results.push({ id: entry.id, status: "skipped" });
           continue;
         }
+        // `apply: "update"` is reserved for a planned diff-confirmation UX
+        // (the wizard will preview the merged config before commit). Until
+        // that ships, "update" behaves identically to "create" — both fall
+        // through to `applyConfig` here. Don't "clean up" the apparently-
+        // dead alternative; the schema would have to bump to add it back.
 
         const target = targetByKind.get(entry.kind);
         if (!target) {
@@ -490,11 +531,18 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           try {
             const secret = await deps.keychain.getSecret(entry.tokenSecretRef);
             if (secret === null) {
+              // Static client-facing message: echoing the ref value back
+              // would confirm to a wire observer which refs exist on the
+              // host. The ref itself is opaque, but a leak still aids
+              // cross-request correlation.
+              console.error(
+                `[Tandem] apply: keychain has no secret for tokenSecretRef=${entry.tokenSecretRef}`,
+              );
               results.push(
                 errorResult(
                   entry.id,
                   ERROR_CODE_SECRET_MISSING,
-                  `Keychain has no secret for tokenSecretRef=${entry.tokenSecretRef}`,
+                  "Secret not available for this integration",
                 ),
               );
               continue;
@@ -535,18 +583,31 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           anyApplied = true;
         } catch (err) {
           if (err instanceof PathRejectedError) {
-            results.push(errorResult(entry.id, ERROR_CODE_PATH_REJECTED, err.message));
+            // err.message embeds the resolved realpath — keep it for the
+            // server log but return a static client-facing message.
+            console.error(
+              `[Tandem] apply: ${entry.id} → ${target.configPath} path-rejected:`,
+              err.message,
+            );
+            results.push(
+              errorResult(
+                entry.id,
+                ERROR_CODE_PATH_REJECTED,
+                "Refused to operate on a symlinked or out-of-tree config path",
+              ),
+            );
             continue;
           }
+          // Node's ENOENT formatting embeds the offending path; echoing
+          // err.message back to the client would leak filesystem layout.
+          console.error(`[Tandem] apply: ${entry.id} → ${target.configPath} failed:`, err);
           results.push(
             errorResult(
               entry.id,
               ERROR_CODE_WRITE_FAILED,
-              err instanceof Error ? err.message : String(err),
+              "Failed to apply config — see server logs",
             ),
           );
-          // Log full error server-side; response gets only the bare message.
-          console.error(`[Tandem] apply: ${entry.id} → ${target.configPath} failed:`, err);
         }
       }
 
@@ -594,6 +655,7 @@ function isValidRef(ref: unknown): ref is string {
 
 function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
+    if (assertLoopbackForMutation(req, res)) return;
     if (!isValidRef(req.params.ref)) {
       res.status(400).json({ error: "BAD_REQUEST", message: "Invalid :ref" });
       return;
@@ -619,6 +681,7 @@ function makePostSecretHandler(deps: IntegrationsRoutesDeps): Handler {
 
 function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
+    if (assertLoopbackForMutation(req, res)) return;
     if (!isValidRef(req.params.ref)) {
       res.status(400).json({ error: "BAD_REQUEST", message: "Invalid :ref" });
       return;

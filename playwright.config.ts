@@ -1,5 +1,5 @@
 import { defineConfig } from "@playwright/test";
-import { DEFAULT_MCP_PORT } from "./src/shared/constants";
+import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/shared/constants";
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -81,7 +81,7 @@ export default defineConfig({
       // playwright-report was generated.)
       env: {
         ...(process.env as Record<string, string>),
-        TANDEM_DISABLE_FIRST_RUN_WIZARD: "1",
+        [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",
       },
     },
   ],

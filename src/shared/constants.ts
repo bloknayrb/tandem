@@ -162,6 +162,14 @@ export const DEFAULT_BIND_HOST = "127.0.0.1";
 /** Env var name to opt in to unauthenticated LAN binding. */
 export const TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV = "TANDEM_ALLOW_UNAUTHENTICATED_LAN";
 
+/**
+ * Env var name to suppress the integration-wizard first-run auto-open.
+ * Used by the E2E harness (Playwright) so wizard modals don't cover
+ * unrelated editor surfaces. The integration-wizard.spec.ts test itself
+ * does NOT set this — it exercises the manual-reopen affordance.
+ */
+export const TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV = "TANDEM_DISABLE_FIRST_RUN_WIZARD";
+
 /** Tauri WebView origin hostname — must be accepted alongside localhost. */
 export const TAURI_HOSTNAME = "tauri.localhost";
 
