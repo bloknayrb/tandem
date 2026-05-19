@@ -947,15 +947,17 @@ const tutorial = createTutorial(
 
     <!-- Single persistent container — editor column is always rendered in the same
          DOM position so the Editor component never remounts on panel toggles.
-         Left and right rails are independently shown/hidden around the stable editor column. -->
-    <!-- `overflow: clip` (not `hidden`) is required: `overflow: hidden` makes
-         this element a programmatic scroll container, and when the right rail
-         mounts with `transform: translateX(100%)` the browser auto-scrolls the
-         container to bring the newly-focused button (offscreen by 300px due to
-         the transform) into view, causing the entire row to "pop" -300px and
-         slide back over the transition window. `clip` clips identically but
-         does not create a scroll container. -->
-    <div style="display: flex; flex: 1; overflow: clip; background: var(--tandem-bg);">
+         Left and right rails are independently shown/hidden around the stable editor column.
+         `onscroll` resets scrollLeft to 0: `overflow: hidden` makes this a scroll
+         container, and when the right rail mounts with `transform: translateX(100%)`,
+         focus lands on the (now-offscreen) edge-collapse button and the browser
+         auto-scrolls the container by 300px to bring it into view, causing the
+         whole row to "pop" -300px and slide back over the transition window.
+         Pinning scrollLeft to 0 cancels that without affecting layout. -->
+    <div
+      style="position: relative; display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);"
+      onscroll={(e) => { e.currentTarget.scrollLeft = 0; }}
+    >
       {#if effectiveLeftVisible}
         <!-- Left rail is locked to the outline; the redesign V7OutlineRail
              has no tab bar. Outermost 8px is the edge-click collapse zone. -->

@@ -37,8 +37,12 @@ function handleKey(e: KeyboardEvent) {
 
 <style>
   .peek-strip {
-    position: fixed;
-    top: var(--tandem-rail-top-clearance, 52px);
+    /* Absolute so we inherit the parent flex container's coordinate space.
+       The container already sits below titlebar + Toolbar + FormattingBar,
+       so matching the rail's `margin-top` / `margin-bottom` here puts the
+       strip's top/bottom edges flush with the open rail's edges. */
+    position: absolute;
+    top: var(--tandem-rail-top-clearance, 0);
     bottom: var(--tandem-status-clearance-total, 60px);
     width: 14px;
     padding: 0;
@@ -72,9 +76,7 @@ function handleKey(e: KeyboardEvent) {
   .peek-strip:hover,
   .peek-strip:focus-visible {
     width: 20px;
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent);
-    box-shadow: var(--tandem-shadow-2);
+    box-shadow: var(--tandem-shadow-3);
     outline: none;
   }
   .peek-strip:hover .peek-chevron,
@@ -82,6 +84,6 @@ function handleKey(e: KeyboardEvent) {
     opacity: 1;
   }
   .peek-strip:focus-visible {
-    box-shadow: var(--tandem-shadow-2), inset 0 0 0 2px var(--tandem-accent);
+    box-shadow: var(--tandem-shadow-3), inset 0 0 0 2px var(--tandem-accent);
   }
 </style>

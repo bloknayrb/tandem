@@ -349,7 +349,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   </div>
 
   {#if isTauriRuntime()}
-    <div class="title-bar-controls tandem-floating-pill">
+    <div class="title-bar-controls">
       <button
         type="button"
         class="title-bar-btn"
@@ -488,6 +488,10 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .title-bar-gap {
     flex: 1 1 0;
     min-width: var(--tandem-space-2);
+    /* Stretch to the title-bar's full content height so the drag region
+       actually has a hit area; an empty div with no intrinsic content
+       collapses to 0px tall under flex `align-items: center`. */
+    align-self: stretch;
   }
 
   /* Cap at 60% so brand + actions stay readable when the center fills with
@@ -623,18 +627,25 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     }
   }
 
-  /* Wincontrols pill: 30×30 buttons inside a single rounded clip.
-     `.tandem-floating-pill` (from index.html) supplies the bg/border/shadow;
-     this rule sets the pill shape + size and ensures buttons clip to the
-     rounded edges. Margin pulls the cluster slightly clear of the gear so
-     it reads as a separate group. */
+  /* Bare window controls — no pill chrome, flush with the window's top-right
+     corner so they read as OS chrome distinct from the in-app actions. The
+     titlebar has `padding: 14px 14px 4px`; negative margin-top/-right cancel
+     the top and right padding so the close button sits at (0, 0) relative to
+     the window corner. `position: relative; z-index` lifts the cluster above
+     tauri-plugin-decorum's overlay drag-region (same rationale as
+     .title-bar-center / .title-bar-actions) so the buttons receive clicks
+     instead of the overlay treating them as drag surface. */
   .title-bar-controls {
     display: inline-flex;
     align-items: center;
     height: 30px;
+    margin-top: -14px;
+    margin-right: -14px;
     margin-left: 6px;
-    overflow: hidden;
+    align-self: flex-start;
     flex-shrink: 0;
+    position: relative;
+    z-index: 99999;
   }
 
   .title-bar-btn {
