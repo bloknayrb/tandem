@@ -102,12 +102,22 @@
 .ProseMirror-focused {
   outline: none;
 }
+/* Wave F #11: empty-paragraph placeholder. The Tiptap-stock `float: left;
+   height: 0` recipe interacts badly with our prose column constraints —
+   the placeholder text wraps one character per line. Absolute positioning
+   keeps the pseudo out of flow (caret stays at offset 0) without
+   constraining its width to whatever 1-char-wide box `float` produced. */
+.ProseMirror p.is-empty {
+  position: relative;
+}
 .ProseMirror p.is-empty::before {
   content: attr(data-placeholder);
   color: var(--tandem-fg-subtle);
   pointer-events: none;
-  float: left;
-  height: 0;
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
 }
 
 /* Find / Replace decorations */
