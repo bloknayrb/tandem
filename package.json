@@ -58,6 +58,8 @@
     "audit:dead-code": "knip",
     "audit:origins": "tsx scripts/audit-origins.ts",
     "audit:ymap-keys": "tsx scripts/audit-ymap-keys.ts",
+    "kg": "node scripts/kg.mjs",
+    "kg:lint": "node scripts/kg-lint.mjs",
     "prepare": "husky",
     "prepublishOnly": "npm run build"
   },
