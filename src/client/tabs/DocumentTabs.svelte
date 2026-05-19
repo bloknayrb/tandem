@@ -183,7 +183,14 @@ $effect(() => {
     if (!target) return;
     if (openBtnEl?.contains(target)) return;
     if ((target as Element).closest?.(".new-tab-menu")) return;
-    if ((target as Element).closest?.("[data-tauri-drag-region]")) return;
+    // Wave M: the titlebar root carries the drag region, with interactive
+    // descendants opting out via `data-tauri-drag-region="false"`. We only
+    // want to ignore clicks that landed in an actual drag area — not in an
+    // opted-out child like the new-tab button.
+    {
+      const drag = (target as Element).closest?.("[data-tauri-drag-region]");
+      if (drag && drag.getAttribute("data-tauri-drag-region") !== "false") return;
+    }
     showRecent = false;
   }
 

@@ -57,7 +57,13 @@ function handleOutsideClick(e: MouseEvent) {
   const target = e.target as (Node & Element) | null;
   if (!target) return;
   if (anchorEl?.contains(target)) return;
-  if (target.closest?.("[data-tauri-drag-region]")) return;
+  // Wave M: honor `data-tauri-drag-region="false"` opt-outs so clicks on
+  // brand-menu items, tabs, etc. (which sit inside the root drag region but
+  // are explicitly opted out) still dismiss this menu.
+  {
+    const drag = target.closest?.("[data-tauri-drag-region]");
+    if (drag && drag.getAttribute("data-tauri-drag-region") !== "false") return;
+  }
   onClose();
 }
 
