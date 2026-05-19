@@ -332,6 +332,20 @@ describe("integrations API routes", () => {
       expect(typeof (res.body as { confirmationNonce: string }).confirmationNonce).toBe("string");
     });
 
+    it("returns needed=false when TANDEM_DISABLE_FIRST_RUN_WIZARD=1 (E2E harness flag)", async () => {
+      deps.readExisting = async () => [];
+      const prev = process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD;
+      process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD = "1";
+      try {
+        const app = makeApp(deps);
+        const res = await request(app, "GET", API_INTEGRATIONS_FIRST_RUN);
+        expect(res.body).toMatchObject({ needed: false });
+      } finally {
+        if (prev === undefined) delete process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD;
+        else process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD = prev;
+      }
+    });
+
     it("returns needed=false when integrations.json has an entry", async () => {
       await deps.store.write({
         schemaVersion: INTEGRATIONS_SCHEMA_VERSION,

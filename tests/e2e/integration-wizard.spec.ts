@@ -8,8 +8,12 @@ import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
  * Integration wizard E2E (#477 PR 3c-i + 3c-ii-b).
  *
  * Post-3c-ii-b: the wizard auto-opens via server-side first-run detection
- * (`GET /api/integrations/first-run-needed`) instead of behind a Settings
- * toggle. Settings exposes a "Reopen wizard" button for manual reopen.
+ * (`GET /api/integrations/first-run-needed`). The Playwright webServer sets
+ * `TANDEM_DISABLE_FIRST_RUN_WIZARD=1` so the auto-open path is suppressed
+ * for the whole E2E suite (other specs would otherwise have the wizard
+ * cover their editor surfaces). This spec exclusively exercises the
+ * manual-reopen affordance from Settings — the auto-open path is covered
+ * by unit tests for `useFirstRunNeeded` and `makeFirstRunHandler`.
  *
  * Does NOT exercise the secrets step (no real keychain on CI Linux without
  * libsecret; that branch is covered by `useIntegrationWizard.test.ts` with
@@ -24,7 +28,6 @@ const AI_TAB = "[data-testid='settings-modal-tab-claude-code']";
 const OPEN_WIZARD_BTN = "[data-testid='settings-modal-open-integration-wizard']";
 const WIZARD = "[data-testid='integration-wizard']";
 const WIZARD_CLOSE = "[data-testid='integration-wizard-close']";
-const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
 
 async function openSettingsModal(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -40,8 +43,6 @@ async function openSettingsModal(page: Page): Promise<void> {
 test.beforeAll(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
-  // The wizard doesn't read any fixture content; we just need a document
-  // open so the editor mounts.
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-e2e-iw-"));
   fs.writeFileSync(path.join(tmpDir, "sample.md"), "# sample\n", "utf-8");
 });
@@ -56,31 +57,9 @@ test.afterAll(async () => {
   }
 });
 
-test.beforeEach(async ({ page }, testInfo) => {
+test.beforeEach(async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://127.0.0.1:5173");
-  // Mark the wizard dismissed so the auto-open path (which depends on
-  // server-side first-run detection) doesn't fire for tests that target
-  // the manual-reopen affordance. Tests that need auto-open clear this
-  // explicitly via a `auto-open` annotation on their title.
-  if (!testInfo.title.includes("auto-open")) {
-    await page.evaluate((key) => {
-      try {
-        localStorage.setItem(key, "dismissed");
-      } catch {
-        /* ignore */
-      }
-    }, WIZARD_DISMISSED_KEY);
-  } else {
-    await page.evaluate((key) => {
-      try {
-        localStorage.removeItem(key);
-      } catch {
-        /* ignore */
-      }
-    }, WIZARD_DISMISSED_KEY);
-  }
-  await page.reload();
 });
 
 test("Reopen wizard button is visible in Settings → AI Assistant tab", async ({ page }) => {
@@ -96,10 +75,8 @@ test("Reopen wizard button launches the modal and closes Settings", async ({ pag
   await expect(page.locator(OPEN_WIZARD_BTN)).toBeVisible();
   await page.locator(OPEN_WIZARD_BTN).click();
 
-  // SettingsModal closes; wizard appears.
   await expect(page.locator(SETTINGS_MODAL)).toHaveCount(0);
   await expect(page.locator(WIZARD)).toBeVisible({ timeout: 5_000 });
-  // The wizard begins in the detect step.
   await expect(page.locator("[data-testid='integration-wizard-step-detect']")).toBeVisible();
 });
 

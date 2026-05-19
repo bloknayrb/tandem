@@ -246,10 +246,24 @@ function makePostIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
 function makeFirstRunHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (_req: Request, res: Response) => {
     try {
+      // `TANDEM_DISABLE_FIRST_RUN_WIZARD=1` short-circuits auto-open without
+      // touching `integrations.json`. Used by the E2E test harness — the
+      // wizard auto-open would otherwise cover unrelated editor surfaces on
+      // every `page.goto()`. The integration-wizard.spec.ts test does NOT
+      // set this var (it explicitly exercises the manual-reopen affordance).
+      const forceDisable = process.env.TANDEM_DISABLE_FIRST_RUN_WIZARD === "1";
+      const gate = getApplyGate();
+      if (forceDisable) {
+        res.json({
+          needed: false,
+          serverVersion: deps.serverVersion,
+          confirmationNonce: gate.nonce,
+        });
+        return;
+      }
       const file = await deps.store.read();
       const installs = await deps.readExisting();
       const needed = file.integrations.length === 0 && !hasExistingTandemEntry(installs);
-      const gate = getApplyGate();
       res.json({
         needed,
         serverVersion: deps.serverVersion,

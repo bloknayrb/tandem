@@ -66,6 +66,15 @@ export default defineConfig({
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      // 3c-ii-b: the integration wizard now auto-opens on first run via
+      // `GET /api/integrations/first-run-needed`. In E2E, a clean home
+      // directory makes the server say `needed: true` and the wizard would
+      // cover every unrelated test's editor surface. The integration-wizard
+      // spec exercises the manual-reopen affordance with this var still set
+      // (Reopen button always works).
+      env: {
+        TANDEM_DISABLE_FIRST_RUN_WIZARD: "1",
+      },
     },
   ],
 });
