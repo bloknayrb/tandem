@@ -214,9 +214,11 @@ describe("loadSettings — migration chain", () => {
     expect(s._readOnly).toBeUndefined();
   });
 
-  it("v3→v4: displaced left tabs move to right rail (chat alone)", () => {
-    // Realistic pre-Wave-D state: user moved Chat to the left rail. After
-    // migration, Chat must survive on the right rail.
+  // v3 sources climb the chain to v5 in memory. The v3→v4 step's displaced-
+  // tab plumbing is no longer observable to consumers because v4→v5 strips
+  // the rail-tab fields entirely. These cases pin down "no crash on weird
+  // v3 input + final state is rail-tab-free at v5."
+  it("v3 with displaced left tabs climbs to v5 with rail-tab fields stripped", () => {
     writeRaw({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
@@ -224,50 +226,12 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
-    expect(s.leftRailTabs).toEqual(["outline"]);
-    expect(s.rightRailTabs).toEqual(["annotations", "chat"]);
+    expect(s.schemaVersion).toBe(5);
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v3→v4: multiple displaced left tabs preserve source order (chat, annotations)", () => {
-    writeRaw({
-      schemaVersion: 3,
-      leftRailTabs: ["chat", "annotations", "outline"],
-      rightRailTabs: [],
-      models: [],
-    });
-    const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
-    expect(s.leftRailTabs).toEqual(["outline"]);
-    // Source order from the left rail is preserved on the right.
-    expect(s.rightRailTabs).toEqual(["chat", "annotations"]);
-  });
-
-  it("v3→v4: displaced left tab already on right rail is deduped", () => {
-    writeRaw({
-      schemaVersion: 3,
-      leftRailTabs: ["chat", "outline"],
-      rightRailTabs: ["annotations", "chat"],
-      models: [],
-    });
-    const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
-    expect(s.rightRailTabs).toEqual(["annotations", "chat"]); // no duplicate
-  });
-
-  it("v3→v4: rightRailTabs absent on v3 source — displaced tabs land on a fresh right rail", () => {
-    writeRaw({
-      schemaVersion: 3,
-      leftRailTabs: ["chat", "outline"],
-      // rightRailTabs intentionally omitted
-      models: [],
-    });
-    const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
-    expect(s.rightRailTabs).toContain("chat");
-  });
-
-  it("v3→v4: rightRailTabs non-array (corrupt) on v3 source — displaced tabs land on a fresh right rail", () => {
+  it("v3 with corrupt rightRailTabs climbs to v5 without crashing", () => {
     writeRaw({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
@@ -275,12 +239,12 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
-    expect(s.rightRailTabs).toContain("chat");
+    expect(s.schemaVersion).toBe(5);
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v3→v4: idempotency — already-v4 blob loads unchanged", () => {
-    // A v4 blob should not re-run the migration (the `=== 3` gate is exclusive).
+  it("v4 blobs climb to v5 stripping rail-tab fields", () => {
     writeRaw({
       schemaVersion: 4,
       leftRailTabs: ["outline"],
@@ -289,11 +253,11 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(4);
-    expect(s.leftRailTabs).toEqual(["outline"]);
-    expect(s.rightRailTabs).toEqual(["annotations", "chat"]);
+    expect(s.schemaVersion).toBe(5);
+    expect(s.leftRailTabs).toBeUndefined();
+    expect(s.rightRailTabs).toBeUndefined();
     expect(s.theme).toBe("dark");
-    // Not _readOnly — schemaVersion === CURRENT.
+    // Not _readOnly — climbed cleanly to CURRENT.
     expect(s._readOnly).toBeUndefined();
   });
 
