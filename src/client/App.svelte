@@ -1098,30 +1098,29 @@ const tutorial = createTutorial(
   ></div>
 {/snippet}
 
-<!-- Edge-click collapse zones: two thin strips (top + bottom) at the outer
-     edge of the rail, leaving the middle uncovered. The middle is where the
-     native scrollbar and the RailTabPicker trigger live; the previous full-
-     height zone occluded both. Each strip is an 8px-wide sibling of panel
-     content (not a parent), so descendant clicks never bubble in. -->
+<!-- Edge-click collapse zone: full-height 8px strip at the outer edge of the
+     rail. The right rail insets the top by 40px so the RailTabPicker trigger
+     (top-inner corner of rail-tabs-row, ~36px tall) stays clickable; the
+     left rail has no picker so it runs edge-to-edge. The right rail's
+     scrollbar shares the outer edge — a known minor conflict; the strip
+     stays 8px so a Windows scrollbar (~17px) remains grabbable from the
+     inside half. Sibling of panel content (not a parent) so descendant
+     clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
-  {#each ["top", "bottom"] as const as edge (edge)}
-    <div
-      class={`panel-edge-collapse panel-edge-collapse-${side} panel-edge-collapse-${edge}`}
-      data-testid={edge === "top"
-        ? `panel-edge-collapse-${side}`
-        : `panel-edge-collapse-${side}-bottom`}
-      role="button"
-      tabindex="0"
-      aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
-      onclick={onToggle}
-      onkeydown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onToggle();
-        }
-      }}
-    ></div>
-  {/each}
+  <div
+    class={`panel-edge-collapse panel-edge-collapse-${side}`}
+    data-testid={`panel-edge-collapse-${side}`}
+    role="button"
+    tabindex="0"
+    aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
+    onclick={onToggle}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onToggle();
+      }
+    }}
+  ></div>
 {/snippet}
 
 {#snippet editorColumn()}
@@ -1410,30 +1409,26 @@ const tutorial = createTutorial(
     font-weight: 700;
   }
 
-  /* Edge-click collapse zones. Two strips per rail (top + bottom) leave
-     the middle uncovered so the native scrollbar and the RailTabPicker
-     trigger stay reachable. Sibling to panel content (not a parent) so
-     descendant clicks never bubble in. */
+  /* Edge-click collapse zone. Full-height 8px strip on the rail's outer
+     edge. Left rail goes edge-to-edge; right rail starts below the
+     rail-tabs-row (40px) so the RailTabPicker stays clickable. Sibling
+     to panel content so descendant clicks don't bubble in. */
   .panel-edge-collapse {
     position: absolute;
     width: 8px;
-    height: 16px;
+    top: 0;
+    bottom: 0;
     cursor: pointer;
     z-index: 1;
     background: transparent;
     transition: background 140ms ease;
-  }
-  .panel-edge-collapse-top {
-    top: 0;
-  }
-  .panel-edge-collapse-bottom {
-    bottom: 0;
   }
   .panel-edge-collapse-left {
     left: 0;
   }
   .panel-edge-collapse-right {
     right: 0;
+    top: 40px;
   }
   .panel-edge-collapse:hover {
     background: var(--tandem-accent-bg);
