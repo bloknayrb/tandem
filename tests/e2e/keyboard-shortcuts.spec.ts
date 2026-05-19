@@ -220,12 +220,21 @@ test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
   await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).not.toBe(initial);
   // focusToggleTarget queues focus via microtask to the activated element's
-  // replacement (peek strip on collapse, edge zone on re-expand).
-  await expect(page.getByTestId("peek-strip-left")).toBeFocused();
+  // replacement: peek strip when the rail just collapsed, edge zone when
+  // it just expanded. Direction depends on the test fixture's initial
+  // panel-visibility, so derive the expected target from the current
+  // post-toggle visibility rather than assuming a fixed direction.
+  const visibleAfterFirst = (await leftHandle.count()) > 0;
+  await expect(
+    page.getByTestId(visibleAfterFirst ? "panel-edge-collapse-left" : "peek-strip-left"),
+  ).toBeFocused();
 
   await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).toBe(initial);
-  await expect(page.getByTestId("panel-edge-collapse-left")).toBeFocused();
+  const visibleAfterSecond = (await leftHandle.count()) > 0;
+  await expect(
+    page.getByTestId(visibleAfterSecond ? "panel-edge-collapse-left" : "peek-strip-left"),
+  ).toBeFocused();
 });
 
 test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
@@ -238,11 +247,17 @@ test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
 
   await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).not.toBe(initial);
-  await expect(page.getByTestId("peek-strip-right")).toBeFocused();
+  const visibleAfterFirst = (await rightHandle.count()) > 0;
+  await expect(
+    page.getByTestId(visibleAfterFirst ? "panel-edge-collapse-right" : "peek-strip-right"),
+  ).toBeFocused();
 
   await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).toBe(initial);
-  await expect(page.getByTestId("panel-edge-collapse-right")).toBeFocused();
+  const visibleAfterSecond = (await rightHandle.count()) > 0;
+  await expect(
+    page.getByTestId(visibleAfterSecond ? "panel-edge-collapse-right" : "peek-strip-right"),
+  ).toBeFocused();
 });
 
 test("Ctrl+Alt+T reopens the most recently closed tab", async ({ page }) => {
