@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import {
   applyConfig,
+  applyOpsForCli,
   buildMcpEntries,
   type DetectedTarget,
   detectTargets,
@@ -64,7 +65,12 @@ export async function runSetupHandler(
       targetKind: target.kind,
     });
     try {
-      await applyConfig(target.configPath, entries);
+      // The /api/setup route preserves the pre-3c-ii-b "remove stale
+      // channel shim unless asked for" semantics. The wizard's
+      // /api/integrations/apply uses an explicit confirmation diff.
+      // /api/setup itself dies in 3c-ii-c — once it's gone, this
+      // call site goes with it.
+      await applyConfig(target.configPath, applyOpsForCli(entries, false));
       configured.push(target.label);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

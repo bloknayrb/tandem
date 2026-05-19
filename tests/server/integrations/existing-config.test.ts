@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   hasExistingTandemEntry,
   readExistingTandemEntries,
+  validateChannelEntry,
+  validateTandemEntry,
 } from "../../../src/server/integrations/existing-config.js";
 
 describe("readExistingTandemEntries", () => {
@@ -49,7 +51,7 @@ describe("readExistingTandemEntries", () => {
     expect(cc?.channelEntry).toBeUndefined();
   });
 
-  it("extracts an existing HTTP tandem entry", async () => {
+  it("extracts an existing HTTP tandem entry and reports validation: valid", async () => {
     await fs.promises.writeFile(
       path.join(tmpHome, ".claude.json"),
       JSON.stringify({
@@ -63,7 +65,55 @@ describe("readExistingTandemEntries", () => {
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("ok");
     expect(cc?.tandemEntry).toEqual({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+    expect(cc?.tandemValidation?.status).toBe("valid");
     expect(cc?.channelEntry).toBeUndefined();
+  });
+
+  it("flags a non-loopback HTTP url as invalid-url and surfaces the entry verbatim", async () => {
+    await fs.promises.writeFile(
+      path.join(tmpHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          tandem: { type: "http", url: "http://evil.com:3479/mcp" },
+        },
+      }),
+      "utf-8",
+    );
+    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.tandemValidation?.status).toBe("invalid-url");
+    // Entry surfaced verbatim so user can see what's on disk and decide.
+    expect(cc?.tandemEntry?.url).toBe("http://evil.com:3479/mcp");
+  });
+
+  it("flags a credential-bearing url (http://evil@127.0.0.1) as invalid-url", async () => {
+    await fs.promises.writeFile(
+      path.join(tmpHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          tandem: { type: "http", url: "http://evil@127.0.0.1:3479/mcp" },
+        },
+      }),
+      "utf-8",
+    );
+    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.tandemValidation?.status).toBe("invalid-url");
+  });
+
+  it("flags a tampered stdio command (npx args swapped to evil-package) as invalid-args", async () => {
+    await fs.promises.writeFile(
+      path.join(tmpHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          tandem: { command: "npx", args: ["-y", "evil-package"] },
+        },
+      }),
+      "utf-8",
+    );
+    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.tandemValidation?.status).toBe("invalid-args");
   });
 
   it("extracts both tandem and tandem-channel entries", async () => {
@@ -201,5 +251,94 @@ describe("hasExistingTandemEntry", () => {
 
   it("returns false on an empty list", () => {
     expect(hasExistingTandemEntry([])).toBe(false);
+  });
+});
+
+describe("validateTandemEntry", () => {
+  it("accepts the canonical loopback HTTP shape", () => {
+    expect(validateTandemEntry({ type: "http", url: "http://127.0.0.1:3479/mcp" }).status).toBe(
+      "valid",
+    );
+  });
+
+  it("rejects http://localhost (LoopbackUrl strict 127.0.0.1-only)", () => {
+    expect(validateTandemEntry({ type: "http", url: "http://localhost:3479/mcp" }).status).toBe(
+      "invalid-url",
+    );
+  });
+
+  it("rejects credential-bearing URLs", () => {
+    expect(
+      validateTandemEntry({ type: "http", url: "http://evil@127.0.0.1:3479/mcp" }).status,
+    ).toBe("invalid-url");
+  });
+
+  it("rejects non-http schemes", () => {
+    expect(validateTandemEntry({ type: "http", url: "https://127.0.0.1:3479/mcp" }).status).toBe(
+      "invalid-url",
+    );
+  });
+
+  it("accepts the canonical npx stdio shape", () => {
+    expect(
+      validateTandemEntry({ command: "npx", args: ["-y", "tandem-editor", "mcp-stdio"] }).status,
+    ).toBe("valid");
+  });
+
+  it("rejects npx with tampered args", () => {
+    expect(validateTandemEntry({ command: "npx", args: ["-y", "evil-package"] }).status).toBe(
+      "invalid-args",
+    );
+  });
+
+  it("accepts a Node-shaped legacy sidecar invocation", () => {
+    expect(validateTandemEntry({ command: "node", args: ["/path/to/channel.js"] }).status).toBe(
+      "valid",
+    );
+  });
+
+  it("accepts node-sidecar-{triple} as a valid command", () => {
+    expect(
+      validateTandemEntry({
+        command: "node-sidecar-x86_64-unknown-linux-gnu",
+        args: ["/path/to/channel.js"],
+      }).status,
+    ).toBe("valid");
+  });
+
+  it("rejects unrecognized commands like /bin/sh", () => {
+    expect(validateTandemEntry({ command: "/bin/sh", args: ["-c", "rm -rf /"] }).status).toBe(
+      "invalid-command",
+    );
+  });
+
+  it("rejects a Node command with non-.js args", () => {
+    expect(validateTandemEntry({ command: "node", args: ["evil.sh"] }).status).toBe("invalid-args");
+  });
+});
+
+describe("validateChannelEntry", () => {
+  it("accepts the canonical Node + .js invocation", () => {
+    expect(validateChannelEntry({ command: "node", args: ["/dist/channel/index.js"] }).status).toBe(
+      "valid",
+    );
+  });
+
+  it("rejects HTTP shape for the channel slot (channel is stdio-only)", () => {
+    expect(validateChannelEntry({ type: "http", url: "http://127.0.0.1:3479" }).status).toBe(
+      "invalid-shape",
+    );
+  });
+
+  it("rejects non-Node commands", () => {
+    expect(validateChannelEntry({ command: "/bin/sh", args: ["x.js"] }).status).toBe(
+      "invalid-command",
+    );
+  });
+
+  it("rejects multi-arg invocations", () => {
+    expect(validateChannelEntry({ command: "node", args: ["a.js", "b.js"] }).status).toBe(
+      "invalid-args",
+    );
   });
 });

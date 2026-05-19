@@ -1,5 +1,5 @@
 /**
- * Integration wizard state machine (#477 PR 3c-i).
+ * Integration wizard state machine.
  *
  * Drives the wizard modal through four steps:
  *   detect   — `GET /api/integrations/existing` populates the "we found these"
@@ -28,7 +28,10 @@
 
 import {
   API_INTEGRATIONS,
+  API_INTEGRATIONS_APPLY,
   API_INTEGRATIONS_EXISTING,
+  type ApplyItemResult,
+  type ApplyResponse,
   type ExistingMcpInstall,
   INTEGRATIONS_SCHEMA_VERSION,
   type IntegrationConfig,
@@ -58,6 +61,10 @@ export interface IntegrationWizardState {
   readonly existing: ExistingMcpInstall[];
   readonly picked: PickedIntegration[];
   readonly errorMessage: string | null;
+  /** Per-integration apply outcomes after save() succeeds. Populated only when
+   *  step === "done"; consult the `status === "error"` items to surface
+   *  per-row error UX in the wizard's done step. */
+  readonly applyResults: ApplyItemResult[];
   /** Whether the keychain is known-unavailable on this server (set after first 503). */
   readonly keychainUnavailable: boolean;
   begin(): Promise<void>;
@@ -95,7 +102,7 @@ export interface IntegrationWizardOptions {
    */
   baseUrl?: string;
   /**
-   * Inject a custom keychain backend (#477 PR 3c-tauri-keychain). Defaults to
+   * Inject a custom keychain backend. Defaults to
    * `createDefaultKeychainBackend()` which picks Tauri commands when running
    * inside the desktop app and the HTTP loopback elsewhere. Tests pass a
    * stub backend so the wizard logic can be verified without either transport.
@@ -115,6 +122,7 @@ export function createIntegrationWizard(
   let existing = $state<ExistingMcpInstall[]>([]);
   let picked = $state<PickedIntegration[]>([]);
   let errorMessage = $state<string | null>(null);
+  let applyResults = $state<ApplyItemResult[]>([]);
   let keychainUnavailable = $state(false);
   // Monotonic generation counter for `begin()` — a later run invalidates
   // earlier in-flight responses so rapid open/close/reopen can't have the
@@ -203,24 +211,63 @@ export function createIntegrationWizard(
     await Promise.all(storedRefs.map((ref) => keychainBackend.delete(ref)));
   };
 
+  /**
+   * Two-call sequence separating intent (persist) from side-effect (apply)
+   * — see ADR-038 §2b. The apply response flows back through
+   * `applyResults` so the done step can surface per-integration failures.
+   */
   const save = async () => {
     step = "saving";
+    // Determine apply intent per picked integration. Failed-validation
+    // entries pre-set to "skip" so re-validated existing entries don't
+    // get overwritten with a wizard-generated shape that differs.
+    const integrations: IntegrationConfig[] = picked.map((p) => {
+      // `other-mcp` is constrained to apply: "skip" by the schema.
+      if (p.config.kind === "other-mcp") {
+        return { ...p.config, apply: "skip" } as IntegrationConfig;
+      }
+      // Wizard's pick step doesn't yet expose a per-row apply choice (a
+      // diff-confirmation UX is a follow-on). For the minimum-viable
+      // contract: every picked claude-code / claude-desktop entry applies.
+      return { ...p.config, apply: "create" } as IntegrationConfig;
+    });
     const file: IntegrationsFile = {
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
-      integrations: picked.map((p) => p.config),
+      integrations,
     };
     try {
-      const res = await fetchFn(`${baseUrl}${API_INTEGRATIONS}`, {
+      const persistRes = await fetchFn(`${baseUrl}${API_INTEGRATIONS}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(file),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { message?: string } | null;
+      if (!persistRes.ok) {
+        const body = (await persistRes.json().catch(() => null)) as { message?: string } | null;
         await cleanupStoredSecrets();
-        setError(body?.message ?? `Could not save (HTTP ${res.status}).`);
+        setError(body?.message ?? `Could not save (HTTP ${persistRes.status}).`);
         return;
       }
+      const persistBody = (await persistRes.json()) as {
+        ids: string[];
+        confirmationNonce: string;
+      };
+
+      // Apply — write the persisted entries to Claude's config.
+      const applyRes = await fetchFn(`${baseUrl}${API_INTEGRATIONS_APPLY}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ids: persistBody.ids,
+          confirmationNonce: persistBody.confirmationNonce,
+        }),
+      });
+      if (!applyRes.ok) {
+        const body = (await applyRes.json().catch(() => null)) as { message?: string } | null;
+        setError(body?.message ?? `Could not apply (HTTP ${applyRes.status}).`);
+        return;
+      }
+      const applyBody = (await applyRes.json()) as ApplyResponse;
+      applyResults = applyBody.results;
       step = "done";
     } catch (err) {
       await cleanupStoredSecrets();
@@ -233,6 +280,7 @@ export function createIntegrationWizard(
     existing = [];
     picked = [];
     errorMessage = null;
+    applyResults = [];
     keychainUnavailable = false;
   };
 
@@ -248,6 +296,9 @@ export function createIntegrationWizard(
     },
     get errorMessage() {
       return errorMessage;
+    },
+    get applyResults() {
+      return applyResults;
     },
     get keychainUnavailable() {
       return keychainUnavailable;

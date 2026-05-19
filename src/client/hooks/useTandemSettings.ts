@@ -102,10 +102,6 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
-  // #477 PR 3c-i: opt-in integration setup wizard (preview). Hidden by default
-  // until ≥2-week soak completes; enables the full-screen modal on next launch
-  // when no integration is configured yet.
-  showIntegrationWizard: boolean;
   // #659 Wave 2 PR 8a: local AI provider registry. Empty until the user adds
   // entries via Settings → Models (PR 8b ships the UI). API keys live in
   // plaintext localStorage today; a future release will move them to the OS
@@ -137,7 +133,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 5,
+  schemaVersion: 6,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -158,7 +154,6 @@ const DEFAULTS: TandemSettings = {
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
   marginView: false,
-  showIntegrationWizard: false,
   models: [],
 };
 
@@ -242,8 +237,13 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  * v4→v5: the cross-rail picker is gone. Both `leftRailTabs` and
  *   `rightRailTabs` are dropped from the schema. Left is locked to outline;
  *   right is hard-coded to Annotations + Chat in the UI.
+ * v5→v6: drop `showIntegrationWizard` (the wizard now auto-opens based on
+ *   server-side first-run detection; the "Reopen wizard" button in
+ *   Settings → Claude Code replaces the toggle). Dismissal state lives in
+ *   its own localStorage key `tandem:wizard-dismissed`, separate from
+ *   `tandem:settings` (orthogonal lifecycle).
  */
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -259,6 +259,10 @@ const CURRENT_SCHEMA_VERSION = 5;
  * v5 (Wave I): `leftRailTabs` and `rightRailTabs` no longer exist. The
  * `loadSettings` migration strips them on read; this helper does not
  * surface them.
+ *
+ * v6 (#477 PR 3c-ii-b): `showIntegrationWizard` no longer exists. The
+ * `loadSettings` migration strips it on read; the field never reaches the
+ * running UI.
  */
 function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
   return {
@@ -332,7 +336,6 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.holdAnnotationsWhileOffline
         : DEFAULTS.holdAnnotationsWhileOffline,
     marginView: parsed.marginView === true,
-    showIntegrationWizard: parsed.showIntegrationWizard === true,
     models: parseModels(parsed.models),
   };
 }
@@ -395,6 +398,14 @@ export function loadSettings(): TandemSettings {
         delete next.rightRailTabs;
         parsed = next;
       }
+      if (parsed.schemaVersion === 5) {
+        // v5→v6: drop `showIntegrationWizard`. The wizard now auto-opens via
+        // server-side first-run detection; dismissal lives in its own
+        // `tandem:wizard-dismissed` key.
+        const next: Record<string, unknown> = { ...parsed, schemaVersion: 6 };
+        delete next.showIntegrationWizard;
+        parsed = next;
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -420,14 +431,15 @@ export function loadSettings(): TandemSettings {
         const knownKeys = new Set(Object.keys(normalized));
         // Explicitly-removed schema fields. Without this set, fields that
         // were stripped by a migration step (e.g. v4→v5 dropped
-        // leftRailTabs / rightRailTabs) would leak through as "future
-        // fields" on a v99 forward-compat blob, silently pinning a
-        // contract the migration intends to retire and inheriting stale
-        // state into any future schema that reuses the names.
+        // leftRailTabs / rightRailTabs, v5→v6 dropped showIntegrationWizard)
+        // would leak through as "future fields" on a v99 forward-compat
+        // blob, silently pinning a contract the migration intends to retire
+        // and inheriting stale state into any future schema that reuses the
+        // names.
         // One-way ratchet: removing an entry from this set requires bumping
         // CURRENT_SCHEMA_VERSION such that no older client ever observes
         // the resurrected field name on a write-through round-trip.
-        const REMOVED_FIELDS = new Set(["leftRailTabs", "rightRailTabs"]);
+        const REMOVED_FIELDS = new Set(["leftRailTabs", "rightRailTabs", "showIntegrationWizard"]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {
           if (!knownKeys.has(k) && k !== "_readOnly" && !REMOVED_FIELDS.has(k)) {

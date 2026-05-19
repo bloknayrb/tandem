@@ -155,16 +155,37 @@ describe("createIntegrationWizard", () => {
     expect(wizard.step).not.toBe("error");
   });
 
-  it("save(): POSTs the integrations file and lands on step=done", async () => {
+  it("save(): POSTs persist then apply and lands on step=done", async () => {
     let savedBody: unknown = null;
+    let applyBody: unknown = null;
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([
         {
+          // POST /api/integrations now returns { ids, confirmationNonce } so
+          // the wizard can immediately chain into apply without a separate
+          // round-trip to GET /first-run-needed.
           method: "POST",
           urlMatch: /\/api\/integrations$/,
           handler: (body) => {
             savedBody = body;
-            return { status: 204, body: null };
+            return {
+              status: 200,
+              body: { ok: true, ids: ["cc-1"], confirmationNonce: "nonce-1" },
+            };
+          },
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: (body) => {
+            applyBody = body;
+            return {
+              status: 200,
+              body: {
+                results: [{ id: "cc-1", status: "applied" }],
+                nextNonce: "nonce-2",
+              },
+            };
           },
         },
       ]),
@@ -191,6 +212,10 @@ describe("createIntegrationWizard", () => {
     expect((savedBody as { schemaVersion: number }).schemaVersion).toBe(
       INTEGRATIONS_SCHEMA_VERSION,
     );
+    // Wizard chained persist → apply using the nonce from the persist response.
+    expect(applyBody).toEqual({ ids: ["cc-1"], confirmationNonce: "nonce-1" });
+    // Per-integration apply results flow through `applyResults`.
+    expect(wizard.applyResults).toEqual([{ id: "cc-1", status: "applied" }]);
   });
 
   it("save(): 400 surfaces server error message into step=error", async () => {

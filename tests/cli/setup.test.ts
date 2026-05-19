@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyConfig,
+  applyOpsForCli,
   buildMcpEntries,
   detectTargets,
   installSkill,
@@ -142,7 +143,7 @@ describe("applyConfig", () => {
   it("creates config file with tandem entries when file does not exist", async () => {
     const configPath = join(tmpDir, ".claude.json");
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, false));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toEqual({
       type: "http",
@@ -154,7 +155,7 @@ describe("applyConfig", () => {
   it("creates parent directory if it does not exist", async () => {
     const configPath = join(tmpDir, "nested", "dir", ".claude.json");
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, false));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toBeDefined();
   });
@@ -166,7 +167,7 @@ describe("applyConfig", () => {
       JSON.stringify({ mcpServers: { "my-other-server": { command: "foo" } } }),
     );
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, false));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers["my-other-server"]).toEqual({ command: "foo" });
     expect(written.mcpServers.tandem).toBeDefined();
@@ -176,7 +177,7 @@ describe("applyConfig", () => {
     const configPath = join(tmpDir, ".claude.json");
     writeFileSync(configPath, JSON.stringify({ numStartups: 42, mcpServers: {} }));
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, false));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.numStartups).toBe(42);
     expect(written.mcpServers.tandem).toBeDefined();
@@ -191,7 +192,7 @@ describe("applyConfig", () => {
       }),
     );
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, false));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem.url).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
   });
@@ -209,7 +210,7 @@ describe("applyConfig", () => {
       }),
     );
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, false));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers["tandem-channel"]).toBeUndefined();
     expect(written.mcpServers["my-other-server"]).toEqual({ command: "foo" });
@@ -219,7 +220,7 @@ describe("applyConfig", () => {
   it("preserves tandem-channel when explicitly included in entries", async () => {
     const configPath = join(tmpDir, ".claude.json");
     const entries = buildMcpEntries("/fake/channel/index.js", { withChannelShim: true });
-    await applyConfig(configPath, entries);
+    await applyConfig(configPath, applyOpsForCli(entries, true));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers["tandem-channel"]).toBeDefined();
   });
@@ -228,7 +229,14 @@ describe("applyConfig", () => {
     const configPath = join(tmpDir, ".claude.json");
     writeFileSync(configPath, "{ this is not json }}}");
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    const prevAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = tmpDir;
+    try {
+      await applyConfig(configPath, applyOpsForCli(entries, false));
+    } finally {
+      if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = prevAppData;
+    }
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers.tandem).toBeDefined();
     expect(Object.keys(written)).toEqual(["mcpServers"]);
@@ -239,18 +247,29 @@ describe("applyConfig", () => {
     const badContent = "{ malformed }";
     writeFileSync(configPath, badContent);
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await applyConfig(configPath, entries);
+    const prevAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = tmpDir;
+    try {
+      await applyConfig(configPath, applyOpsForCli(entries, false));
+    } finally {
+      if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = prevAppData;
+    }
 
-    const backups = readdirSync(tmpDir).filter((n) => n.startsWith(".claude.json.broken-"));
+    // 3c-ii-b moved the backup under the Tandem data-dir (with 0o600 on
+    // POSIX) so we don't leak the malformed file's contents through a
+    // world-readable sibling of ~/.claude.json.
+    const backupDir = join(tmpDir, ".broken-backups");
+    const backups = readdirSync(backupDir).filter((n) => n.startsWith(".claude.json.broken-"));
     expect(backups.length).toBe(1);
-    expect(readFileSync(join(tmpDir, backups[0]!), "utf-8")).toBe(badContent);
+    expect(readFileSync(join(backupDir, backups[0]!), "utf-8")).toBe(badContent);
   });
 
   it("propagates permission errors instead of silently swallowing", async () => {
     const configPath = join(tmpDir, ".claude.json");
     mkdirSync(configPath, { recursive: true });
     const entries = buildMcpEntries("/fake/channel/index.js");
-    await expect(applyConfig(configPath, entries)).rejects.toThrow();
+    await expect(applyConfig(configPath, applyOpsForCli(entries, false))).rejects.toThrow();
   });
 });
 

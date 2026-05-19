@@ -56,7 +56,7 @@ describe("loadSettings — selectionDwellMs clamping", () => {
     const settings = loadSettings();
     expect(settings.leftPanelVisible).toBe(false);
     expect(settings.rightPanelVisible).toBe(true);
-    expect(settings.schemaVersion).toBe(5);
+    expect(settings.schemaVersion).toBe(6);
     expect(settings.editorWidthPercent).toBe(100);
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
@@ -554,7 +554,7 @@ describe("v4→v5 picker teardown migration", () => {
       rightRailTabs: ["annotations", "chat"],
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
@@ -566,13 +566,23 @@ describe("v4→v5 picker teardown migration", () => {
       rightRailTabs: ["annotations"],
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("default load reports schemaVersion 5", () => {
-    expect(loadSettings().schemaVersion).toBe(5);
+  it("strips showIntegrationWizard from a v5 blob", () => {
+    writeRawSettings({
+      schemaVersion: 5,
+      showIntegrationWizard: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(6);
+    expect(s.showIntegrationWizard).toBeUndefined();
+  });
+
+  it("default load reports schemaVersion 6", () => {
+    expect(loadSettings().schemaVersion).toBe(6);
   });
 });
 
