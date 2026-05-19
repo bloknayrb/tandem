@@ -550,8 +550,7 @@ const themeLabel = $derived(THEME_LABEL[theme]);
     flex-shrink: 0;
   }
 
-  /* Wave A: matches calm-v7 .c7-icbtn — 30×30 circular soft-fill chip,
-     not transparent-until-hover. */
+  /* 30×30 circular soft-fill chip — always visible, not transparent-until-hover. */
   .icon-btn {
     display: inline-grid;
     place-items: center;

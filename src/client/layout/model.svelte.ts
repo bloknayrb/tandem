@@ -69,8 +69,8 @@ export function createLayoutModel(
   }
 
   function moveTabs(side: "left" | "right", newTabsForSide: ReadonlyArray<RailTab>): boolean {
-    // Left rail is locked to outline-only (Wave D). Updates targeting the left
-    // rail are rejected; the picker is right-only and the right-rail picker
+    // Left rail is locked to outline-only. Updates targeting the left rail
+    // are rejected; the picker is right-only and the right-rail picker
     // can't add outline either, so no cross-rail transfer is possible.
     if (side === "left") {
       console.warn("[tandem] left rail is locked to outline-only; moveTabs rejected");

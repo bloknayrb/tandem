@@ -327,9 +327,9 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 </script>
 
 {#if showPopup && selectionPosition}
-  <!-- Wave C: selection popup uses the shared .tandem-floating-pill recipe
-       (same shadow + warm/white/dark variants as the formatting bar and
-       titlebar pills). Replaces the previous inline 2-layer shadow. -->
+  <!-- Selection popup uses the shared .tandem-floating-pill recipe so its
+       shadow + warm/white/dark variants match the formatting bar and
+       titlebar pills. -->
   <div
     bind:this={toolbarEl}
     role="toolbar"

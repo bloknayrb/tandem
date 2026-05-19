@@ -224,7 +224,7 @@ const BUILTINS: Action[] = [
     id: "toggle-left-panel",
     label: "Toggle left panel",
     group: "view",
-    shortcut: "Ctrl+\\",
+    shortcut: "Alt+Shift+Left",
     run() {
       guardedRun("toggle-left-panel", (d) => d.toggleLeftPanel());
     },
@@ -233,7 +233,7 @@ const BUILTINS: Action[] = [
     id: "toggle-right-panel",
     label: "Toggle right panel",
     group: "view",
-    shortcut: "Ctrl+Shift+\\",
+    shortcut: "Alt+Shift+Right",
     run() {
       guardedRun("toggle-right-panel", (d) => d.toggleRightPanel());
     },

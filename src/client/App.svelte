@@ -74,6 +74,7 @@ import {
 } from "./panels/annotation-actions";
 import type { FilterAuthor, FilterStatus, FilterType } from "./panels/FilterBar.svelte";
 import MarginColumn from "./panels/MarginColumn.svelte";
+import PeekStrip from "./panels/PeekStrip.svelte";
 import RailTabPicker from "./panels/RailTabPicker.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
@@ -404,7 +405,7 @@ $effect(() => {
 let activeRailTab = $state<"annotations" | "chat" | "outline">(
   settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
 );
-// Left rail is locked to outline-only post-Wave-D; no active-tab state needed.
+// Left rail is locked to the outline tab; no active-tab state needed.
 $effect(() => {
   const rightTabs = settingsState.settings.rightRailTabs;
   if (!rightTabs.includes(activeRailTab)) {
@@ -461,8 +462,26 @@ const dragResizeRight = createDragResize({
 // toggling the right panel back on in solo mode.
 const effectiveLeftVisible = $derived(layoutModel.leftVisible);
 const effectiveRightVisible = $derived(layoutModel.rightVisible);
-const toggleLeftPanel = () => layoutModel.toggleLeft();
-const toggleRightPanel = () => layoutModel.toggleRight();
+// After a keyboard-driven toggle the activated element unmounts (collapse
+// zone → peek strip and vice versa). Without explicit focus restoration the
+// browser drops focus to <body> and the user loses their tab position.
+// queueMicrotask defers until after Svelte mounts the replacement element.
+function focusToggleTarget(side: "left" | "right", nextVisible: boolean) {
+  queueMicrotask(() => {
+    const id = nextVisible ? `panel-edge-collapse-${side}` : `peek-strip-${side}`;
+    document.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+  });
+}
+const toggleLeftPanel = () => {
+  const nextVisible = !layoutModel.leftVisible;
+  layoutModel.toggleLeft();
+  focusToggleTarget("left", nextVisible);
+};
+const toggleRightPanel = () => {
+  const nextVisible = !layoutModel.rightVisible;
+  layoutModel.toggleRight();
+  focusToggleTarget("right", nextVisible);
+};
 const moveTabsBetweenRails = (
   side: "left" | "right",
   newTabsForSide: ("annotations" | "chat" | "outline")[],
@@ -615,11 +634,6 @@ $effect(() => {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
         modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
-      } else if (e.code === "Backslash") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        if (e.shiftKey) toggleRightPanel();
-        else toggleLeftPanel();
       } else if (e.altKey && e.code === "KeyT") {
         if (shouldIgnoreShortcut(e)) return;
         e.preventDefault();
@@ -659,6 +673,23 @@ $effect(() => {
       } else {
         findBarForceScope = "doc";
         findBarOpen = true;
+      }
+    }
+    // Alt+Shift+Left / Alt+Shift+Right — toggle left / right panel. No ctrl/meta
+    // so the browser's Alt+Arrow history navigation is unaffected (history nav
+    // doesn't use Shift). Outside the ctrl/meta block above on purpose.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (e.code === "ArrowLeft") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        toggleLeftPanel();
+        return;
+      }
+      if (e.code === "ArrowRight") {
+        if (shouldIgnoreShortcut(e)) return;
+        e.preventDefault();
+        toggleRightPanel();
+        return;
       }
     }
     // Alt+] / Alt+[ — next / previous annotation. Plain Alt (no ctrl/meta/shift)
@@ -919,12 +950,11 @@ const tutorial = createTutorial(
          Left and right rails are independently shown/hidden around the stable editor column. -->
     <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
       {#if effectiveLeftVisible}
-        <!-- Left rail = outline only (Wave D). No tab bar, no picker; the
-             redesign V7OutlineRail is anchored outline + heading list.
-             Wave A: rail stops above the floating status pill (#7). -->
+        <!-- Left rail is locked to the outline; the redesign V7OutlineRail
+             has no tab bar. Outermost 8px is the edge-click collapse zone. -->
         <div
           data-testid="left-outline-rail"
-          style={`display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
         >
           <PanelSlot
             kind="outline"
@@ -932,8 +962,11 @@ const tutorial = createTutorial(
             {editor}
             visible={true}
           />
+          {@render edgeCollapse("left", toggleLeftPanel)}
         </div>
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
+      {:else}
+        <PeekStrip side="left" onActivate={toggleLeftPanel} />
       {/if}
 
       {@render editorColumn()}
@@ -941,6 +974,8 @@ const tutorial = createTutorial(
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
         {@render tabbedPanel(dragResizeRight.width, "right")}
+      {:else}
+        <PeekStrip side="right" onActivate={toggleRightPanel} />
       {/if}
     </div>
 
@@ -1072,6 +1107,29 @@ const tutorial = createTutorial(
     onmouseleave={(e) => {
       (e.currentTarget as HTMLDivElement).style.background = "transparent";
     }}
+  ></div>
+{/snippet}
+
+<!-- Edge-click collapse zone: full-height 8px strip at the outer edge of the
+     rail. The right rail insets the top by 40px so the RailTabPicker trigger
+     (top-inner corner of rail-tabs-row, ~36px tall) stays clickable; the
+     left rail has no picker so it runs edge-to-edge. The right rail's
+     scrollbar shares the outer edge — a known minor conflict; the strip
+     stays 8px so a Windows scrollbar (~17px) remains grabbable from the
+     inside half. Sibling of panel content (not a parent) so descendant
+     clicks never bubble in. -->
+{#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
+  <!-- Not in the Tab sequence: keyboard users have Alt+Shift+Arrow for
+       the same action, and tab-reachable edge zones would push other
+       focusable elements past the tab-traversal budget. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div
+    class={`panel-edge-collapse panel-edge-collapse-${side}`}
+    data-testid={`panel-edge-collapse-${side}`}
+    role="button"
+    tabindex="-1"
+    aria-label={side === "left" ? "Hide left panel" : "Hide right panel"}
+    onclick={onToggle}
   ></div>
 {/snippet}
 
@@ -1207,18 +1265,16 @@ const tutorial = createTutorial(
 
 {#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
   {@const enabledTabs = settingsState.settings.rightRailTabs}
-  {@const iconOnly = enabledTabs.length > 3}
-  <!-- v7 floating chrome (Wave 2): rail is anchored to the window edge with
-       the OUTER corners flat and the INNER (editor-facing) corners rounded,
-       so it reads as a floating panel peeking past the canvas. The
-       --tandem-rail-top-clearance var defaults to 0; Wave 3 will raise it
-       to ~52px when the fmtbar lifts out of the in-flow layout. -->
+  <!-- Rail anchored to the window edge; outer corners flat, inner corners
+       rounded so it reads as a floating panel peeking past the canvas. -->
+  <!-- `outline` may appear here only when a stale settings blob carried it
+       on the right; the picker doesn't surface it as a new selection. -->
   <div
-    style={`display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
+    style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden;`}
   >
-    <!-- Wave A: rail-tab header restyled to match calm-v7 .c7-rail-tabs —
-         inset pill track with rounded segment buttons. Active segment gets
-         soft background + tiny shadow; underline-bottom pattern is gone. -->
+    {#if borderSide === "right"}
+      {@render edgeCollapse("right", toggleRightPanel)}
+    {/if}
     <div class="rail-tabs-row">
       <div class="rail-tabs-track">
         {#if enabledTabs.includes("annotations")}
@@ -1226,9 +1282,8 @@ const tutorial = createTutorial(
             data-testid="annotations-tab"
             class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
             onclick={() => { activeRailTab = "annotations"; }}
-            title={iconOnly ? "Annotations" : undefined}
           >
-            {#if iconOnly}◨{:else}Annotations{/if}
+            Annotations
             {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
               <span class="rail-tab-badge">
                 {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
@@ -1242,9 +1297,8 @@ const tutorial = createTutorial(
             class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
             onmousedown={captureSelectionForChat}
             onclick={() => { activeRailTab = "chat";  }}
-            title={iconOnly ? "Chat" : undefined}
           >
-            {#if iconOnly}💬{:else}Chat{/if}
+            Chat
           </button>
         {/if}
         {#if enabledTabs.includes("outline")}
@@ -1252,9 +1306,8 @@ const tutorial = createTutorial(
             data-testid="outline-tab"
             class={"rail-tab" + (activeRailTab === "outline" ? " on" : "")}
             onclick={() => { activeRailTab = "outline"; }}
-            title={iconOnly ? "Outline" : undefined}
           >
-            {#if iconOnly}≡{:else}Outline{/if}
+            Outline
           </button>
         {/if}
       </div>
@@ -1310,8 +1363,7 @@ const tutorial = createTutorial(
 {/snippet}
 
 <style>
-  /* Wave A: rail-tab pill (matches calm-v7 .c7-rail-tabs).
-     Inset track + rounded segments + soft active fill. No underline. */
+  /* Rail-tab pill: inset track, rounded segments, soft active fill. */
   .rail-tabs-row {
     display: flex;
     align-items: center;
@@ -1365,5 +1417,35 @@ const tutorial = createTutorial(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  /* Edge-click collapse zone. Full-height 8px strip on the rail's outer
+     edge. Left rail goes edge-to-edge; right rail starts below the
+     rail-tabs-row (40px) so the RailTabPicker stays clickable. Sibling
+     to panel content so descendant clicks don't bubble in. */
+  .panel-edge-collapse {
+    position: absolute;
+    width: 8px;
+    top: 0;
+    bottom: 0;
+    cursor: pointer;
+    z-index: 1;
+    background: transparent;
+    transition: background 140ms ease;
+  }
+  .panel-edge-collapse-left {
+    left: 0;
+  }
+  .panel-edge-collapse-right {
+    right: 0;
+    top: 40px;
+  }
+  .panel-edge-collapse:hover {
+    background: var(--tandem-accent-bg);
+  }
+  .panel-edge-collapse:focus-visible {
+    background: var(--tandem-accent-bg);
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
   }
 </style>

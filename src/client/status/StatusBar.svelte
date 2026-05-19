@@ -152,10 +152,9 @@ function cycleWordMode() {
      bar carried (display name, connection, count, saving, held badge,
      Review-Only, Claude state) plus a new word-count chip that cycles
      through words / chars / sentences / paragraphs on click. -->
-<!-- Wave A: status pill is faint until hover/focus-within. Pure-CSS opacity
-     transition — no JS reactivity. Hover restores full opacity; keyboard
-     focus inside the pill (e.g. tab to the display-name input or word-count
-     button) also reveals via `:focus-within`. -->
+<!-- Status pill is faint until hover/focus-within. Pure-CSS opacity
+     transition; `:focus-within` reveals on keyboard focus so the
+     display-name input + word-count button remain reachable. -->
 <div
   class="tandem-floating-pill tandem-status-pill"
   style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 4px var(--tandem-space-3); height: var(--tandem-h-statusbar, 28px); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
@@ -253,7 +252,7 @@ function cycleWordMode() {
     @keyframes tandem-reconnect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   }
 
-  /* Wave A: status pill is faint until hover/focus-within. */
+  /* Faint until hover/focus-within. */
   .tandem-status-pill {
     opacity: 0.4;
     transition: opacity 180ms ease;

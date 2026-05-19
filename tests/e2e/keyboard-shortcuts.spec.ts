@@ -208,7 +208,7 @@ test("Ctrl+Shift+M toggles solo / tandem mode", async ({ page }) => {
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
 });
 
-test("Ctrl+\\ toggles the left panel", async ({ page }) => {
+test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://127.0.0.1:5173");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
@@ -217,14 +217,14 @@ test("Ctrl+\\ toggles the left panel", async ({ page }) => {
   const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
   const initial = await leftHandle.count();
 
-  await page.keyboard.press("Control+\\");
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).not.toBe(initial);
 
-  await page.keyboard.press("Control+\\");
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).toBe(initial);
 });
 
-test("Ctrl+Shift+\\ toggles the right panel", async ({ page }) => {
+test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://127.0.0.1:5173");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
@@ -232,10 +232,10 @@ test("Ctrl+Shift+\\ toggles the right panel", async ({ page }) => {
   const rightHandle = page.locator("[data-testid='panel-resize-handle']");
   const initial = await rightHandle.count();
 
-  await page.keyboard.press("Control+Shift+\\");
+  await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).not.toBe(initial);
 
-  await page.keyboard.press("Control+Shift+\\");
+  await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).toBe(initial);
 });
 
