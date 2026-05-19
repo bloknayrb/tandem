@@ -25,7 +25,19 @@ import {
   INTEGRATIONS_SCHEMA_VERSION,
 } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
-import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../../src/shared/constants.js";
+import {
+  TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
+  TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV,
+} from "../../../src/shared/constants.js";
+import {
+  ERROR_CODE_APPLY_IN_PROGRESS,
+  ERROR_CODE_BAD_ORIGIN,
+  ERROR_CODE_INVALID_APPLY_REQUEST,
+  ERROR_CODE_INVALID_PERSISTED_FILE,
+  ERROR_CODE_PATH_REJECTED,
+  ERROR_CODE_SECRET_MISSING,
+} from "../../../src/shared/integrations/contract.js";
+import { useEnvOverride, withEnvOverride } from "../../helpers/env-override.js";
 
 /** No-op pass-through used for the `mw` parameter (DNS-rebinding middleware is not in scope). */
 const passthrough: IntegrationsRoutesDeps["store"] extends infer _T
@@ -355,16 +367,11 @@ describe("integrations API routes", () => {
 
     it("returns needed=false when TANDEM_DISABLE_FIRST_RUN_WIZARD=1 (E2E harness flag)", async () => {
       deps.readExisting = async () => [];
-      const prev = process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV];
-      process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = "1";
-      try {
+      await withEnvOverride(TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV, "1", async () => {
         const app = makeApp(deps);
         const res = await request(app, "GET", API_INTEGRATIONS_FIRST_RUN);
         expect(res.body).toMatchObject({ needed: false });
-      } finally {
-        if (prev === undefined) delete process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV];
-        else process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = prev;
-      }
+      });
     });
 
     it("returns needed=false when integrations.json has an entry", async () => {
@@ -626,7 +633,7 @@ describe("integrations API routes", () => {
         TAURI_ORIGIN,
       );
       expect(res.status).toBe(400);
-      expect((res.body as { code: string }).code).toBe("INVALID_PERSISTED_FILE");
+      expect((res.body as { code: string }).code).toBe(ERROR_CODE_INVALID_PERSISTED_FILE);
     });
 
     describe("removals body field", () => {
@@ -645,7 +652,7 @@ describe("integrations API routes", () => {
           TAURI_ORIGIN,
         );
         expect(res.status).toBe(400);
-        expect((res.body as { code: string }).code).toBe("INVALID_APPLY_REQUEST");
+        expect((res.body as { code: string }).code).toBe(ERROR_CODE_INVALID_APPLY_REQUEST);
       });
 
       it("rejects removals entries not in {tandem, tandem-channel}", async () => {
@@ -663,7 +670,7 @@ describe("integrations API routes", () => {
           TAURI_ORIGIN,
         );
         expect(res.status).toBe(400);
-        expect((res.body as { code: string }).code).toBe("INVALID_APPLY_REQUEST");
+        expect((res.body as { code: string }).code).toBe(ERROR_CODE_INVALID_APPLY_REQUEST);
       });
     });
 
@@ -795,7 +802,7 @@ describe("integrations API routes", () => {
         const body = res.body as {
           results: Array<{ id: string; code?: string; message?: string }>;
         };
-        expect(body.results[0]?.code).toBe("PATH_REJECTED");
+        expect(body.results[0]?.code).toBe(ERROR_CODE_PATH_REJECTED);
         // The static message must not contain "realpath=" or the outside path.
         expect(body.results[0]?.message).not.toMatch(/realpath=/);
         expect(body.results[0]?.message).not.toContain(outside);
@@ -837,7 +844,7 @@ describe("integrations API routes", () => {
         const body = res.body as {
           results: Array<{ id: string; code?: string; message?: string }>;
         };
-        expect(body.results[0]?.code).toBe("SECRET_MISSING");
+        expect(body.results[0]?.code).toBe(ERROR_CODE_SECRET_MISSING);
         expect(body.results[0]?.message).not.toContain(secretRefValue);
       });
     });
@@ -861,15 +868,26 @@ describe("integrations API routes", () => {
           ],
         });
         // Slow keychain.getSecret — holds the gate while we send the second.
+        // `entered` resolves the moment the apply handler reaches the
+        // keychain call (which is after `gate.inFlight = true`), so the
+        // second request below is guaranteed to land inside the lock
+        // window — no `setImmediate` race.
         let resolveSlow: ((s: string | null) => void) | undefined;
         const slow = new Promise<string | null>((res) => {
           resolveSlow = res;
+        });
+        let signalEntered: (() => void) | undefined;
+        const entered = new Promise<void>((res) => {
+          signalEntered = res;
         });
         const app = makeApp({
           ...deps,
           keychain: {
             ...deps.keychain,
-            getSecret: () => slow,
+            getSecret: () => {
+              signalEntered?.();
+              return slow;
+            },
           },
           detectTargets: () => [
             { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
@@ -883,9 +901,7 @@ describe("integrations API routes", () => {
           { ids: ["cc-1"], confirmationNonce: nonce },
           TAURI_ORIGIN,
         );
-        // Yield to the event loop so `first` reaches gate.inFlight = true.
-        await new Promise((r) => setImmediate(r));
-        await new Promise((r) => setImmediate(r));
+        await entered;
         const second = request(
           app,
           "POST",
@@ -896,7 +912,7 @@ describe("integrations API routes", () => {
         // Let the second response come back before unblocking the first.
         const secondRes = await second;
         expect(secondRes.status).toBe(429);
-        expect((secondRes.body as { code: string }).code).toBe("APPLY_IN_PROGRESS");
+        expect((secondRes.body as { code: string }).code).toBe(ERROR_CODE_APPLY_IN_PROGRESS);
         // Release the first and let it finish so the test cleanly tears down.
         resolveSlow?.("fake-token");
         const firstRes = await first;
@@ -906,9 +922,7 @@ describe("integrations API routes", () => {
 
     describe("LAN-fail-closed (Phase 2g) — apply endpoint", () => {
       it("rejects non-loopback callers with TANDEM_ALLOW_UNAUTHENTICATED_LAN=1", async () => {
-        const prev = process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
-        process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = "1";
-        try {
+        await withEnvOverride(TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, "1", async () => {
           const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
           const res = await request(
             app,
@@ -918,52 +932,43 @@ describe("integrations API routes", () => {
             TAURI_ORIGIN,
           );
           expect(res.status).toBe(403);
-          expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
-        } finally {
-          if (prev === undefined) delete process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
-          else process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = prev;
-        }
+          expect((res.body as { code: string }).code).toBe(ERROR_CODE_BAD_ORIGIN);
+        });
       });
     });
   });
 
   describe("LAN-fail-closed on mutating routes (Phase 2g)", () => {
-    let prevAllow: string | undefined;
+    useEnvOverride(TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, "1");
 
-    beforeEach(() => {
-      prevAllow = process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
-      process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = "1";
-    });
-
-    afterEach(() => {
-      if (prevAllow === undefined) delete process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN;
-      else process.env.TANDEM_ALLOW_UNAUTHENTICATED_LAN = prevAllow;
-    });
-
-    it("POST /api/integrations rejects non-loopback callers", async () => {
+    // Each row exercises one mutating route with a non-loopback remoteAddress.
+    // Pinning all three together makes the "every mutator is gated" invariant
+    // visible at a glance — adding a future mutating route without a row here
+    // is a screaming test-table omission.
+    it.each([
+      {
+        label: "POST /api/integrations",
+        method: "POST" as const,
+        url: API_INTEGRATIONS,
+        body: { schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] },
+      },
+      {
+        label: "POST /api/integrations/secrets/:ref",
+        method: "POST" as const,
+        url: "/api/integrations/secrets/ref-1",
+        body: { secret: "shhh" },
+      },
+      {
+        label: "DELETE /api/integrations/secrets/:ref",
+        method: "DELETE" as const,
+        url: "/api/integrations/secrets/ref-1",
+        body: undefined,
+      },
+    ])("$label rejects non-loopback callers", async ({ method, url, body }) => {
       const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
-      const res = await request(app, "POST", API_INTEGRATIONS, {
-        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
-        integrations: [],
-      });
+      const res = await request(app, method, url, body);
       expect(res.status).toBe(403);
-      expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
-    });
-
-    it("POST /api/integrations/secrets/:ref rejects non-loopback callers", async () => {
-      const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
-      const res = await request(app, "POST", "/api/integrations/secrets/ref-1", {
-        secret: "shhh",
-      });
-      expect(res.status).toBe(403);
-      expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
-    });
-
-    it("DELETE /api/integrations/secrets/:ref rejects non-loopback callers", async () => {
-      const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
-      const res = await request(app, "DELETE", "/api/integrations/secrets/ref-1");
-      expect(res.status).toBe(403);
-      expect((res.body as { code: string }).code).toBe("BAD_ORIGIN");
+      expect((res.body as { code: string }).code).toBe(ERROR_CODE_BAD_ORIGIN);
     });
 
     it("read-only GET routes remain accessible (verifies the gate is mutation-only)", async () => {
