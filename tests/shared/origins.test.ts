@@ -105,6 +105,8 @@ describe("skip-set predicates match the ADR-031 matrix", () => {
     expect(shouldSkipDurableSync(BROWSER_ORIGIN)).toBe(false);
   });
 
-  // Tombstone observer records for ALL origins — no skip predicate. See sync.ts
-  // observer comment and origins.ts ADR-031 table (file-sync/internal → record).
+  // Tombstone observer records for ALL origins — no skip predicate. The
+  // per-origin behavioral coverage lives in tests/server/annotations/sync.test.ts
+  // (FILE_SYNC: "FILE_SYNC-origin Y.Map.delete records a tombstone…",
+  //  INTERNAL: "INTERNAL-origin Y.Map.delete records a tombstone…").
 });

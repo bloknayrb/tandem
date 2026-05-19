@@ -41,7 +41,7 @@ import {
   type SyncContext,
 } from "../../../src/server/annotations/sync.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/shared/origins.js";
+import { FILE_SYNC_ORIGIN, INTERNAL_ORIGIN, MCP_ORIGIN } from "../../../src/shared/origins.js";
 import {
   annRecord,
   FILE_A,
@@ -1124,6 +1124,33 @@ describe("observer-driven tombstones (#695)", () => {
     queueSpy.mockClear();
 
     ydoc.transact(() => annMap.delete("ann_dead"), FILE_SYNC_ORIGIN);
+
+    const stones = getTombstones(HASH_A);
+    expect(stones).toHaveLength(1);
+    expect(stones[0].id).toBe("ann_dead");
+    expect(stones[0].rev).toBe(2); // prevRev=1 + 1
+    expect(queueSpy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("INTERNAL-origin Y.Map.delete records a tombstone but does NOT queue a write", () => {
+    // INTERNAL is in the durable-sync skip set (origins.ts DURABLE_SKIP) too —
+    // the observer must record the tombstone WITHOUT round-tripping the
+    // delete back to disk via queueWrite. Mirrors the FILE_SYNC test above
+    // for the deleted-shouldSkipTombstone contract's other half. Pre-PR-#765
+    // behavior: shouldSkipTombstone skipped both file-sync AND internal; now
+    // both record. This locks the internal half.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_dead", annRecord({ id: "ann_dead", rev: 1 }));
+    queueSpy.mockClear();
+
+    ydoc.transact(() => annMap.delete("ann_dead"), INTERNAL_ORIGIN);
 
     const stones = getTombstones(HASH_A);
     expect(stones).toHaveLength(1);
