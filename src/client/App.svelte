@@ -452,7 +452,12 @@ const effectiveRightVisible = $derived(layoutModel.rightVisible);
 function focusToggleTarget(side: "left" | "right", nextVisible: boolean) {
   queueMicrotask(() => {
     const id = nextVisible ? `panel-edge-collapse-${side}` : `peek-strip-${side}`;
-    document.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+    const el = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    if (el) {
+      el.focus();
+    } else {
+      console.warn(`[tandem] focusToggleTarget: ${id} not mounted; focus dropped to body`);
+    }
   });
 }
 const toggleLeftPanel = () => {

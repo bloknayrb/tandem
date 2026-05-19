@@ -19,7 +19,11 @@ export function withPreventDefault(command: () => void): (e: MouseEvent) => void
 
 /** Current link's `href` attribute, or `""` if the cursor isn't on a link. */
 export function getInitialLinkHref(editor: TiptapEditor): string {
-  return (editor.getAttributes("link").href as string | undefined) ?? "";
+  const href = editor.getAttributes("link").href;
+  if (href === undefined) return "";
+  if (typeof href === "string") return href;
+  console.warn("[tandem] getInitialLinkHref: non-string href attribute", { href });
+  return "";
 }
 
 /**
