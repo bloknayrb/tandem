@@ -948,7 +948,14 @@ const tutorial = createTutorial(
     <!-- Single persistent container — editor column is always rendered in the same
          DOM position so the Editor component never remounts on panel toggles.
          Left and right rails are independently shown/hidden around the stable editor column. -->
-    <div style="display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);">
+    <!-- `overflow: clip` (not `hidden`) is required: `overflow: hidden` makes
+         this element a programmatic scroll container, and when the right rail
+         mounts with `transform: translateX(100%)` the browser auto-scrolls the
+         container to bring the newly-focused button (offscreen by 300px due to
+         the transform) into view, causing the entire row to "pop" -300px and
+         slide back over the transition window. `clip` clips identically but
+         does not create a scroll container. -->
+    <div style="display: flex; flex: 1; overflow: clip; background: var(--tandem-bg);">
       {#if effectiveLeftVisible}
         <!-- Left rail is locked to the outline; the redesign V7OutlineRail
              has no tab bar. Outermost 8px is the edge-click collapse zone. -->
@@ -974,7 +981,70 @@ const tutorial = createTutorial(
 
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
-        {@render tabbedPanel(dragResizeRight.width, "right")}
+        <!-- Right rail mirrors the left rail's single-node shape (see :955):
+             one div owns width + transition + styling. Previously a snippet
+             with an outer/inner wrapper split — collapsed to remove an
+             unused indirection (one call site only). -->
+        <div
+          transition:railSlide={{ side: "right", reduceMotion: settingsState.settings.reduceMotion }}
+          style={`position: relative; z-index: 1; display: flex; flex-direction: column; width: ${dragResizeRight.width}px; background: var(--tandem-surface-muted); border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px); margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-right);`}
+        >
+          {@render edgeCollapse("right", toggleRightPanel)}
+          <div class="rail-tabs-row">
+            <div class="rail-tabs-track">
+              <button
+                data-testid="annotations-tab"
+                class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
+                onclick={() => { activeRailTab = "annotations"; }}
+              >
+                Annotations
+                {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
+                  <span class="rail-tab-badge">
+                    {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+                  </span>
+                {/if}
+              </button>
+              <button
+                data-testid="chat-tab"
+                class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
+                onmousedown={captureSelectionForChat}
+                onclick={() => { activeRailTab = "chat"; }}
+              >
+                Chat
+              </button>
+            </div>
+          </div>
+          <PanelSlot
+            kind="chat"
+            ctrlYdoc={yjsSync.bootstrapYdoc}
+            {editor}
+            activeDocId={yjsSync.activeTabId}
+            {openDocs}
+            claudeActive={yjsSync.claudeActive}
+            claudeStatus={yjsSync.claudeStatus}
+            {capturedAnchor}
+            onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+            reduceMotion={settingsState.settings.reduceMotion}
+            visible={activeRailTab === "chat"}
+          />
+          <PanelSlot
+            kind="side"
+            annotations={modeGate.visibleAnnotations}
+            {editor}
+            ydoc={activeTab?.ydoc ?? null}
+            heldCount={modeGate.heldCount}
+            tandemMode={modeState.tandemMode}
+            onModeChange={modeState.setTandemMode}
+            activeDocFormat={activeTab?.format}
+            documentId={activeTab?.id}
+            {activeAnnotationId}
+            onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+            reduceMotion={settingsState.settings.reduceMotion}
+            storeReadOnly={yjsSync.storeReadOnly}
+            {review}
+            visible={activeRailTab === "annotations"}
+          />
+        </div>
       {:else}
         <PeekStrip side="right" onActivate={toggleRightPanel} />
       {/if}
@@ -1260,75 +1330,6 @@ const tutorial = createTutorial(
       onClose={() => (findBarOpen = false)}
       tabs={yjsSync.tabs}
       forceScope={findBarForceScope}
-    />
-  </div>
-{/snippet}
-
-{#snippet tabbedPanel(width: number, borderSide: "left" | "right")}
-  <!-- Rail anchored to the window edge; outer corners flat, inner corners
-       rounded so it reads as a floating panel peeking past the canvas. The
-       right rail now has a fixed two-tab header (Annotations + Chat) —
-       the cross-rail picker was removed in Wave I. -->
-  <div
-    transition:railSlide={{ side: borderSide, reduceMotion: settingsState.settings.reduceMotion }}
-    style={`position: relative; display: flex; flex-direction: column; width: ${width}px; background: var(--tandem-surface-muted); border-radius: ${borderSide === "right" ? "var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px)" : "0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0"}; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: ${borderSide === "right" ? "var(--tandem-rail-shadow-right)" : "var(--tandem-rail-shadow-left)"};`}
-  >
-    {#if borderSide === "right"}
-      {@render edgeCollapse("right", toggleRightPanel)}
-    {/if}
-    <div class="rail-tabs-row">
-      <div class="rail-tabs-track">
-        <button
-          data-testid="annotations-tab"
-          class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
-          onclick={() => { activeRailTab = "annotations"; }}
-        >
-          Annotations
-          {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
-            <span class="rail-tab-badge">
-              {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
-            </span>
-          {/if}
-        </button>
-        <button
-          data-testid="chat-tab"
-          class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
-          onmousedown={captureSelectionForChat}
-          onclick={() => { activeRailTab = "chat";  }}
-        >
-          Chat
-        </button>
-      </div>
-    </div>
-    <PanelSlot
-      kind="chat"
-      ctrlYdoc={yjsSync.bootstrapYdoc}
-      {editor}
-      activeDocId={yjsSync.activeTabId}
-      {openDocs}
-      claudeActive={yjsSync.claudeActive}
-      claudeStatus={yjsSync.claudeStatus}
-      {capturedAnchor}
-      onCapturedAnchorChange={(a) => (capturedAnchor = a)}
-      reduceMotion={settingsState.settings.reduceMotion}
-      visible={activeRailTab === "chat"}
-    />
-    <PanelSlot
-      kind="side"
-      annotations={modeGate.visibleAnnotations}
-      {editor}
-      ydoc={activeTab?.ydoc ?? null}
-      heldCount={modeGate.heldCount}
-      tandemMode={modeState.tandemMode}
-      onModeChange={modeState.setTandemMode}
-      activeDocFormat={activeTab?.format}
-      documentId={activeTab?.id}
-      {activeAnnotationId}
-      onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
-      reduceMotion={settingsState.settings.reduceMotion}
-      storeReadOnly={yjsSync.storeReadOnly}
-      {review}
-      visible={activeRailTab === "annotations"}
     />
   </div>
 {/snippet}
