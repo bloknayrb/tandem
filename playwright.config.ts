@@ -72,7 +72,15 @@ export default defineConfig({
       // cover every unrelated test's editor surface. The integration-wizard
       // spec exercises the manual-reopen affordance with this var still set
       // (Reopen button always works).
+      //
+      // **Spread `process.env` explicitly** — Playwright's `webServer.env`
+      // REPLACES the child's environment rather than merging into it, so
+      // omitting the spread strips PATH/HOME/etc. and the tsx command
+      // can't resolve `node`. (Caught the hard way on CI: the webServer
+      // never bound the port, both 120s timeouts expired, no
+      // playwright-report was generated.)
       env: {
+        ...(process.env as Record<string, string>),
         TANDEM_DISABLE_FIRST_RUN_WIZARD: "1",
       },
     },
