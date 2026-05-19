@@ -329,6 +329,22 @@ function configBadge(config: IntegrationConfig): string {
       {:else if wizard.step === "done"}
         <section data-testid="integration-wizard-step-done">
           <p>Done — Tandem is connected to your AI client(s).</p>
+          {#if wizard.applyResults.length > 0}
+            <ul class="iw-apply-results">
+              {#each wizard.applyResults as result (result.id)}
+                <li
+                  class="iw-apply-result iw-apply-result-{result.status}"
+                  data-testid="integration-wizard-apply-result-{result.id}"
+                >
+                  <span class="iw-apply-result-id">{result.id}</span>
+                  <span class="iw-apply-result-status">{result.status}</span>
+                  {#if result.status === "error" && result.message}
+                    <span class="iw-apply-result-message">{result.message}</span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
           <div class="iw-actions">
             <button type="button" onclick={close} data-testid="integration-wizard-done-close">
               Close
@@ -495,5 +511,46 @@ function configBadge(config: IntegrationConfig): string {
     border-radius: var(--tandem-r-pill);
     background: var(--tandem-success-bg);
     color: var(--tandem-success-fg-strong);
+  }
+
+  .iw-apply-results {
+    list-style: none;
+    padding: 0;
+    margin: var(--tandem-space-3) 0;
+  }
+  .iw-apply-result {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-2);
+    border-radius: var(--tandem-r-2);
+    margin-bottom: var(--tandem-space-1);
+    border: 1px solid var(--tandem-border-subtle);
+  }
+  .iw-apply-result-id {
+    font-weight: 600;
+  }
+  .iw-apply-result-status {
+    font-size: var(--tandem-text-2xs);
+    padding: 2px 6px;
+    border-radius: var(--tandem-r-pill);
+    text-transform: uppercase;
+  }
+  .iw-apply-result-message {
+    flex-basis: 100%;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .iw-apply-result-applied {
+    background: var(--tandem-success-bg);
+    color: var(--tandem-success-fg-strong);
+  }
+  .iw-apply-result-skipped {
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+  }
+  .iw-apply-result-error {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
   }
 </style>

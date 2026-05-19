@@ -101,6 +101,34 @@ describe("createFirstRunNeeded", () => {
     expect(state.settled).toBe(true);
   });
 
+  it("resets serverVersion and confirmationNonce when a refetch fails after a success", async () => {
+    // Invariant: serverVersion/confirmationNonce are set only when the
+    // latest fetch succeeded. A failed refetch must clear them so the
+    // App.svelte close-handler doesn't read a stale serverVersion when
+    // computing whether the just-closed wizard came from auto-open.
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      if (call === 1) {
+        return mkResponse({
+          needed: true,
+          serverVersion: "v-1",
+          confirmationNonce: "nonce-1",
+        }) as unknown as Response;
+      }
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const state = createFirstRunNeeded();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(state.serverVersion).toBe("v-1");
+    await state.refetch();
+    flushSync();
+    expect(state.needed).toBe(false);
+    expect(state.serverVersion).toBeNull();
+    expect(state.confirmationNonce).toBeNull();
+  });
+
   it("refetch() updates values", async () => {
     let call = 0;
     globalThis.fetch = (async () => {

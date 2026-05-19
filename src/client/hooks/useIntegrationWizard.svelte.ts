@@ -219,17 +219,28 @@ export function createIntegrationWizard(
   const save = async () => {
     step = "saving";
     // Determine apply intent per picked integration. Failed-validation
-    // entries pre-set to "skip" so re-validated existing entries don't
-    // get overwritten with a wizard-generated shape that differs.
+    // existing entries pre-set to "skip" so re-validated entries don't
+    // get overwritten with a wizard-generated shape that differs (the
+    // user hand-edited a tandem entry to a custom shape; the apply path
+    // would silently replace it with our canonical shape and erase the
+    // customization).
     const integrations: IntegrationConfig[] = picked.map((p) => {
       // `other-mcp` is constrained to apply: "skip" by the schema.
       if (p.config.kind === "other-mcp") {
         return { ...p.config, apply: "skip" } as IntegrationConfig;
       }
-      // Wizard's pick step doesn't yet expose a per-row apply choice (a
-      // diff-confirmation UX is a follow-on). For the minimum-viable
-      // contract: every picked claude-code / claude-desktop entry applies.
-      return { ...p.config, apply: "create" } as IntegrationConfig;
+      // Match the picked entry against the existing-config validation
+      // result by configPath (the natural key for both claude-code and
+      // claude-desktop). If the on-disk entry exists and failed
+      // validation, apply: "skip".
+      const configPath = p.config.configPath;
+      const matched = existing.find((e) => e.target.configPath === configPath);
+      const validationFailed =
+        matched?.tandemValidation !== undefined && matched.tandemValidation.status !== "valid";
+      return {
+        ...p.config,
+        apply: validationFailed ? "skip" : "create",
+      } as IntegrationConfig;
     });
     const file: IntegrationsFile = {
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION,

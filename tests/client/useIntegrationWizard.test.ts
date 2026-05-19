@@ -218,6 +218,89 @@ describe("createIntegrationWizard", () => {
     expect(wizard.applyResults).toEqual([{ id: "cc-1", status: "applied" }]);
   });
 
+  it("save(): pre-sets apply:'skip' on picks whose existing entry failed validation", async () => {
+    // The hand-edited / tampered case: existing tandem entry on disk has
+    // a non-loopback URL, so server-side validation marked it invalid-url.
+    // The wizard must NOT overwrite it with a fresh canonical entry — the
+    // user picked the row deliberately and the safer default is to leave
+    // it alone (apply: "skip") rather than silently erase customizations.
+    let savedBody: unknown = null;
+    let applyBody: unknown = null;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "GET",
+          urlMatch: /\/api\/integrations\/existing$/,
+          handler: () => ({
+            status: 200,
+            body: {
+              installs: [
+                {
+                  target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+                  status: "ok",
+                  tandemEntry: { type: "http", url: "http://evil.com:3479/mcp" },
+                  tandemValidation: { status: "invalid-url", reason: "non-loopback" },
+                },
+              ],
+            },
+          }),
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations$/,
+          handler: (body) => {
+            savedBody = body;
+            return {
+              status: 200,
+              body: { ok: true, ids: ["cc-1"], confirmationNonce: "nonce-1" },
+            };
+          },
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: (body) => {
+            applyBody = body;
+            return {
+              status: 200,
+              body: { results: [{ id: "cc-1", status: "skipped" }], nextNonce: "nonce-2" },
+            };
+          },
+        },
+      ]),
+    });
+    await wizard.begin();
+    flushSync();
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          // configPath MATCHES the existing install — that's the join key
+          // for finding the validation result.
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.save();
+    flushSync();
+    expect(wizard.step).toBe("done");
+    const persisted = savedBody as { integrations: Array<{ id: string; apply: string }> };
+    expect(persisted.integrations[0].apply).toBe("skip");
+    // applyResults reflects the skip outcome end-to-end.
+    expect(wizard.applyResults).toEqual([{ id: "cc-1", status: "skipped" }]);
+    // The applyBody still has the persisted id — the apply route iterates
+    // and observes the `skip` intent, not the wizard.
+    expect((applyBody as { ids: string[] }).ids).toEqual(["cc-1"]);
+  });
+
   it("save(): 400 surfaces server error message into step=error", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([

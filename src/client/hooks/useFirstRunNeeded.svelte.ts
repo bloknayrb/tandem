@@ -47,6 +47,12 @@ export function createFirstRunNeeded(): FirstRunNeededState {
         // user can still manually open via Settings → Reopen wizard.
         if (captured !== gen) return;
         needed = false;
+        // Reset serverVersion + nonce: "set only when the latest fetch
+        // succeeded" is a clearer invariant than "kept from prior success"
+        // — downstream consumers (App.svelte's `closeIntegrationWizard`)
+        // gate on `serverVersion !== null` and shouldn't see a stale value.
+        serverVersion = null;
+        confirmationNonce = null;
         settled = true;
         return;
       }
@@ -66,6 +72,8 @@ export function createFirstRunNeeded(): FirstRunNeededState {
       // by flipping the default.
       if (captured !== gen) return;
       needed = false;
+      serverVersion = null;
+      confirmationNonce = null;
       settled = true;
     }
   }

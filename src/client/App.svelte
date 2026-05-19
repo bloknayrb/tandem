@@ -253,9 +253,16 @@ const shouldShowWizard = $derived(
 );
 
 function closeIntegrationWizard(): void {
-  // Persist dismissal for this server version so subsequent launches
-  // don't auto-reopen until the user updates Tandem.
-  if (firstRun.serverVersion !== null) {
+  // Only persist dismissal when this close ends an auto-open session.
+  // A manual reopen → close where the server says `needed === false`
+  // would otherwise burn the dismissal slot for `serverVersion`, silently
+  // suppressing a later auto-open that flips back to `needed === true`
+  // (e.g. user re-deletes integrations.json).
+  const wasAutoOpen =
+    firstRun.needed === true &&
+    firstRun.serverVersion !== null &&
+    dismissedForVersion !== firstRun.serverVersion;
+  if (wasAutoOpen && firstRun.serverVersion !== null) {
     try {
       localStorage.setItem(WIZARD_DISMISSED_KEY, firstRun.serverVersion);
       dismissedForVersion = firstRun.serverVersion;
@@ -266,6 +273,20 @@ function closeIntegrationWizard(): void {
   }
   manuallyReopened = false;
 }
+
+// Sync dismissal state across tabs: if one tab dismisses (writes to
+// localStorage), other open tabs see the `storage` event and update
+// their reactive view. The event only fires in OTHER tabs — the writing
+// tab updates `dismissedForVersion` synchronously above.
+$effect(() => {
+  const onStorage = (ev: StorageEvent) => {
+    if (ev.key === WIZARD_DISMISSED_KEY) {
+      dismissedForVersion = ev.newValue;
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+});
 
 // SettingsClaudeCodeTab dispatches this when the user clicks "Reopen wizard".
 // Listening here avoids threading another callback through every Settings tab.

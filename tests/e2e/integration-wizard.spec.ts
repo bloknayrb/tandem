@@ -126,6 +126,24 @@ test("Reopen → close → reopen lands fresh at step=detect", async ({ page }) 
   await expect(page.locator("[data-testid='integration-wizard-step-detect']")).toBeVisible();
 });
 
+// Phase 2b regression: closing the wizard via the manual-reopen path
+// must NOT write `tandem:wizard-dismissed` for the current server version
+// — otherwise a later auto-open (server says needed: true) would be
+// silently suppressed. Auto-open is suppressed via TANDEM_DISABLE_FIRST
+// _RUN_WIZARD=1 in this suite, so `firstRun.needed` is `false` at close
+// time; that's exactly the case that should NOT burn the slot.
+test("Manual reopen → close does NOT persist wizard dismissal", async ({ page }) => {
+  await page.evaluate(() => localStorage.removeItem("tandem:wizard-dismissed"));
+  await openSettingsModal(page);
+  await page.locator(AI_TAB).click();
+  await page.locator(OPEN_WIZARD_BTN).click();
+  await expect(page.locator(WIZARD)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(WIZARD)).toHaveCount(0);
+  const dismissed = await page.evaluate(() => localStorage.getItem("tandem:wizard-dismissed"));
+  expect(dismissed).toBeNull();
+});
+
 // The pre-3c-ii-b preview toggle has been removed (the wizard now
 // auto-opens via server-side first-run detection). Pin its absence so a
 // future Settings tab refactor doesn't accidentally resurrect it.
