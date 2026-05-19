@@ -53,7 +53,7 @@ describe("loadSettings — migration chain", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
   }
 
-  it("v1 blob (layout=three-panel) climbs to v4 with models=[] and left=[outline]", () => {
+  it("v1 blob (layout=three-panel) climbs to v6 with models=[] and rail-tab fields stripped", () => {
     writeRaw({
       schemaVersion: 1,
       layout: "three-panel",
@@ -61,17 +61,17 @@ describe("loadSettings — migration chain", () => {
       textSize: "l",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(true);
     expect(s.textSize).toBe("l");
     expect(s.models).toEqual([]);
   });
 
-  it("v1 blob (panelHidden=true) climbs to v5 with both panels hidden", () => {
+  it("v1 blob (panelHidden=true) climbs to v6 with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftPanelVisible).toBe(false);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.models).toEqual([]);
@@ -86,7 +86,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.editorWidthPercent).toBe(80);
@@ -180,26 +180,26 @@ describe("loadSettings — migration chain", () => {
     expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v4→v5 idempotency: an already-v5 blob loads without re-running migrations", () => {
+  it("v5→v6 idempotency: an already-v6 blob loads without re-running migrations", () => {
     writeRaw({
-      schemaVersion: 5,
+      schemaVersion: 6,
       theme: "dark",
       models: [],
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.theme).toBe("dark");
     // The migration chain's `=== N` gates are exclusive — re-running on
-    // an already-v5 blob is a no-op. _readOnly is reserved for the v99+
-    // forward-compat path; an in-bounds v5 should never set it.
+    // an already-v6 blob is a no-op. _readOnly is reserved for the v99+
+    // forward-compat path; an in-bounds v6 should never set it.
     expect(s._readOnly).toBeUndefined();
   });
 
-  it("v2 seed with rail-tabs climbs to v5 with both fields absent (realistic prod-upgrade path)", () => {
+  it("v2 seed with rail-tabs climbs to v6 with both fields absent (realistic prod-upgrade path)", () => {
     // A v2 blob from before Wave D where the user had Chat on the left
-    // rail. After climbing v2→v3 (models added) → v3→v4 (Chat displaced
-    // to right) → v4→v5 (both fields stripped) the typed return must
-    // carry neither name.
+    // rail. After climbing v2→v3 (models added) → v3→v4 (no-op) →
+    // v4→v5 (rail-tab fields stripped) → v5→v6 (showIntegrationWizard
+    // stripped) the typed return must carry none of those names.
     writeRaw({
       schemaVersion: 2,
       leftRailTabs: ["chat", "outline"],
@@ -208,17 +208,17 @@ describe("loadSettings — migration chain", () => {
       rightPanelVisible: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
     expect(s._readOnly).toBeUndefined();
   });
 
-  // v3 sources climb the chain to v5 in memory. The v3→v4 step's displaced-
+  // v3 sources climb the chain to v6 in memory. The v3→v4 step's displaced-
   // tab plumbing is no longer observable to consumers because v4→v5 strips
   // the rail-tab fields entirely. These cases pin down "no crash on weird
-  // v3 input + final state is rail-tab-free at v5."
-  it("v3 with displaced left tabs climbs to v5 with rail-tab fields stripped", () => {
+  // v3 input + final state is rail-tab-free at v6."
+  it("v3 with displaced left tabs climbs to v6 with rail-tab fields stripped", () => {
     writeRaw({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
@@ -226,12 +226,12 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v3 with corrupt rightRailTabs climbs to v5 without crashing", () => {
+  it("v3 with corrupt rightRailTabs climbs to v6 without crashing", () => {
     writeRaw({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
@@ -239,21 +239,21 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v4 blobs climb to v5 stripping rail-tab fields", () => {
+  it("v4 blobs climb to v6 stripping rail-tab fields", () => {
     writeRaw({
-      schemaVersion: 4,
+      schemaVersion: 5,
       leftRailTabs: ["outline"],
       rightRailTabs: ["annotations", "chat"],
       models: [],
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(5);
+    expect(s.schemaVersion).toBe(6);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
     expect(s.theme).toBe("dark");
@@ -289,5 +289,67 @@ describe("loadSettings — migration chain", () => {
     expect(s.models.length).toBe(1);
     expect(s.models[0].id).toBe("valid");
     expect(s.models[0].apiKey).toBe("sk-test-DO-NOT-USE-anthropic");
+  });
+
+  // v5→v6 (#477 PR 3c-ii-b): drop showIntegrationWizard. The wizard now
+  // auto-opens via server-side first-run detection; dismissal lives in its
+  // own `tandem:wizard-dismissed` key.
+
+  it("v5→v6: drops showIntegrationWizard from a v5 blob", () => {
+    writeRaw({
+      schemaVersion: 5,
+      showIntegrationWizard: true,
+      theme: "dark",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(6);
+    expect(s.showIntegrationWizard).toBeUndefined();
+    expect(s.theme).toBe("dark");
+  });
+
+  it("forward-compat strips showIntegrationWizard via REMOVED_FIELDS", () => {
+    // A future-blob carrying the dead field must not leak it through the
+    // forward-compat passthrough. Otherwise a future schema that re-uses
+    // the name silently inherits stale state from this client.
+    writeRaw({
+      schemaVersion: 99,
+      showIntegrationWizard: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s._readOnly).toBe(true);
+    expect(s.showIntegrationWizard).toBeUndefined();
+  });
+
+  it("v1 blob with showIntegrationWizard climbs to v6 stripping it", () => {
+    writeRaw({
+      schemaVersion: 1,
+      layout: "tabbed",
+      showIntegrationWizard: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(6);
+    expect(s.showIntegrationWizard).toBeUndefined();
+  });
+
+  it("v2 blob with showIntegrationWizard climbs to v6 stripping it", () => {
+    writeRaw({
+      schemaVersion: 2,
+      leftPanelVisible: true,
+      showIntegrationWizard: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(6);
+    expect(s.showIntegrationWizard).toBeUndefined();
+  });
+
+  it("v3 blob with showIntegrationWizard climbs to v6 stripping it", () => {
+    writeRaw({
+      schemaVersion: 3,
+      models: [],
+      showIntegrationWizard: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(6);
+    expect(s.showIntegrationWizard).toBeUndefined();
   });
 });

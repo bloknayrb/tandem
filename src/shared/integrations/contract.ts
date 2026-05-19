@@ -18,6 +18,8 @@
 
 export const API_INTEGRATIONS_EXISTING = "/api/integrations/existing";
 export const API_INTEGRATIONS = "/api/integrations";
+export const API_INTEGRATIONS_APPLY = "/api/integrations/apply";
+export const API_INTEGRATIONS_FIRST_RUN = "/api/integrations/first-run-needed";
 /** Server registers as `:ref`; clients fill in the ref. */
 export function apiIntegrationsSecretPath(ref: string): string {
   return `/api/integrations/secrets/${encodeURIComponent(ref)}`;
@@ -25,9 +27,24 @@ export function apiIntegrationsSecretPath(ref: string): string {
 
 // --- Schema version ----------------------------------------------------------
 
-export const INTEGRATIONS_SCHEMA_VERSION = 2 as const;
+export const INTEGRATIONS_SCHEMA_VERSION = 3 as const;
 
-// --- Integration kinds (mirrors src/server/integrations/schema.ts v2 union) --
+// --- Integration kinds (mirrors src/server/integrations/schema.ts v3 union) --
+
+/**
+ * Per-integration apply intent (added in v3). Controls whether
+ * `POST /api/integrations/apply` writes this entry to Claude's config:
+ *   - `"create"` (default for claude-code/desktop): write the entry.
+ *   - `"update"`: same as create, but the wizard surfaced a diff against
+ *     an existing entry that the user confirmed.
+ *   - `"skip"`: persist Tandem's knowledge of the integration but don't
+ *     write/overwrite Claude's config (preserves user-edited entries the
+ *     wizard couldn't validate, or `other-mcp` entries Tandem can't apply).
+ *
+ * `other-mcp` integrations are constrained to `"skip"` by the schema —
+ * Tandem doesn't know how to write arbitrary third-party MCP configs.
+ */
+export type ApplyIntent = "create" | "update" | "skip";
 
 export interface ClaudeCodeIntegration {
   kind: "claude-code";
@@ -37,6 +54,7 @@ export interface ClaudeCodeIntegration {
   transport: "http";
   url: string;
   tokenSecretRef?: string;
+  apply?: ApplyIntent;
 }
 
 export interface ClaudeDesktopIntegration {
@@ -47,6 +65,7 @@ export interface ClaudeDesktopIntegration {
   transport: "stdio";
   nodeBinary?: string;
   tokenSecretRef?: string;
+  apply?: ApplyIntent;
 }
 
 export interface OtherMcpIntegration {
@@ -58,6 +77,8 @@ export interface OtherMcpIntegration {
   url?: string;
   configPath?: string;
   tokenSecretRef?: string;
+  /** Constrained to `"skip"` — Tandem cannot apply arbitrary MCP configs. */
+  apply?: "skip";
 }
 
 export type IntegrationConfig =
@@ -94,11 +115,30 @@ export interface McpEntry {
   env?: Record<string, string>;
 }
 
+/**
+ * Per-entry validation outcome. The wizard pre-sets `apply: "skip"` for
+ * non-`"valid"` entries so unrecognized commands / non-loopback URLs are
+ * never silently re-written by Tandem.
+ */
+export type EntryValidationStatus =
+  | "valid"
+  | "invalid-shape"
+  | "invalid-url"
+  | "invalid-command"
+  | "invalid-args";
+
+export interface EntryValidation {
+  status: EntryValidationStatus;
+  reason?: string;
+}
+
 export interface ExistingMcpInstall {
   target: DetectedTarget;
   status: ExistingConfigReadStatus;
   tandemEntry?: McpEntry;
+  tandemValidation?: EntryValidation;
   channelEntry?: McpEntry;
+  channelValidation?: EntryValidation;
   errorMessage?: string;
 }
 
@@ -110,3 +150,51 @@ export const ERROR_CODE_KEYCHAIN_UNAVAILABLE = "KEYCHAIN_UNAVAILABLE";
 export const ERROR_CODE_INVALID_INTEGRATIONS_FILE = "INVALID_INTEGRATIONS_FILE";
 /** Returned when POST /api/integrations/secrets/:ref payload is malformed. */
 export const ERROR_CODE_INVALID_SECRET = "INVALID_SECRET";
+/** Returned by POST /api/integrations/apply when the request body fails validation. */
+export const ERROR_CODE_INVALID_APPLY_REQUEST = "INVALID_APPLY_REQUEST";
+/** Returned by POST /api/integrations/apply when the persisted file is malformed. */
+export const ERROR_CODE_INVALID_PERSISTED_FILE = "INVALID_PERSISTED_FILE";
+/** Returned by POST /api/integrations/apply when the confirmation nonce doesn't match. */
+export const ERROR_CODE_INVALID_NONCE = "INVALID_NONCE";
+/** Returned by POST /api/integrations/apply when Origin header isn't allowlisted. */
+export const ERROR_CODE_BAD_ORIGIN = "BAD_ORIGIN";
+/** Returned by POST /api/integrations/apply when a concurrent apply is in flight. */
+export const ERROR_CODE_APPLY_IN_PROGRESS = "APPLY_IN_PROGRESS";
+
+// --- Apply endpoint response types ------------------------------------------
+
+/** Per-integration outcome from POST /api/integrations/apply. */
+export type ApplyItemStatus = "applied" | "skipped" | "error";
+
+/** Specific failure codes the wizard can branch on. */
+export type ApplyItemErrorCode =
+  | "TARGET_NOT_DETECTED"
+  | "SECRET_MISSING"
+  | "OTHER_MCP_NOT_APPLICABLE"
+  | "PATH_REJECTED"
+  | "WRITE_FAILED";
+
+export interface ApplyItemResult {
+  id: string;
+  status: ApplyItemStatus;
+  /** Present when status === "error". */
+  code?: ApplyItemErrorCode;
+  /** Human-readable detail. Never includes tokens or full file contents. */
+  message?: string;
+}
+
+export interface ApplyResponse {
+  /** Per-integration outcome, in the order they appeared in the request `ids`. */
+  results: ApplyItemResult[];
+  /** Fresh nonce for the next apply (rotates on every successful call). */
+  nextNonce: string;
+}
+
+export interface FirstRunNeededResponse {
+  /** True iff `integrations.json` is empty AND no existing Tandem MCP entry is detected. */
+  needed: boolean;
+  /** Server `package.json` version — clients key dismissals on this. */
+  serverVersion: string;
+  /** Required in the body of POST /api/integrations/apply (CSRF mitigation). */
+  confirmationNonce: string;
+}

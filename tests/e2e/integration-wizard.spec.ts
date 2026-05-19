@@ -5,11 +5,11 @@ import { expect, type Page, test } from "@playwright/test";
 import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
 
 /**
- * Integration wizard E2E (#477 PR 3c-i).
+ * Integration wizard E2E (#477 PR 3c-i + 3c-ii-b).
  *
- * Covers the happy path: open Settings → AI Assistant → toggle "Show
- * integration wizard" → click "Open integration wizard…" → verify the
- * full-screen modal renders → close via the × button and via Escape.
+ * Post-3c-ii-b: the wizard auto-opens via server-side first-run detection
+ * (`GET /api/integrations/first-run-needed`) instead of behind a Settings
+ * toggle. Settings exposes a "Reopen wizard" button for manual reopen.
  *
  * Does NOT exercise the secrets step (no real keychain on CI Linux without
  * libsecret; that branch is covered by `useIntegrationWizard.test.ts` with
@@ -21,10 +21,10 @@ let tmpDir: string;
 
 const SETTINGS_MODAL = "[data-testid='settings-modal']";
 const AI_TAB = "[data-testid='settings-modal-tab-claude-code']";
-const WIZARD_TOGGLE = "[data-testid='settings-modal-show-integration-wizard-toggle']";
 const OPEN_WIZARD_BTN = "[data-testid='settings-modal-open-integration-wizard']";
 const WIZARD = "[data-testid='integration-wizard']";
 const WIZARD_CLOSE = "[data-testid='integration-wizard-close']";
+const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
 
 async function openSettingsModal(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -56,37 +56,43 @@ test.afterAll(async () => {
   }
 });
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://127.0.0.1:5173");
-  // Reset the toggle between tests so each starts from the default-off state.
-  await page.evaluate(() => {
-    try {
-      const k = "tandem:settings";
-      const raw = localStorage.getItem(k);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      parsed.showIntegrationWizard = false;
-      localStorage.setItem(k, JSON.stringify(parsed));
-    } catch {
-      /* ignore */
-    }
-  });
+  // Mark the wizard dismissed so the auto-open path (which depends on
+  // server-side first-run detection) doesn't fire for tests that target
+  // the manual-reopen affordance. Tests that need auto-open clear this
+  // explicitly via a `auto-open` annotation on their title.
+  if (!testInfo.title.includes("auto-open")) {
+    await page.evaluate((key) => {
+      try {
+        localStorage.setItem(key, "dismissed");
+      } catch {
+        /* ignore */
+      }
+    }, WIZARD_DISMISSED_KEY);
+  } else {
+    await page.evaluate((key) => {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    }, WIZARD_DISMISSED_KEY);
+  }
   await page.reload();
 });
 
-test("toggle off — Open wizard button is hidden", async ({ page }) => {
+test("Reopen wizard button is visible in Settings → AI Assistant tab", async ({ page }) => {
   await openSettingsModal(page);
   await page.locator(AI_TAB).click();
-  await expect(page.locator(WIZARD_TOGGLE)).toBeVisible();
-  await expect(page.locator(OPEN_WIZARD_BTN)).toHaveCount(0);
+  // The preview toggle is gone — the button is always visible.
+  await expect(page.locator(OPEN_WIZARD_BTN)).toBeVisible();
 });
 
-test("toggle on — Open wizard button appears and launches the modal", async ({ page }) => {
+test("Reopen wizard button launches the modal and closes Settings", async ({ page }) => {
   await openSettingsModal(page);
   await page.locator(AI_TAB).click();
-  await page.locator(`${WIZARD_TOGGLE} input`).check();
-
   await expect(page.locator(OPEN_WIZARD_BTN)).toBeVisible();
   await page.locator(OPEN_WIZARD_BTN).click();
 
@@ -100,7 +106,6 @@ test("toggle on — Open wizard button appears and launches the modal", async ({
 test("× button closes the wizard", async ({ page }) => {
   await openSettingsModal(page);
   await page.locator(AI_TAB).click();
-  await page.locator(`${WIZARD_TOGGLE} input`).check();
   await page.locator(OPEN_WIZARD_BTN).click();
   await expect(page.locator(WIZARD)).toBeVisible();
 
@@ -111,7 +116,6 @@ test("× button closes the wizard", async ({ page }) => {
 test("Escape closes the wizard", async ({ page }) => {
   await openSettingsModal(page);
   await page.locator(AI_TAB).click();
-  await page.locator(`${WIZARD_TOGGLE} input`).check();
   await page.locator(OPEN_WIZARD_BTN).click();
   await expect(page.locator(WIZARD)).toBeVisible();
 

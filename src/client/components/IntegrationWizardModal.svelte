@@ -1,15 +1,16 @@
 <script lang="ts">
 /**
- * Integration setup wizard modal (#477 PR 3c-i).
+ * Integration setup wizard modal (#477 PR 3c-i + 3c-ii-b).
  *
  * Full-screen Svelte 5 modal driven by `createIntegrationWizard()` from
  * `../hooks/useIntegrationWizard.svelte.ts`. Four steps in a single file
  * (detect → pick → secrets → review → saving/done/error) — splitting into
  * sub-components added more indirection than value at this size.
  *
- * Reachable only when `settings.showIntegrationWizard === true` AND the
- * caller explicitly opens it. The Settings AI Assistant tab adds the
- * toggle and an "Open wizard" button.
+ * **PR 3c-ii-b**: opens automatically on first run when the server-side
+ * `GET /api/integrations/first-run-needed` returns `needed: true`. App.svelte
+ * mounts via `{#if shouldShowWizard}` (re-mount on close→reopen so the
+ * state machine resets cleanly).
  */
 import { untrack } from "svelte";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";

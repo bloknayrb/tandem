@@ -5,28 +5,45 @@
  * This module is the destination of the PR 3c-ii-a (#477) library factor —
  * the helpers originally lived in `src/cli/setup.ts` from when only the
  * `tandem setup` CLI wrote config. They moved here so the integration setup
- * wizard (PR 3c-i) and the `/api/setup` route share a single implementation
+ * wizard (PR 3c) and the `/api/setup` route share a single implementation
  * with `tandem setup` / `tandem rotate-token`, and the dependency direction
  * (server → CLI) is reversed (server is the source of truth, CLI is a
  * consumer).
  *
- * **No behavior change versus the pre-3c-ii-a location.** The code is
- * byte-identical (modulo import paths) to what was in `src/cli/setup.ts`
- * before this PR. The pending changes that ADR-038 §2b prescribes
- * (idempotent diff/update, path-traversal hardening, explicit
- * channel-shim removal confirmation) land in PR 3c-ii-b alongside the
- * wizard's new apply endpoint.
+ * **PR 3c-ii-b changes (#477):**
+ * 1. `applyConfig` takes an explicit `ApplyOps = { create, remove }` shape
+ *    instead of a bare `entries` object. Stale removal is no longer driven
+ *    by the absence of a key — callers state intent explicitly.
+ * 2. Symlink / reparse-point hardening on every detected `configPath`
+ *    before reading or writing. realpath must resolve under the home
+ *    directory (or `tmpdir()` for tests) — otherwise the operation is
+ *    refused with `PathRejectedError`.
+ * 3. MSIX detection tightened to `/^Claude_[a-z0-9]+$/` and `localAppData`
+ *    realpath verified.
+ * 4. Backup of malformed JSON written to the Tandem app-data dir
+ *    (`${appDataDir}/.broken-backups/`) with mode `0o600`, not next to
+ *    `~/.claude.json` (which may inherit world-readable perms and would
+ *    leak co-tenant API keys).
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
 import { copyFile, mkdir, rename, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { resolveAppDataDir } from "../platform.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +72,50 @@ export interface McpEntry {
 export interface McpEntries {
   tandem: McpEntry;
   "tandem-channel"?: McpEntry;
+}
+
+/** MCP entry keys Tandem owns and may remove from an existing config. */
+export type RemovableEntry = "tandem" | "tandem-channel";
+
+/**
+ * Explicit apply intent. Pre-3c-ii-b, `applyConfig` derived stale-removal
+ * from the absence of a `tandem-channel` key in `entries` — a "boolean
+ * trap" where callers couldn't tell `omit` from `remove`. v3+ forces both
+ * intents to be explicit; CLI/rotate-token callers populate `remove` from
+ * their own diff logic, wizard populates `remove` from the user's
+ * confirmation diff.
+ */
+export interface ApplyOps {
+  /** Entries to create or update in `mcpServers`. */
+  create: McpEntries;
+  /** Entries to remove if present in `mcpServers`. */
+  remove: RemovableEntry[];
+}
+
+/**
+ * Construct `ApplyOps` with the legacy "remove tandem-channel unless using
+ * the shim" semantics. CLI callers (`tandem setup`, `tandem rotate-token`)
+ * use this to preserve back-compat without re-implementing the diff. The
+ * wizard never calls this — it builds `ApplyOps` from the user's diff
+ * confirmation.
+ */
+export function applyOpsForCli(create: McpEntries, withChannelShim: boolean): ApplyOps {
+  return {
+    create,
+    remove: withChannelShim ? [] : ["tandem-channel"],
+  };
+}
+
+/** Error thrown when a target path fails realpath/symlink validation. */
+export class PathRejectedError extends Error {
+  override readonly name = "PathRejectedError";
+  constructor(
+    public readonly path: string,
+    public readonly reason: "symlink" | "outside-home" | "unreadable",
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export interface BuildMcpEntriesOptions {
@@ -120,6 +181,99 @@ export interface DetectedTarget {
   kind: TargetKind;
 }
 
+/**
+ * Verify the target directory (a) is not a symlink/junction and (b) its
+ * realpath resolves under the user's home directory or `tmpdir()` (for
+ * tests that operate inside `/tmp`). Throws `PathRejectedError` otherwise.
+ *
+ * Threat model: prior compromised account replaces `~/.claude.json` with a
+ * symlink to `/etc/shadow`; on Windows, a junction at `~/.claude`
+ * redirecting to `C:\Windows\System32\config\` could let `mkdir(...
+ * recursive)` walk into a protected dir. We reject both cases before any
+ * read or write. The home/tmpdir ancestor check is the closed-set boundary
+ * — any path outside both is refused even if it's not a symlink.
+ *
+ * `allowedRoots` lets test fixtures or `installSkill` callers nominate
+ * additional ancestor directories. The check is "realpath has one of
+ * the allowed roots as a prefix" so subdirectories work.
+ */
+export function assertPathSafe(
+  targetPath: string,
+  opts: { allowedRoots?: string[]; homeOverride?: string } = {},
+): void {
+  const home = opts.homeOverride ?? homedir();
+  const allowedRoots = (opts.allowedRoots ?? [home, tmpdir()]).map((r) => {
+    try {
+      return realpathSync(r);
+    } catch {
+      return r;
+    }
+  });
+
+  // `lstat` a path that may not exist yet (e.g., apply will create the
+  // parent dir). Walk up until we find an existing ancestor and validate
+  // there — if any walked-through component is a symlink, fail.
+  let cursor = targetPath;
+  let existing: string | null = null;
+  const visited: string[] = [];
+  while (true) {
+    visited.push(cursor);
+    if (existsSync(cursor)) {
+      const st = lstatSync(cursor);
+      if (st.isSymbolicLink()) {
+        throw new PathRejectedError(
+          targetPath,
+          "symlink",
+          `Refusing to operate on symlinked path: ${cursor}`,
+        );
+      }
+      existing = cursor;
+      break;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break; // reached filesystem root
+    cursor = parent;
+  }
+
+  // If we found an existing ancestor, also validate intermediate
+  // (already-walked) components via lstat to catch a symlink within
+  // a deeper non-existent path under a real directory.
+  // (`visited` already captured these via the loop above.)
+  for (const p of visited) {
+    if (existsSync(p)) {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) {
+        throw new PathRejectedError(
+          targetPath,
+          "symlink",
+          `Refusing to operate on symlinked path: ${p}`,
+        );
+      }
+    }
+  }
+
+  // Resolve realpath of the closest existing ancestor; verify under an
+  // allowed root.
+  const resolved = existing ? realpathSync(existing) : targetPath;
+  const ok = allowedRoots.some((root) => {
+    const normRoot = root.endsWith("/") || root.endsWith("\\") ? root : `${root}/`;
+    const normResolved =
+      resolved.endsWith("/") || resolved.endsWith("\\") ? resolved : `${resolved}/`;
+    // Path equality OR prefix match (so the root itself and any descendant qualifies).
+    return resolved === root || normResolved.startsWith(normRoot);
+  });
+  if (!ok) {
+    throw new PathRejectedError(
+      targetPath,
+      "outside-home",
+      `Refusing path outside allowed roots: realpath=${resolved}`,
+    );
+  }
+}
+
+/** MSIX package families that match Claude's installer. Anchored on both ends. */
+const MSIX_PACKAGE_PATTERN = /^Claude_[A-Za-z0-9]+$/;
+
 export interface DetectOptions {
   homeOverride?: string;
   localAppDataOverride?: string;
@@ -167,13 +321,40 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   // MSIX-packaged installs (Microsoft Store) redirect %APPDATA% to a per-package
   // LocalCache dir. The config lives under %LOCALAPPDATA%\Packages\Claude_*\
   // LocalCache\Roaming\Claude\. Multiple package families may exist.
+  // Package name is constrained to `Claude_[A-Za-z0-9]+` so an attacker can't
+  // smuggle a write target through a hand-crafted package directory like
+  // `Claude_../../Windows/System32` (the path constructor would reject such
+  // a name on most platforms but we belt-and-suspender).
   if (process.platform === "win32") {
     const localAppData =
       opts.localAppDataOverride ?? process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+    // Verify LOCALAPPDATA resolves under home. An attacker who controls env
+    // could otherwise redirect us to write under any directory.
+    let localAppDataReal: string;
+    try {
+      localAppDataReal = realpathSync(localAppData);
+    } catch {
+      return targets; // localAppData doesn't exist
+    }
+    const homeReal = (() => {
+      try {
+        return realpathSync(home);
+      } catch {
+        return home;
+      }
+    })();
+    const localUnderHome =
+      localAppDataReal === homeReal ||
+      localAppDataReal.startsWith(homeReal.endsWith("\\") ? homeReal : `${homeReal}\\`) ||
+      localAppDataReal.startsWith(homeReal.endsWith("/") ? homeReal : `${homeReal}/`);
+    if (!localUnderHome) {
+      return targets;
+    }
     const packagesDir = join(localAppData, "Packages");
     try {
       const entries = readdirSync(packagesDir);
-      for (const pkg of entries.filter((n) => n.startsWith("Claude_"))) {
+      const matching = entries.filter((n) => MSIX_PACKAGE_PATTERN.test(n));
+      for (const pkg of matching) {
         const msixConfig = join(
           packagesDir,
           pkg,
@@ -183,10 +364,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
           "claude_desktop_config.json",
         );
         if (opts.force || existsSync(msixConfig)) {
-          const suffix =
-            entries.filter((n) => n.startsWith("Claude_")).length > 1
-              ? ` (${pkg.slice(0, 12)}…)`
-              : "";
+          const suffix = matching.length > 1 ? ` (${pkg.slice(0, 12)}…)` : "";
           targets.push({
             label: `Claude Desktop MSIX${suffix}`,
             configPath: msixConfig,
@@ -228,7 +406,25 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
   }
 }
 
-export async function applyConfig(configPath: string, entries: McpEntries): Promise<void> {
+/**
+ * Apply explicit create/remove operations to a Claude config file.
+ *
+ * **Security gates (run before any read or write):**
+ * - `assertPathSafe(configPath)` — symlink / outside-home rejection.
+ * - Malformed JSON is backed up under Tandem's data dir with mode `0o600`
+ *   (avoids leaking other vendors' API keys via a world-readable
+ *   `~/.claude.json.broken-<ts>` sibling).
+ *
+ * `applyConfig` writes both `ops.create` entries (merging into the existing
+ * `mcpServers` object) and removes any key listed in `ops.remove`. Removal
+ * is silent if the key was already absent. Callers state both intents
+ * explicitly — pre-3c-ii-b's "absent key implies remove" semantics is
+ * gone (it was a boolean trap that conflated omit with delete).
+ */
+export async function applyConfig(configPath: string, ops: ApplyOps): Promise<void> {
+  // Security gate: refuse symlinks, refuse paths outside home/tmpdir.
+  assertPathSafe(configPath);
+
   // Read existing config or start fresh — no existsSync guard needed.
   // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
@@ -240,14 +436,19 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
       // File doesn't exist yet — start fresh
     } else if (err instanceof SyntaxError) {
       // Don't silently wipe the user's other mcpServers. Copy the malformed
-      // file to a .broken-<ts> sibling first so they can recover it. If the
-      // backup itself fails, refuse to overwrite — runSetup's per-target
-      // try/catch reports the partial failure.
-      const backupPath = `${configPath}.broken-${Date.now()}`;
+      // file under Tandem's data dir (NOT next to ~/.claude.json — that
+      // location may inherit world-readable perms and leak co-tenant API
+      // keys via the backup). Mode 0o600 hardens against the same.
+      const backupDir = join(resolveAppDataDir(), ".broken-backups");
+      mkdirSync(backupDir, { recursive: true });
+      const backupPath = join(backupDir, `${basename(configPath)}.broken-${Date.now()}`);
       try {
         await copyFile(configPath, backupPath);
+        if (process.platform !== "win32") {
+          chmodSync(backupPath, 0o600);
+        }
         console.error(
-          `  Warning: ${configPath} contains malformed JSON — backed up to ${basename(backupPath)}, replacing with fresh config`,
+          `  Warning: ${configPath} contains malformed JSON — backed up to ${backupPath}, replacing with fresh config`,
         );
       } catch (copyErr) {
         console.error(
@@ -262,19 +463,16 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
     }
   }
 
-  const merged = {
+  const merged: Record<string, McpEntry> = {
     ...(existing.mcpServers ?? {}),
-    ...entries,
+    ...ops.create,
   };
-  // Remove stale tandem-channel entry left by older Tauri installers.
-  // The channel shim is Claude Code-only; Cowork can't use it.
-  if (!entries["tandem-channel"]) {
-    if (merged["tandem-channel"]) {
-      console.error(
-        `  Warning: removed stale tandem-channel entry from ${configPath} (legacy Tauri install artifact)`,
-      );
+  // Explicit removals — silent if the key was already absent.
+  for (const key of ops.remove) {
+    if (merged[key]) {
+      console.error(`  Note: removed mcpServers.${key} from ${configPath}`);
     }
-    delete merged["tandem-channel"];
+    delete merged[key];
   }
   const updated = { ...existing, mcpServers: merged };
 
@@ -286,10 +484,15 @@ export async function applyConfig(configPath: string, entries: McpEntries): Prom
  * Install the Tandem skill to ~/.claude/skills/tandem/SKILL.md.
  * Claude Code auto-discovers skills in this directory and uses the description
  * field to trigger them when tandem_* tools are present.
+ *
+ * `homeOverride` is supported for tests only — the apply HTTP handler
+ * MUST NOT thread this from the request body. Same symlink/realpath
+ * hardening as `applyConfig`.
  */
 export async function installSkill(opts: { homeOverride?: string } = {}): Promise<void> {
   const home = opts.homeOverride ?? homedir();
   const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
+  assertPathSafe(skillPath, { homeOverride: opts.homeOverride });
   await mkdir(dirname(skillPath), { recursive: true });
   await atomicWrite(SKILL_CONTENT, skillPath);
 }
@@ -308,6 +511,13 @@ export { CHANNEL_DIST, PACKAGE_ROOT };
 /**
  * Write the given token into all detected Claude MCP config files.
  * Returns the number of configs successfully updated and any per-target errors.
+ *
+ * Preserves pre-3c-ii-b semantics: when `withChannelShim` is false, any
+ * existing `tandem-channel` entry is removed (legacy install artifact).
+ * The wizard's apply endpoint uses a different code path with explicit
+ * user confirmation; this helper is for CLI `tandem rotate-token` and
+ * `tandem setup --apply` (in 3c-ii-c) where the user already opted in
+ * via the flag.
  */
 export async function applyConfigWithToken(
   token: string | null,
@@ -324,7 +534,7 @@ export async function applyConfigWithToken(
       targetKind: t.kind,
     });
     try {
-      await applyConfig(t.configPath, entries);
+      await applyConfig(t.configPath, applyOpsForCli(entries, !!opts.withChannelShim));
       updated++;
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);

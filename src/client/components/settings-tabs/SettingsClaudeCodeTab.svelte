@@ -81,30 +81,19 @@ function openWizard() {
   <span>Margin annotation view (Word-style)</span>
 </label>
 
-<label
-  data-testid="settings-modal-show-integration-wizard-toggle"
-  style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+<!--
+  PR 3c-ii-b: the preview toggle is gone. The wizard auto-opens on first
+  run (server-driven via GET /api/integrations/first-run-needed); this
+  button manually reopens it after dismissal.
+-->
+<button
+  type="button"
+  onclick={openWizard}
+  data-testid="settings-modal-open-integration-wizard"
+  style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-elevated); color: var(--tandem-fg); cursor: pointer; align-self: flex-start;"
 >
-  <input
-    type="checkbox"
-    checked={ctx.settings.showIntegrationWizard}
-    onchange={(e) =>
-      ctx.onUpdate({ showIntegrationWizard: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent);"
-  />
-  <span>Show integration setup wizard (preview)</span>
-</label>
-
-{#if ctx.settings.showIntegrationWizard}
-  <button
-    type="button"
-    onclick={openWizard}
-    data-testid="settings-modal-open-integration-wizard"
-    style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-elevated); color: var(--tandem-fg); cursor: pointer; align-self: flex-start;"
-  >
-    Open integration wizard…
-  </button>
-{/if}
+  Reopen integration wizard…
+</button>
 
 {#if isTauriRuntime()}
   {#await import("../CoworkSettings.svelte")}
