@@ -118,8 +118,16 @@ async function main() {
     fs.writeFileSync(path.join(tmpDir, f.name), f.content);
   }
 
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ headless: process.env.HEADLESS === "1" ? true : false });
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  // Pre-set tutorial completed before the app boots so the onboarding card never
+  // mounts. (The component's $state(readCompleted()) only reads localStorage at
+  // construction time, so a post-navigation localStorage.setItem is too late.)
+  await context.addInitScript(() => {
+    try {
+      localStorage.setItem("tandem:tutorialCompleted", "true");
+    } catch {}
+  });
   const page = await context.newPage();
 
   try {
@@ -197,8 +205,8 @@ async function main() {
     // ── Add annotations via MCP ──────────────────────────────────────────
     console.log("   Adding annotations...");
 
-    // Comment on "Both you and Claude can see and edit this document at the same time"
-    const highlightText = "Both you and Claude can see and edit this document at the same time";
+    // Comment on the collaboration sentence
+    const highlightText = "Both you and your AI can see and edit this document at the same time";
     const hlRange = findRange(highlightText);
     if (hlRange) {
       await mcp.addAnnotation("tandem_comment", {
@@ -210,8 +218,8 @@ async function main() {
       console.log("   + comment added (was highlight)");
     }
 
-    // Comment on the "Review an annotation" instruction
-    const commentText = "Review an annotation";
+    // Comment on the first numbered step
+    const commentText = "Respond to a suggestion";
     const cmRange = findRange(commentText);
     if (cmRange) {
       await mcp.addAnnotation("tandem_comment", {
