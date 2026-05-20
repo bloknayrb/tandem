@@ -85,4 +85,10 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          # `test-results/` carries Playwright's trace.zip / video.webm /
+          # screenshot artifacts (configured in playwright.config.ts via
+          # trace/screenshot/video). Without this path, diagnosing a CI-only
+          # flake requires re-running the spec locally.
+          path: |
+            playwright-report/
+            test-results/

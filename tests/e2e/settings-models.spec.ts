@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
-import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
+import { cleanupAllOpenDocuments, McpTestClient, nextFrames } from "./helpers";
 
 /**
  * Settings → Models tab E2E (Wave 2 PR 8b, #659).
@@ -297,12 +297,50 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
   }, TANDEM_SETTINGS_KEY);
   await page.reload();
 
-  // Navigate to Models tab without triggering a write — the tab itself
-  // mounts a parallel `createTandemSettings()` which inherits the
-  // _readOnly flag from loadSettings.
+  // Install a setItem spy AFTER reload (which wipes window state) so it
+  // captures any erroneous write to the settings key during the Models tab
+  // mount. Concrete signal beats "wait for settling". The original setItem
+  // is stashed on `window.__origSetItem` so the test can restore it after
+  // assertion — keeps the patch from leaking if context reuse is ever
+  // enabled (e.g. someone debugging with `--workers=1` + shared context).
+  await page.evaluate((key) => {
+    const w = window as unknown as {
+      __settingsWrites: string[];
+      __origSetItem: (k: string, v: string) => void;
+    };
+    w.__settingsWrites = [];
+    w.__origSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k: string, v: string) {
+      if (k === key) w.__settingsWrites.push(String(v));
+      return w.__origSetItem.call(this, k, v);
+    };
+  }, TANDEM_SETTINGS_KEY);
+
+  // Navigate to Models tab — the tab mounts a parallel `createTandemSettings()`
+  // which inherits the _readOnly flag from loadSettings.
   await gotoModelsTab(page);
-  // Wait for any settling.
-  await page.waitForTimeout(100);
+  await nextFrames(page); // flush mount effects
+
+  // Concrete assertion: no write landed on the settings key. `useTandemSettings`
+  // writes are synchronous today, so a single read after `nextFrames` would
+  // suffice; the short poll exists to make the failure mode less brittle
+  // against minor timing shifts in the mount path.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () => (window as unknown as { __settingsWrites: string[] }).__settingsWrites.length,
+        ),
+      { timeout: 300, intervals: [50, 100, 100, 50] },
+    )
+    .toBe(0);
+
+  // Restore the patched setItem so subsequent navigations in this page (or
+  // shared-context fixtures, if ever introduced) are unaffected.
+  await page.evaluate(() => {
+    const w = window as unknown as { __origSetItem: (k: string, v: string) => void };
+    Storage.prototype.setItem = w.__origSetItem;
+  });
 
   // The settings blob must still contain `futureField` after the load.
   const settings = await page.evaluate((key) => {

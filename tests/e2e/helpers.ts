@@ -122,6 +122,27 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
   }
 }
 
+/**
+ * Wait for `n` animation frames inside the page. Use after viewport resizes or
+ * other DOM mutations that propagate through ResizeObserver → Svelte `$state` →
+ * `$effect` → DOM, instead of `page.waitForTimeout(fixedMs)`.
+ *
+ * The full chain after `setViewportSize` is: CDP resize task → rAF #1 (e.g.
+ * `useViewportWidth.svelte.ts:16-30` debounce) → microtask ($effect + $derived)
+ * → rAF #2 (paint). Default `n=3` adds one frame of slack for CI load.
+ */
+export async function nextFrames(page: Page, n = 3): Promise<void> {
+  await page.evaluate(
+    (count) =>
+      new Promise<void>((resolve) => {
+        let i = 0;
+        const tick = () => (++i >= count ? resolve() : requestAnimationFrame(tick));
+        requestAnimationFrame(tick);
+      }),
+    n,
+  );
+}
+
 /** Success-payload shape for `tandem_status` consumed by `cleanupAllOpenDocuments`. */
 type StatusData = {
   openDocuments?: Array<{ documentId: string }>;

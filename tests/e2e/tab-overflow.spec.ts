@@ -62,32 +62,29 @@ test("keyboard reorder with Alt+Arrow swaps tabs", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
   await page.goto("http://127.0.0.1:5173");
 
-  // Wait for sample2.md tab to appear
+  // Wait for sample2.md tab to appear.
   const sample2Name = page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" });
   await expect(sample2Name).toBeVisible();
 
-  // Get all tab names and find sample2's position
+  // The tab element (role='tab') owns the keyboard handler — focus must land
+  // there, not on the inner [tab-name-…] span. Match the drag test pattern below.
+  const tabs = page.locator("[data-testid^='tab-'][role='tab']");
+  const sample2Tab = tabs.filter({ hasText: "sample2.md" });
+
+  // Get all tab names and find sample2's position. One round trip via
+  // `allTextContents()` beats a sequential `nth(i).textContent()` loop.
   const allNames = page.locator("[data-testid^='tab-name-']");
-  const count = await allNames.count();
-  let initialIdx = -1;
-  for (let i = 0; i < count; i++) {
-    const text = await allNames.nth(i).textContent();
-    if (text === "sample2.md") {
-      initialIdx = i;
-      break;
-    }
-  }
+  const initialIdx = (await allNames.allTextContents()).indexOf("sample2.md");
   expect(initialIdx).toBeGreaterThan(0); // sample2 should not be first
 
-  // Click the sample2 tab to focus it, then press Alt+ArrowLeft
-  await sample2Name.click();
-  await page.waitForTimeout(100);
+  // Click the tab itself, wait for focus to land (auto-retry), then press
+  // Alt+ArrowLeft. expect.poll on the post-reorder text absorbs Svelte
+  // reactivity → DOM update latency without a fixed sleep.
+  await sample2Tab.click();
+  await expect(sample2Tab).toBeFocused();
   await page.keyboard.press("Alt+ArrowLeft");
-  await page.waitForTimeout(300);
 
-  // sample2 should now be one position earlier
-  const newText = await allNames.nth(initialIdx - 1).textContent();
-  expect(newText).toBe("sample2.md");
+  await expect.poll(async () => allNames.nth(initialIdx - 1).textContent()).toBe("sample2.md");
 });
 
 test("mouse drag reorders tabs", async ({ page }) => {

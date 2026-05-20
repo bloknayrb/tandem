@@ -9,6 +9,14 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:5173",
     headless: true,
+    // Capture diagnostic artifacts only when a test ultimately fails (i.e.
+    // after Playwright exhausts its retries). Keeps green-test runs fast
+    // while giving us trace / screenshot / video to diagnose the residual
+    // flakes — `retries: 1` masks intermittent failures from CI output, and
+    // without these artifacts the underlying cause is invisible.
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
   },
   // Two webServer entries instead of `npm run dev:standalone`:
   //   1. Vite dev server for the client
