@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openSettingsPopover,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -98,7 +99,7 @@ test.describe("viewport layouts", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await openSample(page);
 
-    await page.locator("[data-testid='settings-btn']").click();
+    await openSettingsPopover(page);
 
     const popover = page.locator("[data-testid='settings-popover']");
     await expect(popover).toBeVisible({ timeout: 3_000 });
@@ -347,15 +348,15 @@ test.describe("tab order traversal", () => {
       if (label) focusedLabels.push(label);
     }
 
+    // Wave M: settings/help/theme moved into the brand dropdown; the brand
+    // button itself (aria-label "Tandem menu") is the titlebar's primary
+    // interactive stop alongside the mode toggle and authorship toggle.
     const toolbarLabels = [
       "Highlight",
-      "Settings",
       "toolbar-highlight-btn",
-      "settings-btn",
       "Solo",
       "Tandem",
-      "Help",
-      "Theme",
+      "titlebar-brand-menu",
       "authorship",
     ];
     const hasToolbarStop = focusedLabels.some((l) =>
