@@ -685,7 +685,7 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   });
 });
 
-// ─── Narrow-width responsive layout tests (issue #515) ────────────────────────────────────────────
+// ─── Narrow-width responsive layout tests (issue #515) ───────────────────────
 
 /** Open sample.md, navigate to the app, and open the settings dialog at the given viewport. */
 async function openSettingsDialog(
