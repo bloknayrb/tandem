@@ -87,8 +87,6 @@ test.describe("viewport layouts", () => {
     expect(statusBarBox).not.toBeNull();
     expect(statusBarBox!.height).toBeGreaterThan(0);
 
-    // Check the tab button itself rather than scrollWidth — narrow viewports may scroll
-    // the tab bar to keep the active tab visible, so scrollWidth > clientWidth is expected.
     const activeTab = page.locator("[data-testid^='tab-']").first();
     if ((await activeTab.count()) > 0) {
       await expect(activeTab).toBeVisible();
@@ -106,7 +104,7 @@ test.describe("viewport layouts", () => {
 
     const box = await popover.boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.y + box!.height).toBeLessThanOrEqual(800 + 2); // 2px tolerance
+    expect(box!.y + box!.height).toBeLessThanOrEqual(800 + 2);
     expect(box!.x + box!.width).toBeLessThanOrEqual(1280 + 2);
   });
 
@@ -141,9 +139,6 @@ test.describe("reduced motion", () => {
   test.use({ reducedMotion: "reduce" });
 
   test("annotation flash is suppressed under prefers-reduced-motion", async ({ page }) => {
-    // Playwright's reducedMotion context option doesn't reliably drive matchMedia().matches
-    // in the running app, so seed the setting directly so the $effect in App.svelte adds
-    // body.tandem-reduce-motion — that's the CSS hook we're actually verifying.
     await page.addInitScript(() => {
       try {
         localStorage.setItem("tandem:settings", JSON.stringify({ reduceMotion: true }));
@@ -238,23 +233,9 @@ test.describe("color scheme — light", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("toolbar re-theming", () => {
-  /**
-   * Verify that HighlightColorPicker borders adapt when the theme changes.
-   * The fix replaced hardcoded rgba(0,0,0,0.15) with var(--tandem-border) on
-   * the color-preview swatch span inside the toggle button and on the grid
-   * swatch buttons in the popover. We target those specific elements, not the
-   * outer toggle button whose border was already token-based.
-   *
-   * Strategy: seed the page in dark mode, read the computed border color of the
-   * inner color-preview span, switch to light mode, read again — values must
-   * differ. Also open the color picker and verify a grid swatch border changes.
-   * This catches any regression back to a hardcoded value that ignores
-   * data-theme changes.
-   */
   test("HighlightColorPicker border-color differs between dark and light themes", async ({
     page,
   }) => {
-    // Start in dark mode so we can detect the change to light.
     await page.addInitScript(() => {
       try {
         localStorage.setItem("tandem:settings", JSON.stringify({ theme: "dark" }));
@@ -262,7 +243,6 @@ test.describe("toolbar re-theming", () => {
     });
     await openSample(page);
 
-    // Select text so the floating toolbar mounts.
     const editor = page.locator(".tiptap");
     await editor.click();
     await editor.locator("p").first().selectText();
@@ -270,8 +250,6 @@ test.describe("toolbar re-theming", () => {
       timeout: 5_000,
     });
 
-    // Read the border-color of the inner color-preview span (the element whose
-    // border was fixed — it lives inside the toggle button).
     const darkBorder = await page.evaluate(() => {
       const el = document.querySelector(
         "[data-testid='toolbar-highlight-color-toggle'] span",
@@ -279,13 +257,10 @@ test.describe("toolbar re-theming", () => {
       return el ? getComputedStyle(el).borderColor : "";
     });
 
-    // Switch to light mode by updating data-theme directly (mirrors what the
-    // app's $effect does when settings.theme changes to "light").
     await page.evaluate(() => {
       document.documentElement.setAttribute("data-theme", "light");
     });
 
-    // Read the border-color of the inner span in light mode.
     const lightBorder = await page.evaluate(() => {
       const el = document.querySelector(
         "[data-testid='toolbar-highlight-color-toggle'] span",
@@ -293,14 +268,10 @@ test.describe("toolbar re-theming", () => {
       return el ? getComputedStyle(el).borderColor : "";
     });
 
-    // The two values must be different — a hardcoded color would be identical
-    // in both modes and expose the regression. An empty string means the
-    // element was not found, which would also fail this assertion.
     expect(darkBorder).not.toBe("");
     expect(lightBorder).not.toBe("");
     expect(darkBorder).not.toBe(lightBorder);
 
-    // Switch back to dark to confirm the token resolves again (dark→light→dark).
     await page.evaluate(() => {
       document.documentElement.setAttribute("data-theme", "dark");
     });
@@ -311,13 +282,6 @@ test.describe("toolbar re-theming", () => {
       return el ? getComputedStyle(el).borderColor : "";
     });
     expect(darkBorderAgain).toBe(darkBorder);
-
-    // Swatch border verification (via the color picker popover) is intentionally
-    // omitted — clicking the toggle clears ProseMirror's selection before the
-    // popover renders in headless Chromium (same limitation documented in
-    // toolbar-redesign.spec.ts). The toggle-button inner span above uses the
-    // same --tandem-border token as the grid swatches, so these assertions are
-    // sufficient to catch any regression to a hardcoded value.
   });
 });
 
@@ -329,7 +293,6 @@ test.describe("tab order traversal", () => {
   test("main UI elements are keyboard reachable via Tab", async ({ page }) => {
     await openSample(page);
 
-    // Click outside the editor to reset focus to the top of the tab sequence.
     await page.locator("body").click({ position: { x: 10, y: 10 } });
 
     const focusedLabels: string[] = [];
@@ -348,9 +311,6 @@ test.describe("tab order traversal", () => {
       if (label) focusedLabels.push(label);
     }
 
-    // Wave M: settings/help/theme moved into the brand dropdown; the brand
-    // button itself (aria-label "Tandem menu") is the titlebar's primary
-    // interactive stop alongside the mode toggle and authorship toggle.
     const toolbarLabels = [
       "Highlight",
       "toolbar-highlight-btn",
