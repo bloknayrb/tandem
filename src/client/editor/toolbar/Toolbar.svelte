@@ -69,8 +69,6 @@ const annotationTextTrimmed = $derived(annotationText.trim());
 // $state (would risk effect_update_depth on every selection change).
 let lastPlacement: SelectionToolbarPlacement | undefined;
 
-let pendingAffordanceFrame = 0;
-
 function updateSelectionAffordance(ed: TiptapEditor) {
   const { from, to } = ed.state.selection;
   const next = from !== to;
@@ -103,16 +101,8 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     }
     selectionPosition = { left: nextPosition.left, top: nextPosition.top };
   } catch {
-    // `coordsAtPos` throws when the PM view hasn't finished its measurement
-    // pass yet — common on a slow CI runner where the selectionUpdate event
-    // fires before the view's update cycle completes. The previous behavior
-    // ("set selectionPosition = null") permanently hid the popup until
-    // *another* selectionUpdate event arrived, which never happens for a
-    // one-shot `selectText()` in an E2E. Retry on the next paint instead.
-    cancelAnimationFrame(pendingAffordanceFrame);
-    pendingAffordanceFrame = requestAnimationFrame(() => {
-      if (!ed.isDestroyed) updateSelectionAffordance(ed);
-    });
+    selectionPosition = null;
+    lastPlacement = undefined;
   }
 }
 
