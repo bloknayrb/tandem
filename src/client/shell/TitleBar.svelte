@@ -42,10 +42,9 @@ interface Props {
    * from `onOpenSettings` so the existing gear keeps invoking the popover
    * until Wave 2 retires it. Triggered today via the command palette /
    * `Ctrl+Shift+,` shortcut registered in `actions/builtin.svelte.ts`.
-   * Intentionally unused inside this component — read inside `$effect` below
-   * so svelte-check sees a live reference and stays quiet about both the
-   * "declared but never read" error and the `state_referenced_locally`
-   * warning. Intentionally NOT wired to
+   * Intentionally unused inside this component — destructured as
+   * `_onOpenSettingsModal` so the compiler treats it as an acknowledged
+   * no-op rather than an oversight. Intentionally NOT wired to
    * `aria-keyshortcuts` on the gear (that attribute describes shortcuts
    * activating the labelled element; Ctrl+Shift+, opens a different surface).
    */
@@ -73,7 +72,7 @@ let {
   onAuthorshipChange,
   onOpenHelp,
   onOpenSettings,
-  onOpenSettingsModal,
+  onOpenSettingsModal: _onOpenSettingsModal,
   settingsBtn = $bindable(null),
   updateAvailable = false,
 }: Props = $props();
@@ -170,13 +169,12 @@ async function closeWindow() {
 }
 
 let brandMenuOpen = $state(false);
-let brandBtnEl = $state<HTMLButtonElement | null>(null);
 let brandMenuEl = $state<HTMLDivElement | null>(null);
 
 $effect(() => {
   if (!brandMenuOpen) return;
   return onOutsideEvent(
-    () => brandMenuEl ?? brandBtnEl,
+    () => brandMenuEl ?? settingsBtn,
     ["mousedown"],
     () => {
       brandMenuOpen = false;
@@ -190,7 +188,7 @@ function toggleBrandMenu() {
 
 function closeBrandMenu() {
   brandMenuOpen = false;
-  brandBtnEl?.focus();
+  settingsBtn?.focus();
 }
 
 function handleBrandMenuKey(e: KeyboardEvent) {
@@ -214,23 +212,6 @@ function chooseHelp() {
   onOpenHelp?.();
   brandMenuOpen = false;
 }
-
-/**
- * `onOpenSettingsModal` is a Wave 1 stable prop slot, declared so Wave 2 can
- * retire `SettingsPopover` by replacing the gear's `onOpenSettings` wiring
- * with this prop without re-touching `TitleBar.svelte`. Today the trigger is
- * the `settings-modal` action (Ctrl+Shift+,) wired in
- * `actions/builtin.svelte.ts`, so the prop is intentionally unused inside
- * this component. Read it inside `$effect` (not a top-level expression) so
- * svelte-check sees a live reference and stays quiet about both the
- * "declared but never read" error and the `state_referenced_locally`
- * warning. Intentionally NOT exposed via `aria-keyshortcuts` on the gear
- * button — that attribute describes shortcuts that activate the labelled
- * element, and Ctrl+Shift+, opens a different surface.
- */
-$effect(() => {
-  void onOpenSettingsModal;
-});
 </script>
 
 <!-- Root carries the drag region; every interactive descendant
@@ -242,7 +223,7 @@ $effect(() => {
 <div class="title-bar" data-testid="title-bar" data-tauri-drag-region>
   <div class="title-bar-left">
     <button
-      bind:this={brandBtnEl}
+      bind:this={settingsBtn}
       type="button"
       class="brand-btn"
       data-testid="titlebar-brand-menu"
