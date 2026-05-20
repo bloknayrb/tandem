@@ -311,6 +311,9 @@ test.describe("tab order traversal", () => {
       if (label) focusedLabels.push(label);
     }
 
+    // Wave M: settings/help/theme moved into the brand dropdown; the brand
+    // button itself (aria-label "Tandem menu") is the titlebar's primary
+    // interactive stop alongside the mode toggle and authorship toggle.
     const toolbarLabels = [
       "Highlight",
       "toolbar-highlight-btn",
