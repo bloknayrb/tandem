@@ -77,8 +77,29 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Pre-E2E server sanity check
+        run: |
+          echo "=== ports in use ==="
+          lsof -i :3478 -i :3479 -i :5173 2>/dev/null | head -20 || echo "(none)"
+          echo "=== dist/server/index.js exists? ==="
+          ls -lh dist/server/index.js
+          echo "=== starting dist server (5s probe) ==="
+          TANDEM_DISABLE_FIRST_RUN_WIZARD=1 node dist/server/index.js &
+          DSID=$!
+          for i in 1 2 3 4 5; do sleep 1; curl -sf http://127.0.0.1:3479/health && echo "DIST_SERVER_OK" && break || true; done
+          kill $DSID 2>/dev/null || true; wait $DSID 2>/dev/null || true
+          echo "=== starting vite (10s probe) ==="
+          npm run dev &
+          VPID=$!
+          for i in 1 2 3 4 5 6 7 8 9 10; do sleep 1; curl -sf http://127.0.0.1:5173 > /dev/null && echo "VITE_OK" && break || true; done
+          kill $VPID 2>/dev/null || true; wait $VPID 2>/dev/null || true
+          echo "=== ports after cleanup ==="
+          lsof -i :3478 -i :3479 -i :5173 2>/dev/null | head -10 || echo "(none)"
+
       - name: E2E tests
         run: npm run test:e2e
+        env:
+          DEBUG: "pw:webserver"
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
