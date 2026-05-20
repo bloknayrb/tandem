@@ -46,10 +46,6 @@
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/block-e2e-port-kill.sh"
-          },
-          {
-            "type": "command",
             "command": "bash .claude/hooks/nudge-simplify-before-commit.sh"
           }
         ]

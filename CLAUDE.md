@@ -193,7 +193,6 @@ Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse 
 
 **PreToolUse — `Bash` matcher:**
 - `block-no-verify.sh` -- Blocks `--no-verify` flag (Husky bypass); fail-closed on parse error
-- `block-e2e-port-kill.sh` -- Blocks E2E test commands that kill dev server ports (:3478/:3479)
 - `nudge-simplify-before-commit.sh` -- Warns on `git commit` when source edits have happened since last `/simplify` (one-shot per edit batch)
 
 **PostToolUse — unmatched (every tool):**
