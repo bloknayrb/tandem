@@ -69,6 +69,9 @@ export default defineConfig({
       env: {
         ...(process.env as Record<string, string>),
         [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",
+        // Isolate the E2E server's data dir so stale sessions/locks from the
+        // stdio-smoke step (or any previous run) can't delay startup.
+        TANDEM_APP_DATA_DIR: "/tmp/tandem-e2e-data",
       },
     },
   ],

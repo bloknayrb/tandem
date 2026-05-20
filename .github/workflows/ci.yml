@@ -84,6 +84,36 @@ jobs:
           fuser -k 3478/tcp 3479/tcp 5173/tcp 2>/dev/null || true
           sleep 1
 
+      - name: Verify backend server starts
+        timeout-minutes: 1
+        run: |
+          echo "=== Starting dist/server/index.js for health check ==="
+          TANDEM_APP_DATA_DIR=/tmp/tandem-diag \
+          TANDEM_NO_SAMPLE=1 \
+          node dist/server/index.js > /tmp/server-diag.txt 2>&1 &
+          SERVER_PID=$!
+          HEALTHY=0
+          for i in $(seq 1 30); do
+            sleep 1
+            if curl -sf http://127.0.0.1:3479/health > /dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              HEALTHY=1
+              break
+            fi
+            echo "  ${i}s: not yet healthy"
+          done
+          echo "=== Server output ==="
+          cat /tmp/server-diag.txt || true
+          echo "=== End server output ==="
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+          fuser -k 3478/tcp 3479/tcp 2>/dev/null || true
+          sleep 1
+          if [ $HEALTHY -eq 0 ]; then
+            echo "FAIL: server did not become healthy within 30s"
+            exit 1
+          fi
+
       - name: E2E tests
         run: npm run test:e2e
 
