@@ -254,13 +254,26 @@ const shouldShowWizard = $derived(
 );
 
 // #659 D4 option a: the first-run model picker runs as the leading step of
-// the first-run flow. It renders when (a) the first-run flow is active and
-// (b) the user has no model entries yet. Once handled (saved or skipped),
-// the integration wizard takes over its place — together they form a
-// perceived "Step 1 of 2 → Step 2 of 2" experience.
+// the AUTO-open first-run flow. It renders when (a) the first-run flow is
+// genuinely active (server says `needed=true` and no dismissal has been
+// recorded for this version) and (b) the user has no model entries yet.
+// Once handled (saved or skipped), the integration wizard takes over its
+// place — together they form a perceived "Step 1 of 2 → Step 2 of 2"
+// experience.
+//
+// **Manual reopen is intentionally excluded.** The "Reopen wizard" button
+// in Settings → Claude Code is for re-running the MCP-client setup wizard
+// specifically; routing it through the model picker would surprise users
+// who expect the same UI as before. Settings → Models is the canonical
+// surface for adding/editing models post-first-run.
 let modelPickerHandled = $state(false);
+const isAutoOpenFirstRun = $derived(
+  firstRun.needed === true &&
+    firstRun.serverVersion !== null &&
+    dismissedForVersion !== firstRun.serverVersion,
+);
 const shouldShowModelPicker = $derived(
-  shouldShowWizard && settingsState.settings.models.length === 0 && !modelPickerHandled,
+  isAutoOpenFirstRun && settingsState.settings.models.length === 0 && !modelPickerHandled,
 );
 
 function closeIntegrationWizard(): void {
