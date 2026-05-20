@@ -194,6 +194,29 @@
           0 22px 38px -22px rgba(0, 0, 0, 0.50);
       }
 
+      /* Wave M: in Solo mode, comments and notes are de-emphasized — visible
+         but quiet — so the user's focus stays on their own writing.
+         Highlights stay normal because they're user-owned color flags.
+         `filter: opacity()` composes with the card's inline opacity, so
+         accepted cards (already at 0.6) layer the fade on top instead of
+         being clamped. */
+      [data-tandem-mode="solo"] [data-annotation-type="comment"],
+      [data-tandem-mode="solo"] [data-annotation-type="note"],
+      [data-tandem-mode="solo"] [data-testid="margin-column-left"] .margin-bubble,
+      [data-tandem-mode="solo"] [data-testid="margin-column-right"] .margin-bubble {
+        filter: opacity(0.45);
+        transition: filter 200ms ease;
+      }
+
+      /* Fade the in-editor underline decorations to match the side-panel card
+         fade above — keeps the visual weight of comments/notes consistent
+         between the editor and the panel in solo mode. */
+      [data-tandem-mode="solo"] .tandem-comment,
+      [data-tandem-mode="solo"] .tandem-note {
+        opacity: 0.45;
+        transition: opacity 200ms ease;
+      }
+
       /* Slash command menu — v7 floating-card variant.
          Inherits floating-pill bg/border/shadow then overrides border-radius
          to a card shape (menus aren't pill-shaped) and stacks an item list
@@ -247,17 +270,23 @@
       }
 
       [data-theme="dark"] {
-        --tandem-bg: oklch(0.18 0.012 270);
-        --tandem-fg: oklch(0.94 0.005 80);
-        --tandem-surface: oklch(0.22 0.012 270);
-        --tandem-surface-muted: oklch(0.20 0.012 270);
-        --tandem-surface-sunk: oklch(0.16 0.012 270);
-        --tandem-border: oklch(0.30 0.012 270);
-        --tandem-border-strong: oklch(0.38 0.014 270);
-        --tandem-fg-muted: oklch(0.72 0.008 80);
-        /* Lightened from 0.55 → 0.70 to meet WCAG AA 4.5:1 on --tandem-surface-muted (0.20) */
-        --tandem-fg-subtle: oklch(0.70 0.008 80);
-        --tandem-fg-faint: oklch(0.58 0.010 270);
+        /* Aligned to calm-v7.css dark canon: canvas 0.22, pill surface 0.27,
+           border 0.34, ink 0.94 — all at hue 280°. Previously surfaces were
+           270° and ink was 80° (warm yellow against cool violet), and the
+           whole palette ran ~4 stops too dark vs the v7 floating-chrome
+           intent. */
+        --tandem-bg: oklch(0.22 0.012 280);
+        --tandem-fg: oklch(0.94 0.006 280);
+        --tandem-surface: oklch(0.27 0.012 280);
+        --tandem-surface-muted: oklch(0.25 0.012 280);
+        --tandem-surface-sunk: oklch(0.20 0.012 280);
+        --tandem-border: oklch(0.34 0.010 280);
+        --tandem-border-strong: oklch(0.42 0.012 280);
+        --tandem-fg-muted: oklch(0.74 0.008 280);
+        /* 0.70 vs v7's 0.74 — preserves WCAG AA 4.5:1 against the lighter
+           --tandem-surface-muted (0.25). */
+        --tandem-fg-subtle: oklch(0.70 0.008 280);
+        --tandem-fg-faint: oklch(0.58 0.008 280);
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.72 0.14 var(--tandem-accent-h));
         --tandem-accent-fg: oklch(0.15 0.01 var(--tandem-accent-h));
