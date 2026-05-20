@@ -4,6 +4,7 @@ import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
+  enterAnnotateMode,
   McpTestClient,
   openSettingsPopover,
   switchToAnnotationsTab,
@@ -191,6 +192,7 @@ test.describe("forced colors / high contrast", () => {
     await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
       timeout: 3_000,
     });
+    await enterAnnotateMode(page);
     await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
       timeout: 3_000,
     });

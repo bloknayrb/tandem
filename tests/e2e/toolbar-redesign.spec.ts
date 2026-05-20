@@ -4,6 +4,7 @@ import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
+  enterAnnotateMode,
   McpTestClient,
   switchToAnnotationsTab,
 } from "./helpers";
@@ -87,6 +88,7 @@ test("selection lights up annotation entry-points", async ({ page }) => {
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
     timeout: 3_000,
   });
+  await enterAnnotateMode(page);
   await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 3_000,
   });
@@ -111,6 +113,7 @@ test("floating selection toolbar stays within a short viewport", async ({ page }
   // viewport the toolbar can lag the selection event by a frame or two under CI.
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await enterAnnotateMode(page);
   // Confirm interactive state before reading boundingBox().
   await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 5_000,
@@ -137,12 +140,15 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
-    timeout: 5_000,
-  });
+  // Default mode exposes formatting + highlight + Annotate; verify those first.
   await expect(toolbar.getByRole("button", { name: "Bold" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Italic" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: /Highlight / })).toHaveCount(4);
+  // Enter annotate mode to surface the textarea + Comment submit button.
+  await enterAnnotateMode(page);
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
+    timeout: 5_000,
+  });
   await expect(toolbar.getByRole("button", { name: "Comment on selection" })).toBeVisible();
   // Strike and Code were removed from the selection popup (see toolbar-ux-research.md).
   // Link lives in the top FormattingToolbar (with inline input), not the floating popup.
@@ -179,7 +185,8 @@ test("Comment flow creates a comment annotation", async ({ page }) => {
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  // Unified popup appears automatically on selection — popup visible = selection confirmed
+  // Wave M: textarea is gated behind the Annotate button in the popup.
+  await enterAnnotateMode(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("test comment");
@@ -204,7 +211,8 @@ test("Note flow creates a note annotation", async ({ page }) => {
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  // Unified popup appears automatically on selection — popup visible = selection confirmed
+  // Wave M: textarea is gated behind the Annotate button in the popup.
+  await enterAnnotateMode(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("test note");
@@ -236,7 +244,10 @@ test("#480 regression — popup appears on selection without creating an annotat
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  // Popup appears — but no annotation is created just by selecting text
+  // Popup appears — but no annotation is created just by selecting text.
+  // Wave M: enter annotate mode to surface the textarea, then assert that
+  // simply revealing it does not create an annotation.
+  await enterAnnotateMode(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
 
@@ -261,7 +272,8 @@ test("Comment submit is disabled when textarea is empty (no annotation created)"
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  // Popup appears — Comment button should be disabled when textarea is empty
+  // Wave M: enter annotate mode to surface the textarea + Comment button.
+  await enterAnnotateMode(page);
   await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 3_000,
   });
@@ -286,6 +298,7 @@ test("Enter key in popup textarea submits as Comment", async ({ page }) => {
   await editor.click();
   await editor.locator("p").first().selectText();
 
+  await enterAnnotateMode(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("enter key comment");
@@ -312,6 +325,7 @@ test("popup textarea and submit buttons are visible on selection", async ({ page
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await enterAnnotateMode(page);
   await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 3_000,
   });
@@ -358,7 +372,8 @@ test("Escape dismisses the popup without creating an annotation", async ({ page 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 10_000 });
 
-  // Type in the popup textarea, then Escape
+  // Wave M: enter annotate mode, then type and Escape.
+  await enterAnnotateMode(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 2_000 });
   await input.fill("draft");
@@ -384,6 +399,7 @@ test("Shift+Enter inserts a newline in the textarea without submitting", async (
   await editor.click();
   await editor.locator("p").first().selectText();
 
+  await enterAnnotateMode(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await expect(input).toBeVisible({ timeout: 3_000 });
   await input.fill("line one");
@@ -410,7 +426,9 @@ test("suppressSelectionToolbar hides the popup when the find bar is open", async
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  const popup = page.locator("[data-testid='popup-annotation-input']");
+  // Use the popup wrapper (role=toolbar) as the visibility proxy — it's
+  // present in both default and annotate modes (post Wave M).
+  const popup = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(popup).toBeVisible({ timeout: 3_000 });
 
   // Open the find bar — App.svelte sets suppressSelectionToolbar when findBarOpen
@@ -430,10 +448,11 @@ test("popup highlight button creates a highlight annotation", async ({ page }) =
   await editor.click();
   await editor.locator("p").first().selectText();
 
-  const popup = page.locator("[data-testid='popup-annotation-input']");
-  await expect(popup).toBeVisible({ timeout: 3_000 });
-
-  // Click the yellow highlight swatch inside the popup (distinct from FormattingBar path)
+  // Highlight swatch lives in the default-mode popup row — assert the popup
+  // wrapper is up (role=toolbar), then click the swatch directly.
+  await expect(page.getByRole("toolbar", { name: "Selection tools" })).toBeVisible({
+    timeout: 3_000,
+  });
   await page.locator("[data-testid='popup-highlight-yellow']").click();
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {

@@ -106,6 +106,22 @@ export function cleanupFixtureDir(dir: string): void {
  * testid in that mode. The helper detects this and no-ops, so tests that
  * switch layout mid-flight still work.
  */
+/**
+ * Click the selection popup's "Annotate" button to enter annotate mode and
+ * surface the textarea + Note/Comment submit buttons.
+ *
+ * Wave M (PR #776) restructured the selection popup into two modes: the
+ * default mode shows B/I, highlight swatches, and an Annotate button; the
+ * textarea (`popup-annotation-input`) and submit buttons (`popup-note-submit`,
+ * `popup-comment-submit`) only render after the user clicks Annotate (or
+ * presses Ctrl+Alt+M). Callers that need the textarea must invoke this
+ * helper after `selectText()` and before asserting input visibility.
+ */
+export async function enterAnnotateMode(page: Page): Promise<void> {
+  const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
+  await annotateBtn.click({ timeout: 5_000 });
+}
+
 export async function switchToAnnotationsTab(page: Page): Promise<void> {
   const tab = page.locator("[data-testid='annotations-tab']");
   // In three-panel mode the tab button does not exist — bail silently.
