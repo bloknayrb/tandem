@@ -116,9 +116,11 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await page.goto("http://127.0.0.1:5173");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
-  // Open via the title-bar help button — the "?" keyboard shortcut is intentionally
-  // suppressed while focus is inside the contenteditable editor.
-  await page.locator("[data-testid='titlebar-help-btn']").click();
+  // Open via the brand menu — Wave M moved the Help entry there (the old standalone
+  // help button was removed). "?" keyboard shortcut is intentionally suppressed while
+  // focus is inside the contenteditable editor.
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await page.locator("[data-testid='brand-menu-shortcuts']").click();
   const modal = page.locator("[data-testid='help-modal']");
   await expect(modal).toBeVisible();
 
