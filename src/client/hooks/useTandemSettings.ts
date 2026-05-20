@@ -127,7 +127,7 @@ const DEFAULTS: TandemSettings = {
   textSize: "m",
   theme: "system",
   accentHue: 275,
-  editorFont: "serif",
+  editorFont: "sans",
   density: "cozy",
   defaultMode: "tandem",
   highContrast: false,

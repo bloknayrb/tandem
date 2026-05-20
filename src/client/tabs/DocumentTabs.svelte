@@ -217,7 +217,7 @@ $effect(() => {
     ]}
     role="tablist"
     aria-label="Open documents"
-    style="display: flex; align-items: stretch; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;"
+    style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 6px 8px;"
   >
     {#each tabs as tab (tab.id)}
       <TabItem

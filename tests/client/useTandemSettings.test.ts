@@ -318,7 +318,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     textSize: "m",
     theme: "system",
     accentHue: 275,
-    editorFont: "serif",
+    editorFont: "sans",
     density: "cozy",
     defaultMode: "tandem",
     highContrast: false,
@@ -450,13 +450,13 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
     expect(loadSettings().editorFont).toBe(font);
   });
 
-  it("falls back to 'serif' for unknown editorFont", () => {
+  it("falls back to 'sans' for unknown editorFont", () => {
     writeRawSettings({ editorFont: "comic-sans" });
-    expect(loadSettings().editorFont).toBe("serif");
+    expect(loadSettings().editorFont).toBe("sans");
   });
 
-  it("defaults editorFont to 'serif' when absent", () => {
-    expect(loadSettings().editorFont).toBe("serif");
+  it("defaults editorFont to 'sans' when absent", () => {
+    expect(loadSettings().editorFont).toBe("sans");
   });
 
   it.each(["compact", "cozy", "spacious"] as const)("accepts density '%s'", (d) => {

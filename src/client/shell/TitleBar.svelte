@@ -293,7 +293,7 @@ function chooseHelp() {
     {/if}
   </div>
 
-  <div class="title-bar-spacer" data-tauri-drag-region></div>
+  <div class="title-bar-spacer title-bar-spacer-fixed" data-tauri-drag-region></div>
 
   {#if center}
     <div class="title-bar-center" data-tauri-drag-region="false">
@@ -444,6 +444,13 @@ function chooseHelp() {
        relying on the inherited `align-items` value breaks `flex-grow` in
        some browsers, so the keyword is set rather than omitted. */
     align-self: stretch;
+  }
+
+  /* Left-of-center spacer: fixed gap (not flex-grow) so the tab strip
+     left-justifies against the brand cluster. The right spacer keeps
+     `flex: 1 1 0` and absorbs all slack. */
+  .title-bar-spacer-fixed {
+    flex: 0 0 var(--tandem-space-3);
   }
 
   .title-bar-spacer-sm {

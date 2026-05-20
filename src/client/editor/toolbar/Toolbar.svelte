@@ -48,6 +48,7 @@ let toolbarEl = $state<HTMLDivElement | null>(null);
 let annotationText = $state("");
 let capturedRange = $state<{ from: number; to: number } | null>(null);
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
+let annotateMode = $state(false);
 
 let toolbarHeight = $state(0);
 let toolbarWidth = $state(0);
@@ -191,6 +192,7 @@ $effect(() => {
   const { from, to } = editor.state.selection;
   if (from === to) return; // No selection → no-op
   untrack(() => captureSelectionRange());
+  annotateMode = true;
   requestAnimationFrame(() => textareaEl?.focus());
 });
 
@@ -311,7 +313,13 @@ function dismissPopup() {
   selectionPosition = null;
   capturedRange = null;
   annotationText = "";
+  annotateMode = false;
   editor?.chain().focus().run();
+}
+
+function openAnnotateMode() {
+  annotateMode = true;
+  requestAnimationFrame(() => textareaEl?.focus());
 }
 
 function submitAsComment() {
@@ -345,85 +353,96 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     role="toolbar"
     aria-label="Selection tools"
     class="tandem-floating-pill"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-pill); z-index: var(--tandem-z-modal); min-width: 260px; max-width: 360px;`}
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-pill); z-index: var(--tandem-z-modal);`}
   >
-    <!-- Row 1: inline-mark formatting + highlight swatches. Buttons bind to
-         mousedown via withPreventDefault so the editor selection survives
-         the click — see handlers.ts for the rationale (avoids the
-         "format-before-type" symptom). -->
-    <div style="display: flex; align-items: center; gap: 1px; padding: 4px;">
-      <ToolbarButton
-        label="B"
-        ariaLabel="Bold"
-        style="font-weight: 700; min-width: 28px;"
-        onMouseDown={boldHandler}
-        onClick={onKeyActivate(boldHandler)}
-      />
-      <ToolbarButton
-        label="I"
-        ariaLabel="Italic"
-        style="font-style: italic; min-width: 28px;"
-        onMouseDown={italicHandler}
-        onClick={onKeyActivate(italicHandler)}
-      />
-      <!-- Strike, Inline code, and Link were intentionally removed from the
-           selection popup per docs/designs/handoff/tandem/project/
-           toolbar-ux-research.md ("Explicitly do NOT include in popup:
-           Strikethrough, code, link — too infrequent to justify space in the
-           reaction surface"). They remain on the persistent FormattingToolbar
-           and via keyboard shortcuts (Ctrl+Shift+X, Ctrl+E, Ctrl+K). -->
-      <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
-      <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
-        {#each MINI_HIGHLIGHT_COLORS as color}
+    {#if !annotateMode}
+      <!-- Single-row action surface: inline-mark formatting + highlight
+           swatches + Annotate. Buttons bind to mousedown via
+           withPreventDefault so the editor selection survives the click —
+           see handlers.ts for the rationale. -->
+      <div style="display: flex; align-items: center; gap: 1px; padding: 4px;">
+        <ToolbarButton
+          label="B"
+          ariaLabel="Bold"
+          style="font-weight: 700; min-width: 28px;"
+          onMouseDown={boldHandler}
+          onClick={onKeyActivate(boldHandler)}
+        />
+        <ToolbarButton
+          label="I"
+          ariaLabel="Italic"
+          style="font-style: italic; min-width: 28px;"
+          onMouseDown={italicHandler}
+          onClick={onKeyActivate(italicHandler)}
+        />
+        <!-- Strike, Inline code, and Link were intentionally removed from the
+             selection popup per docs/designs/handoff/tandem/project/
+             toolbar-ux-research.md. They remain on the persistent
+             FormattingToolbar and via keyboard shortcuts. -->
+        <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+        <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+          {#each MINI_HIGHLIGHT_COLORS as color}
+            <button
+              type="button"
+              data-testid={`popup-highlight-${color}`}
+              aria-label={`Highlight ${color}`}
+              title={`Highlight ${color}`}
+              onmousedown={(e) => {
+                e.preventDefault();
+                handleHighlight(color);
+                editor?.chain().focus().run();
+              }}
+              onclick={onKeyActivate(() => {
+                handleHighlight(color);
+                editor?.chain().focus().run();
+              })}
+              style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
+            ></button>
+          {/each}
+        </div>
+        <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+        <button
+          type="button"
+          data-testid="popup-annotate-btn"
+          aria-label="Annotate"
+          onmousedown={(e) => {
+            e.preventDefault();
+            openAnnotateMode();
+          }}
+          onclick={onKeyActivate(() => openAnnotateMode())}
+          style="height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer;"
+        >Annotate</button>
+      </div>
+    {:else}
+      <div style="display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; min-width: 260px; max-width: 360px;">
+        <textarea
+          bind:this={textareaEl}
+          data-testid="popup-annotation-input"
+          aria-label="Annotation text"
+          bind:value={annotationText}
+          onkeydown={handleTextareaKeyDown}
+          placeholder="Write a note or instruction..."
+          rows={1}
+          style="width: 100%; box-sizing: border-box; field-sizing: content; min-height: 28px; max-height: 120px; overflow-y: auto; resize: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; padding: 4px 6px; outline: none; font-family: inherit;"
+        ></textarea>
+        <div style="display: flex; justify-content: space-between; gap: 6px;">
           <button
             type="button"
-            data-testid={`popup-highlight-${color}`}
-            aria-label={`Highlight ${color}`}
-            title={`Highlight ${color}`}
-            onmousedown={(e) => {
-              e.preventDefault();
-              handleHighlight(color);
-              editor?.chain().focus().run();
-            }}
-            onclick={onKeyActivate(() => {
-              handleHighlight(color);
-              editor?.chain().focus().run();
-            })}
-            style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
-          ></button>
-        {/each}
+            data-testid="popup-note-submit"
+            aria-label="Note to self"
+            onclick={submitAsNote}
+            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
+          >Note to self</button>
+          <button
+            type="button"
+            data-testid="popup-comment-submit"
+            aria-label="Comment on selection"
+            disabled={!annotationTextTrimmed}
+            onclick={submitAsComment}
+            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer;"
+          >Comment</button>
+        </div>
       </div>
-    </div>
-
-    <div style="padding: 6px 8px;">
-      <textarea
-        bind:this={textareaEl}
-        data-testid="popup-annotation-input"
-        aria-label="Annotation text"
-        bind:value={annotationText}
-        onkeydown={handleTextareaKeyDown}
-        placeholder="Write a note or instruction..."
-        rows={1}
-        style="width: 100%; box-sizing: border-box; field-sizing: content; min-height: 28px; max-height: 120px; overflow-y: auto; resize: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; padding: 4px 6px; outline: none; font-family: inherit;"
-      ></textarea>
-    </div>
-
-    <div style="display: flex; justify-content: space-between; gap: 6px; padding: 4px 8px 6px;">
-      <button
-        type="button"
-        data-testid="popup-note-submit"
-        aria-label="Note to self"
-        onclick={submitAsNote}
-        style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
-      >Note to self</button>
-      <button
-        type="button"
-        data-testid="popup-comment-submit"
-        aria-label="Comment on selection"
-        disabled={!annotationTextTrimmed}
-        onclick={submitAsComment}
-        style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer;"
-      >Comment</button>
-    </div>
+    {/if}
   </div>
 {/if}
