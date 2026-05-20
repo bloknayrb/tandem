@@ -208,6 +208,15 @@
         transition: filter 200ms ease;
       }
 
+      /* Fade the in-editor underline decorations to match the side-panel card
+         fade above — keeps the visual weight of comments/notes consistent
+         between the editor and the panel in solo mode. */
+      [data-tandem-mode="solo"] .tandem-comment,
+      [data-tandem-mode="solo"] .tandem-note {
+        opacity: 0.45;
+        transition: opacity 200ms ease;
+      }
+
       /* Slash command menu — v7 floating-card variant.
          Inherits floating-pill bg/border/shadow then overrides border-radius
          to a card shape (menus aren't pill-shaped) and stacks an item list
