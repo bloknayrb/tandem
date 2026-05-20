@@ -628,7 +628,12 @@ test("selections are buffered, not pushed as SSE events (#188)", async ({ page }
   await prose.click();
   await prose.locator("h1").first().selectText();
 
-  // Wait well past the maximum dwell time (3000ms max + headroom)
+  // Wait well past the maximum dwell time. Server-side, the timer is scheduled
+  // with `getDwellMs()` from awareness.ts:30-42, which reads CTRL_ROOM Y.Map.
+  // Default `SELECTION_DWELL_DEFAULT_MS` is 1000ms; the slider ceiling is 3000ms.
+  // 4000ms = 3000ms ceiling + 1000ms RTT headroom for the would-be SSE round-trip.
+  // This is a "prove a negative" wait — no shorter signal exists for the absence
+  // of an event. See ADR / issue #188 for the buffering rationale.
   await page.waitForTimeout(4000);
 
   // No selection:changed events should have been emitted

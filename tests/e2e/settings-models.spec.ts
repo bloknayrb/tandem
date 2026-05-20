@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
-import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
+import { cleanupAllOpenDocuments, McpTestClient, nextFrames } from "./helpers";
 
 /**
  * Settings → Models tab E2E (Wave 2 PR 8b, #659).
@@ -297,12 +297,36 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
   }, TANDEM_SETTINGS_KEY);
   await page.reload();
 
-  // Navigate to Models tab without triggering a write — the tab itself
-  // mounts a parallel `createTandemSettings()` which inherits the
-  // _readOnly flag from loadSettings.
+  // Install a setItem spy AFTER reload (which wipes window state) so it
+  // captures any erroneous write to the settings key during the Models tab
+  // mount. Concrete signal beats "wait for settling".
+  await page.evaluate((key) => {
+    const w = window as unknown as { __settingsWrites: string[] };
+    w.__settingsWrites = [];
+    const orig = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k: string, v: string) {
+      if (k === key) w.__settingsWrites.push(String(v));
+      return orig.call(this, k, v);
+    };
+  }, TANDEM_SETTINGS_KEY);
+
+  // Navigate to Models tab — the tab mounts a parallel `createTandemSettings()`
+  // which inherits the _readOnly flag from loadSettings.
   await gotoModelsTab(page);
-  // Wait for any settling.
-  await page.waitForTimeout(100);
+  await nextFrames(page); // flush mount effects
+
+  // Concrete assertion: no write landed on the settings key. Poll over a
+  // short window to absorb any future async-write path (currently writes
+  // are synchronous in useTandemSettings, so 0 should hold immediately).
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () => (window as unknown as { __settingsWrites: string[] }).__settingsWrites.length,
+        ),
+      { timeout: 300, intervals: [50, 100, 100, 50] },
+    )
+    .toBe(0);
 
   // The settings blob must still contain `futureField` after the load.
   const settings = await page.evaluate((key) => {

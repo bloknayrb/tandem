@@ -6,6 +6,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  nextFrames,
 } from "./helpers";
 
 /**
@@ -172,19 +173,26 @@ test("PR2: two overlapping comments produce non-overlapping bubbles", async ({ p
   );
   await expect(bubbles).toHaveCount(2, { timeout: 5_000 });
 
-  // Allow the collision sweep + bind:clientHeight to settle.
-  await page.waitForTimeout(150);
-
-  const boxes = await bubbles.evaluateAll((els) =>
-    els.map((el) => {
-      const r = el.getBoundingClientRect();
-      return { top: r.top, bottom: r.bottom };
-    }),
-  );
-  expect(boxes.length).toBe(2);
-  const [a, b] = [...boxes].sort((x, y) => x.top - y.top);
-  // The lower bubble's top must sit at or below the upper bubble's bottom.
-  expect(b.top).toBeGreaterThanOrEqual(a.bottom);
+  // Poll directly on the invariant — collapses "wait for collision sweep" and
+  // "assert no overlap" into one auto-retrying step. The initial measure →
+  // bind:clientHeight → adjustedPositions ping-pong takes ≥ 3 frames; a 5s
+  // budget absorbs CI load.
+  await expect
+    .poll(
+      async () =>
+        bubbles.evaluateAll((els) => {
+          const boxes = els.map((el) => {
+            const r = el.getBoundingClientRect();
+            return { top: r.top, bottom: r.bottom };
+          });
+          if (boxes.length !== 2) return false;
+          const [a, b] = [...boxes].sort((x, y) => x.top - y.top);
+          // The lower bubble's top must sit at or below the upper bubble's bottom.
+          return b.top >= a.bottom;
+        }),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
 });
 
 test("PR3: leader lines render and slope with collision adjustment", async ({ page }) => {
@@ -561,8 +569,12 @@ test("PR3: boundary resize does not flicker (hysteresis)", async ({ page }) => {
   await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
 
   await page.setViewportSize({ width: 1044, height: 900 });
-  // Inside the hysteresis band → must NOT flip back to visible.
-  await page.waitForTimeout(80);
+  // Inside the hysteresis band → must NOT flip back to visible. Wait for the
+  // resize → ResizeObserver → useViewportWidth rAF debounce → $effect → DOM
+  // chain to settle. `toHaveCount(0)` auto-retries up to its default timeout,
+  // so even if the chain runs longer than nextFrames covers, the assertion
+  // still holds as long as the column stays hidden.
+  await nextFrames(page);
   await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
   await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
 
@@ -599,11 +611,13 @@ test("PR3: narrow-collapse does not overwrite persisted rail visibility", async 
 
   // Sweep through the narrow boundary and back. Wait between transitions so
   // the $effect that drives narrowSticky actually runs — if it were ever to
-  // touch settings, this is when it would.
+  // touch settings, this is when it would. `nextFrames` covers the full
+  // resize → ResizeObserver → useViewportWidth rAF debounce → $effect → DOM
+  // chain deterministically (replaces a hardcoded 120ms wait).
   await page.setViewportSize({ width: 700, height: 900 });
-  await page.waitForTimeout(120);
+  await nextFrames(page);
   await page.setViewportSize({ width: 1600, height: 900 });
-  await page.waitForTimeout(120);
+  await nextFrames(page);
 
   // Settings must reflect the pre-sweep snapshot exactly.
   const after = await page.evaluate((key) => {
