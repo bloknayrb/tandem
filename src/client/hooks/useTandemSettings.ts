@@ -12,22 +12,6 @@ export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
 export type ThemePreference = "light" | "dark" | "warm" | "system";
-
-export const THEME_NEXT: Record<ThemePreference, ThemePreference> = {
-  system: "dark",
-  dark: "warm",
-  warm: "light",
-  light: "system",
-};
-
-// Action-oriented labels: matches THEME_NEXT cycle so screen readers and
-// tooltips announce what clicking will do, not what the current theme is.
-export const THEME_LABEL: Record<ThemePreference, string> = {
-  light: "Switch to system theme",
-  dark: "Switch to warm theme",
-  warm: "Switch to light theme",
-  system: "Switch to dark theme",
-};
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 
 /**

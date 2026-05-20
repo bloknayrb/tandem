@@ -194,12 +194,9 @@
           0 22px 38px -22px rgba(0, 0, 0, 0.50);
       }
 
-      /* Wave M: in Solo mode, comments and notes are de-emphasized — visible
-         but quiet — so the user's focus stays on their own writing.
-         Highlights stay normal because they're user-owned color flags.
-         `filter: opacity()` composes with the card's inline opacity, so
-         accepted cards (already at 0.6) layer the fade on top instead of
-         being clamped. */
+      /* `filter: opacity()` is used instead of plain `opacity:` so the fade
+         composes with cards that already carry an inline opacity (e.g.
+         accepted cards at 0.6) rather than being clamped by it. */
       [data-tandem-mode="solo"] [data-annotation-type="comment"],
       [data-tandem-mode="solo"] [data-annotation-type="note"],
       [data-tandem-mode="solo"] [data-testid="margin-column-left"] .margin-bubble,
@@ -261,11 +258,7 @@
       }
 
       [data-theme="dark"] {
-        /* Aligned to calm-v7.css dark canon: canvas 0.22, pill surface 0.27,
-           border 0.34, ink 0.94 — all at hue 280°. Previously surfaces were
-           270° and ink was 80° (warm yellow against cool violet), and the
-           whole palette ran ~4 stops too dark vs the v7 floating-chrome
-           intent. */
+        /* Tracks the calm-v7 dark canon at hue 280°. */
         --tandem-bg: oklch(0.22 0.012 280);
         --tandem-fg: oklch(0.94 0.006 280);
         --tandem-surface: oklch(0.27 0.012 280);
@@ -274,8 +267,7 @@
         --tandem-border: oklch(0.34 0.010 280);
         --tandem-border-strong: oklch(0.42 0.012 280);
         --tandem-fg-muted: oklch(0.74 0.008 280);
-        /* 0.70 vs v7's 0.74 — preserves WCAG AA 4.5:1 against the lighter
-           --tandem-surface-muted (0.25). */
+        /* 0.70 keeps WCAG AA 4.5:1 against --tandem-surface-muted (0.25). */
         --tandem-fg-subtle: oklch(0.70 0.008 280);
         --tandem-fg-faint: oklch(0.58 0.008 280);
         --tandem-accent-h: 275deg;
