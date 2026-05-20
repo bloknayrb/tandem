@@ -50,6 +50,7 @@ import {
   type OpenDoc,
   setActiveDocId,
 } from "./document-service.js";
+import { injectTutorialAnnotations } from "./tutorial-annotations.js";
 
 export { SUPPORTED_EXTENSIONS };
 
@@ -149,6 +150,13 @@ export async function openFileByPath(
     await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
+
+  // Inject tutorial annotations whenever the sample welcome document is opened,
+  // regardless of whether TANDEM_NO_SAMPLE skipped the server startup auto-open.
+  // injectTutorialAnnotations is idempotent — safe to call on session-restored docs.
+  if (resolved.endsWith(path.join("sample", "welcome.md"))) {
+    injectTutorialAnnotations(doc);
+  }
 
   return {
     ...buildResult(doc, {

@@ -17,14 +17,6 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:5173",
     headless: true,
-    // Capture diagnostic artifacts only when a test ultimately fails (i.e.
-    // after Playwright exhausts its retries). Keeps green-test runs fast
-    // while giving us trace / screenshot / video to diagnose the residual
-    // flakes — `retries: 1` masks intermittent failures from CI output, and
-    // without these artifacts the underlying cause is invisible.
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-    video: "retain-on-failure",
   },
   // Two webServer entries instead of `npm run dev:standalone`:
   //   1. Vite dev server for the client
@@ -72,6 +64,10 @@ export default defineConfig({
         // Isolate the E2E server's data dir so stale sessions/locks from the
         // stdio-smoke step (or any previous run) can't delay startup.
         TANDEM_APP_DATA_DIR: "/tmp/tandem-e2e-data",
+        // Skip auto-opening sample/welcome.md on startup. The onboarding-tutorial
+        // spec opens it explicitly via tandem_open, and openFileByPath injects
+        // tutorial annotations idempotently whenever the sample doc is opened.
+        TANDEM_NO_SAMPLE: "1",
       },
     },
   ],
