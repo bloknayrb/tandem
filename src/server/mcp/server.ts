@@ -15,8 +15,9 @@ import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
 import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
-import { createKeychain } from "../integrations/keychain.js";
+import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
@@ -394,6 +395,16 @@ export async function startMcpServerHttp(
     keychain: createKeychain(),
     readExisting: readExistingTandemEntries,
     serverVersion: APP_VERSION,
+  });
+
+  // --- Models registry secrets endpoints (#659) ---
+  // Outbound third-party API keys (Anthropic, OpenAI, Gemini, etc.) live in
+  // the OS keychain under a separate `tandem-models` service so they can't
+  // accidentally collide with inbound MCP-client auth tokens. Same security
+  // gates as the integration secret routes (origin allowlist +
+  // loopback-for-mutation, 503 on keychain unavailability).
+  registerModelsRoutes(app, largeBody, lanAwareApiMiddleware, {
+    keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS }),
   });
 
   // Serve built client assets when present (populated by `vite build`).

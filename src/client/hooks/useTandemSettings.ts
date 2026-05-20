@@ -25,7 +25,7 @@ export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
  */
 export type ModelProvider = "anthropic" | "openai" | "gemini" | "local-ollama" | "local-llamacpp";
 
-const VALID_MODEL_PROVIDERS: ModelProvider[] = [
+export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
   "anthropic",
   "openai",
   "gemini",
@@ -34,11 +34,17 @@ const VALID_MODEL_PROVIDERS: ModelProvider[] = [
 ];
 
 /**
- * Transitional inline shape for a Models registry entry. The `apiKey` lives
- * in localStorage plaintext today — `SettingsModelsTab.svelte` surfaces an
- * in-product disclosure banner stating this, and a future release will move
- * keys to the OS keychain (the `tokenSecretRef` pattern from
- * `IntegrationConfig` is the likely path).
+ * Models registry entry shape.
+ *
+ * **API keys never live in this object.** Cloud-provider keys are stored in
+ * the OS keychain (`tandem-models` service) via `POST /api/models/secrets/:ref`;
+ * only the opaque `apiKeyRef` is persisted to localStorage. Reading a key
+ * requires a server-side resolve — there is no GET secrets endpoint.
+ *
+ * Legacy `apiKey` plaintext entries (schemaVersion ≤ 6) are detected by
+ * `parseModels` and surfaced via the transient `_legacyApiKey` field so the
+ * UI can prompt a one-shot migration to keychain. `_legacyApiKey` is never
+ * written back — `mergeAndClampSettings` drops it on every persist.
  */
 export interface ModelRegistryEntry {
   /** Stable identifier, generated via `crypto.randomUUID()`. */
@@ -48,12 +54,23 @@ export interface ModelRegistryEntry {
   displayName: string;
   /** Provider's own model identifier (e.g. "claude-opus-4-7", "gpt-4o", "llama3.1:70b"). */
   modelId: string;
-  /** Cloud providers only (anthropic/openai/gemini). */
-  apiKey?: string;
+  /**
+   * Opaque keychain reference (base64url, ≤ 64 chars). Cloud providers only.
+   * The actual secret lives in the OS keychain under service `tandem-models`.
+   */
+  apiKeyRef?: string;
   /** Local providers only (local-ollama/local-llamacpp). */
   endpoint?: string;
   enabled: boolean;
   params?: Record<string, number | string | boolean>;
+  /**
+   * **Transient, never persisted.** Set by `parseModels` when a legacy v6
+   * blob carried a plaintext `apiKey`. The UI shows a one-shot migration
+   * prompt that POSTs the key to the keychain and rewrites the entry with
+   * `apiKeyRef`. Stripped by `mergeAndClampSettings` on every write so the
+   * plaintext never round-trips back to disk.
+   */
+  _legacyApiKey?: string;
 }
 
 /** Per-entry cap so a corrupt or hand-edited blob can't run the merge cost up. */
@@ -86,11 +103,16 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
-  // #659 Wave 2 PR 8a: local AI provider registry. Empty until the user adds
-  // entries via Settings → Models (PR 8b ships the UI). API keys live in
-  // plaintext localStorage today; a future release will move them to the OS
-  // keychain (see SettingsModelsTab.svelte's in-product banner).
+  // #659: AI provider registry. API keys live in the OS keychain
+  // (`tandem-models` service) via `POST /api/models/secrets/:ref`; the
+  // entries here only carry the opaque `apiKeyRef`.
   models: ModelRegistryEntry[];
+  /**
+   * Id of the default model entry (`null` when none set or when the
+   * referenced entry was deleted). `mergeAndClampSettings` enforces
+   * referential integrity — a stale id is silently coerced to `null`.
+   */
+  defaultModelId: string | null;
   /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
@@ -117,7 +139,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 6,
+  schemaVersion: 7,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -139,7 +161,13 @@ const DEFAULTS: TandemSettings = {
   holdAnnotationsWhileOffline: true,
   marginView: false,
   models: [],
+  defaultModelId: null,
 };
+
+/** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
+const MAX_KEY_REF_LENGTH = 64;
+/** Plaintext `apiKey` cap kept only for the legacy-detection branch on read. */
+const MAX_LEGACY_API_KEY_LENGTH = 512;
 
 /**
  * Strip a corrupt or hand-edited `models` array down to entries that match
@@ -178,7 +206,20 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
       modelId: e.modelId,
       enabled: e.enabled,
     };
-    if (typeof e.apiKey === "string" && e.apiKey.length <= 512) cleaned.apiKey = e.apiKey;
+    if (
+      typeof e.apiKeyRef === "string" &&
+      e.apiKeyRef.length > 0 &&
+      e.apiKeyRef.length <= MAX_KEY_REF_LENGTH &&
+      /^[A-Za-z0-9_-]+$/.test(e.apiKeyRef)
+    ) {
+      cleaned.apiKeyRef = e.apiKeyRef;
+    } else if (typeof e.apiKey === "string" && e.apiKey.length <= MAX_LEGACY_API_KEY_LENGTH) {
+      // Legacy plaintext key from a pre-v7 blob. Surface to the UI via the
+      // transient `_legacyApiKey` so the user can complete a one-shot
+      // migration to the keychain. Never written back — `mergeAndClampSettings`
+      // strips the field on every persist.
+      cleaned._legacyApiKey = e.apiKey;
+    }
     if (typeof e.endpoint === "string" && e.endpoint.length <= 2048) cleaned.endpoint = e.endpoint;
     if (e.params && typeof e.params === "object" && !Array.isArray(e.params)) {
       const params: Record<string, number | string | boolean> = {};
@@ -226,8 +267,15 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   Settings → Claude Code replaces the toggle). Dismissal state lives in
  *   its own localStorage key `tandem:wizard-dismissed`, separate from
  *   `tandem:settings` (orthogonal lifecycle).
+ * v6→v7: introduce `defaultModelId: null` and switch `ModelRegistryEntry`
+ *   secret storage from plaintext `apiKey` → opaque `apiKeyRef` (OS
+ *   keychain). The migration step itself is structural — it sets
+ *   `defaultModelId` based on the first enabled entry and leaves any
+ *   plaintext `apiKey` values in place so `parseModels` can surface them
+ *   via the transient `_legacyApiKey` field for the in-UI migration prompt.
+ *   This is the load-bearing #659 step.
  */
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -321,6 +369,10 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         : DEFAULTS.holdAnnotationsWhileOffline,
     marginView: parsed.marginView === true,
     models: parseModels(parsed.models),
+    defaultModelId:
+      typeof parsed.defaultModelId === "string" && parsed.defaultModelId.length > 0
+        ? parsed.defaultModelId
+        : null,
   };
 }
 
@@ -390,6 +442,23 @@ export function loadSettings(): TandemSettings {
         delete next.showIntegrationWizard;
         parsed = next;
       }
+      if (parsed.schemaVersion === 6) {
+        // v6→v7: introduce `defaultModelId`. Pre-select the first enabled
+        // entry as the default so an existing user with one model doesn't
+        // need to revisit Settings. Plaintext `apiKey` values pass through
+        // here unchanged — `parseModels` rewrites them into the transient
+        // `_legacyApiKey` field that drives the one-shot migration banner.
+        const rawModels = Array.isArray(parsed.models)
+          ? (parsed.models as Array<Record<string, unknown>>)
+          : [];
+        const firstEnabled = rawModels.find((m) => typeof m?.id === "string" && m.enabled === true);
+        parsed = {
+          ...parsed,
+          schemaVersion: 7,
+          defaultModelId:
+            firstEnabled && typeof firstEnabled.id === "string" ? firstEnabled.id : null,
+        };
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -452,6 +521,7 @@ export function mergeAndClampSettings(
   partial: Partial<TandemSettings>,
 ): TandemSettings {
   const merged = { ...prev, ...partial };
+  const parsedModels = parseModels(merged.models);
   return {
     ...merged,
     editorWidthPercent: Math.max(40, Math.min(100, merged.editorWidthPercent)),
@@ -465,7 +535,17 @@ export function mergeAndClampSettings(
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.
     // hand-rolled call site that pushes an object missing `enabled`) can't
-    // corrupt the array between persisted reads.
-    models: parseModels(merged.models),
+    // corrupt the array between persisted reads. `parseModels` strips
+    // `_legacyApiKey` / `apiKey` plaintext fields, so persisted blobs never
+    // re-acquire the legacy shape post-migration.
+    models: parsedModels,
+    // `defaultModelId` referential integrity: a stale id (entry deleted in
+    // the same update, hand-edited blob, etc.) is coerced to `null` so
+    // downstream consumers don't have to defend.
+    defaultModelId:
+      typeof merged.defaultModelId === "string" &&
+      parsedModels.some((m) => m.id === merged.defaultModelId)
+        ? merged.defaultModelId
+        : null,
   };
 }
