@@ -15,13 +15,7 @@ export type {
   TextSize,
   ThemePreference,
 } from "./useTandemSettings.js";
-export {
-  loadSettings,
-  mergeAndClampSettings,
-  TEXT_SIZE_PX,
-  THEME_LABEL,
-  THEME_NEXT,
-} from "./useTandemSettings.js";
+export { loadSettings, mergeAndClampSettings, TEXT_SIZE_PX } from "./useTandemSettings.js";
 
 export interface TandemSettingsState {
   readonly settings: TandemSettings;

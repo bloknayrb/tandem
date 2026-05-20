@@ -44,7 +44,7 @@ describe("shouldShowInMode", () => {
   });
 
   describe('mode = "solo"', () => {
-    it("shows pending claude annotations (Wave M: fade-not-hide)", () => {
+    it("shows pending claude annotations", () => {
       expect(
         shouldShowInMode(makeAnnotation({ author: "claude", status: "pending" }), "solo"),
       ).toBe(true);
@@ -100,7 +100,7 @@ describe("gateAnnotations (useModeGate hook logic)", () => {
     expect(result.heldCount).toBe(0);
   });
 
-  it("solo mode shows pending claude annotations (Wave M: fade-not-hide)", () => {
+  it("solo mode shows pending claude annotations", () => {
     const anns = [
       makeAnnotation({ id: "a1", author: "claude", status: "pending" }),
       makeAnnotation({ id: "a2", author: "claude", status: "pending" }),
@@ -131,7 +131,7 @@ describe("gateAnnotations (useModeGate hook logic)", () => {
     expect(result.heldCount).toBe(0);
   });
 
-  it("heldCount is 0 in solo mode (Wave M: fade-not-hide, no held bucket)", () => {
+  it("heldCount is 0 in solo mode (no held bucket)", () => {
     const anns = [
       makeAnnotation({ id: "a1", author: "claude", status: "pending" }),
       makeAnnotation({ id: "a2", author: "claude", status: "pending" }),

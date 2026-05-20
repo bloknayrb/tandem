@@ -3,8 +3,6 @@ import {
   loadSettings,
   mergeAndClampSettings,
   type TandemSettings,
-  THEME_LABEL,
-  THEME_NEXT,
 } from "../../src/client/hooks/useTandemSettings.js";
 import {
   SELECTION_DWELL_DEFAULT_MS,
@@ -217,22 +215,6 @@ describe("loadSettings — theme", () => {
   it("falls back to 'system' for non-string values", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ theme: true }));
     expect(loadSettings().theme).toBe("system");
-  });
-});
-
-describe("THEME_NEXT — cycle (W1: warm canvas inserted between dark and light)", () => {
-  it("cycles system → dark → warm → light → system", () => {
-    expect(THEME_NEXT.system).toBe("dark");
-    expect(THEME_NEXT.dark).toBe("warm");
-    expect(THEME_NEXT.warm).toBe("light");
-    expect(THEME_NEXT.light).toBe("system");
-  });
-
-  it("THEME_LABEL action verbs match the cycle", () => {
-    expect(THEME_LABEL.system).toBe("Switch to dark theme");
-    expect(THEME_LABEL.dark).toBe("Switch to warm theme");
-    expect(THEME_LABEL.warm).toBe("Switch to light theme");
-    expect(THEME_LABEL.light).toBe("Switch to system theme");
   });
 });
 

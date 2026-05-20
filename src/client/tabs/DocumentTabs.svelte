@@ -1,6 +1,7 @@
 <script lang="ts">
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import type { OpenTab } from "../types.js";
+import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
@@ -183,14 +184,7 @@ $effect(() => {
     if (!target) return;
     if (openBtnEl?.contains(target)) return;
     if ((target as Element).closest?.(".new-tab-menu")) return;
-    // Wave M: the titlebar root carries the drag region, with interactive
-    // descendants opting out via `data-tauri-drag-region="false"`. We only
-    // want to ignore clicks that landed in an actual drag area — not in an
-    // opted-out child like the new-tab button.
-    {
-      const drag = (target as Element).closest?.("[data-tauri-drag-region]");
-      if (drag && drag.getAttribute("data-tauri-drag-region") !== "false") return;
-    }
+    if (isInActiveDragRegion(target as Element)) return;
     showRecent = false;
   }
 

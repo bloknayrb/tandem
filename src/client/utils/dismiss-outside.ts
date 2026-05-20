@@ -48,3 +48,15 @@ export function onOutsideEvent(
     for (const t of eventTypes) document.removeEventListener(t, handle, capture);
   };
 }
+
+/**
+ * True when `target` sits inside a Tauri drag region that has NOT been
+ * opted out via `data-tauri-drag-region="false"`. Used by outside-click
+ * dismiss handlers to ignore clicks on actual drag surface (which can't
+ * really be "outside" anything) while still honoring interactive
+ * descendants that opted themselves back into clickability.
+ */
+export function isInActiveDragRegion(target: Element): boolean {
+  const drag = target.closest?.("[data-tauri-drag-region]");
+  return !!drag && drag.getAttribute("data-tauri-drag-region") !== "false";
+}

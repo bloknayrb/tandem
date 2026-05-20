@@ -1,5 +1,6 @@
 <script lang="ts">
 import { clickOutside } from "../actions/clickOutside.svelte.js";
+import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import { portal } from "../utils/portal.js";
 
 interface Props {
@@ -51,19 +52,12 @@ let menuEl: HTMLDivElement | null = $state(null);
 
 function handleOutsideClick(e: MouseEvent) {
   // The clickOutside action already filtered out clicks inside the menu.
-  // Also ignore:
-  //  - clicks on the anchor button (its own onclick would re-open the menu).
-  //  - clicks on a Tauri drag region (title-bar drag should not dismiss the menu).
+  // Also ignore the anchor button (its own onclick would re-open the menu)
+  // and clicks on an active Tauri drag region (title-bar drag is not a dismiss).
   const target = e.target as (Node & Element) | null;
   if (!target) return;
   if (anchorEl?.contains(target)) return;
-  // Wave M: honor `data-tauri-drag-region="false"` opt-outs so clicks on
-  // brand-menu items, tabs, etc. (which sit inside the root drag region but
-  // are explicitly opted out) still dismiss this menu.
-  {
-    const drag = target.closest?.("[data-tauri-drag-region]");
-    if (drag && drag.getAttribute("data-tauri-drag-region") !== "false") return;
-  }
+  if (isInActiveDragRegion(target)) return;
   onClose();
 }
 

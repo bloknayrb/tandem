@@ -38,15 +38,10 @@ interface Props {
   /** Open Settings popover. */
   onOpenSettings?: () => void;
   /**
-   * Open the new SettingsModal (Wave 1 stable prop slot). Wired separately
-   * from `onOpenSettings` so the existing gear keeps invoking the popover
-   * until Wave 2 retires it. Triggered today via the command palette /
-   * `Ctrl+Shift+,` shortcut registered in `actions/builtin.svelte.ts`.
-   * Intentionally unused inside this component — destructured as
-   * `_onOpenSettingsModal` so the compiler treats it as an acknowledged
-   * no-op rather than an oversight. Intentionally NOT wired to
-   * `aria-keyshortcuts` on the gear (that attribute describes shortcuts
-   * activating the labelled element; Ctrl+Shift+, opens a different surface).
+   * Stable prop slot reserved for the SettingsModal trigger. Currently
+   * unused inside this component (Ctrl+Shift+, is routed through
+   * `actions/builtin.svelte.ts`); destructured as `_onOpenSettingsModal`
+   * below so svelte-check accepts the declared-but-unread prop.
    */
   onOpenSettingsModal?: () => void;
   /** Bindable settings button reference (used for keyboard shortcut anchoring). */
@@ -214,12 +209,9 @@ function chooseHelp() {
 }
 </script>
 
-<!-- Root carries the drag region; every interactive descendant
-     opts back out with `data-tauri-drag-region="false"`. This is the
-     documented Tauri 2 inverse-opt-out pattern. It gives the user every
-     non-button pixel of the titlebar as a grab surface. DocumentTabs and
-     NewTabMenu's bail-out guards honor the opt-out so menu dismissal
-     still works on clicks inside opted-out children. -->
+<!-- Root carries the drag region; interactive descendants opt back out
+     with `data-tauri-drag-region="false"` (Tauri 2 inverse-opt-out pattern)
+     so every non-button pixel is a window grab surface. -->
 <div class="title-bar" data-testid="title-bar" data-tauri-drag-region>
   <div class="title-bar-left">
     <button
@@ -233,8 +225,6 @@ function chooseHelp() {
       aria-expanded={brandMenuOpen}
       onclick={toggleBrandMenu}
     >
-      <!-- 256×256 source displayed at 32×32 — gives ~8× density so the
-           hover scale-up stays inside native resolution and stays crisp. -->
       <img class="brand-mark" src="/logo.png" alt="" width="32" height="32" />
       {#if isTauriRuntime() && updateAvailable}
         <span
@@ -315,9 +305,7 @@ function chooseHelp() {
 
   <div class="title-bar-actions">
     {#if tandemMode && onModeChange}
-      <span data-tauri-drag-region="false">
-        <ModeToggle {tandemMode} {onModeChange} />
-      </span>
+      <ModeToggle {tandemMode} {onModeChange} />
     {/if}
 
     {#if claudeActive}
@@ -427,10 +415,8 @@ function chooseHelp() {
 
 <style>
   /* 3-cluster floating chrome: brand left, center snippet (DocumentTabs),
-     actions right. The bar is transparent so each cluster reads as floating
-     over the canvas. Drag region is carried by the brand cluster and the
-     two flex gaps around the center — the center wrap is attribute-free so
-     interactive children (tab pills, close buttons) stay clickable. */
+     actions right. Transparent so each cluster reads as floating over the
+     canvas. */
   .title-bar {
     display: flex;
     align-items: center;
@@ -441,9 +427,7 @@ function chooseHelp() {
     flex-shrink: 0;
   }
 
-  /* Sibling drag spacers wrap the center + sit before the win controls.
-     `.title-bar-left` is `position: relative` so the absolutely-positioned
-     brand-menu anchors to it. */
+  /* `position: relative` anchors the absolutely-positioned brand-menu. */
   .title-bar-left {
     position: relative;
     display: flex;
@@ -451,18 +435,12 @@ function chooseHelp() {
     flex-shrink: 0;
   }
 
-  /* Flex-grow drag spacers. The wide pair flanks the center cluster
-     (DocumentTabs); a narrow one sits between actions and win controls so
-     even with a tab fill close to the cap there's a draggable column right
-     of the icon buttons. align-self defaults to inherit `align-items`, so
-     stretching to the full bar height happens automatically — explicitly
-     setting align-self: stretch breaks the flex-grow in some browsers. */
   .title-bar-spacer {
     flex: 1 1 0;
     min-width: var(--tandem-space-2);
     /* Stretch to the title-bar's full content height so the drag region
-       actually has a hit area; an empty div with no intrinsic content
-       collapses to 0px tall under flex `align-items: center`. */
+       actually has a hit area; an empty div under flex `align-items: center`
+       collapses to 0px tall otherwise. */
     align-self: stretch;
   }
 
@@ -473,10 +451,8 @@ function chooseHelp() {
 
   /* Cap at 60% so brand + actions stay readable when the center fills with
      many tabs; DocumentTabs handles its own horizontal scroll past the cap.
-     `position: relative; z-index` lifts the tab strip above tauri-plugin-decorum's
-     overlay drag-region (which is full-width and would otherwise intercept all
-     clicks on the tabs). The drag-region gaps on either side stay at the default
-     z so decorum's overlay handles window drag in those zones. */
+     `z-index` lifts the tab strip above tauri-plugin-decorum's overlay
+     drag-region so clicks on tab pills aren't intercepted. */
   .title-bar-center {
     display: flex;
     align-items: center;
@@ -487,9 +463,7 @@ function chooseHelp() {
     z-index: 99999;
   }
 
-  /* The Tandem icon IS the menu trigger — no chrome around it. The button is
-     sized to the icon; hover scales it up slightly for affordance. The
-     update-available dot pins to the top-right corner of the icon itself. */
+  /* The Tandem icon IS the menu trigger — no chrome around it. */
   .brand-btn {
     position: relative;
     display: inline-grid;
@@ -525,9 +499,8 @@ function chooseHelp() {
     flex-shrink: 0;
   }
 
-  /* Dropdown anchored to the icon. `tandem-floating-pill` supplies the
-     surface treatment; this rule positions + sizes the menu and packs the
-     items + heading + divider. */
+  /* Dropdown anchored to the icon — `tandem-floating-pill` supplies the
+     surface treatment; this rule only positions and packs the menu. */
   .brand-menu {
     position: absolute;
     top: calc(100% + 6px);
@@ -652,11 +625,9 @@ function chooseHelp() {
     color: var(--tandem-accent);
   }
 
-  /* Update-available dot — pinned to the top-right corner of the brand
-     icon when a Tauri updater event has fired and not been acknowledged
-     yet (issue #660). The brand-btn is `position: relative` so this
-     absolute positioning targets the button's box. WCAG AA against
-     --tandem-bg in both themes via the contrasting ring. */
+  /* Pinned to the top-right of the brand icon when an updater event has
+     fired and not been acknowledged. The contrasting ring keeps WCAG AA
+     against --tandem-bg in both themes. */
   .titlebar-settings-dot {
     position: absolute;
     top: 3px;
@@ -676,14 +647,11 @@ function chooseHelp() {
     }
   }
 
-  /* Bare window controls — no pill chrome, flush with the window's top-right
-     corner so they read as OS chrome distinct from the in-app actions. The
-     titlebar has `padding: 14px 14px 4px`; negative margin-top/-right cancel
-     the top and right padding so the close button sits at (0, 0) relative to
-     the window corner. `position: relative; z-index` lifts the cluster above
-     tauri-plugin-decorum's overlay drag-region (same rationale as
-     .title-bar-center / .title-bar-actions) so the buttons receive clicks
-     instead of the overlay treating them as drag surface. */
+  /* Bare window controls — no pill chrome, flush with the window's
+     top-right corner. Negative margins cancel the titlebar's top/right
+     padding so the close button sits at (0, 0) relative to the window
+     corner; `z-index` lifts the cluster above decorum's overlay drag
+     region so the buttons receive clicks. */
   .title-bar-controls {
     display: inline-flex;
     align-items: center;
