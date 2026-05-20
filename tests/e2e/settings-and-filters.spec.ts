@@ -6,6 +6,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openSettingsPopover,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -52,10 +53,7 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  // Click the toolbar settings button — uses the new testid from PR #227
-  const settingsBtn = page.locator("[data-testid='settings-btn']");
-  await expect(settingsBtn).toBeVisible({ timeout: 5_000 });
-  await settingsBtn.click();
+  await openSettingsPopover(page);
 
   // Popover mounts with its own testid
   const popover = page.locator("[data-testid='settings-popover']");
@@ -85,7 +83,7 @@ test("settings dialog surfaces default mode and persists it", async ({ page }) =
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
 
@@ -103,7 +101,7 @@ test("settings dialog surfaces default mode and persists it", async ({ page }) =
 
   await page.reload();
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const reloadedPopover = page.locator("[data-testid='settings-popover']");
   await reloadedPopover.getByRole("button", { name: "Collaboration" }).click();
   await expect(reloadedPopover.locator("[data-testid='default-mode-solo-btn']")).toHaveAttribute(
@@ -133,7 +131,7 @@ test("settings dialog sections and About panel reflect the redesign closeout", a
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
 
@@ -181,7 +179,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
 
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
   await popover.getByRole("button", { name: "AI Assistant" }).click();
@@ -207,7 +205,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
   await selectFirstParagraph();
   await expect(toolbar).toHaveCount(0, { timeout: 2_000 });
 
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const reopenedPopover = page.locator("[data-testid='settings-popover']");
   await reopenedPopover.getByRole("button", { name: "AI Assistant" }).click();
   const reopenedToggle = reopenedPopover.locator("[data-testid='selection-toolbar-toggle'] input");
@@ -357,11 +355,9 @@ test("bulk-confirm resets when filter-status changes", async ({ page }) => {
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
 
-test("Solo/Tandem mode toggle switches via toolbar and surfaces held annotations in status", async ({
-  page,
-}) => {
+test("Solo/Tandem mode toggle switches via toolbar (Wave M: fade-not-hide)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  // Seed a pending annotation so Solo mode has something to hold.
+  // Seed a pending annotation — Wave M keeps it visible (faded) in solo mode.
   await mcp.callTool("tandem_comment", {
     from: 2,
     to: 6,
@@ -375,14 +371,6 @@ test("Solo/Tandem mode toggle switches via toolbar and surfaces held annotations
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
   });
-  const settingsBtn = page.locator("[data-testid='settings-btn']");
-  await settingsBtn.click();
-  await page.getByRole("button", { name: "Collaboration" }).click();
-  const soloRailHiddenToggle = page.locator("[data-testid='solo-rail-hidden-toggle'] input");
-  await expect(soloRailHiddenToggle).toBeChecked();
-  await soloRailHiddenToggle.click();
-  await expect(soloRailHiddenToggle).not.toBeChecked();
-  await page.getByLabel("Close settings").click();
 
   const soloBtn = page.locator("[data-testid='mode-solo-btn']");
   const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
@@ -393,33 +381,35 @@ test("Solo/Tandem mode toggle switches via toolbar and surfaces held annotations
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
 
-  // In Tandem mode the held affordance is absent — the annotation is visible.
+  // No held affordance in any mode — Wave M replaces held-hiding with a
+  // CSS opacity fade. sb-held is permanently absent.
   const heldButton = page.getByTestId("sb-held");
   await expect(heldButton).toHaveCount(0);
 
-  // Switch to solo. Assert via localStorage (race-free) + aria-pressed
-  // (visible state). Avoid asserting through tandem_status because Y.Map
-  // propagation over Hocuspocus is async.
+  // Switch to solo. Assert via localStorage (race-free) + aria-pressed.
   await soloBtn.click();
   await expect(soloBtn).toHaveAttribute("aria-pressed", "true");
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "false");
   const soloSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
   expect(soloSaved).toBe("solo");
 
-  // The held affordance must appear in Solo mode and expose the actionable
-  // count in the status bar, which is the contract called for by #519.
-  await expect(heldButton).toBeVisible({ timeout: 2_000 });
-  await expect(heldButton).toHaveText(/\d+ held/);
-  await heldButton.click();
+  // Wave M: annotation is visible (not held). The CSS fade is at 0.45 opacity
+  // but the card is still in the DOM — count must remain 1.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 2_000,
+  });
+  // No held bucket — sb-held never renders.
+  await expect(heldButton).toHaveCount(0);
 
-  // Switch back through the status bar affordance.
+  // Switch back via the toggle.
+  await soloBtn.click();
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
   const tandemSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
   expect(tandemSaved).toBe("tandem");
 
-  // The held affordance clears when back in Tandem.
-  await expect(heldButton).toHaveCount(0, { timeout: 2_000 });
+  // Still no held affordance in Tandem.
+  await expect(heldButton).toHaveCount(0);
 });
 
 test("side panel resets scroll to top on filter change (no active annotation)", async ({
@@ -516,7 +506,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible();
   await popover.getByRole("button", { name: "AI Assistant" }).click();
@@ -547,7 +537,7 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   // Reload and confirm the slider shows the saved value.
   await page.reload();
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const reloadedPopover = page.locator("[data-testid='settings-popover']");
   await reloadedPopover.getByRole("button", { name: "AI Assistant" }).click();
   const reloadedSlider = reloadedPopover.locator("[data-testid='dwell-time-slider']");
@@ -561,7 +551,7 @@ test("settings popover stays within viewport on short screens (#306)", async ({ 
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
 
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible();
@@ -707,7 +697,7 @@ async function openSettingsDialog(
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const dialog = page.locator("[data-testid='settings-popover']");
   await expect(dialog).toBeVisible({ timeout: 3_000 });
   return dialog;
