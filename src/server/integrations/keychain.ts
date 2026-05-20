@@ -45,6 +45,15 @@ const esmRequire = createRequire(import.meta.url);
 /** Keychain service identifier — all Tandem integration tokens live under this name. */
 export const KEYCHAIN_SERVICE = "tandem-integrations" as const;
 
+/**
+ * Keychain service identifier for the Models registry (#659). Separate from
+ * `KEYCHAIN_SERVICE` so outbound third-party API keys (Anthropic, OpenAI,
+ * Gemini) don't share a namespace with inbound MCP-client auth tokens.
+ * Different blast radius (third-party paid account vs local server), so
+ * different namespace.
+ */
+export const KEYCHAIN_SERVICE_MODELS = "tandem-models" as const;
+
 /** Thrown when the underlying OS keychain is unavailable (missing native module, no dbus, etc.). */
 export class KeychainUnavailableError extends Error {
   constructor(cause: unknown) {
@@ -87,20 +96,45 @@ export function generateSecretRef(): string {
   return randomBytes(16).toString("base64url");
 }
 
+export interface CreateKeychainOptions {
+  /** OS keychain service name. Defaults to `KEYCHAIN_SERVICE` (integrations). */
+  service?: string;
+  /** Inject a fake backend for tests. */
+  backend?: KeychainBackend;
+}
+
 /**
  * Create a keychain instance. If `backend` is omitted, lazy-loads
  * `@napi-rs/keyring` on first use; calls throw `KeychainUnavailableError`
  * if the native module cannot be loaded.
+ *
+ * **Service scoping.** Pass `{ service: KEYCHAIN_SERVICE_MODELS }` to create
+ * a Models-scoped instance — the model registry's outbound API keys must
+ * not share a namespace with inbound integration auth tokens. Backwards
+ * compatibility: existing callers passing a `KeychainBackend` directly
+ * still work via the positional-arg overload.
  */
-export function createKeychain(backend?: KeychainBackend): Keychain {
-  const resolveBackend: () => KeychainBackend = backend
-    ? () => backend
+export function createKeychain(
+  backendOrOptions?: KeychainBackend | CreateKeychainOptions,
+): Keychain {
+  // Positional `KeychainBackend` arg form is kept for backwards compat with
+  // existing call sites (integrations routes test fakes). The new options
+  // form is used for the Models registry which needs a different service.
+  const isLegacyBackendArg =
+    backendOrOptions !== undefined &&
+    typeof (backendOrOptions as KeychainBackend).get === "function";
+  const opts: CreateKeychainOptions = isLegacyBackendArg
+    ? { backend: backendOrOptions as KeychainBackend }
+    : ((backendOrOptions as CreateKeychainOptions | undefined) ?? {});
+  const service = opts.service ?? KEYCHAIN_SERVICE;
+  const resolveBackend: () => KeychainBackend = opts.backend
+    ? () => opts.backend as KeychainBackend
     : memoize(() => loadNativeBackend());
 
   return {
     async getSecret(ref) {
       const b = resolveBackend();
-      return b.get(KEYCHAIN_SERVICE, ref);
+      return b.get(service, ref);
     },
     async setSecret(ref, secret) {
       if (!ref || ref.length === 0) {
@@ -110,11 +144,11 @@ export function createKeychain(backend?: KeychainBackend): Keychain {
         throw new Error("setSecret: secret must be a non-empty string");
       }
       const b = resolveBackend();
-      b.set(KEYCHAIN_SERVICE, ref, secret);
+      b.set(service, ref, secret);
     },
     async deleteSecret(ref) {
       const b = resolveBackend();
-      return b.delete(KEYCHAIN_SERVICE, ref);
+      return b.delete(service, ref);
     },
   };
 }

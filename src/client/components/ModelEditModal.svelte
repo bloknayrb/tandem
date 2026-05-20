@@ -8,21 +8,26 @@ interface Props {
   entry?: ModelRegistryEntry;
   onCancel: () => void;
   /**
-   * Save handler. `apiKey` and `endpoint` are passed through verbatim;
-   * the parent decides whether to call `models.addModel` or
-   * `models.updateModel` based on whether `entry` was supplied.
+   * Save handler.
    *
-   * On edit mode the parent passes `entry.apiKey` as the existing value;
-   * if the user did NOT click "Replace key", `apiKey` in the payload
-   * carries the existing value unchanged (round-trips through this
-   * component but never through the DOM). If the user did click
-   * "Replace key", `apiKey` carries the new plaintext value.
+   * **Secrets contract (#659).** Plaintext API keys are stored server-side
+   * in the OS keychain; the entry on disk carries only the opaque
+   * `apiKeyRef`. This component therefore returns `plaintextApiKey` only
+   * when the user is creating an entry or has clicked "Replace key" — in
+   * the no-op edit case (user didn't touch the key field), `plaintextApiKey`
+   * is `undefined` and the parent must preserve the existing `apiKeyRef`.
+   *
+   * The parent (`SettingsModelsTab` / first-run picker) is responsible for
+   * routing `plaintextApiKey` through `useModels.addModel` /
+   * `useModels.updateModel`, which post it to the secrets endpoint and
+   * persist only the ref.
    */
   onSave: (data: {
     provider: ModelProvider;
     displayName: string;
     modelId: string;
-    apiKey?: string;
+    /** Plaintext key for keychain storage; `undefined` to preserve existing ref. */
+    plaintextApiKey?: string;
     endpoint?: string;
     enabled: boolean;
   }) => void;
@@ -52,16 +57,14 @@ let modelId = $state(initialEntry?.modelId ?? "");
 let endpoint = $state(initialEntry?.endpoint ?? "");
 let enabled = $state(initialEntry?.enabled ?? true);
 
-// Reveal-gated apiKey state. On edit mode with an existing key, `apiKey`
-// stays empty in the DOM (`type="password"` masks visually, but the DOM
-// `value` attribute is still serialized by DevTools snapshots — we
-// double-defend by never round-tripping the existing key through the
-// editable input). `replacingKey` flips to true only when the user
-// explicitly clicks "Replace key", at which point the input becomes
-// editable and the parent's save handler will write whatever the user
-// types.
+// Reveal-gated apiKey state. The plaintext key only enters this DOM when
+// the user is adding a new entry or has clicked "Replace key". On edit
+// mode without replacement, the input is not rendered at all — the
+// existing `apiKeyRef` is opaque and the actual secret lives in the OS
+// keychain (no client read path).
 let apiKey = $state("");
-let replacingKey = $state(initialEntry === undefined || !initialEntry.apiKey);
+const hasExistingKey = initialEntry !== undefined && Boolean(initialEntry.apiKeyRef);
+let replacingKey = $state(initialEntry === undefined || !hasExistingKey);
 
 const isEditing = initialEntry !== undefined;
 const isCloud = $derived(
@@ -69,10 +72,12 @@ const isCloud = $derived(
 );
 const isLocal = $derived(provider.startsWith("local-"));
 
-// Last 4 chars of the existing key for the masked preview. Reading the
-// existing key value here keeps it confined to the script block; it never
-// reaches a DOM attribute. Empty string when no existing key.
-const existingKeyTail = initialEntry?.apiKey ? initialEntry.apiKey.slice(-4) : "";
+// Last 4 chars of the opaque `apiKeyRef` for the masked preview. The ref
+// is not sensitive (no read path exposes the plaintext from it), but it
+// also isn't user-meaningful — surfacing four chars is enough to
+// disambiguate "I have a key stored" vs "I don't" without leaking the
+// secret itself.
+const existingKeyTail = initialEntry?.apiKeyRef ? initialEntry.apiKeyRef.slice(-4) : "";
 
 const canSave = $derived(
   displayName.trim().length > 0 &&
@@ -86,8 +91,9 @@ function handleSubmit(e: SubmitEvent) {
   e.preventDefault();
   if (!canSave) return;
 
-  // Build the payload. apiKey: if replacing, use the new value; else
-  // round-trip the existing one (only present in edit mode). endpoint
+  // Build the payload. plaintextApiKey is set ONLY when the user typed a
+  // new key (add mode or "Replace key" path). In no-op edit, the field is
+  // omitted and the parent preserves the existing `apiKeyRef`. Endpoint
   // is similarly gated to local providers.
   const payload: Parameters<typeof onSave>[0] = {
     provider,
@@ -95,12 +101,8 @@ function handleSubmit(e: SubmitEvent) {
     modelId: modelId.trim(),
     enabled,
   };
-  if (isCloud) {
-    if (replacingKey) {
-      if (apiKey.trim()) payload.apiKey = apiKey.trim();
-    } else if (initialEntry?.apiKey) {
-      payload.apiKey = initialEntry.apiKey;
-    }
+  if (isCloud && replacingKey && apiKey.trim()) {
+    payload.plaintextApiKey = apiKey.trim();
   }
   if (isLocal && endpoint.trim()) {
     payload.endpoint = endpoint.trim();
@@ -187,7 +189,7 @@ function startReplacingKey() {
     {#if isCloud}
       <label style="display: flex; flex-direction: column; gap: 4px;">
         <span style="font-size: 11px; font-weight: 600; color: var(--tandem-fg); text-transform: uppercase; letter-spacing: 0.5px;">API key</span>
-        {#if isEditing && initialEntry?.apiKey && !replacingKey}
+        {#if isEditing && initialEntry?.apiKeyRef && !replacingKey}
           <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
             <span
               style="flex: 1; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg-muted); background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); font-family: var(--tandem-font-mono);"
