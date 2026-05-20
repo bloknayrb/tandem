@@ -90,6 +90,29 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  // CI's `check` job runs on a stock ubuntu-latest with no libsecret /
+  // dbus, so the real OS-keychain backend throws `KeychainUnavailableError`
+  // on every secret store. The E2E layer cares about the data-model
+  // contract (plaintext never lands in localStorage; only the opaque
+  // `apiKeyRef` does) — NOT about the system keychain being up. Stub the
+  // POST/DELETE routes here so the in-product flow runs end-to-end against
+  // a fake-but-real network layer. The server-side unit tests in
+  // `tests/server/models/api-routes.test.ts` cover the real keychain path
+  // with an in-memory backend.
+  await page.route("**/api/models/secrets/**", async (route) => {
+    const method = route.request().method();
+    if (method === "POST") {
+      await route.fulfill({ status: 204, body: "" });
+    } else if (method === "DELETE") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ existed: true }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://127.0.0.1:5173");
   await clearModelsRegistry(page);
