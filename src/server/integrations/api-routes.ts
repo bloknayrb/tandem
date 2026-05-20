@@ -182,7 +182,7 @@ export function registerIntegrationsRoutes(
  * opt-in, on the basis that the user explicitly accepted exposing
  * Tandem's read surface to the network.
  */
-function assertLoopbackForMutation(req: Request, res: Response): boolean {
+export function assertLoopbackForMutation(req: Request, res: Response): boolean {
   const allowUnauthLan = process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV] === "1";
   if (allowUnauthLan && !isLoopback(req.socket.remoteAddress)) {
     res.status(403).json({
@@ -205,7 +205,7 @@ function assertLoopbackForMutation(req: Request, res: Response): boolean {
  *
  * Returns true if the response was sent (caller should `return`).
  */
-function assertOriginAllowlisted(req: Request, res: Response, routeLabel: string): boolean {
+export function assertOriginAllowlisted(req: Request, res: Response, routeLabel: string): boolean {
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   if (!isLocalhostOrigin(origin)) {
     res.status(403).json({
@@ -738,7 +738,7 @@ function sendInternal(res: Response, err: unknown, label: string): void {
  * Map `KeychainUnavailableError` to HTTP 503 so the wizard can branch into the
  * env-var fallback UX. Other errors fall through to a generic 500.
  */
-function sendKeychainError(res: Response, err: unknown, label: string): void {
+export function sendKeychainError(res: Response, err: unknown, label: string): void {
   if (err instanceof KeychainUnavailableError) {
     res.status(503).json({
       error: "SERVICE_UNAVAILABLE",

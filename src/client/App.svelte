@@ -18,12 +18,13 @@ import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
+import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
-import SettingsModal from "./components/SettingsModal.svelte";
+import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
@@ -243,35 +244,38 @@ function readDismissed(): string | null {
   }
 }
 
-// `&&` (not `||`) so a stomped/absent localStorage value still triggers
-// the wizard when the server says it's needed — failure-mode-safe.
-const shouldShowWizard = $derived(
-  manuallyReopened ||
-    (firstRun.needed === true &&
-      firstRun.serverVersion !== null &&
-      dismissedForVersion !== firstRun.serverVersion),
+// Server says first-run is needed AND the user hasn't dismissed this
+// server version yet. `&&` (not `||`) so a stomped/absent localStorage
+// value still triggers when the server says it's needed.
+const isAutoOpenFirstRun = $derived(
+  firstRun.needed === true &&
+    firstRun.serverVersion !== null &&
+    dismissedForVersion !== firstRun.serverVersion,
+);
+const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
+
+// The first-run model picker is the leading step of the auto-open flow.
+// Manual reopen is excluded — that path re-runs the MCP-client wizard
+// only; Settings → Models is the post-first-run surface.
+let modelPickerHandled = $state(false);
+const shouldShowModelPicker = $derived(
+  isAutoOpenFirstRun && settingsState.settings.models.length === 0 && !modelPickerHandled,
 );
 
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
-  // would otherwise burn the dismissal slot for `serverVersion`, silently
-  // suppressing a later auto-open that flips back to `needed === true`
-  // (e.g. user re-deletes integrations.json).
-  const wasAutoOpen =
-    firstRun.needed === true &&
-    firstRun.serverVersion !== null &&
-    dismissedForVersion !== firstRun.serverVersion;
-  if (wasAutoOpen && firstRun.serverVersion !== null) {
+  // would otherwise burn the dismissal slot for `serverVersion`.
+  if (isAutoOpenFirstRun && firstRun.serverVersion !== null) {
     try {
       localStorage.setItem(WIZARD_DISMISSED_KEY, firstRun.serverVersion);
       dismissedForVersion = firstRun.serverVersion;
     } catch {
-      // localStorage unavailable — fall through; the server-side check
-      // will re-prompt on next launch (acceptable failure mode).
+      // localStorage unavailable — the server-side check re-prompts on next launch.
     }
   }
   manuallyReopened = false;
+  modelPickerHandled = false;
 }
 
 // Sync dismissal state across tabs: if one tab dismisses (writes to
@@ -335,6 +339,22 @@ function toggleSettings() {
 function openSettingsModalWithAck() {
   updateAvailable.acknowledge();
   settingsModalOpen = true;
+}
+
+const defaultModelLabel = $derived.by(() => {
+  const id = settingsState.settings.defaultModelId;
+  if (id === null) return null;
+  const entry = settingsState.settings.models.find((m) => m.id === id);
+  return entry ? entry.displayName : null;
+});
+
+// `initialTabId` is applied only on the closed → open transition, so a
+// mid-open chip click leaves the user's current tab alone.
+let nextSettingsTabId = $state<string | null>(null);
+
+function openModelsSettings() {
+  if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.models;
+  openSettingsModalWithAck();
 }
 
 function openSettingsPopoverWithAck() {
@@ -964,6 +984,8 @@ const tutorial = createTutorial(
     onOpenSettings={toggleSettings}
     onOpenSettingsModal={openSettingsModalWithAck}
     updateAvailable={updateAvailable.showDot}
+    defaultModelLabel={defaultModelLabel}
+    onOpenModelsSettings={openModelsSettings}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1155,18 +1177,26 @@ const tutorial = createTutorial(
 
     <SettingsModal
       open={settingsModalOpen}
-      onClose={() => (settingsModalOpen = false)}
+      onClose={() => {
+        settingsModalOpen = false;
+        // Reset so a subsequent open without an explicit target lands on the
+        // default tab instead of replaying the last-requested initial.
+        nextSettingsTabId = null;
+      }}
       settings={settingsState.settings}
       onUpdate={settingsState.updateSettings}
       returnFocusEl={settingsBtnEl}
       triggerEl={settingsBtnEl}
       connected={yjsSync.connected}
       reconnectAttempts={yjsSync.reconnectAttempts}
+      initialTabId={nextSettingsTabId}
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
 
-    {#if shouldShowWizard}
+    {#if shouldShowModelPicker}
+      <FirstRunModelPickerModal onComplete={() => (modelPickerHandled = true)} />
+    {:else if shouldShowWizard}
       <IntegrationWizardModal open={true} onClose={closeIntegrationWizard} />
     {/if}
 

@@ -1,19 +1,19 @@
+// @vitest-environment happy-dom
+
 /**
- * Logging-hygiene contract for `createModels` (#659 Wave 2 PR 8a).
+ * Logging-hygiene contract for `createModels` (#659).
  *
- * The Models registry stores API keys and (for local providers) endpoint
- * URLs in plaintext localStorage today. The disclosure banner in
- * `SettingsModelsTab.svelte` makes that explicit to the user. What the
- * user does NOT consent to is having the key text echoed into a thrown
- * Error message, a `console.warn`, or any other surface a future
- * exception handler might log to disk or telemetry.
+ * The Models registry stores API keys in the OS keychain via `POST
+ * /api/models/secrets/:ref`. The plaintext travels through `addModel` /
+ * `updateModel` as a separate `plaintextApiKey` argument — it must never
+ * reach an Error message, console.warn, or any other surface that a
+ * future exception handler might log to disk or telemetry.
  *
- * This file pins the invariant: no error message produced by the CRUD
- * facade may contain the literal `apiKey` or `endpoint` value supplied
- * in the call.
+ * This file pins the invariant: no error produced by the CRUD facade may
+ * contain the literal plaintext or endpoint values supplied in the call.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModels } from "../../src/client/hooks/useModels.svelte.js";
 import type {
   ModelRegistryEntry,
@@ -25,7 +25,7 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): TandemSettings
   let inner: TandemSettings = {
     leftPanelVisible: false,
     rightPanelVisible: true,
-    schemaVersion: 3,
+    schemaVersion: 7,
     primaryTab: "annotations",
     panelOrder: "chat-editor-annotations",
     editorWidthPercent: 100,
@@ -47,6 +47,7 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): TandemSettings
     holdAnnotationsWhileOffline: true,
     marginView: false,
     models: initialModels,
+    defaultModelId: null,
   };
   return {
     get settings() {
@@ -63,36 +64,48 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): TandemSettings
 const LEAKY_KEY = "SECRETSENTINEL_apikey_abcdef1234567890";
 const LEAKY_ENDPOINT = "https://SECRETSENTINEL.example/v1";
 
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 503 })),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("createModels — error messages never leak apiKey or endpoint values", () => {
-  it("addModel with bad provider — error stringifies without the apiKey", () => {
+  it("addModel with bad provider — error stringifies without the plaintext key", async () => {
     const state = makeStubState();
     const models = createModels(state);
     let caught: unknown = null;
     try {
-      models.addModel({
-        // @ts-expect-error — runtime guard under test.
-        provider: "invalid",
-        displayName: "x",
-        modelId: "x",
-        apiKey: LEAKY_KEY,
-        enabled: true,
-      });
+      await models.addModel(
+        {
+          // @ts-expect-error — runtime guard under test.
+          provider: "invalid",
+          displayName: "x",
+          modelId: "x",
+          enabled: true,
+        },
+        LEAKY_KEY,
+      );
     } catch (e) {
       caught = e;
     }
     expect(caught).toBeInstanceOf(Error);
     const message = (caught as Error).message;
     expect(message).not.toContain(LEAKY_KEY);
-    // Stack traces also bear the message; verify there too.
     expect((caught as Error).stack ?? "").not.toContain(LEAKY_KEY);
   });
 
-  it("addModel with bad provider — error stringifies without the endpoint", () => {
+  it("addModel with bad provider — error stringifies without the endpoint", async () => {
     const state = makeStubState();
     const models = createModels(state);
     let caught: unknown = null;
     try {
-      models.addModel({
+      await models.addModel({
         // @ts-expect-error — runtime guard under test.
         provider: "invalid",
         displayName: "x",
@@ -108,29 +121,66 @@ describe("createModels — error messages never leak apiKey or endpoint values",
     expect((caught as Error).stack ?? "").not.toContain(LEAKY_ENDPOINT);
   });
 
-  it("updateModel with bad provider — error stringifies without the apiKey", () => {
+  it("updateModel with bad provider — error stringifies without the plaintext", async () => {
     const state = makeStubState();
+    // First call: succeed by returning 204.
+    let storeCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        storeCalls++;
+        return new Response(null, { status: 204 });
+      }),
+    );
     const models = createModels(state);
-    const id = models.addModel({
-      provider: "anthropic",
-      displayName: "A",
-      modelId: "claude-opus-4-7",
-      apiKey: LEAKY_KEY,
-      enabled: true,
-    });
+    const id = await models.addModel(
+      {
+        provider: "anthropic",
+        displayName: "A",
+        modelId: "claude-opus-4-7",
+        enabled: true,
+      },
+      LEAKY_KEY,
+    );
+    expect(storeCalls).toBe(1);
 
     let caught: unknown = null;
     try {
-      models.updateModel(id, {
-        // @ts-expect-error — runtime guard under test.
-        provider: "invalid",
-        apiKey: `${LEAKY_KEY}-rotated`,
-      });
+      await models.updateModel(
+        id,
+        {
+          // @ts-expect-error — runtime guard under test.
+          provider: "invalid",
+        },
+        `${LEAKY_KEY}-rotated`,
+      );
     } catch (e) {
       caught = e;
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).not.toContain(LEAKY_KEY);
     expect((caught as Error).message).not.toContain(`${LEAKY_KEY}-rotated`);
+  });
+
+  it("storeSecret 503 error does not include the plaintext", async () => {
+    const state = makeStubState();
+    const models = createModels(state);
+    let caught: unknown = null;
+    try {
+      await models.addModel(
+        {
+          provider: "anthropic",
+          displayName: "A",
+          modelId: "claude-opus-4-7",
+          enabled: true,
+        },
+        LEAKY_KEY,
+      );
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toContain(LEAKY_KEY);
+    expect((caught as Error).stack ?? "").not.toContain(LEAKY_KEY);
   });
 });

@@ -46,15 +46,25 @@ export interface ClientKeychainBackend {
 interface HttpBackendOptions {
   fetchFn?: typeof fetch;
   baseUrl?: string;
+  /**
+   * Path builder for the secrets endpoint. Defaults to
+   * `apiIntegrationsSecretPath` (MCP-client tokens). The Models registry
+   * (#659) supplies `apiModelsSecretPath` so outbound provider API keys
+   * route to the `tandem-models` keychain service.
+   */
+  pathFor?: (ref: string) => string;
 }
 
 export function createHttpKeychainBackend(opts: HttpBackendOptions = {}): ClientKeychainBackend {
-  const fetchFn = opts.fetchFn ?? globalThis.fetch.bind(globalThis);
+  // Don't memoize globalThis.fetch — tests stub it via `vi.stubGlobal`, and
+  // capturing the bound reference here would freeze the stub out.
+  const fetchFn: typeof fetch = opts.fetchFn ?? ((...args) => globalThis.fetch(...args));
   const baseUrl = opts.baseUrl ?? "";
+  const pathFor = opts.pathFor ?? apiIntegrationsSecretPath;
   return {
     async set(ref, secret) {
       try {
-        const res = await fetchFn(`${baseUrl}${apiIntegrationsSecretPath(ref)}`, {
+        const res = await fetchFn(`${baseUrl}${pathFor(ref)}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ secret }),
@@ -70,11 +80,9 @@ export function createHttpKeychainBackend(opts: HttpBackendOptions = {}): Client
       }
     },
     async delete(ref) {
-      await fetchFn(`${baseUrl}${apiIntegrationsSecretPath(ref)}`, { method: "DELETE" }).catch(
-        () => {
-          /* best-effort */
-        },
-      );
+      await fetchFn(`${baseUrl}${pathFor(ref)}`, { method: "DELETE" }).catch(() => {
+        /* best-effort */
+      });
     },
   };
 }

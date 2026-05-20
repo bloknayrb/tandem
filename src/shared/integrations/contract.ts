@@ -25,6 +25,13 @@ export function apiIntegrationsSecretPath(ref: string): string {
   return `/api/integrations/secrets/${encodeURIComponent(ref)}`;
 }
 
+/** Models registry's keychain secrets path (#659). Separate route, separate
+ * keychain service (`tandem-models`), so outbound third-party API keys
+ * don't share a namespace with inbound MCP-client tokens. */
+export function apiModelsSecretPath(ref: string): string {
+  return `/api/models/secrets/${encodeURIComponent(ref)}`;
+}
+
 // --- Schema version ----------------------------------------------------------
 
 export const INTEGRATIONS_SCHEMA_VERSION = 3 as const;

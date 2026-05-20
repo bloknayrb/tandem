@@ -56,6 +56,15 @@ interface Props {
    * dot is wrapped in an `{#if isTauriRuntime()}` guard below).
    */
   updateAvailable?: boolean;
+  /**
+   * Label of the active default AI model (#659). When set, the titlebar
+   * renders a small chip ("Opus", "GPT-4o", etc.) that opens Settings →
+   * Models on click. `null` / `undefined` renders no chip — first-run
+   * users with no configured models see nothing here until they pick one.
+   */
+  defaultModelLabel?: string | null;
+  /** Click handler for the default-model chip. Receives no args. */
+  onOpenModelsSettings?: () => void;
 }
 
 let {
@@ -76,6 +85,8 @@ let {
   onOpenSettingsModal: _onOpenSettingsModal,
   settingsBtn = $bindable(null),
   updateAvailable = false,
+  defaultModelLabel = null,
+  onOpenModelsSettings,
 }: Props = $props();
 
 let win = $state<TauriWindow | null>(null);
@@ -287,6 +298,20 @@ const themeLabel = $derived(THEME_LABEL[theme]);
             <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4" fill="none" />
           </svg>
         {/if}
+      </button>
+    {/if}
+
+    {#if defaultModelLabel && onOpenModelsSettings}
+      <button
+        type="button"
+        class="model-chip"
+        data-testid="titlebar-default-model"
+        aria-label={`Default model: ${defaultModelLabel}. Open Settings → Models.`}
+        title={`Default model: ${defaultModelLabel}`}
+        onclick={onOpenModelsSettings}
+      >
+        <span class="model-chip-dot" aria-hidden="true"></span>
+        <span class="model-chip-label">{defaultModelLabel}</span>
       </button>
     {/if}
 
@@ -591,6 +616,43 @@ const themeLabel = $derived(THEME_LABEL[theme]);
   .icon-btn.active {
     background: var(--tandem-accent-bg);
     color: var(--tandem-accent);
+  }
+
+  /* #659 default-model chip. Sits in the right action cluster; clicking
+     opens Settings → Models. Compact so it doesn't crowd the toolbar; the
+     accent-tinted dot signals "active model" without occupying the same
+     visual slot as the Claude-active status dot on the brand side. */
+  .model-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 8px;
+    margin: 0 4px;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    color: var(--tandem-fg-muted);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    max-width: 160px;
+  }
+  .model-chip:hover {
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg);
+  }
+  .model-chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--tandem-r-circle);
+    background: var(--tandem-accent);
+    flex-shrink: 0;
+  }
+  .model-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Wraps the gear button so the update-available dot can position absolute
