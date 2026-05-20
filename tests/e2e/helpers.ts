@@ -122,6 +122,16 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
   }
 }
 
+/**
+ * Open the Settings popover via the brand-menu dropdown (Wave M: the old
+ * standalone gear button was replaced by a menu item inside the Tandem logo
+ * dropdown). Call this wherever tests previously clicked `[data-testid='settings-btn']`.
+ */
+export async function openSettingsPopover(page: Page): Promise<void> {
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await page.locator("[data-testid='brand-menu-settings']").click();
+}
+
 /** Success-payload shape for `tandem_status` consumed by `cleanupAllOpenDocuments`. */
 type StatusData = {
   openDocuments?: Array<{ documentId: string }>;
