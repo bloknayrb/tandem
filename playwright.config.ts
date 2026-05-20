@@ -1,6 +1,14 @@
 import { defineConfig } from "@playwright/test";
 import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/shared/constants";
 
+// Set before defineConfig so the tsx webServer inherits it via process.env
+// without needing an explicit `env:` key. Playwright's webServer.env REPLACES
+// (not merges) the child environment, so specifying `env:` with a spread is
+// fragile — the tsx server then cannot inherit any updates to the runner env
+// made after the config is evaluated. Mutating process.env here is simpler
+// and avoids that problem entirely.
+process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = "1";
+
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 30_000,
@@ -37,7 +45,7 @@ export default defineConfig({
   // the .cmd shim — but Playwright spawns the command via cmd.exe and a path
   // with forward slashes does not match the PATHEXT shim resolution there,
   // producing `'node_modules' is not recognized as an internal or external
-  // command`. Hard-coding `node_modules\.bin\tsx.cmd` works on Windows but
+  // command'. Hard-coding `node_modules\.bin\tsx.cmd` works on Windows but
   // breaks on Unix CI.
   //
   // What works reliably cross-platform (cold start ~3-5s):
@@ -74,23 +82,6 @@ export default defineConfig({
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
-      // 3c-ii-b: the integration wizard now auto-opens on first run via
-      // `GET /api/integrations/first-run-needed`. In E2E, a clean home
-      // directory makes the server say `needed: true` and the wizard would
-      // cover every unrelated test's editor surface. The integration-wizard
-      // spec exercises the manual-reopen affordance with this var still set
-      // (Reopen button always works).
-      //
-      // **Spread `process.env` explicitly** — Playwright's `webServer.env`
-      // REPLACES the child's environment rather than merging into it, so
-      // omitting the spread strips PATH/HOME/etc. and the tsx command
-      // can't resolve `node`. (Caught the hard way on CI: the webServer
-      // never bound the port, both 120s timeouts expired, no
-      // playwright-report was generated.)
-      env: {
-        ...(process.env as Record<string, string>),
-        [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",
-      },
     },
   ],
 });
