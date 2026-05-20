@@ -144,21 +144,10 @@ $effect(() => {
   }
 
   window.addEventListener("resize", scheduleUpdate);
-  // Grace period: PM auto-scrolls the selection into view after a programmatic
-  // selection change. That scroll bubbles to document-level with capture=true
-  // and would fire dismissPopup() before the user has a chance to interact
-  // with the freshly-mounted popup. Ignore scroll events for one paint after
-  // mount — by then any programmatic scroll has settled and only user-initiated
-  // scrolls remain. (Also closes a CI flake where this race was deterministic.)
-  let scrollDismissArmed = false;
-  requestAnimationFrame(() => {
-    scrollDismissArmed = true;
-  });
   const unsubscribeOutsideScroll = onOutsideEvent(
     () => toolbarEl,
     ["scroll"],
     () => {
-      if (!scrollDismissArmed) return;
       // Don't dismiss while the user is composing in the textarea
       if (document.activeElement === textareaEl) return;
       dismissPopup();
