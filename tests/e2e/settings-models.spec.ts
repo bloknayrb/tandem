@@ -6,21 +6,26 @@ import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import { cleanupAllOpenDocuments, McpTestClient, nextFrames } from "./helpers";
 
 /**
- * Settings → Models tab E2E (Wave 2 PR 8b, #659).
+ * Settings → Models tab E2E (#659).
  *
  * Covers:
- *   1. Disclosure banner is visible the moment the tab is selected.
- *   2. Empty-state CTA "Add your first model" opens the edit modal.
- *   3. Add a cloud (Anthropic) model — row appears with correct fields.
- *   4. Edit a cloud model — apiKey input renders masked (`••••${last4}`)
- *      and the DOM value is NEVER the real key. Replace key reveals an
- *      empty editable input.
- *   5. Toggle enabled flips state.
- *   6. Delete via two-step confirm flow.
- *   7. v2→v3 migration boot — pre-seed v2 blob, mount, assert Models tab
+ *   1. Empty-state CTA "Add your first model" opens the edit modal.
+ *   2. Add a cloud (Anthropic) model — row appears with correct fields and
+ *      the plaintext API key NEVER lands in localStorage; only an opaque
+ *      `apiKeyRef` is persisted (the key goes through the keychain endpoint).
+ *   3. Edit a cloud model — `apiKeyRef` is shown masked; the entry's
+ *      plaintext is NOT in the DOM. Replace key reveals an editable input.
+ *   4. Toggle enabled flips state.
+ *   5. Delete via two-step confirm flow.
+ *   6. Default selection: setting a default, persisting through reload,
+ *      and the titlebar chip surfacing the active model's displayName.
+ *   7. v2 migration boot — pre-seed v2 blob, mount, assert Models tab
  *      renders with empty list (catches a broken migration that nukes
- *      settings).
- *   8. v99 forward-compat boot — pre-seed `schemaVersion: 99` with a
+ *      settings); persisted shape carries schemaVersion 7 + defaultModelId.
+ *   8. Legacy plaintext key migration: seed a pre-v7 blob with `apiKey`,
+ *      assert the migration banner appears, click Migrate, banner disappears
+ *      and the entry now carries `apiKeyRef`.
+ *   9. v99 forward-compat boot — pre-seed `schemaVersion: 99` with a
  *      custom field, reload, assert the custom field is preserved.
  *
  * Test-fixture API keys use the form `sk-test-DO-NOT-USE-{provider}` so
@@ -33,7 +38,6 @@ let tmpDir: string;
 
 const SETTINGS_MODAL = "[data-testid='settings-modal']";
 const MODELS_TAB = "[data-testid='settings-modal-tab-models']";
-const BANNER = "[data-testid='models-disclosure-banner']";
 const ADD_BTN = "[data-testid='model-add-btn']";
 const MODAL = "[data-testid='model-edit-modal']";
 
@@ -59,6 +63,7 @@ async function clearModelsRegistry(page: Page): Promise<void> {
       const raw = localStorage.getItem(key);
       const parsed = raw ? JSON.parse(raw) : {};
       parsed.models = [];
+      parsed.defaultModelId = null;
       localStorage.setItem(key, JSON.stringify(parsed));
     } catch {
       /* ignore */
@@ -87,14 +92,7 @@ test.afterAll(async () => {
 test.beforeEach(async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("http://127.0.0.1:5173");
-  // Reset the registry between tests so each starts from empty.
   await clearModelsRegistry(page);
-});
-
-test("disclosure banner is visible the moment the Models tab is selected", async ({ page }) => {
-  await gotoModelsTab(page);
-  await expect(page.locator(BANNER)).toBeVisible();
-  await expect(page.locator(BANNER)).toContainText("unencrypted");
 });
 
 test("empty state — CTA opens the edit modal", async ({ page }) => {
@@ -102,13 +100,15 @@ test("empty state — CTA opens the edit modal", async ({ page }) => {
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
   await page.locator(ADD_BTN).click();
   await expect(page.locator(MODAL)).toBeVisible();
-  // Cancel — modal closes, empty state returns.
   await page.locator("[data-testid='model-edit-cancel']").click();
   await expect(page.locator(MODAL)).toHaveCount(0);
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 });
 
-test("add cloud model — row appears with correct fields", async ({ page }) => {
+test("add cloud model — row appears and plaintext key is NOT persisted to localStorage", async ({
+  page,
+}) => {
+  const PLAINTEXT = "sk-test-DO-NOT-USE-anthropic-newlyTyped";
   await gotoModelsTab(page);
   await page.locator(ADD_BTN).click();
   await expect(page.locator(MODAL)).toBeVisible();
@@ -116,7 +116,7 @@ test("add cloud model — row appears with correct fields", async ({ page }) => 
   await page.locator("[data-testid='model-edit-provider']").selectOption("anthropic");
   await page.locator("[data-testid='model-edit-displayname']").fill("My Opus");
   await page.locator("[data-testid='model-edit-modelid']").fill("claude-opus-4-7");
-  await page.locator("[data-testid='model-edit-apikey']").fill("sk-test-DO-NOT-USE-anthropic");
+  await page.locator("[data-testid='model-edit-apikey']").fill(PLAINTEXT);
   await page.locator("[data-testid='model-edit-save']").click();
 
   await expect(page.locator(MODAL)).toHaveCount(0);
@@ -124,67 +124,59 @@ test("add cloud model — row appears with correct fields", async ({ page }) => 
   await expect(row).toBeVisible();
   await expect(row).toContainText("My Opus");
   await expect(row).toContainText("claude-opus-4-7");
-});
 
-test("edit cloud model — API key input is masked and never round-trips through DOM", async ({
-  page,
-}) => {
-  // Seed an entry directly so we know the exact key text.
-  const SEEDED_KEY = "sk-test-DO-NOT-USE-anthropic-seededValue";
-  await page.evaluate(
-    ({ key, seededKey }) => {
-      const raw = localStorage.getItem(key);
-      const parsed = raw ? JSON.parse(raw) : {};
-      parsed.models = [
-        {
-          id: "seeded-id",
-          provider: "anthropic",
-          displayName: "Seeded",
-          modelId: "claude-opus-4-7",
-          apiKey: seededKey,
-          enabled: true,
-        },
-      ];
-      parsed.schemaVersion = 3;
-      localStorage.setItem(key, JSON.stringify(parsed));
-    },
-    { key: TANDEM_SETTINGS_KEY, seededKey: SEEDED_KEY },
-  );
-  await page.reload();
-  await gotoModelsTab(page);
-  await page.locator("[data-testid='model-edit-btn-seeded-id']").click();
-  await expect(page.locator(MODAL)).toBeVisible();
-
-  // No editable input rendered for the apiKey while in masked mode.
-  await expect(page.locator("[data-testid='model-edit-apikey']")).toHaveCount(0);
-  // The masked label shows the last 4 chars of the seeded key.
-  await expect(page.locator(MODAL)).toContainText(`••••••••${SEEDED_KEY.slice(-4)}`);
-
-  // Snapshot the full DOM and assert the seeded key text does NOT appear
-  // anywhere — this is the load-bearing assertion against the modal
-  // round-tripping the existing key through a `value=` attribute.
-  const dom = await page.locator(MODAL).innerHTML();
-  expect(dom).not.toContain(SEEDED_KEY);
-
-  // Click "Replace key" — input becomes editable and empty.
-  await page.locator("[data-testid='model-edit-apikey-replace-btn']").click();
-  const input = page.locator("[data-testid='model-edit-apikey']");
-  await expect(input).toBeVisible();
-  await expect(input).toHaveAttribute("type", "password");
-  await expect(input).toHaveAttribute("autocomplete", "off");
-  await expect(input).toHaveValue("");
-
-  // Enter a new key, save.
-  await input.fill("sk-test-DO-NOT-USE-anthropic-newValue");
-  await page.locator("[data-testid='model-edit-save']").click();
-  await expect(page.locator(MODAL)).toHaveCount(0);
-
-  // Verify the new key landed in settings (and the seeded one didn't).
+  // Critical: the plaintext key the user typed must NEVER reach
+  // localStorage. The persisted entry should carry only an opaque
+  // `apiKeyRef`; the plaintext was POSTed to the keychain endpoint.
   const persisted = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, TANDEM_SETTINGS_KEY);
-  expect(persisted?.models?.[0]?.apiKey).toBe("sk-test-DO-NOT-USE-anthropic-newValue");
+  const entry = persisted?.models?.[0];
+  expect(entry).toBeDefined();
+  expect(entry.apiKey).toBeUndefined();
+  expect(entry.apiKeyRef).toBeDefined();
+  expect(typeof entry.apiKeyRef).toBe("string");
+  expect(entry.apiKeyRef.length).toBeGreaterThan(0);
+  // Whole-blob assertion: the plaintext must not appear anywhere in the
+  // settings blob (defends against a future bug that leaks via a sibling
+  // field).
+  expect(JSON.stringify(persisted)).not.toContain(PLAINTEXT);
+});
+
+test("edit cloud model — API key input renders masked and plaintext is never in the DOM", async ({
+  page,
+}) => {
+  // Add a model via the UI so we go through the real keychain flow.
+  const PLAINTEXT = "sk-test-DO-NOT-USE-anthropic-existingValue";
+  await gotoModelsTab(page);
+  await page.locator(ADD_BTN).click();
+  await page.locator("[data-testid='model-edit-displayname']").fill("Seeded");
+  await page.locator("[data-testid='model-edit-modelid']").fill("claude-opus-4-7");
+  await page.locator("[data-testid='model-edit-apikey']").fill(PLAINTEXT);
+  await page.locator("[data-testid='model-edit-save']").click();
+  await expect(page.locator(MODAL)).toHaveCount(0);
+
+  // Open the edit modal — `apiKeyRef` is present, so the input is hidden
+  // behind the masked label + Replace-key button.
+  const row = page.locator("[data-testid^='model-row-']").first();
+  await row.locator("[data-testid^='model-edit-btn-']").click();
+  await expect(page.locator(MODAL)).toBeVisible();
+
+  await expect(page.locator("[data-testid='model-edit-apikey']")).toHaveCount(0);
+  // The plaintext value the user typed must not appear anywhere in the
+  // modal DOM — the only way it should ever exist on the client now is in
+  // the running tab's transient state, not in persisted storage or the DOM
+  // tree of the edit modal.
+  const dom = await page.locator(MODAL).innerHTML();
+  expect(dom).not.toContain(PLAINTEXT);
+
+  // Replace key reveals an editable input.
+  await page.locator("[data-testid='model-edit-apikey-replace-btn']").click();
+  const input = page.locator("[data-testid='model-edit-apikey']");
+  await expect(input).toBeVisible();
+  await expect(input).toHaveAttribute("type", "password");
+  await expect(input).toHaveValue("");
 });
 
 test("toggle enabled flips state", async ({ page }) => {
@@ -215,27 +207,114 @@ test("delete with confirm flow", async ({ page }) => {
   await expect(row).toBeVisible();
   const rowId = (await row.getAttribute("data-testid"))!.replace("model-row-", "");
 
-  // First click on "Delete" surfaces the confirm row but doesn't yet
-  // delete — guards against fat-finger clicks.
   await page.locator(`[data-testid='model-delete-btn-${rowId}']`).click();
   await expect(row).toBeVisible();
   await expect(page.locator(`[data-testid='model-delete-confirm-${rowId}']`)).toBeVisible();
 
-  // Confirm — row removed, empty state returns.
   await page.locator(`[data-testid='model-delete-confirm-${rowId}']`).click();
   await expect(page.locator("[data-testid^='model-row-']")).toHaveCount(0);
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 });
 
-test("v2→v6 migration boot — Models tab renders with empty list, settings survive", async ({
+test("default selection persists across reload and the titlebar chip surfaces it", async ({
   page,
 }) => {
-  // Pre-seed a v2 blob (no `models` field, schemaVersion: 2). The loader
-  // walks v2→v3→v4→v5→v6 in memory; persistence happens only when something
-  // calls updateSettings. So we trigger a real write (add a model) which
-  // forces mergeAndClampSettings to persist the migrated shape, then
-  // assert the persisted blob carries schemaVersion: 6 + the seeded
-  // theme/textSize.
+  await gotoModelsTab(page);
+  await page.locator(ADD_BTN).click();
+  await page.locator("[data-testid='model-edit-displayname']").fill("My default model");
+  await page.locator("[data-testid='model-edit-modelid']").fill("claude-opus-4-7");
+  await page.locator("[data-testid='model-edit-apikey']").fill("sk-test-DO-NOT-USE-anthropic");
+  await page.locator("[data-testid='model-edit-save']").click();
+
+  const row = page.locator("[data-testid^='model-row-']").first();
+  const rowId = (await row.getAttribute("data-testid"))!.replace("model-row-", "");
+  const defaultRadio = page.locator(`[data-testid='model-default-${rowId}']`);
+  await defaultRadio.click();
+  await expect(defaultRadio).toBeChecked();
+
+  // Persisted shape carries `defaultModelId` matching the row id.
+  const persisted = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(persisted?.defaultModelId).toBe(rowId);
+
+  // Close the settings modal to expose the titlebar.
+  await page.keyboard.press("Escape");
+
+  // The titlebar chip surfaces the active model's displayName and is clickable.
+  const chip = page.locator("[data-testid='titlebar-default-model']");
+  await expect(chip).toBeVisible();
+  await expect(chip).toContainText("My default model");
+
+  // Reload — both the persisted defaultModelId and the chip survive.
+  await page.reload();
+  await expect(page.locator("[data-testid='titlebar-default-model']")).toContainText(
+    "My default model",
+  );
+  const reloaded = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(reloaded?.defaultModelId).toBe(rowId);
+});
+
+test("legacy plaintext key migration banner — appears, migrates, then disappears", async ({
+  page,
+}) => {
+  // Pre-seed a pre-v7 blob with a plaintext `apiKey` to drive the migration
+  // banner. The `_legacyApiKey` field is the in-memory marker `parseModels`
+  // sets; the banner triggers off `models.hasLegacyKeys`.
+  const LEGACY_KEY = "sk-test-DO-NOT-USE-anthropic-legacy";
+  await page.evaluate(
+    ({ key, legacy }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          schemaVersion: 6,
+          leftPanelVisible: false,
+          rightPanelVisible: true,
+          models: [
+            {
+              id: "legacy-1",
+              provider: "anthropic",
+              displayName: "Legacy entry",
+              modelId: "claude-opus-4-7",
+              apiKey: legacy,
+              enabled: true,
+            },
+          ],
+        }),
+      );
+    },
+    { key: TANDEM_SETTINGS_KEY, legacy: LEGACY_KEY },
+  );
+  await page.reload();
+  await gotoModelsTab(page);
+
+  // Banner is visible — the entry was loaded with a transient `_legacyApiKey`.
+  const banner = page.locator("[data-testid='models-legacy-migration-banner']");
+  await expect(banner).toBeVisible();
+
+  await page.locator("[data-testid='models-legacy-migrate-btn']").click();
+
+  // After migration the banner disappears and the entry now carries
+  // `apiKeyRef` instead of `_legacyApiKey`/`apiKey`.
+  await expect(banner).toHaveCount(0);
+  const persisted = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  }, TANDEM_SETTINGS_KEY);
+  expect(persisted?.schemaVersion).toBe(7);
+  expect(persisted?.models?.[0]?.apiKey).toBeUndefined();
+  expect(persisted?.models?.[0]?.apiKeyRef).toBeDefined();
+  // The plaintext must NEVER appear in localStorage post-migration.
+  expect(JSON.stringify(persisted)).not.toContain(LEGACY_KEY);
+});
+
+test("v2 → v7 migration boot — Models tab renders with empty list, settings survive", async ({
+  page,
+}) => {
   await page.evaluate((key) => {
     localStorage.setItem(
       key,
@@ -251,8 +330,6 @@ test("v2→v6 migration boot — Models tab renders with empty list, settings su
   await page.reload();
 
   await gotoModelsTab(page);
-  // The empty state proves the migration provided an empty `models` array
-  // (the tab unconditionally renders the empty branch when `models.length === 0`).
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 
   // Trigger a real settings write to flush the migrated shape to localStorage.
@@ -263,26 +340,20 @@ test("v2→v6 migration boot — Models tab renders with empty list, settings su
   await page.locator("[data-testid='model-edit-save']").click();
   await expect(page.locator(MODAL)).toHaveCount(0);
 
-  // Now inspect the persisted shape — the migration must have preserved
-  // the v2 fields (theme, textSize) and climbed to schemaVersion: 6 (v3
-  // added `models`, v4 was a no-op intermediate, v5 stripped the rail-tab
-  // fields entirely, v6 drops the legacy `showIntegrationWizard` field —
-  // wizard lifecycle moved to its own `tandem:wizard-dismissed` key).
   const settings = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, TANDEM_SETTINGS_KEY);
   expect(settings?.theme).toBe("dark");
   expect(settings?.textSize).toBe("l");
-  expect(settings?.schemaVersion).toBe(6);
+  expect(settings?.schemaVersion).toBe(7);
   expect(settings?.models?.length).toBe(1);
   expect(settings?.models?.[0]?.displayName).toBe("Migration sentinel");
+  // v7 introduces `defaultModelId` initialized to null on the migration.
+  expect(settings).toHaveProperty("defaultModelId");
 });
 
 test("v99 forward-compat boot — unknown field is preserved", async ({ page }) => {
-  // Pre-seed a v99 blob with a custom field — the loader's forward-compat
-  // clause must preserve `futureField` and refuse to write settings on
-  // subsequent updates.
   await page.evaluate((key) => {
     localStorage.setItem(
       key,
@@ -291,6 +362,7 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
         leftPanelVisible: true,
         rightPanelVisible: true,
         models: [],
+        defaultModelId: null,
         futureField: "preserved-value",
       }),
     );
@@ -342,7 +414,6 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
     Storage.prototype.setItem = w.__origSetItem;
   });
 
-  // The settings blob must still contain `futureField` after the load.
   const settings = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;

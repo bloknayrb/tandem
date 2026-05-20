@@ -19,6 +19,7 @@ import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svel
 import EmptyState from "./components/EmptyState.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
+import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
@@ -252,6 +253,16 @@ const shouldShowWizard = $derived(
       dismissedForVersion !== firstRun.serverVersion),
 );
 
+// #659 D4 option a: the first-run model picker runs as the leading step of
+// the first-run flow. It renders when (a) the first-run flow is active and
+// (b) the user has no model entries yet. Once handled (saved or skipped),
+// the integration wizard takes over its place — together they form a
+// perceived "Step 1 of 2 → Step 2 of 2" experience.
+let modelPickerHandled = $state(false);
+const shouldShowModelPicker = $derived(
+  shouldShowWizard && settingsState.settings.models.length === 0 && !modelPickerHandled,
+);
+
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
@@ -272,6 +283,10 @@ function closeIntegrationWizard(): void {
     }
   }
   manuallyReopened = false;
+  // Reset the model-picker dismissal flag so a future first-run flow
+  // (e.g. after a version bump that re-arms `shouldShowWizard`) gets a
+  // fresh Step 1 if the user still has no models.
+  modelPickerHandled = false;
 }
 
 // Sync dismissal state across tabs: if one tab dismisses (writes to
@@ -335,6 +350,31 @@ function toggleSettings() {
 function openSettingsModalWithAck() {
   updateAvailable.acknowledge();
   settingsModalOpen = true;
+}
+
+// #659: titlebar default-model chip + click handler. The chip renders only
+// when a default is set AND the entry still exists (referential integrity
+// is enforced by `mergeAndClampSettings`, so a stale id is already coerced
+// to `null` by the time we read it here). Clicking opens Settings → Models
+// (initial tab handled by SettingsModal's URL-hash convention; see below).
+const defaultModelLabel = $derived.by(() => {
+  const id = settingsState.settings.defaultModelId;
+  if (id === null) return null;
+  const entry = settingsState.settings.models.find((m) => m.id === id);
+  return entry ? entry.displayName : null;
+});
+
+// When the chip is clicked we want SettingsModal to land on the Models tab.
+// `initialTabId` is only applied on the closed → open transition, so we set
+// the request value first and then open the modal. If the modal is already
+// open, we leave its current tab alone (clobbering mid-edit is worse).
+let nextSettingsTabId = $state<string | null>(null);
+
+function openModelsSettings() {
+  if (!settingsModalOpen) {
+    nextSettingsTabId = "models";
+  }
+  openSettingsModalWithAck();
 }
 
 function openSettingsPopoverWithAck() {
@@ -964,6 +1004,8 @@ const tutorial = createTutorial(
     onOpenSettings={toggleSettings}
     onOpenSettingsModal={openSettingsModalWithAck}
     updateAvailable={updateAvailable.showDot}
+    defaultModelLabel={defaultModelLabel}
+    onOpenModelsSettings={openModelsSettings}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1155,18 +1197,26 @@ const tutorial = createTutorial(
 
     <SettingsModal
       open={settingsModalOpen}
-      onClose={() => (settingsModalOpen = false)}
+      onClose={() => {
+        settingsModalOpen = false;
+        // Reset so a subsequent open without an explicit target lands on the
+        // default tab instead of replaying the last-requested initial.
+        nextSettingsTabId = null;
+      }}
       settings={settingsState.settings}
       onUpdate={settingsState.updateSettings}
       returnFocusEl={settingsBtnEl}
       triggerEl={settingsBtnEl}
       connected={yjsSync.connected}
       reconnectAttempts={yjsSync.reconnectAttempts}
+      initialTabId={nextSettingsTabId}
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
 
-    {#if shouldShowWizard}
+    {#if shouldShowModelPicker}
+      <FirstRunModelPickerModal onComplete={() => (modelPickerHandled = true)} />
+    {:else if shouldShowWizard}
       <IntegrationWizardModal open={true} onClose={closeIntegrationWizard} />
     {/if}
 

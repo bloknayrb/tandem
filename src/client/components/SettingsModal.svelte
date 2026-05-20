@@ -156,6 +156,13 @@ interface Props {
    * Wave 2 lands additional tabs additively via this prop.
    */
   tabs?: SettingsTab[];
+  /**
+   * Optional initial tab id. The modal applies this once on open transition
+   * (closed → open) so subsequent re-opens with a new value swap tabs.
+   * Unknown ids are ignored — `activeTab` falls back to the first resolved
+   * tab via the existing snap-effect.
+   */
+  initialTabId?: string | null;
 }
 
 let {
@@ -168,6 +175,7 @@ let {
   connected = false,
   reconnectAttempts = 0,
   tabs = DEFAULT_SETTINGS_TABS,
+  initialTabId = null,
 }: Props = $props();
 
 let modalEl: HTMLDivElement | undefined = $state();
@@ -180,6 +188,18 @@ let changelogError = $state<string | null>(null);
 let narrowSidebarOpen = $state(false);
 $effect(() => {
   if (open) narrowSidebarOpen = false;
+});
+
+// Apply `initialTabId` once on each closed → open transition. We don't
+// react to mid-session changes in the prop — that would yank the user out
+// of whatever tab they navigated to after opening.
+let wasOpen = false;
+$effect(() => {
+  if (open && !wasOpen && initialTabId) {
+    const target = resolvedTabs.find((t) => t.id === initialTabId);
+    if (target) activeTabId = target.id;
+  }
+  wasOpen = open;
 });
 // Track the 860px breakpoint via matchMedia so we can mark the closed drawer
 // `inert` — without that, the off-canvas nav buttons remain in the tab order
