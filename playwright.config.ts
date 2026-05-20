@@ -28,43 +28,24 @@ export default defineConfig({
   },
   // Two webServer entries instead of `npm run dev:standalone`:
   //   1. Vite dev server for the client
-  //   2. Backend via the tsx CLI invoked through `node` directly
+  //   2. Backend: pre-built dist in CI, tsx source in local dev
   //
-  // Why `node node_modules/tsx/dist/cli.mjs`, not `tsx watch` / `npx tsx` /
-  // `node_modules/.bin/tsx`? (issue #244)
+  // CI uses `node dist/server/index.js` (same binary the stdio smoke test
+  // validates) because tsx's on-demand TypeScript compilation has proven
+  // unreliable under Playwright's webServer supervision in CI: the process
+  // never binds the port, the 120s timeout expires, and no playwright-report
+  // is generated. dist/server/index.js is already built by the `Build` step
+  // that runs before E2E, so there is no extra build cost.
   //
-  // On Windows under Playwright's webServer supervision, the following all
-  // deadlock — Playwright's pipe never sees any child output, the server
-  // never binds the port, and webServer times out:
-  //   - `tsx watch src/server/index.ts`           (watch parent holds pipe)
-  //   - `node_modules/.bin/tsx watch ...`         (same — watcher, not npx)
-  //   - `npx tsx src/server/index.ts`             (npx wrapper buffers stdio)
-  //   - `npx tsx watch src/server/index.ts`       (both wrappers compound)
+  // Local dev uses `node node_modules/tsx/dist/cli.mjs src/server/index.ts`
+  // for fast iteration without a rebuild. The direct tsx CLI path bypasses
+  // both the watch-mode parent-process stdout-pipe deadlock on Windows AND
+  // `npx`/`.bin` shim buffering issues (see issue #244 / PR #672).
   //
-  // `node_modules/.bin/tsx` (no watch) starts fine when the shell can resolve
-  // the .cmd shim — but Playwright spawns the command via cmd.exe and a path
-  // with forward slashes does not match the PATHEXT shim resolution there,
-  // producing `'node_modules' is not recognized as an internal or external
-  // command'. Hard-coding `node_modules\.bin\tsx.cmd` works on Windows but
-  // breaks on Unix CI.
-  //
-  // What works reliably cross-platform (cold start ~3-5s):
-  //   - `node node_modules/tsx/dist/cli.mjs src/server/index.ts`
-  //
-  // Invoking the tsx CLI script through `node` bypasses both shell shim
-  // resolution and the watch-mode parent process, while using a forward-slash
-  // path that Node accepts on every OS.
-  //
-  // Root cause is upstream — tsx's watch-mode parent process keeps the
-  // stdout pipe to its supervisor (Playwright) open without flushing under
-  // Windows anonymous-pipe stdio, and `npx` adds its own buffering layer.
-  // Local dev (`npm run dev:server`) keeps `tsx watch` for hot-reload; it
-  // works there because there's no parent process holding the pipe.
-  //
-  // Tradeoff vs the prior `npm run build:server && node dist/...` workaround:
-  // no tsup build step (~2-3s faster cold start). First request may be
-  // marginally slower due to on-demand transpilation but is well within
-  // test timeouts.
+  // **Spread `process.env` explicitly** in `env:` — Playwright's
+  // `webServer.env` REPLACES the child's environment rather than merging
+  // into it, so omitting the spread strips PATH/HOME/etc. and the server
+  // command can't resolve `node`.
   webServer: [
     {
       command: "npm run dev",
@@ -73,15 +54,22 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
-      // tsx internal entry path — bypasses both `tsx watch` parent-process
-      // stdout-pipe deadlock on Windows AND `npx`/`.bin` shim buffering issues
-      // (see rationale block above). If tsx restructures this path, fall back
-      // to `npm exec tsx -- src/server/index.ts` or update the path here.
-      // See PR #672 investigation notes.
-      command: "node node_modules/tsx/dist/cli.mjs src/server/index.ts",
+      command: process.env.CI
+        ? "node dist/server/index.js"
+        : "node node_modules/tsx/dist/cli.mjs src/server/index.ts",
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      // 3c-ii-b: the integration wizard now auto-opens on first run via
+      // `GET /api/integrations/first-run-needed`. In E2E, a clean home
+      // directory makes the server say `needed: true` and the wizard would
+      // cover every unrelated test's editor surface. The integration-wizard
+      // spec exercises the manual-reopen affordance with this var still set
+      // (Reopen button always works).
+      env: {
+        ...(process.env as Record<string, string>),
+        [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",
+      },
     },
   ],
 });
