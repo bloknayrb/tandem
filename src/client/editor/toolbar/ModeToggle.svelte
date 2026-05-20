@@ -13,6 +13,7 @@ const { tandemMode, onModeChange }: Props = $props();
      The Claude-active dot lives on the status bar, not duplicated here. -->
 <div
   data-testid="mode-toggle"
+  data-tauri-drag-region="false"
   class="mode-toggle"
   role="group"
   aria-label="AI collaboration mode"

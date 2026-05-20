@@ -1,6 +1,7 @@
 <script lang="ts">
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import type { OpenTab } from "../types.js";
+import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
@@ -183,7 +184,7 @@ $effect(() => {
     if (!target) return;
     if (openBtnEl?.contains(target)) return;
     if ((target as Element).closest?.(".new-tab-menu")) return;
-    if ((target as Element).closest?.("[data-tauri-drag-region]")) return;
+    if (isInActiveDragRegion(target as Element)) return;
     showRecent = false;
   }
 
@@ -216,7 +217,7 @@ $effect(() => {
     ]}
     role="tablist"
     aria-label="Open documents"
-    style="display: flex; align-items: stretch; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;"
+    style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 6px 8px;"
   >
     {#each tabs as tab (tab.id)}
       <TabItem

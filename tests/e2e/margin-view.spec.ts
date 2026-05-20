@@ -7,6 +7,7 @@ import {
   createFixtureDir,
   McpTestClient,
   nextFrames,
+  openSettingsPopover,
 } from "./helpers";
 
 /**
@@ -39,7 +40,7 @@ test.afterEach(async () => {
 });
 
 async function openSettingsAndGotoCowork(page: import("@playwright/test").Page): Promise<void> {
-  await page.locator("[data-testid='settings-btn']").click();
+  await openSettingsPopover(page);
   const popover = page.locator("[data-testid='settings-popover']");
   await expect(popover).toBeVisible({ timeout: 2_000 });
   await popover.getByRole("button", { name: "AI Assistant" }).click();
@@ -49,16 +50,22 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
  * #683 PR3 — Per-side rail-replaces-margin gates margin columns on rail
  * visibility. The product default has `rightPanelVisible=true`, which would
  * hide the right margin column out of the box. Toggle each rail off only if
- * currently visible (read via `aria-pressed` on the titlebar toggles) so we
- * exercise the on-state of margin view, not the rail-default.
+ * currently visible (detected via the resize-handle testid) so we exercise
+ * the on-state of margin view, not the rail-default. Wave M removed the
+ * titlebar panel-toggle buttons; keyboard shortcuts drive the toggle instead.
  */
 async function closeBothRails(page: import("@playwright/test").Page): Promise<void> {
-  for (const side of ["left", "right"] as const) {
-    const btn = page.locator(`[data-testid='titlebar-toggle-${side}']`);
-    if ((await btn.getAttribute("aria-pressed")) === "true") {
-      await btn.click();
-      await expect(btn).toHaveAttribute("aria-pressed", "false");
-    }
+  if ((await page.locator("[data-testid='left-panel-resize-handle']").count()) > 0) {
+    await page.keyboard.press("Alt+Shift+ArrowLeft");
+    await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0, {
+      timeout: 3_000,
+    });
+  }
+  if ((await page.locator("[data-testid='panel-resize-handle']").count()) > 0) {
+    await page.keyboard.press("Alt+Shift+ArrowRight");
+    await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0, {
+      timeout: 3_000,
+    });
   }
 }
 
@@ -493,16 +500,16 @@ test("PR3: opening a rail hides only that side's margin column", async ({ page }
   await expect(leftCol).toHaveCount(1);
   await expect(rightCol).toHaveCount(1);
 
-  // Open the LEFT rail → left column hides, right stays. The titlebar toggle
-  // is the same control surfaced to the user.
-  await page.locator("[data-testid='titlebar-toggle-left']").click();
+  // Open the LEFT rail → left column hides, right stays. Wave M removed the
+  // titlebar panel-toggle buttons; use the keyboard shortcut instead.
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect(leftCol).toHaveCount(0);
   await expect(rightCol).toHaveCount(1);
 
   // Close left, open right → right column hides, left returns.
-  await page.locator("[data-testid='titlebar-toggle-left']").click();
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect(leftCol).toHaveCount(1);
-  await page.locator("[data-testid='titlebar-toggle-right']").click();
+  await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect(leftCol).toHaveCount(1);
   await expect(rightCol).toHaveCount(0);
 });

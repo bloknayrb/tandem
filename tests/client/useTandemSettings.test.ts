@@ -3,8 +3,6 @@ import {
   loadSettings,
   mergeAndClampSettings,
   type TandemSettings,
-  THEME_LABEL,
-  THEME_NEXT,
 } from "../../src/client/hooks/useTandemSettings.js";
 import {
   SELECTION_DWELL_DEFAULT_MS,
@@ -220,22 +218,6 @@ describe("loadSettings — theme", () => {
   });
 });
 
-describe("THEME_NEXT — cycle (W1: warm canvas inserted between dark and light)", () => {
-  it("cycles system → dark → warm → light → system", () => {
-    expect(THEME_NEXT.system).toBe("dark");
-    expect(THEME_NEXT.dark).toBe("warm");
-    expect(THEME_NEXT.warm).toBe("light");
-    expect(THEME_NEXT.light).toBe("system");
-  });
-
-  it("THEME_LABEL action verbs match the cycle", () => {
-    expect(THEME_LABEL.system).toBe("Switch to dark theme");
-    expect(THEME_LABEL.dark).toBe("Switch to warm theme");
-    expect(THEME_LABEL.warm).toBe("Switch to light theme");
-    expect(THEME_LABEL.light).toBe("Switch to system theme");
-  });
-});
-
 describe("loadSettings — reduceMotion", () => {
   let store: Map<string, string>;
 
@@ -336,7 +318,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     textSize: "m",
     theme: "system",
     accentHue: 275,
-    editorFont: "serif",
+    editorFont: "sans",
     density: "cozy",
     defaultMode: "tandem",
     highContrast: false,
@@ -468,13 +450,13 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
     expect(loadSettings().editorFont).toBe(font);
   });
 
-  it("falls back to 'serif' for unknown editorFont", () => {
+  it("falls back to 'sans' for unknown editorFont", () => {
     writeRawSettings({ editorFont: "comic-sans" });
-    expect(loadSettings().editorFont).toBe("serif");
+    expect(loadSettings().editorFont).toBe("sans");
   });
 
-  it("defaults editorFont to 'serif' when absent", () => {
-    expect(loadSettings().editorFont).toBe("serif");
+  it("defaults editorFont to 'sans' when absent", () => {
+    expect(loadSettings().editorFont).toBe("sans");
   });
 
   it.each(["compact", "cozy", "spacious"] as const)("accepts density '%s'", (d) => {

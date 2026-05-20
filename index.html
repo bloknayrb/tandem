@@ -35,16 +35,37 @@
         src: url("/fonts/source-serif-4-latin.woff2") format("woff2");
       }
       @font-face {
+        font-family: "Hanuman";
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url("/fonts/hanuman-latin.woff2") format("woff2");
+      }
+      @font-face {
         font-family: "JetBrains Mono";
         font-style: normal;
         font-weight: 400 500;
         font-display: swap;
         src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2");
       }
+      @font-face {
+        font-family: "Sono";
+        font-style: normal;
+        font-weight: 200 800;
+        font-display: swap;
+        src: url("/fonts/sono-latin.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "SN Pro";
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url("/fonts/sn-pro-latin.woff2") format("woff2");
+      }
       :root {
-        --tandem-font-sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        --tandem-font-serif: "Source Serif 4", "Source Serif Pro", Charter, "Iowan Old Style", Georgia, serif;
-        --tandem-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        --tandem-font-sans: "SN Pro", "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --tandem-font-serif: "Hanuman", "Source Serif 4", "Source Serif Pro", Charter, "Iowan Old Style", Georgia, serif;
+        --tandem-font-mono: "Sono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
         --tandem-bg: oklch(0.985 0.004 80);
         --tandem-fg: oklch(0.22 0.012 280);
         --tandem-surface: oklch(1 0 0);
@@ -92,7 +113,7 @@
         --tandem-suggestion-border: color-mix(in srgb, var(--tandem-suggestion) 40%, var(--tandem-border));
         --tandem-accent-border: oklch(0.84 0.10 var(--tandem-accent-h));
         --tandem-selection-blurred-bg: color-mix(in srgb, var(--tandem-accent) 22%, transparent);
-        --tandem-editor-font-family: var(--tandem-font-serif);
+        --tandem-editor-font-family: var(--tandem-font-sans);
         --tandem-editor-font-size: 17px;
         --tandem-scrollbar-track: oklch(0.96 0.006 80);
         --tandem-scrollbar-thumb: oklch(0.82 0.005 280);
@@ -194,6 +215,27 @@
           0 22px 38px -22px rgba(0, 0, 0, 0.50);
       }
 
+      /* `filter: opacity()` is used instead of plain `opacity:` so the fade
+         composes with cards that already carry an inline opacity (e.g.
+         accepted cards at 0.6) rather than being clamped by it. Highlights
+         are intentionally excluded — they're user-owned color flags. */
+      [data-tandem-mode="solo"] [data-annotation-type="comment"],
+      [data-tandem-mode="solo"] [data-annotation-type="note"],
+      [data-tandem-mode="solo"] [data-testid="margin-column-left"] .margin-bubble,
+      [data-tandem-mode="solo"] [data-testid="margin-column-right"] .margin-bubble {
+        filter: opacity(0.45);
+        transition: filter 200ms ease;
+      }
+
+      /* Fade the in-editor underline decorations to match the side-panel card
+         fade above — keeps the visual weight of comments/notes consistent
+         between the editor and the panel in solo mode. */
+      [data-tandem-mode="solo"] .tandem-comment,
+      [data-tandem-mode="solo"] .tandem-note {
+        opacity: 0.45;
+        transition: opacity 200ms ease;
+      }
+
       /* Slash command menu — v7 floating-card variant.
          Inherits floating-pill bg/border/shadow then overrides border-radius
          to a card shape (menus aren't pill-shaped) and stacks an item list
@@ -247,17 +289,18 @@
       }
 
       [data-theme="dark"] {
-        --tandem-bg: oklch(0.18 0.012 270);
-        --tandem-fg: oklch(0.94 0.005 80);
-        --tandem-surface: oklch(0.22 0.012 270);
-        --tandem-surface-muted: oklch(0.20 0.012 270);
-        --tandem-surface-sunk: oklch(0.16 0.012 270);
-        --tandem-border: oklch(0.30 0.012 270);
-        --tandem-border-strong: oklch(0.38 0.014 270);
-        --tandem-fg-muted: oklch(0.72 0.008 80);
-        /* Lightened from 0.55 → 0.70 to meet WCAG AA 4.5:1 on --tandem-surface-muted (0.20) */
-        --tandem-fg-subtle: oklch(0.70 0.008 80);
-        --tandem-fg-faint: oklch(0.58 0.010 270);
+        /* Tracks the calm-v7 dark canon at hue 280°. */
+        --tandem-bg: oklch(0.22 0.012 280);
+        --tandem-fg: oklch(0.94 0.006 280);
+        --tandem-surface: oklch(0.27 0.012 280);
+        --tandem-surface-muted: oklch(0.25 0.012 280);
+        --tandem-surface-sunk: oklch(0.20 0.012 280);
+        --tandem-border: oklch(0.34 0.010 280);
+        --tandem-border-strong: oklch(0.42 0.012 280);
+        --tandem-fg-muted: oklch(0.74 0.008 280);
+        /* 0.70 keeps WCAG AA 4.5:1 against --tandem-surface-muted (0.25). */
+        --tandem-fg-subtle: oklch(0.70 0.008 280);
+        --tandem-fg-faint: oklch(0.58 0.008 280);
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.72 0.14 var(--tandem-accent-h));
         --tandem-accent-fg: oklch(0.15 0.01 var(--tandem-accent-h));

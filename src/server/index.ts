@@ -27,7 +27,6 @@ import {
   saveCurrentSession,
   writeGenerationId,
 } from "./mcp/document.js";
-import { docIdFromPath } from "./mcp/document-model.js";
 import { broadcastStoreReadOnly, docCount, getOpenDocs } from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 import {
@@ -36,7 +35,6 @@ import {
   startMcpServerHttp,
   startMcpServerStdio,
 } from "./mcp/server.js";
-import { injectTutorialAnnotations } from "./mcp/tutorial-annotations.js";
 import { pushNotification } from "./notifications.js";
 import { freePort, LAST_SEEN_VERSION_FILE, waitForPort } from "./platform.js";
 import {
@@ -46,7 +44,7 @@ import {
 } from "./session/manager.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
-import { getOrCreateDocument, setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
+import { setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -390,12 +388,6 @@ async function main() {
       const samplePath = path.join(sampleBase, "sample/welcome.md");
       try {
         await openFileByPath(samplePath);
-        try {
-          const doc = getOrCreateDocument(docIdFromPath(samplePath));
-          injectTutorialAnnotations(doc);
-        } catch (err) {
-          console.error("[Tandem] Failed to inject tutorial annotations:", err);
-        }
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           console.error("[Tandem] Sample file not found (skipping):", samplePath);

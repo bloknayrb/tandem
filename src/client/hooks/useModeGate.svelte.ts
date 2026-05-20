@@ -20,15 +20,12 @@ export function createModeGate(
     const annotations = getAnnotations();
     const mode = getMode();
     const visibleAnnotations: Annotation[] = [];
-    let heldCount = 0;
     for (const a of annotations) {
       if (shouldShowInMode(a, mode)) {
         visibleAnnotations.push(a);
-      } else if (a.status === "pending") {
-        heldCount++;
       }
     }
-    return { visibleAnnotations, heldCount };
+    return { visibleAnnotations, heldCount: 0 };
   });
 
   return {

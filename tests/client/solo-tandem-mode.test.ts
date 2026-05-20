@@ -44,10 +44,10 @@ describe("shouldShowInMode", () => {
   });
 
   describe('mode = "solo"', () => {
-    it("hides pending claude annotations", () => {
+    it("shows pending claude annotations", () => {
       expect(
         shouldShowInMode(makeAnnotation({ author: "claude", status: "pending" }), "solo"),
-      ).toBe(false);
+      ).toBe(true);
     });
 
     it("shows pending user annotations", () => {
@@ -100,25 +100,24 @@ describe("gateAnnotations (useModeGate hook logic)", () => {
     expect(result.heldCount).toBe(0);
   });
 
-  it("solo mode hides pending claude annotations", () => {
+  it("solo mode shows pending claude annotations", () => {
     const anns = [
       makeAnnotation({ id: "a1", author: "claude", status: "pending" }),
       makeAnnotation({ id: "a2", author: "claude", status: "pending" }),
     ];
     const result = gateAnnotations(anns, "solo");
-    expect(result.visibleAnnotations).toHaveLength(0);
-    expect(result.heldCount).toBe(2);
+    expect(result.visibleAnnotations).toHaveLength(2);
+    expect(result.heldCount).toBe(0);
   });
 
-  it("solo mode shows pending user annotations", () => {
+  it("solo mode shows pending user annotations alongside pending claude", () => {
     const anns = [
       makeAnnotation({ id: "a1", author: "user", status: "pending" }),
       makeAnnotation({ id: "a2", author: "claude", status: "pending" }),
     ];
     const result = gateAnnotations(anns, "solo");
-    expect(result.visibleAnnotations).toHaveLength(1);
-    expect(result.visibleAnnotations[0].id).toBe("a1");
-    expect(result.heldCount).toBe(1);
+    expect(result.visibleAnnotations).toHaveLength(2);
+    expect(result.heldCount).toBe(0);
   });
 
   it("solo mode shows resolved annotations from any author", () => {
@@ -132,16 +131,16 @@ describe("gateAnnotations (useModeGate hook logic)", () => {
     expect(result.heldCount).toBe(0);
   });
 
-  it("heldCount counts only pending hidden annotations", () => {
+  it("heldCount is 0 in solo mode (no held bucket)", () => {
     const anns = [
-      makeAnnotation({ id: "a1", author: "claude", status: "pending" }), // held
-      makeAnnotation({ id: "a2", author: "claude", status: "pending" }), // held
-      makeAnnotation({ id: "a3", author: "claude", status: "accepted" }), // visible (resolved)
-      makeAnnotation({ id: "a4", author: "user", status: "pending" }), // visible (user)
+      makeAnnotation({ id: "a1", author: "claude", status: "pending" }),
+      makeAnnotation({ id: "a2", author: "claude", status: "pending" }),
+      makeAnnotation({ id: "a3", author: "claude", status: "accepted" }),
+      makeAnnotation({ id: "a4", author: "user", status: "pending" }),
     ];
     const result = gateAnnotations(anns, "solo");
-    expect(result.visibleAnnotations).toHaveLength(2);
-    expect(result.heldCount).toBe(2);
+    expect(result.visibleAnnotations).toHaveLength(4);
+    expect(result.heldCount).toBe(0);
   });
 
   it("returns empty results for empty input", () => {
