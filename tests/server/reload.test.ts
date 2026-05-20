@@ -137,32 +137,34 @@ describe("reload: refreshRange dead relRange recovery", () => {
     doc = makeDoc("Hello world");
     const map = getAnnotationsMap(doc);
 
-    // Create annotation with CRDT-anchored range
     const result = anchoredRange(doc, toFlatOffset(0), toFlatOffset(5), "Hello");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect("relRange" in result && result.relRange).toBeDefined();
+    const originalRelRange = "relRange" in result ? result.relRange : undefined;
 
     const ann = makeAnnotation({
       id: "ann_dead_rel",
       range: result.range,
-      relRange: "relRange" in result ? result.relRange : undefined,
+      relRange: originalRelRange,
       textSnapshot: "Hello",
     });
     doc.transact(() => map.set(ann.id, ann), MCP_ORIGIN);
 
-    // Replace content entirely — old CRDT items are garbage-collected
     doc.transact(() => {
       populateYDoc(doc, "Hello world reloaded");
     }, MCP_ORIGIN);
 
-    // refreshRange should detect dead relRange and attempt recovery
-    refreshRange(ann, doc, map);
-    const stored = map.get("ann_dead_rel") as Annotation;
-    expect(stored).toBeDefined();
+    // Preserving the dead relRange (vs. stripping/replacing it) blocks the
+    // lazy re-attachment recovery path — see CLAUDE.md "Dead CRDT
+    // RelativePositions must be stripped, not preserved".
+    const refreshResult = refreshRange(ann, doc, map);
+    expect(refreshResult.kind).toBe("repaired");
 
-    // The annotation should either have a fresh relRange or have relRange stripped
-    // Either outcome is acceptable — the annotation survives
-    expect(stored.range).toBeDefined();
+    const stored = map.get("ann_dead_rel") as Annotation;
+    expect(stored.range).toEqual({ from: 0, to: 5 });
+    expect(stored.relRange).toBeDefined();
+    expect(stored.relRange).not.toEqual(originalRelRange);
   });
 });
 

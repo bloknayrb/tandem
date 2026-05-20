@@ -96,14 +96,19 @@ describe("dismissPending", () => {
 });
 
 describe("transactions are tagged with MCP_ORIGIN (channel-event skip)", () => {
-  it("acceptPending fires under MCP_ORIGIN", () => {
+  // ADR-031: catches a wrong-helper substitution (e.g. `withBrowser` for
+  // `withMcp`) that the raw-`doc.transact` pre-commit hook cannot see.
+  it.each([
+    ["acceptPending", (id: string, d: Y.Doc, m: Y.Map<unknown>) => acceptPending(id, d, m)],
+    ["dismissPending", (id: string, d: Y.Doc, m: Y.Map<unknown>) => dismissPending(id, d, m)],
+  ])("%s fires under MCP_ORIGIN", (_label, op) => {
     const map = getAnnotationsMap(doc);
     const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
 
     const origins: unknown[] = [];
     doc.on("beforeTransaction", (tr: Y.Transaction) => origins.push(tr.origin));
 
-    acceptPending(id, doc, map);
+    op(id, doc, map);
 
     expect(origins).toContain("mcp");
   });

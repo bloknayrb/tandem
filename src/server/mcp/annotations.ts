@@ -400,9 +400,11 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_suggest",
     "DEPRECATED — use tandem_comment with suggestedText instead. Always returns an error.",
     {
-      from: z.number(),
-      to: z.number(),
-      newText: z.string(),
+      // All params optional: a deprecated stub must surface DEPRECATED for any
+      // call shape, including ones missing the legacy required params.
+      from: z.number().optional(),
+      to: z.number().optional(),
+      newText: z.string().optional(),
       reason: z.string().optional(),
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
@@ -561,6 +563,16 @@ export function registerAnnotationTools(server: McpServer): void {
 
         // Sanitize legacy shapes before editing
         const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
+
+        // ADR-027: notes are user-private. Claude must not read or modify them
+        // via MCP. The note→comment promotion path runs from the browser, not
+        // through this tool.
+        if (ann.type === "note") {
+          return mcpError(
+            "INVALID_ARGUMENT",
+            "Cannot edit a note via MCP — notes are user-private (ADR-027).",
+          );
+        }
 
         if (ann.status !== "pending") {
           return mcpError("ANNOTATION_RESOLVED", `Cannot edit a ${ann.status} annotation`);

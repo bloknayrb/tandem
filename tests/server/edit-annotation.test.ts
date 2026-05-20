@@ -133,6 +133,44 @@ describe("tandem_editAnnotation", () => {
     expect(after.content).toBe("Original");
   });
 
+  it("rejects edit on a dismissed annotation", async () => {
+    const ydoc = setupDoc("edit-4-dismissed", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+
+    const ann = map.get(id) as Annotation;
+    ydoc.transact(() => map.set(id, { ...ann, status: "dismissed" as const }), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, content: "New text" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
+
+    const after = map.get(id) as Annotation;
+    expect(after.content).toBe("Original");
+  });
+
+  it("rejects edit on a user note (ADR-027 — notes are user-private)", async () => {
+    const ydoc = setupDoc("edit-4-note", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, content: "Claude tries to edit a private note" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_ARGUMENT");
+    expect(parsed.message).toMatch(/note/i);
+
+    const after = map.get(id) as Annotation;
+    expect(after.content).toBe("private note");
+  });
+
   it("rejects when no editable fields provided for non-suggestion", async () => {
     const ydoc = setupDoc("edit-5", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -256,17 +294,5 @@ describe("tandem_comment via MCP", () => {
   });
 });
 
-describe("tandem_suggest deprecation stub", () => {
-  it("returns DEPRECATED error regardless of arguments", async () => {
-    setupDoc("suggest-deprecated-1", "Hello world");
-
-    const result = await client.callTool({
-      name: "tandem_suggest",
-      arguments: { from: 0, to: 5, newText: "Hi", reason: "brevity" },
-    });
-    const parsed = parseResult(result as any);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-    expect(parsed.message).toMatch(/deprecated/i);
-  });
-});
+// tandem_suggest deprecation: covered by mcp-tool-integration.test.ts's
+// parametrized it.each (which also pins the pushNotification side-effect).

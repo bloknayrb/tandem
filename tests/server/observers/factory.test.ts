@@ -11,7 +11,12 @@
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { makePerKeyChangeObserver } from "../../../src/server/events/observers/factory.js";
-import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../../src/shared/origins.js";
+import {
+  FILE_SYNC_ORIGIN,
+  INTERNAL_ORIGIN,
+  MCP_ORIGIN,
+  RELOAD_ORIGIN,
+} from "../../../src/shared/origins.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: Y.Doc.transact's second arg is `unknown`.
 const rawTransact = (doc: Y.Doc, fn: () => void, origin?: unknown) =>
@@ -60,7 +65,7 @@ describe("makePerKeyChangeObserver — delete-path contract", () => {
     teardown();
   });
 
-  it("skips baseline channel-skip origins (MCP_ORIGIN, FILE_SYNC_ORIGIN)", () => {
+  it("skips every baseline channel-skip origin (ADR-031 table: mcp, file-sync, internal, reload)", () => {
     const doc = new Y.Doc();
     const map = doc.getMap<unknown>("samples");
     const derive = vi.fn();
@@ -71,18 +76,16 @@ describe("makePerKeyChangeObserver — delete-path contract", () => {
       pushEvent: () => {},
     });
 
-    rawTransact(
-      doc,
-      () => map.set("k", { id: "k", rev: 1, text: "x" } satisfies SamplePayload),
-      MCP_ORIGIN,
-    );
-    expect(derive).not.toHaveBeenCalled();
-
-    rawTransact(
-      doc,
-      () => map.set("k2", { id: "k2", rev: 1, text: "y" } satisfies SamplePayload),
-      FILE_SYNC_ORIGIN,
-    );
+    // ADR-031 observer-side complement to the predicate coverage in
+    // tests/shared/origins.test.ts.
+    const skipOrigins = [MCP_ORIGIN, FILE_SYNC_ORIGIN, INTERNAL_ORIGIN, RELOAD_ORIGIN] as const;
+    for (const [i, origin] of skipOrigins.entries()) {
+      rawTransact(
+        doc,
+        () => map.set(`k_${i}`, { id: `k_${i}`, rev: 1, text: "x" } satisfies SamplePayload),
+        origin,
+      );
+    }
     expect(derive).not.toHaveBeenCalled();
 
     teardown();

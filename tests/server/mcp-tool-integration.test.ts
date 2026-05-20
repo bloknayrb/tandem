@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
+import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
 import {
   addDoc,
   getOpenDocs,
@@ -83,6 +84,24 @@ describe("MCP tool integration — document tools", () => {
     expect(parsed.code).toBe("NO_DOCUMENT");
   });
 
+  // Critical Rule #5: tandem_getTextContent must use extractText, not
+  // extractMarkdown — the two produce different character offsets for the
+  // same Y.Doc, and Claude's annotation ranges are anchored to extractText's.
+  it("tandem_getTextContent matches extractText() (not extractMarkdown())", async () => {
+    const ydoc = setupDoc(
+      "mcp-doc-extract",
+      "# Heading One\n\nBody paragraph\n## Heading Two\nMore body",
+    );
+
+    const result = await client.callTool({ name: "tandem_getTextContent", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.text).toBe(extractText(ydoc));
+    expect(parsed.data.text).toContain("# Heading One");
+    expect(parsed.data.text).toContain("## Heading Two");
+    expect(parsed.data.text).not.toBe(extractMarkdown(ydoc));
+  });
+
   it("tandem_getOutline returns headings", async () => {
     setupDoc("mcp-doc-2", "# Title\n## Section\nContent");
 
@@ -140,6 +159,8 @@ describe("MCP tool integration — annotation tools", () => {
     ["tandem_highlight", {}, "mcp-ann-hl-noargs"],
     ["tandem_flag", { from: 0, to: 5 }, "mcp-ann-flag"],
     ["tandem_flag", {}, "mcp-ann-flag-noargs"],
+    ["tandem_suggest", { from: 0, to: 5, newText: "Hi", reason: "brevity" }, "mcp-ann-sug"],
+    ["tandem_suggest", {}, "mcp-ann-sug-noargs"],
   ] as const)("%s returns DEPRECATED error (args: %j)", async (toolName, args, docId) => {
     setupDoc(docId, "Hello world");
     resetNotifications();
