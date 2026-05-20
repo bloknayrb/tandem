@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   createKeychain,
-  type KeychainBackend,
   KEYCHAIN_SERVICE_MODELS,
+  type KeychainBackend,
 } from "../../../src/server/integrations/keychain.js";
 import {
   API_MODELS_SECRET,
