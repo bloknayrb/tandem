@@ -4,7 +4,6 @@ import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
-  enterAnnotateMode,
   McpTestClient,
 } from "./helpers";
 
@@ -134,8 +133,6 @@ test("slash menu suppresses while annotation popup is open (D10)", async ({ page
   if (!box) throw new Error("paragraph not laid out");
   await page.mouse.click(box.x + 10, box.y + box.height / 2, { clickCount: 3 });
 
-  // Wave M: textarea is gated behind the Annotate button in the popup.
-  await enterAnnotateMode(page);
   const popupInput = page.getByTestId("popup-annotation-input");
   await expect(popupInput).toBeVisible();
   await popupInput.focus();

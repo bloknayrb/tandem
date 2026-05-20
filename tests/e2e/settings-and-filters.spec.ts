@@ -5,7 +5,6 @@ import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
-  enterAnnotateMode,
   McpTestClient,
   openSettingsPopover,
   switchToAnnotationsTab,
@@ -665,8 +664,7 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   const firstParagraph = editor.locator("p").first();
   await firstParagraph.selectText();
 
-  // Wave M: textarea is gated behind the Annotate button in the popup.
-  await enterAnnotateMode(page);
+  // AR3: the unified popup appears automatically on selection — no button click needed.
   const noteInput = page.locator("[data-testid='popup-annotation-input']");
   await expect(noteInput).toBeVisible({ timeout: 3_000 });
 
