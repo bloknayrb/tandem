@@ -168,4 +168,26 @@ describe("createDefaultKeychainBackend", () => {
     await backend.set("ref", "v");
     expect(fetchFn).toHaveBeenCalled();
   });
+
+  // The `pathFor` argument is the only way the Models registry separates its
+  // outbound third-party API keys (`/api/models/secrets/`, service
+  // `tandem-models`) from inbound MCP-client tokens
+  // (`/api/integrations/secrets/`, service `tandem-integrations`). Forgetting
+  // to forward it through the default factory silently commingles the two
+  // namespaces — and the bug shows up as a 503 KEYCHAIN_UNAVAILABLE in CI
+  // because the wrong route's mock doesn't fire.
+  it("forwards pathFor to the HTTP backend (Models registry namespace separation)", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const backend = createDefaultKeychainBackend({
+      force: "http",
+      fetchFn: fetchFn as unknown as typeof fetch,
+      baseUrl: "http://127.0.0.1:3479",
+      pathFor: (ref) => `/api/models/secrets/${ref}`,
+    });
+    await backend.set("abc123", "v");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "http://127.0.0.1:3479/api/models/secrets/abc123",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });
