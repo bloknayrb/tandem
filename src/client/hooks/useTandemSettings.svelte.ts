@@ -21,6 +21,7 @@ export {
   TEXT_SIZE_PX,
   THEME_LABEL,
   THEME_NEXT,
+  VALID_MODEL_PROVIDERS,
 } from "./useTandemSettings.js";
 
 export interface TandemSettingsState {

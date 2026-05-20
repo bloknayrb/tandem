@@ -24,7 +24,7 @@ import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
-import SettingsModal from "./components/SettingsModal.svelte";
+import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
@@ -244,34 +244,20 @@ function readDismissed(): string | null {
   }
 }
 
-// `&&` (not `||`) so a stomped/absent localStorage value still triggers
-// the wizard when the server says it's needed — failure-mode-safe.
-const shouldShowWizard = $derived(
-  manuallyReopened ||
-    (firstRun.needed === true &&
-      firstRun.serverVersion !== null &&
-      dismissedForVersion !== firstRun.serverVersion),
-);
-
-// #659 D4 option a: the first-run model picker runs as the leading step of
-// the AUTO-open first-run flow. It renders when (a) the first-run flow is
-// genuinely active (server says `needed=true` and no dismissal has been
-// recorded for this version) and (b) the user has no model entries yet.
-// Once handled (saved or skipped), the integration wizard takes over its
-// place — together they form a perceived "Step 1 of 2 → Step 2 of 2"
-// experience.
-//
-// **Manual reopen is intentionally excluded.** The "Reopen wizard" button
-// in Settings → Claude Code is for re-running the MCP-client setup wizard
-// specifically; routing it through the model picker would surprise users
-// who expect the same UI as before. Settings → Models is the canonical
-// surface for adding/editing models post-first-run.
-let modelPickerHandled = $state(false);
+// Server says first-run is needed AND the user hasn't dismissed this
+// server version yet. `&&` (not `||`) so a stomped/absent localStorage
+// value still triggers when the server says it's needed.
 const isAutoOpenFirstRun = $derived(
   firstRun.needed === true &&
     firstRun.serverVersion !== null &&
     dismissedForVersion !== firstRun.serverVersion,
 );
+const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
+
+// The first-run model picker is the leading step of the auto-open flow.
+// Manual reopen is excluded — that path re-runs the MCP-client wizard
+// only; Settings → Models is the post-first-run surface.
+let modelPickerHandled = $state(false);
 const shouldShowModelPicker = $derived(
   isAutoOpenFirstRun && settingsState.settings.models.length === 0 && !modelPickerHandled,
 );
@@ -279,26 +265,16 @@ const shouldShowModelPicker = $derived(
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
-  // would otherwise burn the dismissal slot for `serverVersion`, silently
-  // suppressing a later auto-open that flips back to `needed === true`
-  // (e.g. user re-deletes integrations.json).
-  const wasAutoOpen =
-    firstRun.needed === true &&
-    firstRun.serverVersion !== null &&
-    dismissedForVersion !== firstRun.serverVersion;
-  if (wasAutoOpen && firstRun.serverVersion !== null) {
+  // would otherwise burn the dismissal slot for `serverVersion`.
+  if (isAutoOpenFirstRun && firstRun.serverVersion !== null) {
     try {
       localStorage.setItem(WIZARD_DISMISSED_KEY, firstRun.serverVersion);
       dismissedForVersion = firstRun.serverVersion;
     } catch {
-      // localStorage unavailable — fall through; the server-side check
-      // will re-prompt on next launch (acceptable failure mode).
+      // localStorage unavailable — the server-side check re-prompts on next launch.
     }
   }
   manuallyReopened = false;
-  // Reset the model-picker dismissal flag so a future first-run flow
-  // (e.g. after a version bump that re-arms `shouldShowWizard`) gets a
-  // fresh Step 1 if the user still has no models.
   modelPickerHandled = false;
 }
 
@@ -365,11 +341,6 @@ function openSettingsModalWithAck() {
   settingsModalOpen = true;
 }
 
-// #659: titlebar default-model chip + click handler. The chip renders only
-// when a default is set AND the entry still exists (referential integrity
-// is enforced by `mergeAndClampSettings`, so a stale id is already coerced
-// to `null` by the time we read it here). Clicking opens Settings → Models
-// (initial tab handled by SettingsModal's URL-hash convention; see below).
 const defaultModelLabel = $derived.by(() => {
   const id = settingsState.settings.defaultModelId;
   if (id === null) return null;
@@ -377,16 +348,12 @@ const defaultModelLabel = $derived.by(() => {
   return entry ? entry.displayName : null;
 });
 
-// When the chip is clicked we want SettingsModal to land on the Models tab.
-// `initialTabId` is only applied on the closed → open transition, so we set
-// the request value first and then open the modal. If the modal is already
-// open, we leave its current tab alone (clobbering mid-edit is worse).
+// `initialTabId` is applied only on the closed → open transition, so a
+// mid-open chip click leaves the user's current tab alone.
 let nextSettingsTabId = $state<string | null>(null);
 
 function openModelsSettings() {
-  if (!settingsModalOpen) {
-    nextSettingsTabId = "models";
-  }
+  if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.models;
   openSettingsModalWithAck();
 }
 

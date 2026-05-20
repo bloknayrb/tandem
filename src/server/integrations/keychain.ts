@@ -104,15 +104,14 @@ export interface CreateKeychainOptions {
 }
 
 /**
- * Create a keychain instance. If `backend` is omitted, lazy-loads
- * `@napi-rs/keyring` on first use; calls throw `KeychainUnavailableError`
- * if the native module cannot be loaded.
+ * Create a keychain instance. Two arg forms:
+ *   - `createKeychain(backend)` — inject a fake backend (tests).
+ *   - `createKeychain({ service, backend? })` — service-scoped instance.
+ *     Pass `KEYCHAIN_SERVICE_MODELS` for the Models registry so its keys
+ *     don't share a namespace with integration auth tokens.
  *
- * **Service scoping.** Pass `{ service: KEYCHAIN_SERVICE_MODELS }` to create
- * a Models-scoped instance — the model registry's outbound API keys must
- * not share a namespace with inbound integration auth tokens. Backwards
- * compatibility: existing callers passing a `KeychainBackend` directly
- * still work via the positional-arg overload.
+ * No-arg / no-backend lazy-loads `@napi-rs/keyring` on first use; calls
+ * throw `KeychainUnavailableError` if the native module cannot be loaded.
  */
 export function createKeychain(
   backendOrOptions?: KeychainBackend | CreateKeychainOptions,

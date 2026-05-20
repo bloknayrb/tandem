@@ -24,6 +24,20 @@ export interface SettingsTabContext {
   reconnectAttempts: number;
 }
 
+/** Stable tab ids — exported so callers can pass `initialTabId` safely. */
+export const SETTINGS_TAB_IDS = {
+  appearance: "appearance",
+  editor: "editor",
+  network: "network",
+  accessibility: "accessibility",
+  collaboration: "collaboration",
+  claudeCode: "claude-code",
+  models: "models",
+  shortcuts: "shortcuts",
+  about: "about",
+} as const;
+export type SettingsTabId = (typeof SETTINGS_TAB_IDS)[keyof typeof SETTINGS_TAB_IDS];
+
 /**
  * Registry entry for one tab in the SettingsModal sidebar.
  *

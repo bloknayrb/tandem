@@ -1,24 +1,8 @@
 <script lang="ts">
 /**
- * First-run model picker (#659 D4 option a).
- *
- * Full-screen Svelte 5 modal that runs as the leading step of the
- * Tandem first-run experience: pick an AI provider, paste a key, and
- * Tandem stores it in the OS keychain. App.svelte mounts this modal
- * BEFORE the `IntegrationWizardModal` (which handles inbound MCP-client
- * setup). The two modals form a perceived two-step flow.
- *
- * On `Save`, the picker calls `models.addModel(...)` with the plaintext
- * key — `useModels` POSTs it to `/api/models/secrets/:ref` so the
- * plaintext never lands in localStorage — then `models.setDefault(id)`
- * so the new entry is the active default. `onComplete()` advances the
- * caller's state machine to the next step (integration wizard) regardless
- * of save vs skip.
- *
- * **Existing-key detection.** The data model already merged any prior
- * Anthropic key on first load via the v6→v7 migration's `_legacyApiKey`
- * surfacing — `App.svelte` runs the picker only when `models.length === 0`,
- * so a returning user with prior entries never sees this modal.
+ * First-run model picker: pick a provider, store the key in the OS
+ * keychain, set as default. Runs ahead of the integration wizard. The
+ * caller's `onComplete` fires on save or skip.
  */
 import { untrack } from "svelte";
 import { createModels } from "../hooks/useModels.svelte.js";
@@ -96,16 +80,16 @@ $effect(() => {
   };
 });
 
-// When the user changes provider, reset modelId to that provider's default
-// (if the field still shows the previous default — don't clobber a typed override).
-let lastProviderDefault = $state(PROVIDER_OPTIONS[0].defaultModelId);
-$effect(() => {
-  const next = currentProvider.defaultModelId;
-  if (modelId === lastProviderDefault) {
-    modelId = next;
+function selectProvider(next: ModelProvider) {
+  const prev = PROVIDER_OPTIONS.find((p) => p.value === provider);
+  const target = PROVIDER_OPTIONS.find((p) => p.value === next);
+  // Only swap modelId when the field still holds the previous provider's
+  // default — preserves any custom value the user typed.
+  if (target && prev && modelId === prev.defaultModelId) {
+    modelId = target.defaultModelId;
   }
-  lastProviderDefault = next;
-});
+  provider = next;
+}
 
 async function handleSave(e: SubmitEvent) {
   e.preventDefault();
@@ -184,7 +168,7 @@ function handleSkip() {
               value={opt.value}
               checked={provider === opt.value}
               data-testid={`first-run-provider-${opt.value}`}
-              onchange={() => (provider = opt.value)}
+              onchange={() => selectProvider(opt.value)}
             />
             <span>{opt.label}</span>
           </label>

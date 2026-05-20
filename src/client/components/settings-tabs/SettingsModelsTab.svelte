@@ -111,10 +111,6 @@ async function runLegacyMigration() {
     migratingLegacy = false;
   }
 }
-
-function setAsDefault(id: string) {
-  models.setDefault(id);
-}
 </script>
 
 <div style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
@@ -203,7 +199,7 @@ function setAsDefault(id: string) {
                       name="default-model"
                       data-testid={`model-default-${entry.id}`}
                       checked={models.defaultModelId === entry.id}
-                      onchange={() => setAsDefault(entry.id)}
+                      onchange={() => models.setDefault(entry.id)}
                       style="accent-color: var(--tandem-accent);"
                     />
                     <span>Default</span>

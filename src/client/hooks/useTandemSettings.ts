@@ -41,7 +41,7 @@ export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
  */
 export type ModelProvider = "anthropic" | "openai" | "gemini" | "local-ollama" | "local-llamacpp";
 
-const VALID_MODEL_PROVIDERS: ModelProvider[] = [
+export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
   "anthropic",
   "openai",
   "gemini",
