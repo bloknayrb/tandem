@@ -10,7 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "noEmit": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
