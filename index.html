@@ -196,7 +196,8 @@
 
       /* `filter: opacity()` is used instead of plain `opacity:` so the fade
          composes with cards that already carry an inline opacity (e.g.
-         accepted cards at 0.6) rather than being clamped by it. */
+         accepted cards at 0.6) rather than being clamped by it. Highlights
+         are intentionally excluded — they're user-owned color flags. */
       [data-tandem-mode="solo"] [data-annotation-type="comment"],
       [data-tandem-mode="solo"] [data-annotation-type="note"],
       [data-tandem-mode="solo"] [data-testid="margin-column-left"] .margin-bubble,

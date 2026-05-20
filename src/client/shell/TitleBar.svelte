@@ -440,7 +440,9 @@ function chooseHelp() {
     min-width: var(--tandem-space-2);
     /* Stretch to the title-bar's full content height so the drag region
        actually has a hit area; an empty div under flex `align-items: center`
-       collapses to 0px tall otherwise. */
+       collapses to 0px tall otherwise. Explicit `align-self: stretch` —
+       relying on the inherited `align-items` value breaks `flex-grow` in
+       some browsers, so the keyword is set rather than omitted. */
     align-self: stretch;
   }
 
