@@ -60,7 +60,7 @@ test("toolbar renders all expected controls", async ({ page }) => {
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeVisible();
-  await expect(page.locator("[data-testid='settings-btn']")).toBeVisible();
+  await expect(page.locator("[data-testid='titlebar-brand-menu']")).toBeVisible();
   await expect(page.locator("[data-testid='toolbar-authorship-toggle']")).toBeVisible();
 });
 
