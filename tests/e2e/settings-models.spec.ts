@@ -299,14 +299,20 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
 
   // Install a setItem spy AFTER reload (which wipes window state) so it
   // captures any erroneous write to the settings key during the Models tab
-  // mount. Concrete signal beats "wait for settling".
+  // mount. Concrete signal beats "wait for settling". The original setItem
+  // is stashed on `window.__origSetItem` so the test can restore it after
+  // assertion — keeps the patch from leaking if context reuse is ever
+  // enabled (e.g. someone debugging with `--workers=1` + shared context).
   await page.evaluate((key) => {
-    const w = window as unknown as { __settingsWrites: string[] };
+    const w = window as unknown as {
+      __settingsWrites: string[];
+      __origSetItem: (k: string, v: string) => void;
+    };
     w.__settingsWrites = [];
-    const orig = Storage.prototype.setItem;
+    w.__origSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function (k: string, v: string) {
       if (k === key) w.__settingsWrites.push(String(v));
-      return orig.call(this, k, v);
+      return w.__origSetItem.call(this, k, v);
     };
   }, TANDEM_SETTINGS_KEY);
 
@@ -315,9 +321,10 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
   await gotoModelsTab(page);
   await nextFrames(page); // flush mount effects
 
-  // Concrete assertion: no write landed on the settings key. Poll over a
-  // short window to absorb any future async-write path (currently writes
-  // are synchronous in useTandemSettings, so 0 should hold immediately).
+  // Concrete assertion: no write landed on the settings key. `useTandemSettings`
+  // writes are synchronous today, so a single read after `nextFrames` would
+  // suffice; the short poll exists to make the failure mode less brittle
+  // against minor timing shifts in the mount path.
   await expect
     .poll(
       async () =>
@@ -327,6 +334,13 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
       { timeout: 300, intervals: [50, 100, 100, 50] },
     )
     .toBe(0);
+
+  // Restore the patched setItem so subsequent navigations in this page (or
+  // shared-context fixtures, if ever introduced) are unaffected.
+  await page.evaluate(() => {
+    const w = window as unknown as { __origSetItem: (k: string, v: string) => void };
+    Storage.prototype.setItem = w.__origSetItem;
+  });
 
   // The settings blob must still contain `futureField` after the load.
   const settings = await page.evaluate((key) => {

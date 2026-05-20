@@ -71,17 +71,10 @@ test("keyboard reorder with Alt+Arrow swaps tabs", async ({ page }) => {
   const tabs = page.locator("[data-testid^='tab-'][role='tab']");
   const sample2Tab = tabs.filter({ hasText: "sample2.md" });
 
-  // Get all tab names and find sample2's position.
+  // Get all tab names and find sample2's position. One round trip via
+  // `allTextContents()` beats a sequential `nth(i).textContent()` loop.
   const allNames = page.locator("[data-testid^='tab-name-']");
-  const count = await allNames.count();
-  let initialIdx = -1;
-  for (let i = 0; i < count; i++) {
-    const text = await allNames.nth(i).textContent();
-    if (text === "sample2.md") {
-      initialIdx = i;
-      break;
-    }
-  }
+  const initialIdx = (await allNames.allTextContents()).indexOf("sample2.md");
   expect(initialIdx).toBeGreaterThan(0); // sample2 should not be first
 
   // Click the tab itself, wait for focus to land (auto-retry), then press
