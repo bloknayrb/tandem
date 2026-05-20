@@ -317,6 +317,72 @@ describe("LoopbackUrl constraint", () => {
   });
 });
 
+describe("apply intent constraint", () => {
+  const baseClaudeCode = {
+    kind: "claude-code" as const,
+    id: "cc-1",
+    label: "Claude Code",
+    configPath: "/home/user/.claude.json",
+    transport: "http" as const,
+    url: "http://127.0.0.1:3479",
+  };
+  const baseClaudeDesktop = {
+    kind: "claude-desktop" as const,
+    id: "cd-1",
+    label: "Claude Desktop",
+    configPath: "/home/user/Library/Application Support/Claude/claude_desktop_config.json",
+    transport: "stdio" as const,
+  };
+  const baseOtherMcp = {
+    kind: "other-mcp" as const,
+    id: "om-1",
+    label: "Other MCP Client",
+    transport: "http" as const,
+    url: "http://127.0.0.1:3479",
+  };
+
+  // Other-mcp.apply is constrained to "skip" at the schema boundary — the
+  // apply handler can't write arbitrary third-party MCP configs, and a
+  // hand-edited integrations.json saying apply:"create" on an other-mcp
+  // entry must fail parsing rather than be silently no-op'd at runtime.
+  it.each(["create", "update"] as const)("rejects other-mcp.apply: '%s'", (apply) => {
+    const result = IntegrationConfigSchema.safeParse({ ...baseOtherMcp, apply });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts other-mcp.apply: 'skip'", () => {
+    const result = IntegrationConfigSchema.safeParse({ ...baseOtherMcp, apply: "skip" });
+    expect(result.success).toBe(true);
+  });
+
+  it.each(["create", "update", "skip"] as const)("accepts claude-code.apply: '%s'", (apply) => {
+    const result = IntegrationConfigSchema.safeParse({ ...baseClaudeCode, apply });
+    expect(result.success).toBe(true);
+  });
+
+  it.each(["create", "update", "skip"] as const)("accepts claude-desktop.apply: '%s'", (apply) => {
+    const result = IntegrationConfigSchema.safeParse({ ...baseClaudeDesktop, apply });
+    expect(result.success).toBe(true);
+  });
+
+  // apply: "update" is reserved for a planned diff-confirmation UX. Today
+  // it's treated identically to "create" at the apply handler. Pinning the
+  // round-trip prevents a future "dead branch" cleanup from silently
+  // changing the semantics — the schema must continue accepting "update",
+  // because removing it and adding it back would force a v3 → v4 schema
+  // bump.
+  it("apply: 'update' round-trips through the file schema", () => {
+    const result = IntegrationsFileSchema.safeParse({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [{ ...baseClaudeCode, apply: "update" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.integrations[0]?.apply).toBe("update");
+    }
+  });
+});
+
 describe("IntegrationsFileSchema", () => {
   it("accepts an empty integrations file", () => {
     const result = IntegrationsFileSchema.safeParse(emptyIntegrationsFile());
@@ -354,6 +420,35 @@ describe("IntegrationsFileSchema", () => {
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
       integrations: [],
       defaultIntegrationId: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown top-level field (.strict)", () => {
+    // Mirrors V1/V2 schemas: unknown fields are a tamper signal, not noise
+    // to silently strip. Catches forward-compat drift and hand-edited files.
+    const result = IntegrationsFileSchema.safeParse({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [],
+      bogusExtraField: "tamper",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown field on a claude-code integration variant (.strict)", () => {
+    const result = IntegrationsFileSchema.safeParse({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/home/user/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          bogusVariantField: "tamper",
+        },
+      ],
     });
     expect(result.success).toBe(false);
   });

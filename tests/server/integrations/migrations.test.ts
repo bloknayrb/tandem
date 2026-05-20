@@ -95,4 +95,127 @@ describe("migrateUp", () => {
       expect(() => migrateUp(bogus, 1, 2)).toThrow();
     });
   });
+
+  describe("v2 → v3", () => {
+    it("bumps schemaVersion and stamps apply: 'create' on claude-code", () => {
+      const v2 = {
+        schemaVersion: 2,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+          },
+        ],
+      };
+      expect(migrateUp(v2, 2, 3)).toEqual({
+        schemaVersion: 3,
+        integrations: [{ ...v2.integrations[0], apply: "create" }],
+      });
+    });
+
+    it("stamps apply: 'create' on claude-desktop", () => {
+      const v2 = {
+        schemaVersion: 2,
+        integrations: [
+          {
+            kind: "claude-desktop",
+            id: "cd-1",
+            label: "Claude Desktop",
+            configPath: "/home/user/Library/Application Support/Claude/claude_desktop_config.json",
+            transport: "stdio",
+          },
+        ],
+      };
+      const out = migrateUp(v2, 2, 3) as { integrations: Array<{ apply?: string }> };
+      expect(out.integrations[0]?.apply).toBe("create");
+    });
+
+    it("stamps apply: 'skip' on other-mcp (Tandem can't apply third-party configs)", () => {
+      const v2 = {
+        schemaVersion: 2,
+        integrations: [
+          {
+            kind: "other-mcp",
+            id: "om-1",
+            label: "Cursor",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+          },
+        ],
+      };
+      const out = migrateUp(v2, 2, 3) as { integrations: Array<{ apply?: string }> };
+      expect(out.integrations[0]?.apply).toBe("skip");
+    });
+
+    it("preserves tokenSecretRef and defaultIntegrationId", () => {
+      const v2 = {
+        schemaVersion: 2,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            tokenSecretRef: "tandem-cc-1",
+          },
+        ],
+        defaultIntegrationId: "cc-1",
+      };
+      const out = migrateUp(v2, 2, 3) as {
+        integrations: Array<{ tokenSecretRef?: string; apply?: string }>;
+        defaultIntegrationId?: string;
+      };
+      expect(out.integrations[0]?.tokenSecretRef).toBe("tandem-cc-1");
+      expect(out.integrations[0]?.apply).toBe("create");
+      expect(out.defaultIntegrationId).toBe("cc-1");
+    });
+
+    it("rejects v2 input containing a v3-only `apply` field (forces explicit migration)", () => {
+      const bogus = {
+        schemaVersion: 2,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            apply: "create",
+          },
+        ],
+      };
+      expect(() => migrateUp(bogus, 2, 3)).toThrow();
+    });
+  });
+
+  describe("chained migrations", () => {
+    it("v1 → v3 stamps apply per kind via the full chain", () => {
+      const v1 = {
+        schemaVersion: 1,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+          },
+        ],
+      };
+      const out = migrateUp(v1, 1, 3) as {
+        schemaVersion: number;
+        integrations: Array<{ apply?: string }>;
+      };
+      expect(out.schemaVersion).toBe(3);
+      expect(out.integrations[0]?.apply).toBe("create");
+    });
+  });
 });

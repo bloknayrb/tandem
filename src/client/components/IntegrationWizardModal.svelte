@@ -1,15 +1,12 @@
 <script lang="ts">
 /**
- * Integration setup wizard modal (#477 PR 3c-i).
+ * Integration setup wizard modal.
  *
- * Full-screen Svelte 5 modal driven by `createIntegrationWizard()` from
- * `../hooks/useIntegrationWizard.svelte.ts`. Four steps in a single file
- * (detect → pick → secrets → review → saving/done/error) — splitting into
- * sub-components added more indirection than value at this size.
- *
- * Reachable only when `settings.showIntegrationWizard === true` AND the
- * caller explicitly opens it. The Settings AI Assistant tab adds the
- * toggle and an "Open wizard" button.
+ * Full-screen Svelte 5 modal driven by `createIntegrationWizard()`. All
+ * steps (detect → pick → secrets → review → saving/done/error) live in
+ * one file — splitting into sub-components added more indirection than
+ * value at this size. App.svelte mounts via `{#if shouldShowWizard}` so
+ * the state machine resets on close→reopen.
  */
 import { untrack } from "svelte";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
@@ -71,16 +68,9 @@ function close(): void {
 }
 
 /**
- * Build a default `PickedIntegration` from a detected install. PR 3c-i
- * only generates `claude-code` / `claude-desktop` records here — the
- * "add other-mcp" path is exposed via a separate button in step=pick.
- */
-/**
  * Build a stable id. `Date.now()` has only millisecond resolution and
  * `IntegrationsFileSchema` doesn't reject duplicate ids — two rapid picks
  * in the same tick would silently overwrite each other downstream.
- * `crypto.randomUUID()` is CSPRNG and collision-free for any human-scale
- * usage.
  */
 function newPickedId(kindPrefix: string): string {
   return `${kindPrefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -339,6 +329,22 @@ function configBadge(config: IntegrationConfig): string {
       {:else if wizard.step === "done"}
         <section data-testid="integration-wizard-step-done">
           <p>Done — Tandem is connected to your AI client(s).</p>
+          {#if wizard.applyResults.length > 0}
+            <ul class="iw-apply-results">
+              {#each wizard.applyResults as result (result.id)}
+                <li
+                  class="iw-apply-result iw-apply-result-{result.status}"
+                  data-testid="integration-wizard-apply-result-{result.id}"
+                >
+                  <span class="iw-apply-result-id">{result.id}</span>
+                  <span class="iw-apply-result-status">{result.status}</span>
+                  {#if result.status === "error" && result.message}
+                    <span class="iw-apply-result-message">{result.message}</span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
           <div class="iw-actions">
             <button type="button" onclick={close} data-testid="integration-wizard-done-close">
               Close
@@ -505,5 +511,46 @@ function configBadge(config: IntegrationConfig): string {
     border-radius: var(--tandem-r-pill);
     background: var(--tandem-success-bg);
     color: var(--tandem-success-fg-strong);
+  }
+
+  .iw-apply-results {
+    list-style: none;
+    padding: 0;
+    margin: var(--tandem-space-3) 0;
+  }
+  .iw-apply-result {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-2);
+    border-radius: var(--tandem-r-2);
+    margin-bottom: var(--tandem-space-1);
+    border: 1px solid var(--tandem-border-subtle);
+  }
+  .iw-apply-result-id {
+    font-weight: 600;
+  }
+  .iw-apply-result-status {
+    font-size: var(--tandem-text-2xs);
+    padding: 2px 6px;
+    border-radius: var(--tandem-r-pill);
+    text-transform: uppercase;
+  }
+  .iw-apply-result-message {
+    flex-basis: 100%;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .iw-apply-result-applied {
+    background: var(--tandem-success-bg);
+    color: var(--tandem-success-fg-strong);
+  }
+  .iw-apply-result-skipped {
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+  }
+  .iw-apply-result-error {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
   }
 </style>

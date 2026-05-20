@@ -14,7 +14,7 @@
  * we can revisit.
  */
 
-import { IntegrationsFileV1Schema } from "./schema.js";
+import { IntegrationsFileV1Schema, IntegrationsFileV2Schema } from "./schema.js";
 
 export type MigrationFn = (input: unknown) => unknown;
 
@@ -37,11 +37,35 @@ const migrateV1ToV2: MigrationFn = (input) => {
 };
 
 /**
+ * v2 → v3: add `apply` field to each integration. Defaults to `"create"`
+ * for claude-code / claude-desktop (the wizard's apply endpoint should
+ * write them on first apply), `"skip"` for `other-mcp` (Tandem can't
+ * write arbitrary third-party MCP configs).
+ *
+ * This is **migrate-on-read** — the file gets rewritten as v3 only when
+ * the next persist happens (avoids touching the user's disk just for
+ * reading old data).
+ */
+const migrateV2ToV3: MigrationFn = (input) => {
+  const parsed = IntegrationsFileV2Schema.parse(input);
+  return {
+    schemaVersion: 3,
+    integrations: parsed.integrations.map((entry) => ({
+      ...entry,
+      apply: entry.kind === "other-mcp" ? "skip" : "create",
+    })),
+    ...(parsed.defaultIntegrationId !== undefined
+      ? { defaultIntegrationId: parsed.defaultIntegrationId }
+      : {}),
+  };
+};
+
+/**
  * Ordered migration chain. `migrations[i]` migrates v(i+1) → v(i+2).
  * Module-local — exposed only via `migrateUp` so external code cannot
  * inject a migration at runtime.
  */
-const migrations: ReadonlyArray<MigrationFn> = [migrateV1ToV2];
+const migrations: ReadonlyArray<MigrationFn> = [migrateV1ToV2, migrateV2ToV3];
 
 /**
  * Run the migration chain forward from `fromVersion` to `toVersion`. The

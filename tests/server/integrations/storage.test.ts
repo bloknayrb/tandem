@@ -168,7 +168,10 @@ describe("createIntegrationsStore", () => {
 
     const result = await store.read();
     expect(result.schemaVersion).toBe(INTEGRATIONS_SCHEMA_VERSION);
-    expect(result.integrations).toEqual(v1OnDisk.integrations);
+    // v1 → v2 → v3 migration adds `apply: "create"` to claude-code records.
+    expect(result.integrations).toEqual(
+      v1OnDisk.integrations.map((entry) => ({ ...entry, apply: "create" })),
+    );
     expect(result.defaultIntegrationId).toBe("cc-1");
   });
 

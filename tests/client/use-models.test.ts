@@ -58,7 +58,6 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): {
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
     marginView: false,
-    showIntegrationWizard: false,
     models: initialModels,
   };
   const state: TandemSettingsState = {

@@ -227,14 +227,14 @@ test("delete with confirm flow", async ({ page }) => {
   await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
 });
 
-test("v2→v5 migration boot — Models tab renders with empty list, settings survive", async ({
+test("v2→v6 migration boot — Models tab renders with empty list, settings survive", async ({
   page,
 }) => {
   // Pre-seed a v2 blob (no `models` field, schemaVersion: 2). The loader
-  // walks v2→v3→v4→v5 in memory; persistence happens only when something
+  // walks v2→v3→v4→v5→v6 in memory; persistence happens only when something
   // calls updateSettings. So we trigger a real write (add a model) which
   // forces mergeAndClampSettings to persist the migrated shape, then
-  // assert the persisted blob carries schemaVersion: 5 + the seeded
+  // assert the persisted blob carries schemaVersion: 6 + the seeded
   // theme/textSize.
   await page.evaluate((key) => {
     localStorage.setItem(
@@ -264,16 +264,17 @@ test("v2→v5 migration boot — Models tab renders with empty list, settings su
   await expect(page.locator(MODAL)).toHaveCount(0);
 
   // Now inspect the persisted shape — the migration must have preserved
-  // the v2 fields (theme, textSize) and climbed to schemaVersion: 5 (v3
-  // added `models`, v4 clamped left rail to outline-only, v5 stripped
-  // the rail-tab fields entirely).
+  // the v2 fields (theme, textSize) and climbed to schemaVersion: 6 (v3
+  // added `models`, v4 was a no-op intermediate, v5 stripped the rail-tab
+  // fields entirely, v6 drops the legacy `showIntegrationWizard` field —
+  // wizard lifecycle moved to its own `tandem:wizard-dismissed` key).
   const settings = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, TANDEM_SETTINGS_KEY);
   expect(settings?.theme).toBe("dark");
   expect(settings?.textSize).toBe("l");
-  expect(settings?.schemaVersion).toBe(5);
+  expect(settings?.schemaVersion).toBe(6);
   expect(settings?.models?.length).toBe(1);
   expect(settings?.models?.[0]?.displayName).toBe("Migration sentinel");
 });

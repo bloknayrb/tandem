@@ -393,6 +393,7 @@ export async function startMcpServerHttp(
     store: createIntegrationsStore(resolveAppDataDir()),
     keychain: createKeychain(),
     readExisting: readExistingTandemEntries,
+    serverVersion: APP_VERSION,
   });
 
   // Serve built client assets when present (populated by `vite build`).

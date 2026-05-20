@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import {
   applyConfig,
+  applyOpsForCli,
   buildMcpEntries,
   CHANNEL_DIST,
   detectTargets,
@@ -22,8 +23,10 @@ import {
  * a non-interactive `--apply` wrapper and the CLI surface is reduced.
  */
 export {
+  type ApplyOps,
   applyConfig,
   applyConfigWithToken,
+  applyOpsForCli,
   type BuildMcpEntriesOptions,
   buildMcpEntries,
   type DetectedTarget,
@@ -32,6 +35,8 @@ export {
   installSkill,
   type McpEntries,
   type McpEntry,
+  PathRejectedError,
+  type RemovableEntry,
   type TargetKind,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
@@ -76,7 +81,10 @@ export async function runSetup(
       targetKind: t.kind,
     });
     try {
-      await applyConfig(t.configPath, entries);
+      await applyConfig(
+        t.configPath,
+        applyOpsForCli(entries, { withChannelShim: !!opts.withChannelShim }),
+      );
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
     } catch (err) {
       failures++;

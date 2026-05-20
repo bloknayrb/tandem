@@ -11,6 +11,11 @@
  * - v2 (#477 PR 3b): adds optional `tokenSecretRef` on every variant; adds
  *   `other-mcp` kind for generic MCP-capable clients (Cursor, Continue.dev,
  *   LM Studio, Ollama, etc.).
+ * - v3 (#477 PR 3c-ii-b): adds optional `apply: "create" | "update" | "skip"`
+ *   on every variant (constrained to `"skip"` on `other-mcp`). The apply
+ *   endpoint (`POST /api/integrations/apply`) iterates entries whose
+ *   `apply !== "skip"` and writes them to Claude's config — separates intent
+ *   (persist) from side-effect (apply) per ADR-038 §2b adversarial review.
  *
  * `tokenSecretRef` is an opaque pointer into the OS keychain — never a
  * secret value. The keychain backend lives in `./keychain.ts`. Future
@@ -45,7 +50,7 @@ const AbsolutePath = z.string().min(1).refine(path.isAbsolute, {
  * and add attack surface — `127.0.0.2` etc. are valid loopback addresses
  * but reaching them implies someone configured an alternate bind).
  */
-const LoopbackUrl = z
+export const LoopbackUrl = z
   .string()
   .url()
   .refine(
@@ -67,25 +72,48 @@ const LoopbackUrl = z
     },
   );
 
-const ClaudeCodeIntegration = z.object({
-  kind: z.literal("claude-code"),
+/**
+ * v3 `apply` intent. Constrained to `"skip"` on `other-mcp` (apply endpoint
+ * cannot write arbitrary third-party MCP configs); free `"create" | "update"
+ * | "skip"` on `claude-code` / `claude-desktop`.
+ *
+ * `"update"` is reserved for a planned diff-confirmation UX (wizard previews
+ * the merged config before commit). Today the apply handler treats `"update"`
+ * identically to `"create"`. Don't remove it as apparently-dead — the schema
+ * would have to bump to add it back when the UX ships.
+ */
+const ApplyIntent = z.enum(["create", "update", "skip"]);
+
+/**
+ * Shared base fields lifted into a Zod object so each variant `.merge`s
+ * them in. Pre-v3 the schema duplicated these — v3's `apply` addition was
+ * the right moment to factor them out per architectural review.
+ */
+const BaseIntegrationFields = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
-  configPath: AbsolutePath,
-  transport: z.literal("http"),
-  url: LoopbackUrl,
   tokenSecretRef: z.string().min(1).optional(),
 });
 
-const ClaudeDesktopIntegration = z.object({
+// `.strict()` on every v3 variant + the top-level file schema mirrors the v1
+// and v2 migration schemas: a hand-edited or tampered file containing unknown
+// fields is rejected loudly rather than silently stripped, keeping the v3
+// shape contract honest against forward-compat drift.
+const ClaudeCodeIntegration = BaseIntegrationFields.extend({
+  kind: z.literal("claude-code"),
+  configPath: AbsolutePath,
+  transport: z.literal("http"),
+  url: LoopbackUrl,
+  apply: ApplyIntent.optional(),
+}).strict();
+
+const ClaudeDesktopIntegration = BaseIntegrationFields.extend({
   kind: z.literal("claude-desktop"),
-  id: z.string().min(1),
-  label: z.string().min(1),
   configPath: AbsolutePath,
   transport: z.literal("stdio"),
   nodeBinary: z.string().min(1).optional(),
-  tokenSecretRef: z.string().min(1).optional(),
-});
+  apply: ApplyIntent.optional(),
+}).strict();
 
 /**
  * Generic MCP-capable client (Cursor, Continue.dev, LM Studio, Ollama, etc.).
@@ -98,16 +126,20 @@ const ClaudeDesktopIntegration = z.object({
  * `http://127.0.0.1:3479` when omitted. `configPath` is optional because
  * many MCP clients have no canonical config file location Tandem can
  * detect.
+ *
+ * `apply` is constrained to `"skip"` — the apply endpoint refuses to
+ * touch third-party MCP configs (we'd have to know each client's config
+ * format). The schema-level restriction means a hand-edited
+ * `integrations.json` setting `apply: "create"` on an `other-mcp` entry
+ * is rejected at parse time, not silently no-op'd at runtime.
  */
-const OtherMcpIntegration = z.object({
+const OtherMcpIntegration = BaseIntegrationFields.extend({
   kind: z.literal("other-mcp"),
-  id: z.string().min(1),
-  label: z.string().min(1),
   transport: z.union([z.literal("http"), z.literal("stdio")]),
   url: LoopbackUrl.optional(),
   configPath: AbsolutePath.optional(),
-  tokenSecretRef: z.string().min(1).optional(),
-});
+  apply: z.literal("skip").optional(),
+}).strict();
 
 /**
  * `discriminatedUnion` members must be plain `ZodObject`s, so the
@@ -138,11 +170,13 @@ export const IntegrationConfigSchema = z
 
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 
-export const IntegrationsFileSchema = z.object({
-  schemaVersion: z.literal(SHARED_SCHEMA_VERSION),
-  integrations: z.array(IntegrationConfigSchema),
-  defaultIntegrationId: z.string().min(1).optional(),
-});
+export const IntegrationsFileSchema = z
+  .object({
+    schemaVersion: z.literal(SHARED_SCHEMA_VERSION),
+    integrations: z.array(IntegrationConfigSchema),
+    defaultIntegrationId: z.string().min(1).optional(),
+  })
+  .strict();
 
 export type IntegrationsFile = z.infer<typeof IntegrationsFileSchema>;
 
@@ -195,6 +229,62 @@ export const IntegrationsFileV1Schema = z
     schemaVersion: z.literal(1),
     integrations: z.array(
       z.discriminatedUnion("kind", [ClaudeCodeIntegrationV1, ClaudeDesktopIntegrationV1]),
+    ),
+    defaultIntegrationId: z.string().min(1).optional(),
+  })
+  .strict();
+
+/**
+ * v2 input shape for the v2→v3 migration. v2 differs from v3 in: no `apply`
+ * field on any variant. `.strict()` mirrors the v1 schema's invariant — a v2
+ * file containing v3-only fields is rejected (forces an explicit migration
+ * rather than silent merge).
+ */
+const ClaudeCodeIntegrationV2 = z
+  .object({
+    kind: z.literal("claude-code"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    configPath: AbsolutePath,
+    transport: z.literal("http"),
+    url: LoopbackUrl,
+    tokenSecretRef: z.string().min(1).optional(),
+  })
+  .strict();
+
+const ClaudeDesktopIntegrationV2 = z
+  .object({
+    kind: z.literal("claude-desktop"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    configPath: AbsolutePath,
+    transport: z.literal("stdio"),
+    nodeBinary: z.string().min(1).optional(),
+    tokenSecretRef: z.string().min(1).optional(),
+  })
+  .strict();
+
+const OtherMcpIntegrationV2 = z
+  .object({
+    kind: z.literal("other-mcp"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+    transport: z.union([z.literal("http"), z.literal("stdio")]),
+    url: LoopbackUrl.optional(),
+    configPath: AbsolutePath.optional(),
+    tokenSecretRef: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const IntegrationsFileV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    integrations: z.array(
+      z.discriminatedUnion("kind", [
+        ClaudeCodeIntegrationV2,
+        ClaudeDesktopIntegrationV2,
+        OtherMcpIntegrationV2,
+      ]),
     ),
     defaultIntegrationId: z.string().min(1).optional(),
   })

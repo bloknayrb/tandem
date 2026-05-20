@@ -48,6 +48,7 @@ import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
+import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
@@ -228,14 +229,74 @@ if (isTauriRuntime()) {
 
 let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
-let integrationWizardOpen = $state(false);
 
-// SettingsClaudeCodeTab dispatches this when the user clicks "Open wizard".
+const firstRun = createFirstRunNeeded();
+const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
+let dismissedForVersion = $state<string | null>(readDismissed());
+let manuallyReopened = $state(false);
+
+function readDismissed(): string | null {
+  try {
+    return localStorage.getItem(WIZARD_DISMISSED_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// `&&` (not `||`) so a stomped/absent localStorage value still triggers
+// the wizard when the server says it's needed — failure-mode-safe.
+const shouldShowWizard = $derived(
+  manuallyReopened ||
+    (firstRun.needed === true &&
+      firstRun.serverVersion !== null &&
+      dismissedForVersion !== firstRun.serverVersion),
+);
+
+function closeIntegrationWizard(): void {
+  // Only persist dismissal when this close ends an auto-open session.
+  // A manual reopen → close where the server says `needed === false`
+  // would otherwise burn the dismissal slot for `serverVersion`, silently
+  // suppressing a later auto-open that flips back to `needed === true`
+  // (e.g. user re-deletes integrations.json).
+  const wasAutoOpen =
+    firstRun.needed === true &&
+    firstRun.serverVersion !== null &&
+    dismissedForVersion !== firstRun.serverVersion;
+  if (wasAutoOpen && firstRun.serverVersion !== null) {
+    try {
+      localStorage.setItem(WIZARD_DISMISSED_KEY, firstRun.serverVersion);
+      dismissedForVersion = firstRun.serverVersion;
+    } catch {
+      // localStorage unavailable — fall through; the server-side check
+      // will re-prompt on next launch (acceptable failure mode).
+    }
+  }
+  manuallyReopened = false;
+}
+
+// Sync dismissal state across tabs: if one tab dismisses (writes to
+// localStorage), other open tabs see the `storage` event and update
+// their reactive view. The event only fires in OTHER tabs — the writing
+// tab updates `dismissedForVersion` synchronously above.
+$effect(() => {
+  const onStorage = (ev: StorageEvent) => {
+    if (ev.key === WIZARD_DISMISSED_KEY) {
+      dismissedForVersion = ev.newValue;
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+});
+
+// SettingsClaudeCodeTab dispatches this when the user clicks "Reopen wizard".
 // Listening here avoids threading another callback through every Settings tab.
 $effect(() => {
   const onOpen = () => {
-    integrationWizardOpen = true;
+    manuallyReopened = true;
     settingsModalOpen = false;
+    // Re-fetch first-run state so a reopen reflects any concurrent
+    // persist from another tab / CLI.
+    void firstRun.refetch();
   };
   window.addEventListener("tandem:open-integration-wizard", onOpen);
   return () => window.removeEventListener("tandem:open-integration-wizard", onOpen);
@@ -1105,11 +1166,8 @@ const tutorial = createTutorial(
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
 
-    {#if settingsState.settings.showIntegrationWizard}
-      <IntegrationWizardModal
-        open={integrationWizardOpen}
-        onClose={() => (integrationWizardOpen = false)}
-      />
+    {#if shouldShowWizard}
+      <IntegrationWizardModal open={true} onClose={closeIntegrationWizard} />
     {/if}
 
     {#if fileOpenDialogOpen}
