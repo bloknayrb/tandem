@@ -58,7 +58,7 @@ import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
-import { createTandemSettings, TEXT_SIZE_PX, THEME_NEXT } from "./hooks/useTandemSettings.svelte";
+import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
@@ -340,10 +340,6 @@ function openSettingsModalWithAck() {
 function openSettingsPopoverWithAck() {
   updateAvailable.acknowledge();
   settingsOpen = true;
-}
-
-function cycleTheme() {
-  settingsState.updateSettings({ theme: THEME_NEXT[settingsState.settings.theme] });
 }
 
 // Wire action dependencies for builtin actions (save, settings, find, mode)
@@ -947,17 +943,16 @@ const tutorial = createTutorial(
 );
 </script>
 
-<div style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);">
+<div
+  data-tandem-mode={modeState.tandemMode}
+  style="display: flex; flex-direction: column; height: 100vh; background: var(--tandem-bg); color: var(--tandem-fg);"
+>
   <TitleBar
     tandemMode={modeState.tandemMode}
     onModeChange={modeState.setTandemMode}
     claudeActive={yjsSync.claudeActive}
-    leftPanelVisible={effectiveLeftVisible}
-    onToggleLeftPanel={toggleLeftPanel}
-    rightPanelVisible={effectiveRightVisible}
-    onToggleRightPanel={toggleRightPanel}
     theme={settingsState.settings.theme}
-    onCycleTheme={cycleTheme}
+    onSetTheme={(t) => settingsState.updateSettings({ theme: t })}
     showAuthorship={settingsState.settings.showAuthorship}
     onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
