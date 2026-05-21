@@ -1,0 +1,82 @@
+# CLAUDE.local.md — feat/design-system-impl umbrella
+
+Gitignored. Local-only context for working on this umbrella branch. Loaded alongside CLAUDE.md.
+
+## Where you are
+
+This is the `feat/design-system-impl` umbrella branch worktree at `C:/Users/blokn/GitHub/tandem-design-impl/`. The main repo worktree is `C:/Users/blokn/GitHub/tandem/` on a different branch. Don't confuse them.
+
+The umbrella is a long-running branch off master. Sub-PRs target `feat/design-system-impl`, **not master**. The umbrella merges to master only when every sub-PR has landed and Phase 5 verification passes.
+
+## Standing rules
+
+**Visual artifacts go in OpenDesign.** OD watches `docs/design-system-impl/`. Anything visual (HTML previews, screenshots, design comparisons) written there auto-renders. **Do NOT commit visual artifacts until Bryan has reviewed them in OD.** Text-only deliverables (manifests, specs, strategy docs) commit directly.
+
+**Conflict resolutions are LOCKED** in `docs/design-system-impl/conflicts-resolved.md`. Sub-PRs that need a different resolution use the override protocol — explicit confirmation required before merging. Default is "follow the locked resolution."
+
+**Suggestions are Claude-only.** Five-row annotation taxonomy. Users author notes, comments, and highlights — never suggestions. `tandem_createAnnotation` must reject user-authored annotations with `suggestedText`; the UI must never render one. This rule was Bryan's explicit correction during Phase 0f.
+
+## Phase status
+
+**Phase 0: COMPLETE** (15 commits, baselines captured in `5f08128`). Umbrella branch `feat/design-system-impl` pushed to origin on 2026-05-21.
+
+**Phase 1: IN PROGRESS.**
+- **Sub-PR 1.1 — TitleBar:** [PR #802](https://github.com/bloknayrb/tandem/pull/802) (branch `design-impl/1.1-titlebar`). Visual layer onto production TitleBar + BrandMenu + ModeToggle per Conflict #1 / Option A. 40×40 brand button with hover-scale on the logo (no chip ring — Bryan corrected the soft-fill alternative mid-implementation), 2×2 theme swatch grid with diagonal split for "system", borderless ModeToggle with `fg @ 6%` recipe. Plan reviewed by svelte-migration-reviewer at plan stage; 2 BLOCKERS + 3 IMPORTANT findings addressed before implementation.
+- **Sub-PR 1.2 — FormatBar / Toolbar:** next.
+- Sub-PRs 1.3–1.12 remaining per plan.
+
+Note on pre-push: full vitest suite occasionally flakes `tests/cli/mcp-stdio.test.ts > process exits in <3s after half-open timeout fires` under CPU load (e.g., `cargo tauri dev` running concurrently). Stop background processes and retry; or run the failing test in isolation to confirm it passes. The test is timing-sensitive, not broken by visual changes.
+
+## Key paths
+
+- `docs/design-system-impl/` — all umbrella docs (OD-watched)
+- `docs/design-system-impl/preview/baselines/` — captured HTML baselines (open in OD or any browser)
+- `docs/design-system-impl/preview/annotation-edge-colors.html` — 5-row annotation taxonomy visual reference
+- `docs/design-system-impl/derived-spec.md` — Phase 3 recipe doc; sub-PRs implement against this
+- `docs/design-system-impl/conflicts-resolved.md` — 9 locked decisions
+- `scripts/design-baselines/capture.spec.ts` — HTML baseline capture
+- `scripts/check-semantic-tokens.ts` — current token gate (NOT extended with bundle blocklist; see #799)
+
+## Commands
+
+- `npm run capture:design-baselines` — regenerate the 16 HTML baselines into `docs/design-system-impl/preview/baselines/`
+- `npm run dev:standalone` — server + client for manual testing
+- `npm run typecheck` — typecheck server + client
+- `npm test` — vitest unit tests
+- `npm run test:e2e` — Playwright (does NOT run the baseline capture; that's behind `CAPTURE_DESIGN_BASELINES=1`)
+
+## Sub-PR template (per plan)
+
+Every sub-PR into `feat/design-system-impl` includes:
+1. Surface header (plain-English description, bundle source, conflict-resolved reference)
+2. Updated HTML baseline(s) for any of the 8 covered surfaces touched
+3. Code changes preserving every existing testid (per `testid-manifest.md`) and every tutorial anchor (per `tutorial-anchor-manifest.md`)
+4. Verification: typecheck + targeted test + full `npm run test:e2e`
+5. Adversarial review via mandatory specialized agents:
+   - `svelte-migration-reviewer` for any `.svelte` change
+   - `crdt-reviewer` for `editor/extensions/annotation.ts`, `editor/extensions/authorship.ts`, any `panels/*Card.svelte`
+   - `annotation-model-reviewer` for any annotation card or rail surface
+   - `security-reviewer` for any integration/wizard surface
+6. A11y check (per `accessibility` skill) for any new interactive surface
+7. CHANGELOG entry under `[Unreleased] → ### Changed → Design system re-skin`
+8. Explicit "no `src/server/` changes" acknowledgement for annotation sub-PRs
+
+## Follow-ups not blocking sub-PRs
+
+- **#798** Motion language threading — defer until umbrella merges; v1.0 GA gate
+- **#799** Bundle-token CI blocklist — should land before Phase 3 starts (Phase 1-2 are tight enough for doc-review)
+
+## Things that have caught me
+
+- Bundle README aspirational text drifts from bundle source. Always read `.svelte` + `.css` for actual recipe (caught in Phase 0f annotation card rewrite).
+- I claimed CI enforcement in conflicts-resolved.md that didn't ship in 0c. Describe gates that ACTUALLY exist; file follow-ups for the gaps.
+- Playwright shortcut + testid guesses from "what other apps do" — always grep before writing test selectors. Production palette is Ctrl+Shift+P not Ctrl+P; settings trigger is Ctrl+Shift+, not a button click.
+- WebServer commands in subdir playwright configs need explicit `cwd` to repo root or the `node_modules/tsx/...` relative path breaks.
+
+## Bryan's working style here
+
+- Drives the design; corrections come fast and direct ("does not match the latest download from Claude Design").
+- Trusts judgment calls on scope-down decisions, but flag them in the summary.
+- Prefers conversation about design over checklist execution.
+- Does NOT want commits before OD-reviewing visual deliverables.
+- Will absolutely correct me if I miss something — wait for the correction rather than hedge into compliance.
