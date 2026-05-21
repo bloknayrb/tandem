@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../../src/client/hooks/useTandemSettings.js";
+import { CURRENT_SCHEMA_VERSION, loadSettings } from "../../src/client/hooks/useTandemSettings.js";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants.js";
 
 function installLocalStorageStub() {
@@ -61,7 +61,7 @@ describe("loadSettings — migration chain", () => {
       textSize: "l",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(true);
     expect(s.textSize).toBe("l");
@@ -71,7 +71,7 @@ describe("loadSettings — migration chain", () => {
   it("v1 blob (panelHidden=true) climbs to v6 with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(false);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.models).toEqual([]);
@@ -86,7 +86,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.editorWidthPercent).toBe(80);
@@ -187,7 +187,7 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.theme).toBe("dark");
     // The migration chain's `=== N` gates are exclusive — re-running on
     // an already-v6 blob is a no-op. _readOnly is reserved for the v99+
@@ -208,7 +208,7 @@ describe("loadSettings — migration chain", () => {
       rightPanelVisible: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
     expect(s._readOnly).toBeUndefined();
@@ -226,7 +226,7 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
@@ -239,7 +239,7 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
@@ -253,7 +253,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
     expect(s.theme).toBe("dark");
@@ -306,7 +306,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
     expect(s.theme).toBe("dark");
   });
@@ -331,7 +331,7 @@ describe("loadSettings — migration chain", () => {
       showIntegrationWizard: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
@@ -342,7 +342,7 @@ describe("loadSettings — migration chain", () => {
       showIntegrationWizard: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
@@ -353,7 +353,7 @@ describe("loadSettings — migration chain", () => {
       showIntegrationWizard: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 });
