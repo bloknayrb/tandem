@@ -30,6 +30,7 @@ import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
 import Editor from "./editor/Editor.svelte";
+import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
@@ -456,6 +457,25 @@ $effect(() => {
   if (firstRun) return;
   untrack(() => {
     const tr = ed.state.tr.setMeta(authorshipPluginKey, { type: "toggle", visible });
+    ed.view.dispatch(tr);
+  });
+});
+
+// #596: mirrors the authorship toggle pattern; plugin reads localStorage at init, this handles flips.
+let lastDispatchedDecorations: boolean | null = null;
+$effect(() => {
+  const ed = editor;
+  if (!ed) return;
+  const visible = settingsState.settings.showAnnotationDecorations;
+  if (lastDispatchedDecorations === visible) return;
+  const firstRun = lastDispatchedDecorations === null;
+  lastDispatchedDecorations = visible;
+  if (firstRun) return;
+  untrack(() => {
+    const tr = ed.state.tr.setMeta(annotationPluginKey, {
+      type: "toggle-decorations",
+      visible,
+    });
     ed.view.dispatch(tr);
   });
 });

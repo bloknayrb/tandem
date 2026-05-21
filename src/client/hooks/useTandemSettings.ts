@@ -103,6 +103,8 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
+  // #596: when false, suppresses inline annotation marks in the editor; side-panel cards stay.
+  showAnnotationDecorations: boolean;
   // #659: AI provider registry. API keys live in the OS keychain
   // (`tandem-models` service) via `POST /api/models/secrets/:ref`; the
   // entries here only carry the opaque `apiKeyRef`.
@@ -139,7 +141,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 7,
+  schemaVersion: 8,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -160,6 +162,7 @@ const DEFAULTS: TandemSettings = {
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
   marginView: false,
+  showAnnotationDecorations: true,
   models: [],
   defaultModelId: null,
 };
@@ -274,8 +277,11 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   plaintext `apiKey` values in place so `parseModels` can surface them
  *   via the transient `_legacyApiKey` field for the in-UI migration prompt.
  *   This is the load-bearing #659 step.
+ * v7→v8: introduce `showAnnotationDecorations: true` (#596). Default
+ *   preserves prior visual behavior; users opt in to suppress inline
+ *   annotation marks in the editor.
  */
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -368,6 +374,8 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.holdAnnotationsWhileOffline
         : DEFAULTS.holdAnnotationsWhileOffline,
     marginView: parsed.marginView === true,
+    showAnnotationDecorations:
+      parsed.showAnnotationDecorations === false ? false : DEFAULTS.showAnnotationDecorations,
     models: parseModels(parsed.models),
     defaultModelId:
       typeof parsed.defaultModelId === "string" && parsed.defaultModelId.length > 0
@@ -458,6 +466,12 @@ export function loadSettings(): TandemSettings {
           defaultModelId:
             firstEnabled && typeof firstEnabled.id === "string" ? firstEnabled.id : null,
         };
+      }
+      if (parsed.schemaVersion === 7) {
+        // v7→v8: introduce `showAnnotationDecorations: true`. Default
+        // preserves prior visual behavior; normalizeKnownFields handles
+        // the actual coercion on a blob that already carries the field.
+        parsed = { ...parsed, schemaVersion: 8 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`

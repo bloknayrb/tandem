@@ -100,6 +100,7 @@ export const Y_MAP_READ_ONLY = "readOnly";
 export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
+export const ANNOTATION_DECORATIONS_TOGGLE_KEY = "tandem:showAnnotationDecorations";
 
 export const RECENT_FILES_KEY = "tandem:recentFiles";
 export const RECENT_FILES_CAP = 20;

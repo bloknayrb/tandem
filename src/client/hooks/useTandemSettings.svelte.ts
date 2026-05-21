@@ -1,4 +1,8 @@
-import { AUTHORSHIP_TOGGLE_KEY, TANDEM_SETTINGS_KEY } from "../../shared/constants.js";
+import {
+  ANNOTATION_DECORATIONS_TOGGLE_KEY,
+  AUTHORSHIP_TOGGLE_KEY,
+  TANDEM_SETTINGS_KEY,
+} from "../../shared/constants.js";
 import type { TandemSettings } from "./useTandemSettings.js";
 import { loadSettings, mergeAndClampSettings } from "./useTandemSettings.js";
 
@@ -61,6 +65,10 @@ export function createTandemSettings(): TandemSettingsState {
       localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
       // Mirror authorship toggle to dedicated key for ProseMirror plugin init
       localStorage.setItem(AUTHORSHIP_TOGGLE_KEY, String(next.showAuthorship));
+      localStorage.setItem(
+        ANNOTATION_DECORATIONS_TOGGLE_KEY,
+        String(next.showAnnotationDecorations),
+      );
     } catch {
       // localStorage unavailable (incognito/storage-disabled)
     }
