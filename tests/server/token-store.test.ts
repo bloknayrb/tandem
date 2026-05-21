@@ -69,6 +69,19 @@ describe("token-store", () => {
       expect(read).toBe(token);
     });
 
+    // POSIX file permissions are the only access-control surface for the
+    // auth-token file on a shared host.
+    it.skipIf(process.platform === "win32")(
+      "writes the token file with mode 0o600 (owner-only read/write)",
+      async () => {
+        const token = crypto.randomBytes(32).toString("base64url");
+        await writeTokenToFile(token);
+        const stat = await fs.promises.stat(getTokenFilePath());
+
+        expect(stat.mode & 0o777).toBe(0o600);
+      },
+    );
+
     it("creates parent directories if missing", async () => {
       const originalTempDir = tempDir;
       // Re-route getTokenFilePath() to a deeply nested path that doesn't exist yet.

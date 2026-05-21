@@ -267,6 +267,85 @@ describe("origin filtering", () => {
     expect(events[0].type).toBe("annotation:dismissed");
     cleanup();
   });
+
+  // ADR-027: notes are user-private. The annotation:created skip on notes
+  // is pinned above; these extend the same guard to edit / accept / dismiss.
+  it("does NOT emit annotation:edited for user notes", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    doc.transact(() => {
+      map.set("ann_note_edit", {
+        id: "ann_note_edit",
+        type: "note",
+        author: "user",
+        content: "before",
+        status: "pending",
+        textSnapshot: "PRIVATE",
+        range: { from: 0, to: 5 },
+        editedAt: 1000,
+      });
+    }, MCP_ORIGIN);
+
+    map.set("ann_note_edit", {
+      id: "ann_note_edit",
+      type: "note",
+      author: "user",
+      content: "after — must not leak",
+      status: "pending",
+      textSnapshot: "PRIVATE",
+      range: { from: 0, to: 5 },
+      editedAt: 2000,
+    });
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
+
+  // Synthetic `author: "claude", type: "note"` shape — structurally
+  // impossible in the live model, but we pin the observer's defense-in-depth
+  // type filter so a future code path that leaked a Claude-authored note
+  // (file-sync echo, schema drift) wouldn't surface status events. With
+  // `author: "user"` this assertion would pass via the author gate alone,
+  // which is misleading; using `author: "claude"` makes it load-bearing.
+  it("does NOT emit annotation:accepted or annotation:dismissed for claude-authored notes (synthetic)", () => {
+    const { events, cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    doc.transact(() => {
+      map.set("ann_note_status", {
+        id: "ann_note_status",
+        type: "note",
+        author: "claude",
+        content: "private",
+        status: "pending",
+        textSnapshot: "PRIVATE",
+        range: { from: 0, to: 5 },
+      });
+    }, MCP_ORIGIN);
+
+    map.set("ann_note_status", {
+      id: "ann_note_status",
+      type: "note",
+      author: "claude",
+      content: "private",
+      status: "accepted",
+      textSnapshot: "PRIVATE",
+      range: { from: 0, to: 5 },
+    });
+    map.set("ann_note_status", {
+      id: "ann_note_status",
+      type: "note",
+      author: "claude",
+      content: "private",
+      status: "dismissed",
+      textSnapshot: "PRIVATE",
+      range: { from: 0, to: 5 },
+    });
+
+    expect(events).toHaveLength(0);
+    cleanup();
+  });
 });
 
 // --- Buffer eviction and replaySince ---

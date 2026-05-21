@@ -184,5 +184,9 @@ export function createDefaultKeychainBackend(
   const useTauri = opts.force === "tauri" || (opts.force !== "http" && isTauriRuntime());
   return useTauri
     ? createTauriKeychainBackend({ invoke: opts.invoke })
-    : createHttpKeychainBackend({ fetchFn: opts.fetchFn, baseUrl: opts.baseUrl });
+    : createHttpKeychainBackend({
+        fetchFn: opts.fetchFn,
+        baseUrl: opts.baseUrl,
+        pathFor: opts.pathFor,
+      });
 }

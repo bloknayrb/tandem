@@ -7,6 +7,7 @@ import {
   createFixtureDir,
   McpTestClient,
   nextFrames,
+  openAnnotatePopup,
   openSettingsPopover,
 } from "./helpers";
 
@@ -325,8 +326,8 @@ test("PR2: note bubble never exposes replies (ADR-027)", async ({ page }) => {
   // Create a real note via the selection popup (pattern: toolbar-redesign.spec.ts).
   await editor.click();
   await editor.locator("p").first().selectText();
+  await openAnnotatePopup(page);
   const popupInput = page.locator("[data-testid='popup-annotation-input']");
-  await expect(popupInput).toBeVisible({ timeout: 3_000 });
   await popupInput.fill("private note");
   await page.locator("[data-testid='popup-note-submit']").click();
 

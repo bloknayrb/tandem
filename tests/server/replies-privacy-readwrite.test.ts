@@ -8,17 +8,13 @@
  *   (c) reply on highlight — write returns INVALID_ARGUMENT; read drops any
  *                            rogue rows even if forced into the Y.Map.
  *   (d) orphan parent      — write returns NOT_FOUND when the parent has been
- *                            deleted (covered by existing NOT_FOUND path); the
- *                            channel observer skips emission when the parent
- *                            is absent.
+ *                            deleted (covered by existing NOT_FOUND path).
  *
- * Mirrors the channel-observer pattern in
- * `src/server/events/observers/replies.ts` and the read-path filter in
- * `src/server/mcp/annotations.ts#tandem_getAnnotations`.
+ * Channel-observer coverage for the same privacy guard lives in
+ * `tests/server/replies-privacy.test.ts` (note / highlight / orphan skip + the
+ * client-side `getVisibleReplies` mirror).
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { makeRepliesObserver } from "../../src/server/events/observers/replies.js";
-import type { TandemEvent } from "../../src/server/events/types.js";
 import {
   addReplyToAnnotation,
   collectRepliesForAnnotation,
@@ -141,63 +137,5 @@ describe("ADR-027 reply privacy (read path strips rogue rows)", () => {
     const ann = map.get(annId) as Annotation;
     const attached = ann.type === "comment" ? collectRepliesForAnnotation(repliesMap, annId) : [];
     expect(attached).toEqual([]);
-  });
-});
-
-describe("ADR-027 reply privacy (channel observer)", () => {
-  it("(d) skips emission when parent annotation is absent or not a comment", () => {
-    const ydoc = setupDoc("obs-1", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const commentId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "c");
-    const noteId = createAnnotation(map, ydoc, "note", rangeOf(6, 11, ydoc), "n");
-
-    const events: TandemEvent[] = [];
-    const off = makeRepliesObserver({
-      docName: "obs-1",
-      doc: ydoc,
-      pushEvent: (e) => events.push(e),
-    });
-
-    const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
-
-    // (i) Reply on a note parent — observer must skip (parentAnn.type !== "comment").
-    const rogueNote: AnnotationReply = {
-      id: "rpl_obs_note",
-      annotationId: noteId,
-      author: "user",
-      text: "should be skipped",
-      timestamp: Date.now(),
-      rev: 1,
-    };
-    ydoc.transact(() => repliesMap.set(rogueNote.id, rogueNote));
-    expect(events).toHaveLength(0);
-
-    // (ii) Reply on an orphan parent (deleted) — observer must skip (!parentAnn).
-    const orphanId = "ann_orphan_does_not_exist";
-    const orphanReply: AnnotationReply = {
-      id: "rpl_obs_orphan",
-      annotationId: orphanId,
-      author: "user",
-      text: "should be skipped",
-      timestamp: Date.now(),
-      rev: 1,
-    };
-    ydoc.transact(() => repliesMap.set(orphanReply.id, orphanReply));
-    expect(events).toHaveLength(0);
-
-    // (iii) Reply on a comment parent — observer emits.
-    const goodReply: AnnotationReply = {
-      id: "rpl_obs_good",
-      annotationId: commentId,
-      author: "user",
-      text: "valid",
-      timestamp: Date.now(),
-      rev: 1,
-    };
-    ydoc.transact(() => repliesMap.set(goodReply.id, goodReply));
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("annotation:reply");
-
-    off();
   });
 });

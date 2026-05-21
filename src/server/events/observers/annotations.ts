@@ -87,6 +87,11 @@ export function makeAnnotationsObserver(deps: {
       }
 
       if (action === "update" && ann.author === "claude") {
+        // ADR-027 defense-in-depth: a Claude-authored note is structurally
+        // impossible today, but file-sync echoes or future schema drift
+        // could produce one. Mirror the `add` branch's type guard above so
+        // the privacy invariant is locally explicit on both surfaces.
+        if (ann.type === "note") return undefined;
         if (ann.status === "accepted") {
           return {
             id: generateEventId(),
