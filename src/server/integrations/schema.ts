@@ -105,6 +105,11 @@ const ClaudeCodeIntegration = BaseIntegrationFields.extend({
   transport: z.literal("http"),
   url: LoopbackUrl,
   apply: ApplyIntent.optional(),
+  // PR #477 PR-4 supervisor: optional cwd for auto-spawned Claude.
+  // Default at consumer level is os.homedir(); we don't enforce existence
+  // here because a user may legitimately set a path that exists on their
+  // OTHER machine when syncing config.
+  workingDirectory: AbsolutePath.optional(),
 }).strict();
 
 const ClaudeDesktopIntegration = BaseIntegrationFields.extend({
