@@ -191,7 +191,10 @@ test.describe("forced colors / high contrast", () => {
     await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
       timeout: 3_000,
     });
-    await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
+    // Wave M: the action surface (Annotate button) mounts on selection;
+    // the textarea lives behind the Annotate click. Forced-colors mode
+    // applies to both surfaces, so we just verify the popup is reachable.
+    await expect(page.locator("[data-testid='popup-annotate-btn']")).toBeVisible({
       timeout: 3_000,
     });
   });

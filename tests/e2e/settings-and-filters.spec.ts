@@ -6,6 +6,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openAnnotatePopup,
   openSettingsPopover,
   switchToAnnotationsTab,
 } from "./helpers";
@@ -401,8 +402,9 @@ test("Solo/Tandem mode toggle switches via toolbar (Wave M: fade-not-hide)", asy
   // No held bucket — sb-held never renders.
   await expect(heldButton).toHaveCount(0);
 
-  // Switch back via the toggle.
-  await soloBtn.click();
+  // Switch back via the toggle. Wave M's toggle is two distinct buttons —
+  // each sets the mode unconditionally, so re-clicking solo would no-op.
+  await tandemBtn.click();
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
   const tandemSaved = await page.evaluate((key) => localStorage.getItem(key), TANDEM_MODE_KEY);
@@ -664,9 +666,10 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   const firstParagraph = editor.locator("p").first();
   await firstParagraph.selectText();
 
-  // AR3: the unified popup appears automatically on selection — no button click needed.
+  // Wave M (#776): selection shows the action surface; clicking Annotate
+  // reveals the textarea. Originally AR3 surfaced the textarea on selection.
+  await openAnnotatePopup(page);
   const noteInput = page.locator("[data-testid='popup-annotation-input']");
-  await expect(noteInput).toBeVisible({ timeout: 3_000 });
 
   // Type note content and submit via "Note to self".
   await noteInput.fill("my private note");

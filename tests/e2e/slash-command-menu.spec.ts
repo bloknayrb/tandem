@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openAnnotatePopup,
 } from "./helpers";
 
 let mcp: McpTestClient;
@@ -125,16 +126,19 @@ test("slash menu inserts horizontal rule", async ({ page }) => {
 test("slash menu suppresses while annotation popup is open (D10)", async ({ page }) => {
   const editor = await openSample(page);
 
-  // Select text to open the selection toolbar. The popup mounts
-  // `popup-annotation-input` — the slash menu must refuse to activate while
-  // that surface is present (D10 forward suppression).
+  // Select text to open the selection toolbar. Wave M (PR #776) split the
+  // popup: selection shows the action surface (Annotate button + highlight
+  // swatches); clicking Annotate reveals `popup-annotation-input`. The slash
+  // menu must refuse to activate while either surface is mounted (D10
+  // forward suppression). We exercise the annotate-mode arm here because the
+  // test focuses the textarea below.
   const paragraph = editor.locator("p").first();
   const box = await paragraph.boundingBox();
   if (!box) throw new Error("paragraph not laid out");
   await page.mouse.click(box.x + 10, box.y + box.height / 2, { clickCount: 3 });
 
+  await openAnnotatePopup(page);
   const popupInput = page.getByTestId("popup-annotation-input");
-  await expect(popupInput).toBeVisible();
   await popupInput.focus();
 
   const slashMenu = page.getByRole("listbox", { name: "Slash commands" });

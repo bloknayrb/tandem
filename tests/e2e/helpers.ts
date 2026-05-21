@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -120,6 +120,23 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
   if ((await toggle.count()) > 0) {
     await toggle.click();
   }
+}
+
+/**
+ * Open the selection popup's annotate mode. Wave M (PR #776) split the popup
+ * into two surfaces — selection shows the action surface (formatting +
+ * highlight swatches + Annotate button); clicking Annotate reveals the
+ * textarea-bearing annotate mode (`popup-annotation-input`,
+ * `popup-comment-submit`, `popup-note-submit`). Tests that interact with the
+ * textarea or submit buttons must call this helper after selecting text.
+ */
+export async function openAnnotatePopup(page: Page): Promise<void> {
+  const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
+  await expect(annotateBtn).toBeVisible({ timeout: 3_000 });
+  await annotateBtn.click();
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
+    timeout: 3_000,
+  });
 }
 
 /**
