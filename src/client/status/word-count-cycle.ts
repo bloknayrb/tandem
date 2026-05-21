@@ -1,17 +1,26 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 
-export type WordCountMode = "words" | "characters" | "sentences" | "paragraphs";
+export type WordCountMode = "words" | "characters" | "sentences" | "paragraphs" | "pages";
 
 const STORAGE_KEY = "tandem-status-count-mode";
 
-const CYCLE: readonly WordCountMode[] = ["words", "characters", "sentences", "paragraphs"];
+const CYCLE: readonly WordCountMode[] = ["words", "characters", "sentences", "paragraphs", "pages"];
 
 const MODE_LABEL: Record<WordCountMode, string> = {
   words: "words",
   characters: "chars",
   sentences: "sentences",
   paragraphs: "paragraphs",
+  pages: "pages",
 };
+
+// Publishing-standard manuscript page basis (double-spaced, 12pt).
+const WORDS_PER_PAGE = 250;
+
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
 
 export function nextMode(current: WordCountMode): WordCountMode {
   const i = CYCLE.indexOf(current);
@@ -56,11 +65,8 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
   switch (mode) {
     case "characters":
       return text.length;
-    case "words": {
-      const trimmed = text.trim();
-      if (!trimmed) return 0;
-      return trimmed.split(/\s+/).length;
-    }
+    case "words":
+      return countWords(text);
     case "sentences": {
       const matches = text.match(/[^.!?]+[.!?]+(?:\s|$)/g);
       return matches?.length ?? (text.trim() ? 1 : 0);
@@ -72,5 +78,7 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
       });
       return count;
     }
+    case "pages":
+      return Math.ceil(countWords(text) / WORDS_PER_PAGE);
   }
 }
