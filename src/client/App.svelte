@@ -461,9 +461,7 @@ $effect(() => {
   });
 });
 
-// #596: mirror the authorship pattern for annotation-decoration visibility.
-// Plugin reads initial state from localStorage at construction; this effect
-// only dispatches subsequent flips.
+// #596: mirrors the authorship toggle pattern; plugin reads localStorage at init, this handles flips.
 let lastDispatchedDecorations: boolean | null = null;
 $effect(() => {
   const ed = editor;

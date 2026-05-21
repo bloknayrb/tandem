@@ -15,12 +15,7 @@ import { annotationToPmRange } from "../../positions";
 
 export const annotationPluginKey = new PluginKey("tandemAnnotations");
 
-/**
- * Meta payload to toggle inline annotation decorations on/off (#596).
- * `App.svelte` dispatches this when the `showAnnotationDecorations`
- * setting flips; the plugin's apply() handler rebuilds (or empties)
- * the decoration set accordingly.
- */
+/** Dispatched by App.svelte when showAnnotationDecorations flips (#596). */
 export interface AnnotationToggleMeta {
   type: "toggle-decorations";
   visible: boolean;
@@ -154,9 +149,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     let hasAnnotations = annotationsMap.size > 0;
     let recoveryAttempted = false;
 
-    // #596: localStorage mirror lets the plugin read the setting at init
-    // without coupling to the Svelte settings store. Default `true` (show
-    // marks) when unset, matching the schema default.
+    // Read initial state from localStorage so the plugin stays decoupled from the Svelte store.
     let visible = true;
     try {
       const stored = localStorage.getItem(ANNOTATION_DECORATIONS_TOGGLE_KEY);

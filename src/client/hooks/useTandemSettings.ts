@@ -103,13 +103,7 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
-  /**
-   * #596: when `false`, the editor's inline annotation marks (highlights,
-   * comment underlines, suggestion strikethroughs) are suppressed. Side-
-   * panel cards, margin bubbles, and the held-count badge are unaffected.
-   * Default `true` — the toggle is opt-in for users who want a cleaner
-   * editor surface while keeping the annotation list visible.
-   */
+  // #596: when false, suppresses inline annotation marks in the editor; side-panel cards stay.
   showAnnotationDecorations: boolean;
   // #659: AI provider registry. API keys live in the OS keychain
   // (`tandem-models` service) via `POST /api/models/secrets/:ref`; the

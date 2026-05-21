@@ -224,7 +224,7 @@ const densityRg = createRadioGroup<Density>(
 <div>
   <label
     data-testid="annotation-decorations-toggle"
-    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
   >
     <input
       type="checkbox"
@@ -238,8 +238,8 @@ const densityRg = createRadioGroup<Density>(
   <div
     style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);"
   >
-    Turn off to hide inline highlight, comment, and suggestion marks in the editor. Annotation
-    cards in the side panel stay visible.
+    Turn off to hide inline highlight, note, comment, and suggestion marks in the editor.
+    Annotation cards in the side panel stay visible.
   </div>
 </div>
 
@@ -247,7 +247,7 @@ const densityRg = createRadioGroup<Density>(
 <div>
   <label
     data-testid="reduce-motion-toggle"
-    style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
   >
     <input
       type="checkbox"
