@@ -26,7 +26,16 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +43,7 @@ import { fileURLToPath } from "node:url";
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
-import { assertNoBroadAce, setRestrictiveAcl } from "./acl-win.js";
+import { setRestrictiveAcl } from "./acl-win.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -362,68 +371,83 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
 
 /**
  * Atomic write: write to a temp file in the SAME directory as the destination,
- * tighten its DACL on Windows, then rename. Using the same directory avoids
- * EXDEV errors when `%TEMP%` and `%APPDATA%` are on different drives.
+ * tighten its mode/DACL, then rename. Same-directory tempfile avoids EXDEV
+ * errors when `%TEMP%` and `%APPDATA%` are on different drives.
  *
- * Sequence on Windows (security-load-bearing):
- * 1. Create tempfile and write content. The tempfile inherits its parent
- *    dir's DACL — on Windows, `homedir()` is OS-restricted to user + SYSTEM
- *    + Administrators by default, so the inherited DACL is already narrow.
- * 2. Set restrictive DACL on the tempfile (break inheritance, grant only
- *    current user). This is explicit defence in depth on top of #1.
- * 3. Rename tempfile to destination. On Windows, rename preserves the
- *    file's DACL — the destination keeps the restrictive ACL set in #2,
- *    NOT the destination directory's default.
- * 4. Re-verify the destination DACL has no broad-principal ACE. If
- *    verification fails, unlink the destination and propagate the error
- *    rather than leave a bearer token at a permissive ACL.
- *
- * POSIX path: writeFile sets mode at open via the `mode` argument (the
- * caller passes `0o600` for token-bearing files via Node's `chmod`).
+ * Sequence (security-load-bearing):
+ * 1. Write tempfile. On Windows the tempfile inherits its parent dir's
+ *    DACL (`homedir()` is OS-restricted by default to user + SYSTEM +
+ *    Administrators); on POSIX it lands at `0o666 & ~umask` (typically
+ *    `0o644` — world-readable, hence step 2's chmod).
+ * 2. Tighten on the tempfile:
+ *    - Windows: `setRestrictiveAcl` breaks inheritance and grants Full
+ *      Control to the current user's SID only, then self-verifies via
+ *      SDDL read. The verify is load-bearing — icacls exits 0 even when
+ *      "Failed processing N files".
+ *    - POSIX: `chmod(tmp, 0o600)` — user-only read/write.
+ * 3. Rename tempfile to dest. The kernel preserves mode (POSIX) and DACL
+ *    (Windows `MoveFileEx`) across the rename, so the tightened
+ *    permissions survive into the destination.
+ * 4. On cleanup failure after a write/ACL/rename error, the original
+ *    failure propagates with the cleanup error attached via `cause` so
+ *    operators can diagnose a leaked tempfile or dest from a single log
+ *    line rather than chasing a stray `console.error`.
  */
 async function atomicWrite(content: string, dest: string): Promise<void> {
   const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
   await writeFile(tmp, content, "utf-8");
 
-  if (process.platform === "win32") {
-    try {
+  try {
+    if (process.platform === "win32") {
       await setRestrictiveAcl(tmp);
-    } catch (aclErr) {
-      await unlink(tmp).catch((cleanupErr: Error) => {
-        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
-      });
-      throw aclErr;
+    } else {
+      await chmod(tmp, 0o600);
     }
+  } catch (tightenErr) {
+    await unlinkOrLeak(tmp, tightenErr);
+    throw tightenErr;
   }
 
   try {
     await rename(tmp, dest);
   } catch (err) {
-    // EXDEV: cross-device link — fall back to copy + delete
+    // EXDEV: cross-device link — fall back to copy + delete. The copy
+    // preserves the source mode on POSIX (file is created via copyFile's
+    // default which honors the source's mode bits); on Windows the
+    // destination DACL is recomputed from the dest dir, so we re-run
+    // setRestrictiveAcl on the dest after the cross-device copy.
     if ((err as NodeJS.ErrnoException).code === "EXDEV") {
       await copyFile(tmp, dest);
-      await unlink(tmp).catch((cleanupErr: Error) => {
-        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
-      });
+      await unlinkOrLeak(tmp, err);
+      if (process.platform === "win32") await setRestrictiveAcl(dest);
+      else await chmod(dest, 0o600);
     } else {
-      await unlink(tmp).catch((cleanupErr: Error) => {
-        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
-      });
+      await unlinkOrLeak(tmp, err);
       throw err;
     }
   }
+}
 
-  if (process.platform === "win32") {
-    try {
-      await assertNoBroadAce(dest);
-    } catch (verifyErr) {
-      await unlink(dest).catch((cleanupErr: Error) => {
-        console.error(
-          `  Warning: could not remove dest after ACL verify failure: ${cleanupErr.message}`,
-        );
-      });
-      throw verifyErr;
+/**
+ * Attempt to delete `path` after a write/ACL/rename failure. On cleanup
+ * success we just return; on cleanup failure we attach the cleanup error
+ * as `cause` to the original failure (mutating `originalErr`) so operators
+ * see a single composite log line rather than a free-floating
+ * `console.error`. Bearer-token-bearing files that fail cleanup MUST be
+ * surfaced, not silently logged.
+ */
+async function unlinkOrLeak(path: string, originalErr: unknown): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (cleanupErr) {
+    if (originalErr instanceof Error && originalErr.cause === undefined) {
+      (originalErr as { cause?: unknown }).cause = cleanupErr;
     }
+    console.error(
+      `  Warning: could not remove ${path} after a previous failure: ${
+        (cleanupErr as Error).message
+      }`,
+    );
   }
 }
 
