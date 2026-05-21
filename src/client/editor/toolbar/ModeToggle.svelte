@@ -38,8 +38,7 @@ const { tandemMode, onModeChange }: Props = $props();
   .mode-toggle {
     display: inline-flex;
     padding: 3px;
-    background: var(--tandem-surface-sunk);
-    border: 1px solid var(--tandem-border);
+    background: color-mix(in srgb, var(--tandem-fg) 6%, transparent);
     border-radius: var(--tandem-r-pill);
     font-size: 12px;
     gap: 0;

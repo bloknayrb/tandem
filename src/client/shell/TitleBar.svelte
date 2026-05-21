@@ -251,6 +251,29 @@ function chooseHelp() {
         aria-label="Tandem menu"
         onkeydown={handleBrandMenuKey}
       >
+        {#if onSetTheme}
+          <div class="brand-menu-heading">Color scheme</div>
+          <div class="brand-theme-grid" role="group" aria-label="Color scheme">
+            {#each THEME_OPTIONS as opt (opt.value)}
+              <button
+                type="button"
+                class="brand-theme-sw"
+                class:on={theme === opt.value}
+                data-testid="brand-menu-theme-{opt.value}"
+                data-theme-swatch={opt.value}
+                role="menuitemradio"
+                aria-checked={theme === opt.value}
+                onclick={() => selectTheme(opt.value)}
+              >
+                <span class="brand-theme-dot" aria-hidden="true"></span>
+                <span class="brand-theme-label">{opt.label}</span>
+              </button>
+            {/each}
+          </div>
+          {#if onOpenSettings || onOpenHelp}
+            <div class="brand-menu-divider" role="separator"></div>
+          {/if}
+        {/if}
         {#if onOpenSettings}
           <button
             type="button"
@@ -274,25 +297,6 @@ function chooseHelp() {
             <span>Keyboard Shortcuts</span>
             <kbd class="brand-menu-kbd">?</kbd>
           </button>
-        {/if}
-        {#if onSetTheme}
-          <div class="brand-menu-divider" role="separator"></div>
-          <div class="brand-menu-heading">Color scheme</div>
-          {#each THEME_OPTIONS as opt (opt.value)}
-            <button
-              type="button"
-              class="brand-menu-item"
-              data-testid="brand-menu-theme-{opt.value}"
-              role="menuitemradio"
-              aria-checked={theme === opt.value}
-              onclick={() => selectTheme(opt.value)}
-            >
-              <span class="brand-menu-check" aria-hidden="true">
-                {theme === opt.value ? "●" : "○"}
-              </span>
-              <span>{opt.label}</span>
-            </button>
-          {/each}
         {/if}
       </div>
     {/if}
@@ -490,35 +494,44 @@ function chooseHelp() {
     z-index: 99999;
   }
 
-  /* The Tandem icon IS the menu trigger — no chrome around it. */
+  /* The Tandem icon IS the menu trigger — no chrome around it.
+     40×40 hit box with the 32×32 logo centered inside; the -10px
+     negative margins keep the logo's optical center at the same
+     titlebar coordinate it had when the box was 32×32 with -6px
+     margins (so the rest of the title-bar rhythm is unaffected).
+     Hover/active use transform scale on the logo (not a background
+     fill) so the icon itself feels interactive without a chip ring. */
   .brand-btn {
     position: relative;
     display: inline-grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     padding: 0;
-    margin: -6px 0 0 -6px;
+    margin: -10px 0 0 -10px;
     border: none;
     background: transparent;
     color: var(--tandem-fg);
     cursor: pointer;
-    transition: transform 140ms ease;
     -webkit-tap-highlight-color: transparent;
   }
 
-  .brand-btn:hover {
-    transform: scale(1.08);
+  .brand-btn :global(.brand-mark) {
+    transition: transform 140ms ease;
+  }
+
+  .brand-btn:hover :global(.brand-mark) {
+    transform: scale(1.12);
+  }
+
+  .brand-btn:active :global(.brand-mark) {
+    transform: scale(0.96);
   }
 
   .brand-btn:focus-visible {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 2px;
-    border-radius: var(--tandem-r-2);
-  }
-
-  .brand-btn:active {
-    transform: scale(0.96);
+    border-radius: var(--tandem-r-pill);
   }
 
   .brand-mark {
@@ -564,22 +577,6 @@ function chooseHelp() {
     outline: none;
   }
 
-  .brand-menu-item[aria-checked="true"] {
-    color: var(--tandem-accent);
-  }
-
-  .brand-menu-check {
-    display: inline-block;
-    width: 14px;
-    margin-right: var(--tandem-space-2);
-    color: var(--tandem-fg-subtle);
-    font-size: var(--tandem-text-xs);
-  }
-
-  .brand-menu-item[aria-checked="true"] .brand-menu-check {
-    color: var(--tandem-accent);
-  }
-
   .brand-menu-kbd {
     color: var(--tandem-fg-subtle);
     font-family: var(--tandem-font-mono);
@@ -598,6 +595,77 @@ function chooseHelp() {
     font-size: var(--tandem-text-2xs);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+
+  /* 2×2 swatch grid for the 4 themes (system/light/dark/warm). Each
+     swatch is a square color chip + label. The "system" swatch uses a
+     diagonal half-light/half-dark split, the conventional indicator for
+     auto/match-system in OS theme pickers. */
+  .brand-theme-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px 6px 6px;
+  }
+
+  .brand-theme-sw {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--tandem-r-2);
+    background: transparent;
+    color: var(--tandem-fg);
+    font: inherit;
+    font-size: var(--tandem-text-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .brand-theme-sw:hover,
+  .brand-theme-sw:focus-visible {
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
+
+  .brand-theme-sw.on {
+    border-color: var(--tandem-accent-border);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+  }
+
+  .brand-theme-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: var(--tandem-r-circle);
+    border: 1px solid var(--tandem-border-strong);
+    flex-shrink: 0;
+  }
+
+  .brand-theme-sw[data-theme-swatch="system"] .brand-theme-dot {
+    background: linear-gradient(
+      135deg,
+      var(--tandem-bg) 0%,
+      var(--tandem-bg) 50%,
+      var(--tandem-fg) 50%,
+      var(--tandem-fg) 100%
+    );
+  }
+  .brand-theme-sw[data-theme-swatch="light"] .brand-theme-dot {
+    background: oklch(1 0 0);
+  }
+  .brand-theme-sw[data-theme-swatch="dark"] .brand-theme-dot {
+    background: oklch(0.22 0.012 280);
+  }
+  .brand-theme-sw[data-theme-swatch="warm"] .brand-theme-dot {
+    background: oklch(0.945 0.012 70);
+  }
+
+  .brand-theme-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .title-bar-actions {
