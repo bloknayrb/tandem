@@ -145,6 +145,20 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
 
+  // Prune stale `.claude.json` backups left over from a previous run.
+  // Idempotent and bounded — only touches Tandem's own `.backups/` dir.
+  // Failures are non-fatal (a backup dir we can't sweep is operationally
+  // annoying, not a security regression).
+  try {
+    const { sweepBackupsOnStartup } = await import("./integrations/backup.js");
+    const { resolveAppDataDir } = await import("./platform.js");
+    await sweepBackupsOnStartup(resolveAppDataDir());
+  } catch (err) {
+    console.error(
+      `[Tandem] Warning: backup sweep failed: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
   // Take the durable-annotation store lock before accepting connections.
   // HTTP mode: retry up to 30s when a live PID holds the lock, logging every 5s.
   // Stdio mode: single attempt only — the MCP init timeout cannot survive a retry loop.
