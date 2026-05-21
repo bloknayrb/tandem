@@ -98,6 +98,13 @@ export function resolveToElement(
 /**
  * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
  * Returns null if the offset falls in a heading prefix or can't be resolved.
+ *
+ * Sole mint of `SerializedRelPos` — no other code path constructs the wire
+ * shape. Readers (`relPosToFlatOffset` here + `relRangeToPmPositions` in
+ * `src/client/positions.ts`) must tolerate `Y.createRelativePositionFromJSON`
+ * throwing on stale items after `reloadFromDisk` replaces the Y.Doc content;
+ * see `docs/lessons-learned.md` "Dead CRDT RelativePositions Must Be Stripped,
+ * Not Preserved" for why the throw is expected rather than a bug.
  */
 export function flatOffsetToRelPos(
   doc: Y.Doc,
@@ -259,6 +266,12 @@ export function validateRange(
  * Validate a range and create both flat and CRDT-anchored positions in one call.
  * Pass `opts.rejectHeadingOverlap: true` to also reject ranges that overlap
  * heading prefixes (same guard used by `tandem_edit`).
+ *
+ * Sole assembler of `RelativeRange` at annotation birth — `refreshRange`'s
+ * lazy-attach and dead-relRange repair branches are the only other sites that
+ * assemble the `{fromRel, toRel}` shape, and both live in this file. Wire-shape
+ * changes to `SerializedRelPos` require updating `SerializedRelPosSchema`,
+ * both readers, and any on-disk JSON predating the change.
  */
 export function anchoredRange(
   ydoc: Y.Doc,
@@ -305,6 +318,11 @@ export function anchoredRange(
  * callers can distinguish healthy / updated / attached / repaired /
  * degraded / failed paths instead of treating every outcome as success.
  * If `map` is provided, persists changes back to the Y.Map.
+ *
+ * The lazy-attach and dead-relRange repair branches below are the two
+ * intentional `{fromRel, toRel}` re-assembly sites referenced by
+ * `anchoredRange`'s JSDoc — both repair existing annotations rather than
+ * minting new ones, so the shape duplication is deliberate, not a DRY gap.
  */
 export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>): RefreshResult {
   if (!ann.relRange) {
