@@ -17,8 +17,25 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +43,7 @@ import { fileURLToPath } from "node:url";
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
+import { setRestrictiveAcl } from "./acl-win.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +59,15 @@ const PACKAGE_ROOT = (() => {
 const CHANNEL_DIST = resolve(PACKAGE_ROOT, "dist/channel/index.js");
 
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
+
+/**
+ * Refuse to read a config larger than 5 MiB. The realistic `.claude.json` is
+ * single-digit kilobytes; anything beyond that is either accidental corruption
+ * (log files dropped in) or a deliberate DoS aimed at making the wizard's
+ * read-parse-rewrite path exhaust memory. The cap is generous enough that no
+ * legitimate user hits it.
+ */
+const MAX_CONFIG_BYTES = 5 * 1024 * 1024;
 
 export interface McpEntry {
   type?: "http";
@@ -344,27 +371,83 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
 
 /**
  * Atomic write: write to a temp file in the SAME directory as the destination,
- * then rename. Using the same directory avoids EXDEV errors on Windows when
- * %TEMP% and %APPDATA% are on different drives.
+ * tighten its mode/DACL, then rename. Same-directory tempfile avoids EXDEV
+ * errors when `%TEMP%` and `%APPDATA%` are on different drives.
+ *
+ * Sequence (security-load-bearing):
+ * 1. Write tempfile. On Windows the tempfile inherits its parent dir's
+ *    DACL (`homedir()` is OS-restricted by default to user + SYSTEM +
+ *    Administrators); on POSIX it lands at `0o666 & ~umask` (typically
+ *    `0o644` — world-readable, hence step 2's chmod).
+ * 2. Tighten on the tempfile:
+ *    - Windows: `setRestrictiveAcl` breaks inheritance and grants Full
+ *      Control to the current user's SID only, then self-verifies via
+ *      SDDL read. The verify is load-bearing — icacls exits 0 even when
+ *      "Failed processing N files".
+ *    - POSIX: `chmod(tmp, 0o600)` — user-only read/write.
+ * 3. Rename tempfile to dest. The kernel preserves mode (POSIX) and DACL
+ *    (Windows `MoveFileEx`) across the rename, so the tightened
+ *    permissions survive into the destination.
+ * 4. On cleanup failure after a write/ACL/rename error, the original
+ *    failure propagates with the cleanup error attached via `cause` so
+ *    operators can diagnose a leaked tempfile or dest from a single log
+ *    line rather than chasing a stray `console.error`.
  */
 async function atomicWrite(content: string, dest: string): Promise<void> {
   const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
   await writeFile(tmp, content, "utf-8");
+
+  try {
+    if (process.platform === "win32") {
+      await setRestrictiveAcl(tmp);
+    } else {
+      await chmod(tmp, 0o600);
+    }
+  } catch (tightenErr) {
+    await unlinkOrLeak(tmp, tightenErr);
+    throw tightenErr;
+  }
+
   try {
     await rename(tmp, dest);
   } catch (err) {
-    // EXDEV: cross-device link — fall back to copy + delete
+    // EXDEV: cross-device link — fall back to copy + delete. The copy
+    // preserves the source mode on POSIX (file is created via copyFile's
+    // default which honors the source's mode bits); on Windows the
+    // destination DACL is recomputed from the dest dir, so we re-run
+    // setRestrictiveAcl on the dest after the cross-device copy.
     if ((err as NodeJS.ErrnoException).code === "EXDEV") {
       await copyFile(tmp, dest);
-      await unlink(tmp).catch((cleanupErr: Error) => {
-        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
-      });
+      await unlinkOrLeak(tmp, err);
+      if (process.platform === "win32") await setRestrictiveAcl(dest);
+      else await chmod(dest, 0o600);
     } else {
-      await unlink(tmp).catch((cleanupErr: Error) => {
-        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
-      });
+      await unlinkOrLeak(tmp, err);
       throw err;
     }
+  }
+}
+
+/**
+ * Attempt to delete `path` after a write/ACL/rename failure. On cleanup
+ * success we just return; on cleanup failure we attach the cleanup error
+ * as `cause` to the original failure (mutating `originalErr`) so operators
+ * see a single composite log line rather than a free-floating
+ * `console.error`. Bearer-token-bearing files that fail cleanup MUST be
+ * surfaced, not silently logged.
+ */
+async function unlinkOrLeak(path: string, originalErr: unknown): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (cleanupErr) {
+    if (originalErr instanceof Error && originalErr.cause === undefined) {
+      (originalErr as { cause?: unknown }).cause = cleanupErr;
+    }
+    console.error(
+      `  Warning: could not remove ${path} after a previous failure: ${
+        (cleanupErr as Error).message
+      }`,
+    );
   }
 }
 
@@ -385,6 +468,19 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
 export async function applyConfig(configPath: string, ops: ApplyOps): Promise<void> {
   // Security gate: refuse symlinks, refuse paths outside home/tmpdir.
   assertPathSafe(configPath);
+
+  // Size guard runs before any read — fail closed on oversized files. ENOENT
+  // falls through so fresh-install (no .claude.json yet) stays the common path.
+  try {
+    const { size } = statSync(configPath);
+    if (size > MAX_CONFIG_BYTES) {
+      throw new Error(
+        `${configPath} is ${size} bytes; refusing to read (cap: ${MAX_CONFIG_BYTES}).`,
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
 
   // Read existing config or start fresh — no existsSync guard needed.
   // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.

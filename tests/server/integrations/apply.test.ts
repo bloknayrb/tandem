@@ -212,3 +212,45 @@ describe("applyConfig — malformed-JSON backup", () => {
     ).rejects.toBeInstanceOf(PathRejectedError);
   });
 });
+
+describe("applyConfig — 5MB size guard", () => {
+  let tmpDir: string;
+  let configPath: string;
+  let savedAppData: string | undefined;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-size-guard-"));
+    configPath = path.join(tmpDir, ".claude.json");
+    savedAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = tmpDir;
+  });
+
+  afterEach(async () => {
+    if (savedAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = savedAppData;
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("accepts a config just under the 5 MiB cap", async () => {
+    // 5 MiB - 1 KiB padding so the JSON object header fits without crossing.
+    const padding = "x".repeat(5 * 1024 * 1024 - 1024);
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {}, _pad: padding }));
+    // Should not throw — boundary case proves the cap isn't off-by-one strict.
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+    });
+  });
+
+  it("rejects a config above the 5 MiB cap", async () => {
+    // 5 MiB + 1 byte of padding.
+    const padding = "x".repeat(5 * 1024 * 1024 + 1);
+    fs.writeFileSync(configPath, JSON.stringify({ _pad: padding }));
+    await expect(
+      applyConfig(configPath, {
+        create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+        remove: [],
+      }),
+    ).rejects.toThrow(/refusing to read/);
+  });
+});
