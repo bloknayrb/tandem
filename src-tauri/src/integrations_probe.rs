@@ -78,13 +78,15 @@ impl UnvalidatedSidecarLocation {
     ///    `self.exe`. Windows: reject any path component carrying
     ///    `FILE_ATTRIBUTE_REPARSE_POINT` — catches symlinks AND junctions,
     ///    which `is_symlink()` does not.
-    /// 2. **Hardlink rejection (POSIX).** Assert `nlink == 1` on the exe
-    ///    itself. A pre-existing second name for the exe lets an attacker
-    ///    swap content via the other link. Windows path is `None` here
+    /// 2. **Hardlink rejection (POSIX, defence-in-depth).** Assert
+    ///    `nlink == 1` on the exe. The parent-mode check (criterion #3) is
+    ///    the load-bearing TOCTOU mitigation — a writable parent dir always
+    ///    wins regardless of nlink. The hardlink check catches the residual
+    ///    case where the install dir is restrictive but the exe was created
+    ///    with a second link at install time. Windows path is `None` here
     ///    because `MetadataExt::number_of_links()` is still unstable
-    ///    (rust-lang/rust#63010); #643's parent-directory ACL audit closes
-    ///    this attack surface on Windows by ensuring the attacker cannot
-    ///    write a second link into the restricted install directory.
+    ///    (rust-lang/rust#63010); #643's parent-directory ACL audit covers
+    ///    the same surface on Windows.
     /// 3. **POSIX parent-dir mode check.** Reject group/world-writable parents
     ///    (`mode & 0o022 != 0`). Windows ACL audit lives in #643 — out of
     ///    scope for this validator.
@@ -131,14 +133,11 @@ impl UnvalidatedSidecarLocation {
             format!("canonicalise sidecar exe {}: {e}", exe.display())
         })?;
 
-        // Any reparse point along the resolved exe path is fatal — a junction
-        // mid-path can redirect canonicalisation result on Windows. POSIX
-        // `canonicalize` already resolves symlinks so the check is a no-op,
-        // but it costs nothing to keep symmetric.
-        for ancestor in canonical_exe.ancestors() {
-            if ancestor == canonical_exe.as_path() {
-                continue;
-            }
+        // Windows-only: a junction mid-path can redirect the canonical
+        // result. POSIX `canonicalize` already resolves symlinks along the
+        // path, so this loop is redundant on Unix.
+        #[cfg(windows)]
+        for ancestor in canonical_exe.ancestors().skip(1) {
             if let Ok(meta) = std::fs::symlink_metadata(ancestor) {
                 if is_reparse_or_symlink(&meta) {
                     return Err(format!(
@@ -176,10 +175,9 @@ impl UnvalidatedSidecarLocation {
     }
 }
 
-/// True for symbolic-link reparse points (POSIX + Windows) AND non-symlink
-/// reparse points like Windows directory junctions. `Metadata::file_type()
-/// .is_symlink()` returns false for junctions; the only reliable catch-all on
-/// Windows is the `FILE_ATTRIBUTE_REPARSE_POINT` bit.
+/// `Metadata::file_type().is_symlink()` returns false for Windows directory
+/// junctions, so the `FILE_ATTRIBUTE_REPARSE_POINT` bit is the only reliable
+/// catch-all there.
 fn is_reparse_or_symlink(meta: &std::fs::Metadata) -> bool {
     if meta.file_type().is_symlink() {
         return true;
@@ -371,6 +369,15 @@ mod tests {
         p.pop();
         p.push("tests/fixtures/mcp-config-sample.json");
         p
+    }
+
+    /// Tempdirs default to permissive modes (often 0o700) which trip the
+    /// world-writable-parent check. Set 0o755 so install-root-allowlist
+    /// tests exercise the install-root code path, not the mode-reject path.
+    #[cfg(unix)]
+    fn chmod_755(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
@@ -624,10 +631,7 @@ mod tests {
         let exe = dir.path().join("node-sidecar");
         std::fs::write(&exe, b"binary").unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        chmod_755(dir.path());
         let loc = UnvalidatedSidecarLocation {
             exe: exe.clone(),
             args: vec![],
@@ -644,11 +648,7 @@ mod tests {
         let outside_dir = tempfile::tempdir().unwrap();
         let allowed_dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(outside_dir.path(), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        }
+        chmod_755(outside_dir.path());
         let exe = outside_dir.path().join("node-sidecar");
         std::fs::write(&exe, b"binary").unwrap();
         let loc = UnvalidatedSidecarLocation {
@@ -668,11 +668,7 @@ mod tests {
         let outside_dir = tempfile::tempdir().unwrap();
         let allowed_dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(outside_dir.path(), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        }
+        chmod_755(outside_dir.path());
         let real_exe = outside_dir.path().join("node-sidecar");
         std::fs::write(&real_exe, b"binary").unwrap();
 
@@ -703,11 +699,7 @@ mod tests {
     fn validate_documents_exe_derived_install_root_pattern() {
         let install_dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(install_dir.path(), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        }
+        chmod_755(install_dir.path());
         // Simulated launcher binary location (analogous to current_exe()).
         let launcher = install_dir.path().join("tandem-launcher");
         std::fs::write(&launcher, b"launcher").unwrap();
