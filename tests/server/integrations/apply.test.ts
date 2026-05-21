@@ -254,3 +254,102 @@ describe("applyConfig — 5MB size guard", () => {
     ).rejects.toThrow(/refusing to read/);
   });
 });
+
+describe("applyConfig — backup-before-overwrite (#644)", () => {
+  let tmpDir: string;
+  let configPath: string;
+  let savedAppData: string | undefined;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-backup-apply-"));
+    configPath = path.join(tmpDir, ".claude.json");
+    savedAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = tmpDir;
+  });
+
+  afterEach(async () => {
+    if (savedAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = savedAppData;
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does NOT back up on fresh install (no existing config)", async () => {
+    const calls: string[] = [];
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+      onBackup: (p) => calls.push(p),
+    });
+    expect(calls).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, ".backups"))).toBe(false);
+  });
+
+  it("does NOT back up on token rotation (default URL + Bearer header)", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          tandem: {
+            type: "http",
+            url: "http://127.0.0.1:3479/mcp",
+            headers: { Authorization: "Bearer old-token" },
+          },
+        },
+      }),
+    );
+    const calls: string[] = [];
+    await applyConfig(configPath, {
+      create: {
+        tandem: {
+          type: "http",
+          url: "http://127.0.0.1:3479/mcp",
+          headers: { Authorization: "Bearer new-token" },
+        },
+      },
+      remove: [],
+      onBackup: (p) => calls.push(p),
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("backs up when the existing tandem URL is non-default", async () => {
+    const customConfig = JSON.stringify({
+      mcpServers: {
+        tandem: { type: "http", url: "http://127.0.0.1:9999/mcp" },
+      },
+    });
+    fs.writeFileSync(configPath, customConfig);
+    const calls: string[] = [];
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+      onBackup: (p) => calls.push(p),
+    });
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toMatch(/[\\/]\.backups[\\/]claude-json-/);
+    // Backup must contain the ORIGINAL config bytes (not the new one).
+    const backupBytes = fs.readFileSync(calls[0], "utf-8");
+    expect(backupBytes).toBe(customConfig);
+    // Original is the new config.
+    const newConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(newConfig.mcpServers.tandem.url).toBe("http://127.0.0.1:3479/mcp");
+  });
+
+  it("backs up when the existing tandem entry has stdio-shape keys", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          tandem: { command: "node", args: ["/path/to/shim.js"] },
+        },
+      }),
+    );
+    const calls: string[] = [];
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+      onBackup: (p) => calls.push(p),
+    });
+    expect(calls.length).toBe(1);
+  });
+});

@@ -43,6 +43,12 @@ export default defineConfig({
           name: "node",
           environment: "node",
           include: ["tests/**/*.test.ts", "!tests/client/**/*.test.ts"],
+          // On Windows, integration tests that exercise `applyConfig`
+          // spawn icacls + pwsh (Get-Acl) once per write. Under vitest's
+          // parallel pool the spawn contention pushes some apply-heavy
+          // tests past the 5s default. 15s is enough headroom for the
+          // contended case; tests that genuinely hang still surface.
+          testTimeout: 15_000,
         },
       },
     ],

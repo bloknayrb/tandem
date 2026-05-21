@@ -44,6 +44,7 @@ import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
+import { backupDir, isNonDefaultTandem, pruneOldBackups, writeBackup } from "./backup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -97,6 +98,15 @@ export interface ApplyOps {
   create: McpEntries;
   /** Entries to remove if present in `mcpServers`. */
   remove: RemovableEntry[];
+  /**
+   * Optional callback invoked with the backup path when `applyConfig`
+   * preserves a non-default existing `mcpServers.tandem` entry before
+   * overwriting it. CLI callers pass a `console.error` printer; the
+   * wizard pushes the path onto its structured apply response so the
+   * user sees a recovery hint. Callback is NOT invoked on fresh-install
+   * or pure token-rotation runs (those don't trigger a backup).
+   */
+  onBackup?: (backupPath: string) => void;
 }
 
 /**
@@ -496,23 +506,23 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       // file under Tandem's data dir (NOT next to ~/.claude.json — that
       // location may inherit world-readable perms and leak co-tenant API
       // keys via the backup). Mode 0o600 hardens against the same.
-      const backupDir = join(resolveAppDataDir(), ".broken-backups");
+      const brokenBackupDir = join(resolveAppDataDir(), ".broken-backups");
       // Validate against default roots [homedir(), tmpdir()] rather than
       // scoping to resolveAppDataDir() — the latter is tautological, and
       // an XDG_DATA_HOME-poisoning attacker can otherwise redirect the
       // backup target outside the home tree.
-      assertPathSafe(backupDir);
+      assertPathSafe(brokenBackupDir);
       // mode: 0o700 on dir creation — the file mode is 0o600, but a
       // world-readable parent dir lists sibling filenames (older backups
       // carry other vendors' keys). Mode applies only when the dir is
       // newly created; existing dirs retain their mode.
-      mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+      mkdirSync(brokenBackupDir, { recursive: true, mode: 0o700 });
       // randomUUID() in the path defeats path prediction by an attacker
       // who might pre-create a file at the predicted location and have
       // our mode-at-open inherit world-readable bits. `wx` (exclusive
       // create) below is the second layer.
       const backupPath = join(
-        backupDir,
+        brokenBackupDir,
         `${basename(configPath)}.broken-${Date.now()}-${randomUUID()}`,
       );
       try {
@@ -549,6 +559,15 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
     }
   }
 
+  // Backup the existing config IFF the existing `mcpServers.tandem` entry
+  // is non-default (user-customised URL or extra keys). Token rotation and
+  // fresh-install runs would otherwise generate backup churn that buries
+  // the one backup the user actually needs. The write happens BEFORE the
+  // rewrite — atomicity invariant: if backup throws, the original is
+  // untouched.
+  const backupPath = await maybeBackupExistingConfig(configPath, existing);
+  if (backupPath) ops.onBackup?.(backupPath);
+
   const merged: Record<string, McpEntry> = {
     ...(existing.mcpServers ?? {}),
     ...ops.create,
@@ -564,6 +583,37 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
 
   await mkdir(dirname(configPath), { recursive: true });
   await atomicWrite(JSON.stringify(updated, null, 2) + "\n", configPath);
+}
+
+/**
+ * Conditionally back up `configPath` before `applyConfig` overwrites a
+ * user-customised tandem entry. Returns the backup path on write, or
+ * `undefined` when no backup was needed (fresh install, token rotation,
+ * non-tandem-key changes only).
+ *
+ * Atomicity contract: if this throws, the caller MUST abort before
+ * touching the destination. The original config and any prior backup
+ * remain intact.
+ */
+async function maybeBackupExistingConfig(
+  configPath: string,
+  existing: { mcpServers?: Record<string, McpEntry> },
+): Promise<string | undefined> {
+  const tandemEntry = existing.mcpServers?.tandem as Record<string, unknown> | undefined;
+  if (!isNonDefaultTandem(tandemEntry, `${MCP_URL}/mcp`)) return undefined;
+
+  const dir = backupDir(resolveAppDataDir());
+  // assertPathSafe defeats XDG_DATA_HOME poisoning — same hardening as
+  // the broken-JSON backup path above.
+  assertPathSafe(dir);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  const content = readFileSync(configPath);
+  const backupPath = await writeBackup(dir, content);
+  // Prune AFTER successful write so we never delete the previous backup
+  // before its replacement is on disk.
+  await pruneOldBackups(dir);
+  return backupPath;
 }
 
 /**
