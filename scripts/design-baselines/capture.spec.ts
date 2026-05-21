@@ -221,11 +221,14 @@ for (const theme of ["light", "dark"] as const) {
         if (!pm) return;
         const firstPara = pm.querySelector("p");
         if (!firstPara) return;
-        const range = document.createRange();
-        const textNode = firstPara.firstChild;
+        // Authorship decorations wrap text in spans, so firstPara.firstChild
+        // may be an element. Walk for the first actual Text node.
+        const walker = document.createTreeWalker(firstPara, NodeFilter.SHOW_TEXT);
+        const textNode = walker.nextNode() as Text | null;
         if (!textNode) return;
+        const range = document.createRange();
         range.setStart(textNode, 0);
-        range.setEnd(textNode, Math.min(40, textNode.textContent?.length ?? 0));
+        range.setEnd(textNode, Math.min(40, textNode.data.length));
         const sel = window.getSelection();
         sel?.removeAllRanges();
         sel?.addRange(range);
