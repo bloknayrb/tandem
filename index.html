@@ -121,6 +121,15 @@
         --tandem-highlight-green: rgba(76, 175, 80, 0.3);
         --tandem-highlight-blue: rgba(33, 150, 243, 0.3);
         --tandem-highlight-pink: rgba(236, 72, 153, 0.3);
+        /* Theme-picker swatch chips. Fixed identity colors that PREVIEW
+           each scheme — they do NOT track the active theme (adapting
+           them would defeat the picker visually). Note:
+           --tandem-swatch-dark is oklch(0.22 0.012 280), NOT the dark
+           theme's actual --tandem-bg (oklch(0.18 0.012 270)) —
+           intentional design choice; do not "correct" to match. */
+        --tandem-swatch-light: oklch(1 0 0);
+        --tandem-swatch-dark: oklch(0.22 0.012 280);
+        --tandem-swatch-warm: oklch(0.945 0.012 70);
         --tandem-h-fmtbar: 36px;
         --tandem-page-bg: #e8e8e8;
         --tandem-page-paper: #ffffff;

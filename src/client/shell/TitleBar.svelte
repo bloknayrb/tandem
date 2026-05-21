@@ -653,13 +653,13 @@ function chooseHelp() {
     );
   }
   .brand-theme-sw[data-theme-swatch="light"] .brand-theme-dot {
-    background: oklch(1 0 0);
+    background: var(--tandem-swatch-light);
   }
   .brand-theme-sw[data-theme-swatch="dark"] .brand-theme-dot {
-    background: oklch(0.22 0.012 280);
+    background: var(--tandem-swatch-dark);
   }
   .brand-theme-sw[data-theme-swatch="warm"] .brand-theme-dot {
-    background: oklch(0.945 0.012 70);
+    background: var(--tandem-swatch-warm);
   }
 
   .brand-theme-label {
