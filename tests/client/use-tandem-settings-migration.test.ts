@@ -1,21 +1,14 @@
 /**
- * Migration chain coverage for `loadSettings` (#659 Wave 2 PR 8a).
+ * Migration chain coverage for `loadSettings`.
  *
- * The existing `useTandemSettings.test.ts` covers the v1→v2 migration and
- * the v2 leftSlot.kind→leftRailTabs fallback. This file pins down:
- *
- *   1. v1→v3: a v1 blob (with `layout`/`panelHidden`) walks the full
- *      chain in one load and ends at schemaVersion=3 with models=[].
- *   2. v2→v3: a v2 blob gets `models: []` added without touching other fields.
- *   3. v3 forward-compat: an on-disk `schemaVersion: 99` blob loads
- *      defensively as `_readOnly: true`; subsequent `updateSettings` calls
- *      are no-ops (verified via the createTandemSettings facade).
- *   4. v3 forward-compat preserves unknown future fields so a user who
- *      bounces back to the newer client doesn't see a regression.
+ * Pins the full v1→current migration chain: panel layout coercions (v1→v2),
+ * models array addition (v2→v3), rail-tab teardown (v4→v5), wizard flag
+ * removal (v5→v6), defaultModelId introduction (v6→v7), and any subsequent
+ * migrations. Forward-compat (schemaVersion: 99) is also covered.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../../src/client/hooks/useTandemSettings.js";
+import { CURRENT_SCHEMA_VERSION, loadSettings } from "../../src/client/hooks/useTandemSettings.js";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants.js";
 
 function installLocalStorageStub() {
@@ -53,7 +46,7 @@ describe("loadSettings — migration chain", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
   }
 
-  it("v1 blob (layout=three-panel) climbs to v6 with models=[] and rail-tab fields stripped", () => {
+  it("v1 blob (layout=three-panel) migrates fully with models=[] and rail-tab fields stripped", () => {
     writeRaw({
       schemaVersion: 1,
       layout: "three-panel",
@@ -61,17 +54,17 @@ describe("loadSettings — migration chain", () => {
       textSize: "l",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(true);
     expect(s.textSize).toBe("l");
     expect(s.models).toEqual([]);
   });
 
-  it("v1 blob (panelHidden=true) climbs to v6 with both panels hidden", () => {
+  it("v1 blob (panelHidden=true) migrates fully with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(false);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.models).toEqual([]);
@@ -86,7 +79,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
     expect(s.editorWidthPercent).toBe(80);
@@ -187,7 +180,7 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.theme).toBe("dark");
     // The migration chain's `=== N` gates are exclusive — re-running on
     // an already-v6 blob is a no-op. _readOnly is reserved for the v99+
@@ -195,11 +188,10 @@ describe("loadSettings — migration chain", () => {
     expect(s._readOnly).toBeUndefined();
   });
 
-  it("v2 seed with rail-tabs climbs to v6 with both fields absent (realistic prod-upgrade path)", () => {
+  it("v2 seed with rail-tabs migrates fully with both fields absent (realistic prod-upgrade path)", () => {
     // A v2 blob from before Wave D where the user had Chat on the left
-    // rail. After climbing v2→v3 (models added) → v3→v4 (no-op) →
-    // v4→v5 (rail-tab fields stripped) → v5→v6 (showIntegrationWizard
-    // stripped) the typed return must carry none of those names.
+    // rail. After the full migration chain the typed return must carry
+    // none of those names.
     writeRaw({
       schemaVersion: 2,
       leftRailTabs: ["chat", "outline"],
@@ -208,17 +200,17 @@ describe("loadSettings — migration chain", () => {
       rightPanelVisible: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
     expect(s._readOnly).toBeUndefined();
   });
 
-  // v3 sources climb the chain to v6 in memory. The v3→v4 step's displaced-
-  // tab plumbing is no longer observable to consumers because v4→v5 strips
-  // the rail-tab fields entirely. These cases pin down "no crash on weird
-  // v3 input + final state is rail-tab-free at v6."
-  it("v3 with displaced left tabs climbs to v6 with rail-tab fields stripped", () => {
+  // v3 sources climb the full chain. The v3→v4 step's displaced-tab plumbing
+  // is no longer observable to consumers because v4→v5 strips the rail-tab
+  // fields entirely. These cases pin down "no crash on weird v3 input + final
+  // state is rail-tab-free."
+  it("v3 with displaced left tabs migrates fully with rail-tab fields stripped", () => {
     writeRaw({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
@@ -226,12 +218,12 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v3 with corrupt rightRailTabs climbs to v6 without crashing", () => {
+  it("v3 with corrupt rightRailTabs migrates fully without crashing", () => {
     writeRaw({
       schemaVersion: 3,
       leftRailTabs: ["chat", "outline"],
@@ -239,21 +231,21 @@ describe("loadSettings — migration chain", () => {
       models: [],
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
   });
 
-  it("v4 blobs climb to v6 stripping rail-tab fields", () => {
+  it("v4 blobs migrate fully stripping rail-tab fields", () => {
     writeRaw({
-      schemaVersion: 5,
+      schemaVersion: 4,
       leftRailTabs: ["outline"],
       rightRailTabs: ["annotations", "chat"],
       models: [],
       theme: "dark",
     });
     const s = loadSettings();
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
     expect(s.theme).toBe("dark");
@@ -306,7 +298,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
     expect(s.theme).toBe("dark");
   });
@@ -324,36 +316,36 @@ describe("loadSettings — migration chain", () => {
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
-  it("v1 blob with showIntegrationWizard climbs to v6 stripping it", () => {
+  it("v1 blob with showIntegrationWizard migrates fully stripping it", () => {
     writeRaw({
       schemaVersion: 1,
       layout: "tabbed",
       showIntegrationWizard: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
-  it("v2 blob with showIntegrationWizard climbs to v6 stripping it", () => {
+  it("v2 blob with showIntegrationWizard migrates fully stripping it", () => {
     writeRaw({
       schemaVersion: 2,
       leftPanelVisible: true,
       showIntegrationWizard: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
-  it("v3 blob with showIntegrationWizard climbs to v6 stripping it", () => {
+  it("v3 blob with showIntegrationWizard migrates fully stripping it", () => {
     writeRaw({
       schemaVersion: 3,
       models: [],
       showIntegrationWizard: true,
     });
     const s = loadSettings() as Record<string, unknown>;
-    expect(s.schemaVersion).toBe(7);
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 });

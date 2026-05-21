@@ -275,7 +275,7 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   via the transient `_legacyApiKey` field for the in-UI migration prompt.
  *   This is the load-bearing #659 step.
  */
-const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.

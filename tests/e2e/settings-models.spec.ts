@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
+import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import { cleanupAllOpenDocuments, McpTestClient, nextFrames } from "./helpers";
 
@@ -328,14 +329,14 @@ test("legacy plaintext key migration banner — appears, migrates, then disappea
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, TANDEM_SETTINGS_KEY);
-  expect(persisted?.schemaVersion).toBe(7);
+  expect(persisted?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
   expect(persisted?.models?.[0]?.apiKey).toBeUndefined();
   expect(persisted?.models?.[0]?.apiKeyRef).toBeDefined();
   // The plaintext must NEVER appear in localStorage post-migration.
   expect(JSON.stringify(persisted)).not.toContain(LEGACY_KEY);
 });
 
-test("v2 → v7 migration boot — Models tab renders with empty list, settings survive", async ({
+test("v2 → current schema migration boot — Models tab renders with empty list, settings survive", async ({
   page,
 }) => {
   await page.evaluate((key) => {
@@ -369,7 +370,7 @@ test("v2 → v7 migration boot — Models tab renders with empty list, settings 
   }, TANDEM_SETTINGS_KEY);
   expect(settings?.theme).toBe("dark");
   expect(settings?.textSize).toBe("l");
-  expect(settings?.schemaVersion).toBe(7);
+  expect(settings?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
   expect(settings?.models?.length).toBe(1);
   expect(settings?.models?.[0]?.displayName).toBe("Migration sentinel");
   // v7 introduces `defaultModelId` initialized to null on the migration.
