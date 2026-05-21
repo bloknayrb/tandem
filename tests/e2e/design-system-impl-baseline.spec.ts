@@ -19,6 +19,7 @@
  * baselines.
  */
 import { expect, test } from "@playwright/test";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { cleanupAllOpenDocuments, McpTestClient, switchToAnnotationsTab } from "./helpers";
@@ -28,9 +29,22 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..");
 const welcomePath = path.join(repoRoot, "sample", "welcome.md");
 
+// Playwright's default snapshot directory for this spec.
+const BASELINE_DIR = path.join(__dirname, "design-system-impl-baseline.spec.ts-snapshots");
+
 test.skip(
   process.platform !== "linux",
   "Design-system-impl visual baselines only run on Linux (CI); local Windows/macOS pixel diffs are unreliable.",
+);
+
+// Until the seed-design-baselines workflow runs, the baseline directory
+// doesn't exist and the spec would fail every PR with "missing baseline".
+// Skip until baselines are seeded. The seed workflow runs with
+// --update-snapshots, which creates the directory; from that point on the
+// spec auto-enables on every subsequent run.
+test.skip(
+  !fs.existsSync(BASELINE_DIR),
+  "Design-system-impl visual baselines not yet seeded — run the seed-design-baselines workflow to bootstrap, then this spec auto-enables.",
 );
 
 // Stable viewport — single width chosen to match common laptop screens.
@@ -127,19 +141,11 @@ for (const theme of ["light", "dark"] as const) {
       await switchToAnnotationsTab(page);
       const firstCard = page.locator("[data-testid^='annotation-card-']").first();
       await expect(firstCard).toBeVisible({ timeout: 10_000 });
-      // Capture the entire right rail so chrome (filter bar, tab strip,
-      // card list) is exercised together.
-      const rail = page.locator("[data-testid='panel-right'], .side-panel").first();
-      if ((await rail.count()) === 0) {
-        // Fallback: viewport-anchored right slice.
-        const vp = page.viewportSize();
-        if (!vp) throw new Error("No viewport");
-        await expect(page).toHaveScreenshot(`side-panel-annotations-${theme}.png`, {
-          clip: { x: vp.width - 420, y: 0, width: 420, height: vp.height },
-        });
-      } else {
-        await expect(rail).toHaveScreenshot(`side-panel-annotations-${theme}.png`);
-      }
+      // Annotation list scroll container is the stable testid for the
+      // side panel content region (per testid-manifest.md).
+      const rail = page.locator("[data-testid='annotation-list-scroll-container']").first();
+      await expect(rail).toBeVisible({ timeout: 5_000 });
+      await expect(rail).toHaveScreenshot(`side-panel-annotations-${theme}.png`);
     });
 
     test(`annotation-card-comment — ${theme}`, async ({ page }) => {
@@ -182,7 +188,8 @@ for (const theme of ["light", "dark"] as const) {
       await mcp.callTool("tandem_open", { filePath: welcomePath });
       await page.goto("/");
       await waitForEditor(page);
-      await page.keyboard.press("Control+P");
+      // Production command palette shortcut is Ctrl+Shift+P (App.svelte:707).
+      await page.keyboard.press("Control+Shift+P");
       const palette = page.locator("[data-testid='command-palette']");
       await expect(palette).toBeVisible({ timeout: 3_000 });
       await page.waitForTimeout(200);
@@ -193,16 +200,9 @@ for (const theme of ["light", "dark"] as const) {
       await mcp.callTool("tandem_open", { filePath: welcomePath });
       await page.goto("/");
       await waitForEditor(page);
-      // Open settings — testid varies between popover and modal entry points,
-      // both surface this id on the trigger button per testid manifest.
-      const settingsBtn = page.locator("[data-testid='settings-btn']").first();
-      if ((await settingsBtn.count()) > 0) {
-        await settingsBtn.click();
-      } else {
-        // Fallback: shortcut for command palette → search settings.
-        await page.keyboard.press("Control+,");
-      }
-      const content = page.locator("[data-testid='settings-content']").first();
+      // Ctrl+Shift+, opens the SettingsModal (useSettingsShortcut.ts).
+      await page.keyboard.press("Control+Shift+Comma");
+      const content = page.locator("[data-testid='settings-modal-content']");
       await expect(content).toBeVisible({ timeout: 3_000 });
       await page.waitForTimeout(300);
       await expect(content).toHaveScreenshot(`settings-modal-${theme}.png`);

@@ -45,7 +45,8 @@ Conventions used below:
 
 - **Resolution:** Production tokens win for shipped colors. Bundle contributes ONLY new tokens that have no production analogue.
 - **Why:** Production tokens passed the WCAG AA audit (#556) and the v7 dark-mode pass (#776). Wholesale adoption of the bundle's tokens risks regressing the audit on every surface. The protected-token list in `token-audit.md` is non-negotiable (`--tandem-author-{user,claude}`, `--tandem-claude-focus-{bg,border}`, `--tandem-suggestion*`).
-- **Sub-PR constraint:** A bundle color may only appear in production CSS if (a) it has no production equivalent, OR (b) a per-token WCAG re-audit is committed alongside the change. The `check-semantic-tokens.ts` extension (Phase 0c) enforces the blocklist mechanically; the gate is CI-blocking, not advisory.
+- **Sub-PR constraint:** A bundle color may only appear in production CSS if (a) it has no production equivalent, OR (b) a per-token WCAG re-audit is committed alongside the change.
+- **Enforcement status:** the original Phase 0 plan called for `scripts/check-semantic-tokens.ts` to ship a bundle-token blocklist as a CI-blocking mechanical gate. The Phase 0c commit landed the token-audit doc and the protected-token snapshot test but NOT the blocklist extension — building the blocklist requires deriving the exact bundle-color set as a follow-up, tracked in [#799](https://github.com/bloknayrb/tandem/issues/799). Sub-PRs in Phases 1–3 enforce this conflict via the audit doc + reviewer attention rather than a CI block until #799 lands. #799 should ship before Phase 3 starts.
 
 ## #7 — Paragraph Authorship Gutter (Sub-PRs 1.3, 1.5, 3.10)
 
