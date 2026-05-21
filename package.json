@@ -71,7 +71,7 @@
       "eslint --fix",
       "biome check --write"
     ],
-    "**/*.{svelte,css,html}": [
+    "src/**/*.{svelte,css,html}": [
       "biome check --write"
     ],
     "**/*.mjs": [
