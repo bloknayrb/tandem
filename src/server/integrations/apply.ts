@@ -17,7 +17,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -26,6 +34,7 @@ import { fileURLToPath } from "node:url";
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
+import { assertNoBroadAce, setRestrictiveAcl } from "./acl-win.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +50,15 @@ const PACKAGE_ROOT = (() => {
 const CHANNEL_DIST = resolve(PACKAGE_ROOT, "dist/channel/index.js");
 
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
+
+/**
+ * Refuse to read a config larger than 5 MiB. The realistic `.claude.json` is
+ * single-digit kilobytes; anything beyond that is either accidental corruption
+ * (log files dropped in) or a deliberate DoS aimed at making the wizard's
+ * read-parse-rewrite path exhaust memory. The cap is generous enough that no
+ * legitimate user hits it.
+ */
+const MAX_CONFIG_BYTES = 5 * 1024 * 1024;
 
 export interface McpEntry {
   type?: "http";
@@ -344,12 +362,40 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
 
 /**
  * Atomic write: write to a temp file in the SAME directory as the destination,
- * then rename. Using the same directory avoids EXDEV errors on Windows when
- * %TEMP% and %APPDATA% are on different drives.
+ * tighten its DACL on Windows, then rename. Using the same directory avoids
+ * EXDEV errors when `%TEMP%` and `%APPDATA%` are on different drives.
+ *
+ * Sequence on Windows (security-load-bearing):
+ * 1. Create tempfile and write content. The tempfile inherits its parent
+ *    dir's DACL — on Windows, `homedir()` is OS-restricted to user + SYSTEM
+ *    + Administrators by default, so the inherited DACL is already narrow.
+ * 2. Set restrictive DACL on the tempfile (break inheritance, grant only
+ *    current user). This is explicit defence in depth on top of #1.
+ * 3. Rename tempfile to destination. On Windows, rename preserves the
+ *    file's DACL — the destination keeps the restrictive ACL set in #2,
+ *    NOT the destination directory's default.
+ * 4. Re-verify the destination DACL has no broad-principal ACE. If
+ *    verification fails, unlink the destination and propagate the error
+ *    rather than leave a bearer token at a permissive ACL.
+ *
+ * POSIX path: writeFile sets mode at open via the `mode` argument (the
+ * caller passes `0o600` for token-bearing files via Node's `chmod`).
  */
 async function atomicWrite(content: string, dest: string): Promise<void> {
   const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
   await writeFile(tmp, content, "utf-8");
+
+  if (process.platform === "win32") {
+    try {
+      await setRestrictiveAcl(tmp);
+    } catch (aclErr) {
+      await unlink(tmp).catch((cleanupErr: Error) => {
+        console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
+      });
+      throw aclErr;
+    }
+  }
+
   try {
     await rename(tmp, dest);
   } catch (err) {
@@ -364,6 +410,19 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
         console.error(`  Warning: could not remove temp file ${tmp}: ${cleanupErr.message}`);
       });
       throw err;
+    }
+  }
+
+  if (process.platform === "win32") {
+    try {
+      await assertNoBroadAce(dest);
+    } catch (verifyErr) {
+      await unlink(dest).catch((cleanupErr: Error) => {
+        console.error(
+          `  Warning: could not remove dest after ACL verify failure: ${cleanupErr.message}`,
+        );
+      });
+      throw verifyErr;
     }
   }
 }
@@ -385,6 +444,19 @@ async function atomicWrite(content: string, dest: string): Promise<void> {
 export async function applyConfig(configPath: string, ops: ApplyOps): Promise<void> {
   // Security gate: refuse symlinks, refuse paths outside home/tmpdir.
   assertPathSafe(configPath);
+
+  // Size guard runs before any read — fail closed on oversized files. ENOENT
+  // falls through so fresh-install (no .claude.json yet) stays the common path.
+  try {
+    const { size } = statSync(configPath);
+    if (size > MAX_CONFIG_BYTES) {
+      throw new Error(
+        `${configPath} is ${size} bytes; refusing to read (cap: ${MAX_CONFIG_BYTES}).`,
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
 
   // Read existing config or start fresh — no existsSync guard needed.
   // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
