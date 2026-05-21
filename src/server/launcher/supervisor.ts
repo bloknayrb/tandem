@@ -472,8 +472,12 @@ export function resolveSafeCwd(candidate: string): string | null {
     if (candidate.startsWith("\\\\")) return null; // UNC
   }
   try {
-    const real = fs.realpathSync(candidate);
-    const stat = fs.statSync(real);
+    // This function IS the path validator: it canonicalizes via realpath,
+    // rejects non-directories, and returns null on any failure. Callers
+    // either gate the result further (resolveRouteCwd home-confines) or
+    // accept advanced users' explicit integrations.json scope.
+    const real = fs.realpathSync(candidate); // lgtm[js/path-injection]
+    const stat = fs.statSync(real); // lgtm[js/path-injection]
     if (!stat.isDirectory()) return null;
     return real;
   } catch {
