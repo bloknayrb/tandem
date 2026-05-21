@@ -1,5 +1,6 @@
 ---
 name: tandem
+version: 2
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -93,3 +94,15 @@ When starting a new Claude session with Tandem already running:
 ## Multi-Document
 
 When multiple documents are open, always pass `documentId` explicitly — omitting it targets the active document, which may have changed since your last call. Use `tandem_listDocuments` to see what's available. Cross-reference by reading both docs via `tandem_getTextContent({ documentId: "..." })` and annotating the relevant one.
+
+## Project Context Discovery
+
+Tandem auto-launches you in a single working directory (the user's home by default, or whatever they configured under Settings → Claude Code → Working directory). The document the user opens may live elsewhere — a different project, a different repo. When you're working on a file outside your launch cwd:
+
+1. **Read `<docDir>/CLAUDE.md`** if it exists — it's the project's own playbook.
+2. **Walk up** the directory tree from `<docDir>` looking for `CLAUDE.md`, `.claude/`, `README.md`, or `package.json`/`Cargo.toml`/`pyproject.toml` to identify the project root.
+3. **Surface a relaunch nudge** when you detect project-scoped Claude tools you can't load mid-session:
+   - `.claude/skills/`, `.claude/agents/`, `.claude/hooks/`, or a `.mcp.json` you haven't loaded
+   - Tell the user: *"I see project-specific Claude tools at `<path>`. I can't load them in this session — open the command palette and run `Relaunch Claude in this folder` if you'd like me to pick them up."*
+
+The user is in control: relaunch ends the current conversation, so only suggest it when the project-scoped tools materially change what you can help with.

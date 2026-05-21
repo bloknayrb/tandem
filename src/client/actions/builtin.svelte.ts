@@ -9,7 +9,15 @@
  * Wire the getters by calling wireActionDeps() from App.svelte after mount.
  */
 
-import { API_SAVE, API_SCRATCHPAD } from "../../shared/api-paths.js";
+import {
+  API_LAUNCHER_NONCE,
+  API_LAUNCHER_RELAUNCH,
+  API_LAUNCHER_START_FRESH,
+  API_LAUNCHER_STATUS,
+  API_SAVE,
+  API_SCRATCHPAD,
+} from "../../shared/api-paths.js";
+import type { LauncherStatus } from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { type Action, registerAction } from "./registry.svelte.js";
 
@@ -19,6 +27,12 @@ import { type Action, registerAction } from "./registry.svelte.js";
 
 interface ActionDeps {
   getActiveTabId: () => string | null;
+  /** Absolute filesystem path of the active doc, or null for upload://,
+   * scratchpads, or app-internal docs. Launcher palette actions use this
+   * to derive a cwd for `/relaunch-here`. */
+  getActiveDocumentPath: () => string | null;
+  /** Push a transient toast notification (info/warning/error). */
+  notify: (severity: "info" | "warning" | "error", message: string) => void;
   openSettings: () => void;
   /**
    * Open the new SettingsModal (Wave 1 sibling component). Separate from
@@ -113,6 +127,138 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
   } finally {
     inflight = false;
     saving = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Claude launcher — /relaunch-here + start-fresh (#477 PR 4b)
+// ---------------------------------------------------------------------------
+
+let launcherInflight = false;
+
+async function fetchLauncherStatus(): Promise<LauncherStatus | null> {
+  try {
+    const res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
+    if (!res.ok) return null;
+    return (await res.json()) as LauncherStatus;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLauncherNonce(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_BASE}${API_LAUNCHER_NONCE}`, { method: "GET" });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { nonce?: unknown };
+    return typeof body.nonce === "string" ? body.nonce : null;
+  } catch {
+    return null;
+  }
+}
+
+function deriveCwdFromDocPath(docPath: string | null): string | null {
+  if (!docPath) return null;
+  // Reject upload:// and other non-filesystem URIs before they reach the API.
+  if (/^[a-z]+:\/\//.test(docPath)) return null;
+  // path.dirname equivalent that handles both separators.
+  const lastSlash = Math.max(docPath.lastIndexOf("/"), docPath.lastIndexOf("\\"));
+  return lastSlash > 0 ? docPath.slice(0, lastSlash) : null;
+}
+
+/** Convergent tail for both launcher palette actions: acquire a nonce,
+ * POST to the endpoint, notify on success/failure. Diverges on the
+ * preflight (status check, cwd derivation, confirm prompt) — that lives
+ * in each caller. The `extraBody` carries action-specific fields (cwd
+ * for relaunch; nothing for start-fresh). */
+async function postLauncherMutation(
+  d: ActionDeps,
+  endpoint: string,
+  extraBody: Record<string, unknown>,
+  labels: { failPrefix: string; requestFailPrefix: string; successMessage: string },
+): Promise<void> {
+  const nonce = await fetchLauncherNonce();
+  if (!nonce) {
+    d.notify("error", "Failed to acquire launcher nonce.");
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...extraBody, nonce }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      d.notify("error", `${labels.failPrefix}: ${body.message ?? res.statusText}`);
+      return;
+    }
+    d.notify("info", labels.successMessage);
+  } catch (err) {
+    d.notify("error", `${labels.requestFailPrefix}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Guards that both palette actions share: in-flight check + availability
+ * probe. Returns true when the caller should proceed, false when it
+ * should bail (caller need not notify — guards notify when appropriate). */
+async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
+  if (launcherInflight) return false;
+  const status = await fetchLauncherStatus();
+  if (!status || !status.available) {
+    d.notify("warning", "Claude launcher not active in this Tandem build.");
+    return false;
+  }
+  return true;
+}
+
+async function relaunchHere(d: ActionDeps): Promise<void> {
+  if (!(await checkLauncherAvailable(d))) return;
+  const cwd = deriveCwdFromDocPath(d.getActiveDocumentPath());
+  if (!cwd) {
+    d.notify(
+      "warning",
+      "Active document isn't saved to a folder. Set a working directory in Settings → Claude Code.",
+    );
+    return;
+  }
+  if (!confirm(`Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`)) return;
+  launcherInflight = true;
+  try {
+    await postLauncherMutation(
+      d,
+      API_LAUNCHER_RELAUNCH,
+      { cwd },
+      {
+        failPrefix: "Relaunch failed",
+        requestFailPrefix: "Relaunch request failed",
+        successMessage: `Claude restarting in ${cwd}.`,
+      },
+    );
+  } finally {
+    launcherInflight = false;
+  }
+}
+
+async function startFreshConversation(d: ActionDeps): Promise<void> {
+  if (!(await checkLauncherAvailable(d))) return;
+  if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
+    return;
+  }
+  launcherInflight = true;
+  try {
+    await postLauncherMutation(
+      d,
+      API_LAUNCHER_START_FRESH,
+      {},
+      {
+        failPrefix: "Start fresh failed",
+        requestFailPrefix: "Start-fresh request failed",
+        successMessage: "Claude restarting with a fresh conversation.",
+      },
+    );
+  } finally {
+    launcherInflight = false;
   }
 }
 
@@ -303,6 +449,22 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+Alt+A",
     run() {
       guardedRun("toggle-authorship", (d) => d.toggleAuthorship());
+    },
+  },
+  {
+    id: "launcher-relaunch-here",
+    label: "Relaunch Claude in this folder",
+    group: "claude",
+    run() {
+      guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d));
+    },
+  },
+  {
+    id: "launcher-start-fresh",
+    label: "Start fresh Claude conversation",
+    group: "claude",
+    run() {
+      guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));
     },
   },
 ];

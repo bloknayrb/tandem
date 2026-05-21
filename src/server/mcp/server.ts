@@ -203,6 +203,14 @@ function snapshotToolCount(server: McpServer): number | null {
 }
 
 /** Start the MCP server on HTTP using Streamable HTTP transport. Returns the http.Server for lifecycle management. */
+export interface LauncherWiring {
+  /** Late-bound: the supervisor is created in `src/server/index.ts` *after*
+   * this function returns. Routes call this getter on each request. */
+  getSupervisor: () => import("../launcher/supervisor.js").Supervisor | null;
+  /** Why the supervisor is null. Surfaced in `GET /api/launcher/status`. */
+  unavailableReason: () => import("../../shared/launcher/contract.js").LauncherUnavailableReason;
+}
+
 export async function startMcpServerHttp(
   port: number,
   host = DEFAULT_BIND_HOST,
@@ -214,6 +222,8 @@ export async function startMcpServerHttp(
    * undefined for loopback binds — only localhost/127.0.0.1/tauri.localhost allowed.
    */
   resolvedLanIP?: string,
+  /** Launcher route wiring. Omitted in tests; routes simply not registered. */
+  launcher?: LauncherWiring,
 ): Promise<Server> {
   mcpServer = createMcpServer();
   // Snapshot tool count now — all registrations are unconditional in createMcpServer(),
@@ -396,6 +406,20 @@ export async function startMcpServerHttp(
     readExisting: readExistingTandemEntries,
     serverVersion: APP_VERSION,
   });
+
+  // --- Auto-launcher endpoints (#477 PR 4b) ---
+  // Status, single-use nonce, relaunch, start-fresh, and a narrow
+  // working-directory PATCH that bypasses the integrations apply-nonce
+  // rotation. `launcher` is optional — if omitted (tests, future stdio
+  // hardening), the routes are not registered and clients get 404.
+  if (launcher) {
+    const { registerLauncherRoutes } = await import("../launcher/api-routes.js");
+    registerLauncherRoutes(app, lanAwareApiMiddleware, {
+      getSupervisor: launcher.getSupervisor,
+      unavailableReason: launcher.unavailableReason,
+      store: createIntegrationsStore(resolveAppDataDir()),
+    });
+  }
 
   // --- Models registry secrets endpoints (#659) ---
   // Outbound third-party API keys (Anthropic, OpenAI, Gemini, etc.) live in

@@ -23,6 +23,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
+import type { LauncherErrorCode } from "../../shared/launcher/contract.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
@@ -57,8 +58,11 @@ export interface Supervisor {
   relaunch(newCwd: string): Promise<void>;
   /** Idempotent — safe to call when not running. */
   stop(): Promise<void>;
-  /** Drop any persisted session so the next start uses a fresh one. */
-  startFresh(): Promise<void>;
+  /** Drop any persisted session and respawn fresh.
+   * If `cwdOverride` is provided, the spawn uses that cwd (and the integration's
+   * persisted workingDirectory is left untouched). Otherwise uses the integration's
+   * setting. Single atomic stop+clear+spawn under the supervisor lock. */
+  startFresh(cwdOverride?: string): Promise<void>;
   /** Current state for /api/launcher/status. */
   status(): SupervisorStatus;
 }
@@ -66,7 +70,7 @@ export interface Supervisor {
 /** Discriminated union: when `running === false` no other fields exist;
  * when `running === true` all process-level fields are guaranteed present. */
 export type SupervisorStatus =
-  | { running: false; lastError?: string }
+  | { running: false; lastError?: LauncherErrorCode }
   | {
       running: true;
       /** PID of the reaper process. Claude's own PID is intentionally not
@@ -95,7 +99,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * because relaunch awaits stop before chaining. */
   let opLock: Promise<void> = Promise.resolve();
   /** Last fatal error message — surfaced via status() when running=false. */
-  let lastError: string | undefined;
+  let lastError: LauncherErrorCode | undefined;
   function withLock<T>(fn: () => Promise<T>): Promise<T> {
     const next = opLock.then(fn, fn);
     opLock = next.then(
@@ -168,11 +172,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   function reaperPath(): string {
     const exeName = process.platform === "win32" ? "tandem-reaper.exe" : "tandem-reaper";
-    // TANDEM_REAPER_PATH is honored only in non-production runtimes (dev,
-    // tests). Production builds resolve from known install locations only —
-    // an attacker-controlled env shouldn't be able to redirect the reaper.
+    // TANDEM_REAPER_PATH is honored only in dev/test runtimes — both
+    // NODE_ENV !== "production" AND not a Tauri sidecar build. Belt-and-suspenders
+    // against a malicious shell rc redirecting the reaper inside a packaged sidecar
+    // where NODE_ENV may not always be set to "production".
     if (
       process.env.NODE_ENV !== "production" &&
+      process.env.TANDEM_TAURI_SIDECAR !== "1" &&
       process.env.TANDEM_REAPER_PATH &&
       fs.existsSync(process.env.TANDEM_REAPER_PATH)
     ) {
@@ -270,13 +276,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       currentSessionId = undefined;
       currentResuming = false;
       if (err.code === "ENOENT") {
-        lastError = "ENOENT: reaper or Claude binary not found";
+        lastError = "binary-not-found";
         breakerTripped = true;
         console.error(
-          `[Launcher] Reaper or Claude binary not found. Install Claude Code: npm i -g @anthropic-ai/claude-code`,
+          `[Launcher] Reaper or Claude binary not found (${err.message}). Install Claude Code: npm i -g @anthropic-ai/claude-code`,
         );
       } else {
-        lastError = `${err.code ?? "spawn-error"}: ${err.message}`;
+        lastError = "spawn-failed";
         console.error("[Launcher] Reaper spawn error:", err);
         if (!stopRequested) scheduleRestart();
       }
@@ -309,6 +315,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     recentAttempts.push(now);
     if (recentAttempts.length > CIRCUIT_BREAKER_MAX_ATTEMPTS) {
       breakerTripped = true;
+      lastError = "circuit-open";
       console.error(
         `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. Restart Tandem to retry.`,
       );
@@ -402,7 +409,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error(
           "[Launcher] Reaper failed to exit even after SIGKILL — abandoning handle, child may persist",
         );
-        lastError = "stop-failed: reaper unresponsive to SIGKILL";
+        lastError = "stop-failed";
       }
     }
     child = null;
@@ -415,13 +422,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return withLock(() => stopInternal());
   }
 
-  async function startFresh(): Promise<void> {
+  async function startFresh(cwdOverride?: string): Promise<void> {
     return withLock(async () => {
       await stopInternal();
       clearSavedSession();
       breakerTripped = false;
       recentAttempts = [];
-      await startInternal();
+      const plan = await buildPlan(cwdOverride);
+      if (!plan) return;
+      await spawnOnce(plan);
     });
   }
 
@@ -450,7 +459,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 /** Exported for unit testing. Resolves a cwd candidate to a canonical path,
  * rejecting UNC paths, Windows `\\?\` / `\\.\` device namespaces, relative
  * paths, and anything that does not canonicalize to a real directory.
- * Returns null on any rejection so callers can fall back to a safe default. */
+ * Returns null on any rejection so callers can fall back to a safe default.
+ *
+ * This is the *permissive* resolver used by integration-file reads — a user
+ * who edits `integrations.json` directly can point the launcher at any
+ * canonical directory on disk. HTTP-driven mutations must use
+ * `resolveRouteCwd()` below, which additionally home-confines. */
 export function resolveSafeCwd(candidate: string): string | null {
   if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return null;
   if (process.platform === "win32") {
@@ -465,4 +479,27 @@ export function resolveSafeCwd(candidate: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** HTTP-surface variant of `resolveSafeCwd`. Adds: the canonical path must
+ * be under `os.homedir()` (also canonicalized) so a malicious loopback page
+ * can't pivot Claude into system directories via a junction/symlink the user
+ * happens to have under their home tree. The integration-file path bypasses
+ * this — advanced users who hand-edit `integrations.json` opt into wider
+ * scope. */
+export function resolveRouteCwd(candidate: string): string | null {
+  const safe = resolveSafeCwd(candidate);
+  if (safe === null) return null;
+  let homeReal: string;
+  try {
+    homeReal = fs.realpathSync(os.homedir());
+  } catch {
+    return null;
+  }
+  const rel = path.relative(homeReal, safe);
+  // Outside home (`rel` starts with `..`), or a different drive on Windows
+  // (`rel` is absolute), or the empty string (home itself — allowed).
+  if (rel === "") return safe;
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return safe;
 }
