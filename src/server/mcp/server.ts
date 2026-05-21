@@ -409,15 +409,19 @@ export async function startMcpServerHttp(
 
   // --- Auto-launcher endpoints (#477 PR 4b) ---
   // Status, single-use nonce, relaunch, start-fresh, and a narrow
-  // working-directory PATCH that bypasses the integrations apply-nonce
+  // working-directory POST that bypasses the integrations apply-nonce
   // rotation. `launcher` is optional — if omitted (tests, future stdio
   // hardening), the routes are not registered and clients get 404.
   if (launcher) {
-    const { registerLauncherRoutes } = await import("../launcher/api-routes.js");
+    const [{ registerLauncherRoutes }, { getSkillRefreshError }] = await Promise.all([
+      import("../launcher/api-routes.js"),
+      import("../integrations/apply.js"),
+    ]);
     registerLauncherRoutes(app, lanAwareApiMiddleware, {
       getSupervisor: launcher.getSupervisor,
       unavailableReason: launcher.unavailableReason,
       store: createIntegrationsStore(resolveAppDataDir()),
+      getSkillRefreshError,
     });
   }
 

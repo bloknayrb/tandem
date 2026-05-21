@@ -346,4 +346,258 @@ describe("POST /api/launcher/working-directory", () => {
       expect((res.body as { code: string }).code).toBe("PATH_REJECTED");
     }
   });
+
+  it("clears workingDirectory when body is { workingDirectory: null }", async () => {
+    let writtenFile: { integrations: Array<{ workingDirectory?: string }> } | null = null;
+    const store = {
+      read: async () => ({
+        schemaVersion: 3 as const,
+        integrations: [
+          {
+            kind: "claude-code" as const,
+            id: "cc1",
+            label: "Claude Code",
+            configPath:
+              process.platform === "win32" ? "C:\\Users\\t\\.claude.json" : "/home/t/.claude.json",
+            transport: "http" as const,
+            url: "http://127.0.0.1:3479/mcp",
+            apply: "create" as const,
+            workingDirectory: fs.realpathSync(os.homedir()),
+          },
+        ],
+      }),
+      write: async (file: unknown) => {
+        writtenFile = file as typeof writtenFile;
+      },
+    } as unknown as LauncherRoutesDeps["store"];
+    const { app } = makeApp(baseDeps(makeFakeSupervisor(), "stdio-mode", store));
+    const res = await request(app, "POST", "/api/launcher/working-directory", {
+      workingDirectory: null,
+    });
+    expect(res.status).toBe(200);
+    expect(writtenFile).not.toBeNull();
+    expect(writtenFile?.integrations[0].workingDirectory).toBeUndefined();
+  });
+
+  it("persists the canonical resolved path on happy path", async () => {
+    let writtenFile: { integrations: Array<{ workingDirectory?: string }> } | null = null;
+    const store = {
+      read: async () => ({
+        schemaVersion: 3 as const,
+        integrations: [
+          {
+            kind: "claude-code" as const,
+            id: "cc1",
+            label: "Claude Code",
+            configPath:
+              process.platform === "win32" ? "C:\\Users\\t\\.claude.json" : "/home/t/.claude.json",
+            transport: "http" as const,
+            url: "http://127.0.0.1:3479/mcp",
+            apply: "create" as const,
+          },
+        ],
+      }),
+      write: async (file: unknown) => {
+        writtenFile = file as typeof writtenFile;
+      },
+    } as unknown as LauncherRoutesDeps["store"];
+    const { app } = makeApp(baseDeps(makeFakeSupervisor(), "stdio-mode", store));
+    const home = fs.realpathSync(os.homedir());
+    const inside = fs.mkdtempSync(path.join(home, "wd-happy-test-"));
+    try {
+      const res = await request(app, "POST", "/api/launcher/working-directory", {
+        workingDirectory: inside,
+      });
+      expect(res.status).toBe(200);
+      expect(writtenFile?.integrations[0].workingDirectory).toBe(fs.realpathSync(inside));
+    } finally {
+      fs.rmSync(inside, { recursive: true, force: true });
+    }
+  });
+});
+
+// --- Review-fix tests (Group A) -------------------------------------------
+
+describe("nonce rotation on FAILURE (T1)", () => {
+  it("a failed mutating attempt rotates the live nonce — a captured pre-attempt value is invalid", async () => {
+    const { app } = makeApp(baseDeps(makeFakeSupervisor()));
+    // Fetch nonce A.
+    const a = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    // Fetch nonce B — rotates A out. A is now stale.
+    const b = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    // POST with the stale value A — must 403 (rotates again, B is now also dead).
+    const r1 = await request(app, "POST", "/api/launcher/relaunch", {
+      cwd: os.homedir(),
+      nonce: a.nonce,
+    });
+    expect(r1.status).toBe(403);
+    // POST with B — if rotation-on-failure is broken, this would now succeed.
+    // It must 403 because the failed r1 above rotated the live nonce.
+    const r2 = await request(app, "POST", "/api/launcher/relaunch", {
+      cwd: os.homedir(),
+      nonce: b.nonce,
+    });
+    expect(r2.status).toBe(403);
+  });
+});
+
+describe("per-route 429 inflight gates (T2)", () => {
+  // Hold the first operation in-flight via a deferred promise; assert the
+  // second concurrent attempt returns 429 + LAUNCHER_IN_PROGRESS.
+  function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("concurrent POST /relaunch returns 429 (relaunchHook holds the gate)", async () => {
+    const sup = makeFakeSupervisor();
+    const gate = deferred();
+    const deps: LauncherRoutesDeps = {
+      ...baseDeps(sup),
+      relaunchHook: () => gate.promise,
+    };
+    const { app } = makeApp(deps);
+    const home = fs.realpathSync(os.homedir());
+    const n1 = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const inflightReq = request(app, "POST", "/api/launcher/relaunch", {
+      cwd: home,
+      nonce: n1.nonce,
+    });
+    // Allow the inflight handler to enter the try block + set inflight=true.
+    await new Promise((r) => setTimeout(r, 30));
+    const n2 = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const second = await request(app, "POST", "/api/launcher/relaunch", {
+      cwd: home,
+      nonce: n2.nonce,
+    });
+    expect(second.status).toBe(429);
+    expect((second.body as { code: string }).code).toBe("LAUNCHER_IN_PROGRESS");
+    gate.resolve();
+    await inflightReq;
+  });
+
+  it("relaunch in-flight blocks start-fresh (shared gate) but NOT working-directory", async () => {
+    const sup = makeFakeSupervisor();
+    const gate = deferred();
+    const store = {
+      read: async () => ({
+        schemaVersion: 3 as const,
+        integrations: [
+          {
+            kind: "claude-code" as const,
+            id: "cc1",
+            label: "Claude Code",
+            configPath:
+              process.platform === "win32" ? "C:\\Users\\t\\.claude.json" : "/home/t/.claude.json",
+            transport: "http" as const,
+            url: "http://127.0.0.1:3479/mcp",
+            apply: "create" as const,
+          },
+        ],
+      }),
+      write: async () => {},
+    } as unknown as LauncherRoutesDeps["store"];
+    const deps: LauncherRoutesDeps = {
+      ...baseDeps(sup, "stdio-mode", store),
+      relaunchHook: () => gate.promise,
+    };
+    const { app } = makeApp(deps);
+    const home = fs.realpathSync(os.homedir());
+    const n1 = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const inflightReq = request(app, "POST", "/api/launcher/relaunch", {
+      cwd: home,
+      nonce: n1.nonce,
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const n2 = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const sf = await request(app, "POST", "/api/launcher/start-fresh", { nonce: n2.nonce });
+    expect(sf.status).toBe(429);
+    // working-directory has its own flag — must NOT 429.
+    const wd = await request(app, "POST", "/api/launcher/working-directory", {
+      workingDirectory: home,
+    });
+    expect(wd.status).toBe(200);
+    gate.resolve();
+    await inflightReq;
+  });
+});
+
+describe("loopback vs LAN redaction for running:false (T6)", () => {
+  it("loopback sees lastError; non-loopback does not", async () => {
+    const sup: Supervisor = {
+      start: async () => {},
+      stop: async () => {},
+      relaunch: async () => {},
+      startFresh: async () => {},
+      status: () => ({ running: false, lastError: "spawn-failed" as const }),
+    };
+    const { app: appLoop } = makeApp(baseDeps(sup));
+    const loop = await request(appLoop, "GET", "/api/launcher/status");
+    expect(loop.body).toMatchObject({
+      available: true,
+      running: false,
+      lastError: "spawn-failed",
+    });
+    const { app: appLan } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
+    const lan = await request(appLan, "GET", "/api/launcher/status");
+    expect(lan.body).toEqual({ available: true, running: false });
+    expect(lan.body).not.toHaveProperty("lastError");
+  });
+
+  it("loopback sees skillRefresh.error from the deps getter; non-loopback does not", async () => {
+    const sup = makeFakeSupervisor();
+    const depsWithSkill: LauncherRoutesDeps = {
+      ...baseDeps(sup),
+      getSkillRefreshError: () => ({ code: "write-failed", message: "EACCES" }),
+    };
+    const { app: appLoop } = makeApp(depsWithSkill);
+    const loop = (await request(appLoop, "GET", "/api/launcher/status")).body as {
+      skillRefresh?: { code: string; message: string } | null;
+    };
+    expect(loop.skillRefresh).toEqual({ code: "write-failed", message: "EACCES" });
+    const { app: appLan } = makeApp(depsWithSkill, { remoteAddress: "192.168.1.50" });
+    const lan = await request(appLan, "GET", "/api/launcher/status");
+    expect(lan.body).toEqual({ available: true, running: false });
+  });
+});
+
+describe("/status try/catch on supervisor throw (B4)", () => {
+  it("returns 200 with lastError:'status-check-failed' when sup.status() throws (loopback)", async () => {
+    const sup: Supervisor = {
+      start: async () => {},
+      stop: async () => {},
+      relaunch: async () => {},
+      startFresh: async () => {},
+      status: () => {
+        throw new Error("simulated supervisor crash");
+      },
+    };
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      available: true,
+      running: false,
+      lastError: "status-check-failed",
+    });
+  });
+
+  it("returns minimal LAN shape when sup.status() throws (non-loopback)", async () => {
+    const sup: Supervisor = {
+      start: async () => {},
+      stop: async () => {},
+      relaunch: async () => {},
+      startFresh: async () => {},
+      status: () => {
+        throw new Error("simulated");
+      },
+    };
+    const { app } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ available: true, running: false });
+  });
 });

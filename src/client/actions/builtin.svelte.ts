@@ -136,25 +136,36 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
 
 let launcherInflight = false;
 
-async function fetchLauncherStatus(): Promise<LauncherStatus | null> {
+type FetchResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; kind: "not-built" | "network" | "server-error"; detail?: string };
+
+async function fetchLauncherStatus(): Promise<FetchResult<LauncherStatus>> {
+  let res: Response;
   try {
-    const res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
-    if (!res.ok) return null;
-    return (await res.json()) as LauncherStatus;
-  } catch {
-    return null;
+    res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
+  } catch (err) {
+    return { ok: false, kind: "network", detail: err instanceof Error ? err.message : String(err) };
   }
+  if (res.status === 404) return { ok: false, kind: "not-built" };
+  if (!res.ok) return { ok: false, kind: "server-error", detail: `HTTP ${res.status}` };
+  return { ok: true, value: (await res.json()) as LauncherStatus };
 }
 
-async function fetchLauncherNonce(): Promise<string | null> {
+async function fetchLauncherNonce(): Promise<FetchResult<string>> {
+  let res: Response;
   try {
-    const res = await fetch(`${API_BASE}${API_LAUNCHER_NONCE}`, { method: "GET" });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { nonce?: unknown };
-    return typeof body.nonce === "string" ? body.nonce : null;
-  } catch {
-    return null;
+    res = await fetch(`${API_BASE}${API_LAUNCHER_NONCE}`, { method: "GET" });
+  } catch (err) {
+    return { ok: false, kind: "network", detail: err instanceof Error ? err.message : String(err) };
   }
+  if (res.status === 404) return { ok: false, kind: "not-built" };
+  if (!res.ok) return { ok: false, kind: "server-error", detail: `HTTP ${res.status}` };
+  const body = (await res.json()) as { nonce?: unknown };
+  if (typeof body.nonce !== "string") {
+    return { ok: false, kind: "server-error", detail: "malformed nonce response" };
+  }
+  return { ok: true, value: body.nonce };
 }
 
 function deriveCwdFromDocPath(docPath: string | null): string | null {
@@ -177,11 +188,15 @@ async function postLauncherMutation(
   extraBody: Record<string, unknown>,
   labels: { failPrefix: string; requestFailPrefix: string; successMessage: string },
 ): Promise<void> {
-  const nonce = await fetchLauncherNonce();
-  if (!nonce) {
-    d.notify("error", "Failed to acquire launcher nonce.");
+  const nonceResult = await fetchLauncherNonce();
+  if (!nonceResult.ok) {
+    d.notify(
+      "error",
+      `Failed to acquire launcher nonce: ${nonceResult.kind}${nonceResult.detail ? ` (${nonceResult.detail})` : ""}.`,
+    );
     return;
   }
+  const nonce = nonceResult.value;
   try {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       method: "POST",
@@ -204,10 +219,33 @@ async function postLauncherMutation(
  * should bail (caller need not notify — guards notify when appropriate). */
 async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
   if (launcherInflight) return false;
-  const status = await fetchLauncherStatus();
-  if (!status || !status.available) {
+  const result = await fetchLauncherStatus();
+  if (!result.ok) {
+    if (result.kind === "not-built") {
+      d.notify("warning", "Claude launcher not active in this Tandem build.");
+    } else if (result.kind === "network") {
+      d.notify("error", `Cannot reach Tandem server${result.detail ? `: ${result.detail}` : ""}.`);
+    } else {
+      d.notify(
+        "error",
+        `Launcher status check failed${result.detail ? `: ${result.detail}` : ""}.`,
+      );
+    }
+    return false;
+  }
+  const status = result.value;
+  if (!status.available) {
     d.notify("warning", "Claude launcher not active in this Tandem build.");
     return false;
+  }
+  // Side-channel: surface bundled-skill refresh failures to the user. The
+  // server only includes `skillRefresh` on loopback, and the field is
+  // optional on the discriminated-union so absence is the success case.
+  if ("skillRefresh" in status && status.skillRefresh) {
+    d.notify(
+      "warning",
+      `Bundled skill refresh failed: ${status.skillRefresh.message}. Run \`tandem setup\` to retry.`,
+    );
   }
   return true;
 }

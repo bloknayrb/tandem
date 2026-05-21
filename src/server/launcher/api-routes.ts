@@ -12,7 +12,7 @@
  *     overlapping operations.
  *   - `POST /start-fresh` — body `{ cwd?, nonce }`. Drops persisted
  *     session, respawns with a new session id.
- *   - `PATCH /working-directory` — body `{ workingDirectory: string | null }`.
+ *   - `POST /working-directory` — body `{ workingDirectory: string | null }`.
  *     Narrow write to the first claude-code integration's
  *     `workingDirectory` field. Bypasses the integrations apply-nonce
  *     rotation that a full-array POST would trigger.
@@ -44,6 +44,7 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
   type LauncherStatus,
   type LauncherUnavailableReason,
+  type SkillRefreshError,
 } from "../../shared/launcher/contract.js";
 import { isLoopback } from "../auth/middleware.js";
 import { assertLoopbackForMutation, assertOriginAllowlisted } from "../integrations/api-routes.js";
@@ -133,6 +134,15 @@ export interface LauncherRoutesDeps {
   unavailableReason: () => LauncherUnavailableReason;
   /** Reads/writes the integrations file. Same store passed to integrations routes. */
   store: IntegrationsStore;
+  /** Loopback-only side-channel for skill refresh failures. `null` when the
+   * last refresh succeeded or the helper is not wired (test mode). */
+  getSkillRefreshError?: () => SkillRefreshError | null;
+  /** Test-only seam: hook fires inside try, immediately after `inflight.X = true`,
+   * before the supervisor call. Used to hold an operation in-flight so concurrent
+   * requests exercise the 429 gate. */
+  relaunchHook?: () => Promise<void>;
+  startFreshHook?: () => Promise<void>;
+  workingDirHook?: () => Promise<void>;
 }
 
 export function registerLauncherRoutes(app: Express, mw: Handler, deps: LauncherRoutesDeps): void {
@@ -157,19 +167,29 @@ export function registerLauncherRoutes(app: Express, mw: Handler, deps: Launcher
 function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
   return (req: Request, res: Response) => {
     const sup = deps.getSupervisor();
+    const loopback = isLoopback(req.socket.remoteAddress);
     if (sup === null) {
       const body: LauncherStatus = { available: false, reason: deps.unavailableReason() };
       res.json(body);
       return;
     }
-    const raw = sup.status();
-    const loopback = isLoopback(req.socket.remoteAddress);
+    const skillRefresh = loopback ? (deps.getSkillRefreshError?.() ?? null) : undefined;
+    let raw: ReturnType<Supervisor["status"]>;
+    try {
+      raw = sup.status();
+    } catch {
+      // sup.status() should never throw, but if it does we must not return a
+      // generic 500 — the client maps that to "not active in this Tandem build"
+      // which is wrong. Degrade to a structured `lastError: "status-check-failed"`.
+      const body: LauncherStatus = loopback
+        ? { available: true, running: false, lastError: "status-check-failed", skillRefresh }
+        : { available: true, running: false };
+      res.json(body);
+      return;
+    }
     if (raw.running) {
       if (!loopback) {
-        res.json({ available: true, running: true } satisfies Pick<LauncherStatus, never> & {
-          available: true;
-          running: true;
-        });
+        res.json({ available: true, running: true });
         return;
       }
       const body: LauncherStatus = {
@@ -179,12 +199,13 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         cwd: raw.cwd,
         sessionId: "<set>",
         resuming: raw.resuming,
+        skillRefresh,
       };
       res.json(body);
       return;
     }
     const body: LauncherStatus = loopback
-      ? { available: true, running: false, lastError: raw.lastError }
+      ? { available: true, running: false, lastError: raw.lastError, skillRefresh }
       : { available: true, running: false };
     res.json(body);
   };
@@ -238,7 +259,7 @@ function sendInProgress(res: Response, message: string): void {
 
 /** Validate a string cwd field: type, length cap, and home-confined resolution.
  * `fieldName` parameterizes the error messages — "cwd" for request bodies,
- * "workingDirectory" for the PATCH route. */
+ * "workingDirectory" for the POST /working-directory route. */
 function validateCwdString(
   raw: unknown,
   res: Response,
@@ -315,6 +336,7 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     }
     inflight.relaunch = true;
     try {
+      if (deps.relaunchHook) await deps.relaunchHook();
       await sup.relaunch(cwd);
       res.json({ ok: true, cwd });
     } catch (err) {
@@ -346,6 +368,7 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     }
     inflight.startFresh = true;
     try {
+      if (deps.startFreshHook) await deps.startFreshHook();
       await sup.startFresh(cwd);
       res.json({ ok: true, cwd: cwd ?? null });
     } catch (err) {
@@ -385,6 +408,7 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
     }
     inflight.workingDirectory = true;
     try {
+      if (deps.workingDirHook) await deps.workingDirHook();
       const file = await deps.store.read();
       const idx = file.integrations.findIndex(
         (i): i is ClaudeCodeIntegration => i.kind === "claude-code",

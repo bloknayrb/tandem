@@ -705,6 +705,23 @@ function readSkillVersion(skillContent: string): number {
 
 const BUNDLED_SKILL_VERSION = readSkillVersion(SKILL_CONTENT);
 
+/** Module-scoped last-failure record. Cleared on successful refresh; set on
+ * read/write failure. Surfaced via `GET /api/launcher/status` (loopback only)
+ * so the palette/settings UI can warn the user that the bundled skill is
+ * out of date. `null` when last refresh succeeded or was a no-op. */
+let lastSkillRefreshError: { code: "write-failed" | "read-failed"; message: string } | null = null;
+export function getSkillRefreshError(): {
+  code: "write-failed" | "read-failed";
+  message: string;
+} | null {
+  return lastSkillRefreshError;
+}
+/** Test-only — reset module state between tests. */
+export function _resetSkillRefreshErrorForTests(): void {
+  if (process.env.VITEST !== "true") return;
+  lastSkillRefreshError = null;
+}
+
 /**
  * Idempotent skill refresh — called from supervisor startup so existing
  * users (who already ran `tandem setup` once) pick up bundled-skill
@@ -728,21 +745,37 @@ export async function refreshSkillIfStale(opts: { homeOverride?: string } = {}):
     return;
   }
   let onDiskVersion = -1; // -1 = file missing (treat as needing install)
+  let readErr: unknown;
   try {
     const fs = await import("node:fs/promises");
     const current = await fs.readFile(skillPath, "utf8");
     onDiskVersion = readSkillVersion(current);
-  } catch {
-    // File missing or unreadable — fall through to write.
+  } catch (err) {
+    // ENOENT is expected (first run); any other error is a real read failure.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") readErr = err;
   }
-  if (onDiskVersion >= BUNDLED_SKILL_VERSION) return;
+  if (onDiskVersion >= BUNDLED_SKILL_VERSION) {
+    // No-op path — clear any prior failure only if read succeeded.
+    if (readErr === undefined) lastSkillRefreshError = null;
+    else
+      lastSkillRefreshError = {
+        code: "read-failed",
+        message: readErr instanceof Error ? readErr.message : String(readErr),
+      };
+    return;
+  }
   try {
     await mkdir(dirname(skillPath), { recursive: true });
     await atomicWrite(SKILL_CONTENT, skillPath);
+    lastSkillRefreshError = null;
     console.error(
       `[Tandem] Refreshed bundled skill at ${skillPath} (v${onDiskVersion} → v${BUNDLED_SKILL_VERSION}).`,
     );
   } catch (err) {
+    lastSkillRefreshError = {
+      code: "write-failed",
+      message: err instanceof Error ? err.message : String(err),
+    };
     console.error(
       `[Tandem] Skill refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
     );

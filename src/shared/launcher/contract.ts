@@ -26,6 +26,8 @@ export type LauncherStatus =
       running: false;
       /** Last fatal error from the supervisor, scrubbed to a small enum. */
       lastError?: LauncherErrorCode;
+      /** Loopback-only. `null` when last refresh succeeded. */
+      skillRefresh?: SkillRefreshError | null;
     }
   | {
       available: true;
@@ -35,6 +37,8 @@ export type LauncherStatus =
       /** Always the literal string "<set>" — the real UUID never crosses the wire. */
       sessionId: "<set>";
       resuming: boolean;
+      /** Loopback-only. `null` when last refresh succeeded. */
+      skillRefresh?: SkillRefreshError | null;
     };
 
 export type LauncherUnavailableReason = "stdio-mode" | "disabled-by-env" | "spawn-failed";
@@ -44,7 +48,16 @@ export type LauncherErrorCode =
   | "spawn-failed"
   | "binary-not-found"
   | "stop-failed"
-  | "circuit-open";
+  | "circuit-open"
+  | "status-check-failed";
+
+/** Loopback-only side-channel for bundled-skill refresh failures. The user
+ * has no other signal that the skill is stale, so `/status` surfaces this
+ * for the palette/settings UI to convert into a notification. */
+export interface SkillRefreshError {
+  code: "write-failed" | "read-failed";
+  message: string;
+}
 
 // --- Request bodies -------------------------------------------------------
 
