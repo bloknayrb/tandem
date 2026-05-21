@@ -336,7 +336,7 @@ test("legacy plaintext key migration banner — appears, migrates, then disappea
   expect(JSON.stringify(persisted)).not.toContain(LEGACY_KEY);
 });
 
-test("v2 → v7 migration boot — Models tab renders with empty list, settings survive", async ({
+test("v2 → current schema migration boot — Models tab renders with empty list, settings survive", async ({
   page,
 }) => {
   await page.evaluate((key) => {
