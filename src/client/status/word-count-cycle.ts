@@ -1,17 +1,26 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 
-export type WordCountMode = "words" | "characters" | "sentences" | "paragraphs";
+export type WordCountMode = "words" | "characters" | "sentences" | "paragraphs" | "pages";
 
 const STORAGE_KEY = "tandem-status-count-mode";
 
-const CYCLE: readonly WordCountMode[] = ["words", "characters", "sentences", "paragraphs"];
+const CYCLE: readonly WordCountMode[] = ["words", "characters", "sentences", "paragraphs", "pages"];
 
 const MODE_LABEL: Record<WordCountMode, string> = {
   words: "words",
   characters: "chars",
   sentences: "sentences",
   paragraphs: "paragraphs",
+  pages: "pages",
 };
+
+/**
+ * Word-count basis for page estimation. 250 words/page is the publishing-
+ * industry standard for a manuscript page (double-spaced, 12pt). The
+ * alternative — characters/page — varies with font and is less stable
+ * across mixed-case prose.
+ */
+export const WORDS_PER_PAGE = 250;
 
 export function nextMode(current: WordCountMode): WordCountMode {
   const i = CYCLE.indexOf(current);
@@ -71,6 +80,12 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
         if (node.type.name === "paragraph" && node.textContent.trim()) count++;
       });
       return count;
+    }
+    case "pages": {
+      const trimmed = text.trim();
+      if (!trimmed) return 0;
+      const words = trimmed.split(/\s+/).length;
+      return Math.ceil(words / WORDS_PER_PAGE);
     }
   }
 }

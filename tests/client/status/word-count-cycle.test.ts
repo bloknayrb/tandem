@@ -9,11 +9,12 @@ import {
 } from "../../../src/client/status/word-count-cycle.js";
 
 describe("word-count-cycle — cycle order + persistence", () => {
-  it("cycles words → characters → sentences → paragraphs → words", () => {
+  it("cycles words → characters → sentences → paragraphs → pages → words", () => {
     expect(nextMode("words")).toBe("characters");
     expect(nextMode("characters")).toBe("sentences");
     expect(nextMode("sentences")).toBe("paragraphs");
-    expect(nextMode("paragraphs")).toBe("words");
+    expect(nextMode("paragraphs")).toBe("pages");
+    expect(nextMode("pages")).toBe("words");
   });
 
   it("modeLabel returns a short label for each mode", () => {
@@ -21,6 +22,7 @@ describe("word-count-cycle — cycle order + persistence", () => {
     expect(modeLabel("characters")).toBe("chars");
     expect(modeLabel("sentences")).toBe("sentences");
     expect(modeLabel("paragraphs")).toBe("paragraphs");
+    expect(modeLabel("pages")).toBe("pages");
   });
 
   describe("loadMode / saveMode", () => {
@@ -98,7 +100,13 @@ describe("word-count-cycle — getCount derivations", () => {
   }
 
   it("returns 0 for null editor", () => {
-    for (const m of ["words", "characters", "sentences", "paragraphs"] as WordCountMode[]) {
+    for (const m of [
+      "words",
+      "characters",
+      "sentences",
+      "paragraphs",
+      "pages",
+    ] as WordCountMode[]) {
       expect(getCount(null, m)).toBe(0);
     }
   });
@@ -145,5 +153,22 @@ describe("word-count-cycle — getCount derivations", () => {
         "paragraphs",
       ),
     ).toBe(1);
+  });
+
+  it("pages = ceil(words / 250) — publishing-standard manuscript page", () => {
+    // Empty doc → 0 pages.
+    expect(getCount(makeEditor("") as never, "pages")).toBe(0);
+    expect(getCount(makeEditor("   ") as never, "pages")).toBe(0);
+    // 1 word → 1 page (anything non-empty rounds up to 1).
+    expect(getCount(makeEditor("hello") as never, "pages")).toBe(1);
+    // 250 words → 1 page (boundary, ceil(250/250) = 1).
+    const exact = Array.from({ length: 250 }, (_, i) => `w${i}`).join(" ");
+    expect(getCount(makeEditor(exact) as never, "pages")).toBe(1);
+    // 251 words → 2 pages.
+    const overOne = Array.from({ length: 251 }, (_, i) => `w${i}`).join(" ");
+    expect(getCount(makeEditor(overOne) as never, "pages")).toBe(2);
+    // 500 words → 2 pages.
+    const exactTwo = Array.from({ length: 500 }, (_, i) => `w${i}`).join(" ");
+    expect(getCount(makeEditor(exactTwo) as never, "pages")).toBe(2);
   });
 });
