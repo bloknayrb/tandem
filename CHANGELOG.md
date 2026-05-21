@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Design system re-skin (umbrella `feat/design-system-impl`):**
+  - TitleBar + BrandMenu + ModeToggle re-skinned to the bundle's visual language (sub-PR 1.1)
+  - Added `--tandem-swatch-light|dark|warm` semantic tokens for the BrandMenu theme-picker chips (fixed-identity colors, `:root` only)
 - **Network settings split into Connection / Advanced (Wave 2 PR 6)** — connection status, transport, and the restart-sidecar button stay always-visible; loopback port, degraded-banner delay, reconnect strategy, hold-while-offline, and token rotation collapsed under a new "Advanced" disclosure. Disclosure state is ephemeral (resets each time the modal opens). New `CollapsibleSection.svelte` primitive uses native `<details>/<summary>` for free keyboard a11y.
 
 ### Added
