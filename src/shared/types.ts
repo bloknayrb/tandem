@@ -278,7 +278,8 @@ export interface TandemNotification {
     | "session-restored"
     | "general-error"
     | "file-reloaded"
-    | "review-pending";
+    | "review-pending"
+    | "launcher";
   severity: "info" | "warning" | "error";
   message: string;
   documentId?: string;

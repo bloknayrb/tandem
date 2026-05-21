@@ -79,6 +79,8 @@ const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT)
 let httpServer: Server | null = null;
 let isShuttingDown = false;
 let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
+let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
+  process.env.TANDEM_DISABLE_LAUNCHER === "1" ? "disabled-by-env" : "stdio-mode";
 
 // Swallow known Hocuspocus/ws protocol errors but crash on genuine bugs.
 function handleFatalError(label: string, value: unknown): void {
@@ -425,7 +427,10 @@ async function main() {
     }
 
     const [srv] = await Promise.all([
-      startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP),
+      startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP, {
+        getSupervisor: () => launcherSupervisor,
+        unavailableReason: () => launcherUnavailableReason,
+      }),
       startHocuspocus(wsPort).then(() => {
         console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
       }),
@@ -453,8 +458,14 @@ async function main() {
         launcherSupervisor = createSupervisor({
           integrationsBase: resolveAppDataDir(),
         });
+        // Refresh the bundled skill on-disk if the version stamp moved
+        // forward — existing users pick up skill updates without re-running
+        // `tandem setup`. Best-effort, non-blocking.
+        const { refreshSkillIfStale } = await import("./integrations/apply.js");
+        void refreshSkillIfStale();
         await launcherSupervisor.start();
       } catch (err) {
+        launcherUnavailableReason = "spawn-failed";
         console.error(
           `[Tandem] Launcher supervisor failed to start (non-fatal): ${err instanceof Error ? err.message : err}`,
         );

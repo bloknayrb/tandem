@@ -693,6 +693,95 @@ export async function installSkill(opts: { homeOverride?: string } = {}): Promis
   await atomicWrite(SKILL_CONTENT, skillPath);
 }
 
+/** Parse the integer `version:` from a skill front-matter block. Returns 0
+ * if the file doesn't exist, has no version, or fails to parse — older
+ * bundled skills predate the version stamp, so 0 means "definitely upgrade". */
+function readSkillVersion(skillContent: string): number {
+  const match = skillContent.match(/^version:\s*(\d+)\s*$/m);
+  if (!match) return 0;
+  const n = parseInt(match[1], 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const BUNDLED_SKILL_VERSION = readSkillVersion(SKILL_CONTENT);
+
+/** Module-scoped last-failure record. Cleared on successful refresh; set on
+ * read/write failure. Surfaced via `GET /api/launcher/status` (loopback only)
+ * so the palette/settings UI can warn the user that the bundled skill is
+ * out of date. `null` when last refresh succeeded or was a no-op. */
+let lastSkillRefreshError: { code: "write-failed" | "read-failed"; message: string } | null = null;
+export function getSkillRefreshError(): {
+  code: "write-failed" | "read-failed";
+  message: string;
+} | null {
+  return lastSkillRefreshError;
+}
+/** Test-only — reset module state between tests. */
+export function _resetSkillRefreshErrorForTests(): void {
+  if (process.env.VITEST !== "true") return;
+  lastSkillRefreshError = null;
+}
+
+/**
+ * Idempotent skill refresh — called from supervisor startup so existing
+ * users (who already ran `tandem setup` once) pick up bundled-skill
+ * updates without re-running the wizard.
+ *
+ * Compares the bundled `version:` against the on-disk file. Writes only
+ * if bundled > on-disk. Silently no-ops on any error (read failure,
+ * write failure, missing parent dir) — this is a best-effort refresh,
+ * not a critical path. The wizard-driven `installSkill()` remains the
+ * authoritative installer.
+ */
+export async function refreshSkillIfStale(opts: { homeOverride?: string } = {}): Promise<void> {
+  if (BUNDLED_SKILL_VERSION === 0) return; // Bundled skill has no version stamp — nothing to compare.
+  const home = opts.homeOverride ?? homedir();
+  const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
+  try {
+    assertPathSafe(skillPath, {
+      allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined,
+    });
+  } catch {
+    return;
+  }
+  let onDiskVersion = -1; // -1 = file missing (treat as needing install)
+  let readErr: unknown;
+  try {
+    const fs = await import("node:fs/promises");
+    const current = await fs.readFile(skillPath, "utf8");
+    onDiskVersion = readSkillVersion(current);
+  } catch (err) {
+    // ENOENT is expected (first run); any other error is a real read failure.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") readErr = err;
+  }
+  if (onDiskVersion >= BUNDLED_SKILL_VERSION) {
+    // No-op path — clear any prior failure only if read succeeded.
+    if (readErr === undefined) lastSkillRefreshError = null;
+    else
+      lastSkillRefreshError = {
+        code: "read-failed",
+        message: readErr instanceof Error ? readErr.message : String(readErr),
+      };
+    return;
+  }
+  try {
+    await mkdir(dirname(skillPath), { recursive: true });
+    await atomicWrite(SKILL_CONTENT, skillPath);
+    lastSkillRefreshError = null;
+    console.error(
+      `[Tandem] Refreshed bundled skill at ${skillPath} (v${onDiskVersion} → v${BUNDLED_SKILL_VERSION}).`,
+    );
+  } catch (err) {
+    lastSkillRefreshError = {
+      code: "write-failed",
+      message: err instanceof Error ? err.message : String(err),
+    };
+    console.error(
+      `[Tandem] Skill refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
+
 /**
  * Returns true if the channel-shim build artifact exists at the given path.
  * Exported so the prereq check can be tested without spawning runSetup.

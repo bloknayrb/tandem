@@ -7,7 +7,11 @@ import {
   type IntegrationsFile,
 } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
-import { createSupervisor, resolveSafeCwd } from "../../../src/server/launcher/supervisor.js";
+import {
+  createSupervisor,
+  resolveRouteCwd,
+  resolveSafeCwd,
+} from "../../../src/server/launcher/supervisor.js";
 
 let tmpDir: string;
 
@@ -171,6 +175,44 @@ describe("resolveSafeCwd — path normalization (security I2)", () => {
     expect(resolveSafeCwd(undefined as unknown as string)).toBeNull();
     expect(resolveSafeCwd(null as unknown as string)).toBeNull();
     expect(resolveSafeCwd(42 as unknown as string)).toBeNull();
+  });
+});
+
+describe("resolveRouteCwd — home-confined HTTP variant (PR 4b sec I1)", () => {
+  it("rejects everything resolveSafeCwd rejects", () => {
+    expect(resolveRouteCwd("relative/path")).toBeNull();
+    expect(resolveRouteCwd("/does/not/exist/xyz")).toBeNull();
+  });
+
+  it("accepts a real directory inside the user's home", () => {
+    // os.homedir() is the test process's home — we create a tmpdir inside it
+    // for the home-confined check. Using the existing tmpDir would fail on
+    // many CI environments where tmpDir is outside $HOME.
+    const homeReal = fs.realpathSync(os.homedir());
+    const inside = fs.mkdtempSync(path.join(homeReal, "route-cwd-test-"));
+    try {
+      const resolved = resolveRouteCwd(inside);
+      expect(resolved).toBe(fs.realpathSync(inside));
+    } finally {
+      fs.rmSync(inside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a real directory outside the user's home", () => {
+    // tmpDir from beforeEach lives in os.tmpdir(), which is outside $HOME on
+    // POSIX. On Windows %LOCALAPPDATA%\Temp may or may not be under %USERPROFILE%
+    // — skip the assertion if the test tmpdir happens to be home-rooted.
+    const home = fs.realpathSync(os.homedir());
+    const real = fs.realpathSync(tmpDir);
+    const relative = path.relative(home, real);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      expect(resolveRouteCwd(tmpDir)).toBeNull();
+    }
+  });
+
+  it("accepts the home directory itself", () => {
+    const home = fs.realpathSync(os.homedir());
+    expect(resolveRouteCwd(home)).toBe(home);
   });
 });
 

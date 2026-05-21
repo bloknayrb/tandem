@@ -38,3 +38,10 @@ export const API_CHAT = "/api/chat";
 // --- Setup / auth -----------------------------------------------------------
 export const API_SETUP = "/api/setup";
 export const API_ROTATE_TOKEN = "/api/rotate-token";
+
+// --- Auto-launcher (Claude Code supervisor, #477 PR 4b) ---------------------
+export const API_LAUNCHER_STATUS = "/api/launcher/status";
+export const API_LAUNCHER_NONCE = "/api/launcher/nonce";
+export const API_LAUNCHER_RELAUNCH = "/api/launcher/relaunch";
+export const API_LAUNCHER_START_FRESH = "/api/launcher/start-fresh";
+export const API_LAUNCHER_WORKING_DIRECTORY = "/api/launcher/working-directory";

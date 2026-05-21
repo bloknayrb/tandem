@@ -367,6 +367,19 @@ function openSettingsPopoverWithAck() {
 // after the reactive state they depend on is available.
 wireActionDeps({
   getActiveTabId: () => yjsSync.activeTabId,
+  getActiveDocumentPath: () => {
+    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+    return tab && !isUploadPath(tab.filePath) ? tab.filePath : null;
+  },
+  notify: (severity, message) => {
+    notifications.push({
+      id: `launcher-${Date.now()}`,
+      type: "launcher",
+      severity,
+      message,
+      timestamp: Date.now(),
+    });
+  },
   openSettings: openSettingsPopoverWithAck,
   openSettingsModal: openSettingsModalWithAck,
   toggleSoloMode: () =>
