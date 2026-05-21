@@ -183,7 +183,7 @@ pub fn run(opts: ReaperOpts) -> i32 {
         let _ = CloseHandle(parent_handle);
         // Intentionally DO NOT close `job` early — leave it for process teardown
         // so the OS performs the kill atomically with our exit.
-        let _ = job; // silence unused warning
+        let _ = job;
 
         child_exit
     }

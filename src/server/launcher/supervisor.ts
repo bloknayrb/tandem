@@ -28,8 +28,6 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
   integrationsBase: string;
-  /** Tandem MCP HTTP port — passed into Claude's env (TANDEM_MCP_PORT). */
-  mcpPort: number;
 }
 
 interface SpawnPlan {
@@ -65,13 +63,19 @@ export interface Supervisor {
   status(): SupervisorStatus;
 }
 
-export interface SupervisorStatus {
-  running: boolean;
-  pid?: number;
-  cwd?: string;
-  sessionId?: string;
-  resuming?: boolean;
-}
+/** Discriminated union: when `running === false` no other fields exist;
+ * when `running === true` all process-level fields are guaranteed present. */
+export type SupervisorStatus =
+  | { running: false; lastError?: string }
+  | {
+      running: true;
+      /** PID of the reaper process. Claude's own PID is intentionally not
+       * exposed — the reaper is the lifecycle owner. */
+      reaperPid: number;
+      cwd: string;
+      sessionId: string;
+      resuming: boolean;
+    };
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let child: ChildProcess | null = null;
@@ -90,6 +94,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * the same task chain (e.g. relaunch → stop → spawn) sequence naturally
    * because relaunch awaits stop before chaining. */
   let opLock: Promise<void> = Promise.resolve();
+  /** Last fatal error message — surfaced via status() when running=false. */
+  let lastError: string | undefined;
   function withLock<T>(fn: () => Promise<T>): Promise<T> {
     const next = opLock.then(fn, fn);
     opLock = next.then(
@@ -156,25 +162,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return os.homedir();
   }
 
-  /** Resolve a cwd candidate to a canonical path, rejecting UNC paths,
-   * Windows `\\?\` / `\\.\` device namespaces, and anything that does not
-   * canonicalize to a real directory under the user's filesystem. */
   function safeCwd(candidate: string): string | null {
-    if (!path.isAbsolute(candidate)) return null;
-    // Reject Windows device paths and UNC up front — `realpathSync` resolves
-    // them silently. Mirrors the apply-route safety pattern.
-    if (process.platform === "win32") {
-      if (candidate.startsWith("\\\\?\\") || candidate.startsWith("\\\\.\\")) return null;
-      if (candidate.startsWith("\\\\")) return null; // UNC
-    }
-    try {
-      const real = fs.realpathSync(candidate);
-      const stat = fs.statSync(real);
-      if (!stat.isDirectory()) return null;
-      return real;
-    } catch {
-      return null;
-    }
+    return resolveSafeCwd(candidate);
   }
 
   function reaperPath(): string {
@@ -203,9 +192,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     throw new Error(`tandem-reaper binary not found (checked ${adjacent})`);
   }
 
-  // Intentional behavior: TANDEM_CLAUDE_CMD honors PATH search via spawn.
-  // Security boundary is "user controls their own PATH" — same as running
-  // `claude` in any terminal would be. Matches src/server/mcp/launcher.ts.
+  // TANDEM_CLAUDE_CMD honors PATH search via spawn. Security boundary is
+  // "user controls their own PATH" — same as running `claude` in any terminal.
   function claudeCommand(): string {
     return process.env.TANDEM_CLAUDE_CMD || "claude";
   }
@@ -273,12 +261,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
 
     child.on("error", (err: NodeJS.ErrnoException) => {
+      // CRITICAL: clear child state so status() doesn't lie about being
+      // running and so subsequent start()/relaunch() actually re-attempt.
+      // ENOENT is unrecoverable without user action — trip the breaker
+      // immediately rather than schedule a doomed restart.
+      child = null;
+      currentCwd = undefined;
+      currentSessionId = undefined;
+      currentResuming = false;
       if (err.code === "ENOENT") {
+        lastError = "ENOENT: reaper or Claude binary not found";
+        breakerTripped = true;
         console.error(
           `[Launcher] Reaper or Claude binary not found. Install Claude Code: npm i -g @anthropic-ai/claude-code`,
         );
       } else {
+        lastError = `${err.code ?? "spawn-error"}: ${err.message}`;
         console.error("[Launcher] Reaper spawn error:", err);
+        if (!stopRequested) scheduleRestart();
       }
     });
 
@@ -375,14 +375,36 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     } catch {
       // best-effort
     }
-    // Reaper will escalate to SIGKILL after grace; we don't need to.
-    await new Promise<void>((resolve) => {
-      if (!child) return resolve();
-      const onExit = () => resolve();
-      child.once("exit", onExit);
-      // Safety net if exit never arrives.
-      setTimeout(resolve, 10_000);
+    // Wait for the reaper to exit gracefully. If it doesn't within
+    // SIGTERM_GRACE_MS, escalate to SIGKILL (which the reaper's own escalation
+    // would do for Claude anyway, but here we're escalating the REAPER itself
+    // because its kqueue/PDEATHSIG handler might be stuck). Then a final
+    // safety-net timeout so we never block shutdown indefinitely.
+    const SIGTERM_GRACE_MS = 6_000;
+    const SAFETY_NET_MS = 10_000;
+    const exited = await new Promise<boolean>((resolve) => {
+      const onExit = () => resolve(true);
+      c.once("exit", onExit);
+      setTimeout(() => resolve(false), SIGTERM_GRACE_MS);
     });
+    if (!exited) {
+      console.error("[Launcher] Reaper did not exit on SIGTERM — escalating to SIGKILL");
+      try {
+        c.kill("SIGKILL");
+      } catch {
+        // best-effort
+      }
+      await new Promise<void>((resolve) => {
+        c.once("exit", () => resolve());
+        setTimeout(resolve, SAFETY_NET_MS - SIGTERM_GRACE_MS);
+      });
+      if (c.exitCode === null && c.signalCode === null) {
+        console.error(
+          "[Launcher] Reaper failed to exit even after SIGKILL — abandoning handle, child may persist",
+        );
+        lastError = "stop-failed: reaper unresponsive to SIGKILL";
+      }
+    }
     child = null;
     currentCwd = undefined;
     currentSessionId = undefined;
@@ -404,16 +426,43 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   function status(): SupervisorStatus {
-    return child && !child.killed
-      ? {
-          running: true,
-          pid: child.pid,
-          cwd: currentCwd,
-          sessionId: currentSessionId,
-          resuming: currentResuming,
-        }
-      : { running: false };
+    if (
+      child &&
+      !child.killed &&
+      child.pid !== undefined &&
+      currentCwd !== undefined &&
+      currentSessionId !== undefined
+    ) {
+      return {
+        running: true,
+        reaperPid: child.pid,
+        cwd: currentCwd,
+        sessionId: currentSessionId,
+        resuming: currentResuming,
+      };
+    }
+    return lastError ? { running: false, lastError } : { running: false };
   }
 
   return { start, relaunch, stop, startFresh, status };
+}
+
+/** Exported for unit testing. Resolves a cwd candidate to a canonical path,
+ * rejecting UNC paths, Windows `\\?\` / `\\.\` device namespaces, relative
+ * paths, and anything that does not canonicalize to a real directory.
+ * Returns null on any rejection so callers can fall back to a safe default. */
+export function resolveSafeCwd(candidate: string): string | null {
+  if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return null;
+  if (process.platform === "win32") {
+    if (candidate.startsWith("\\\\?\\") || candidate.startsWith("\\\\.\\")) return null;
+    if (candidate.startsWith("\\\\")) return null; // UNC
+  }
+  try {
+    const real = fs.realpathSync(candidate);
+    const stat = fs.statSync(real);
+    if (!stat.isDirectory()) return null;
+    return real;
+  } catch {
+    return null;
+  }
 }

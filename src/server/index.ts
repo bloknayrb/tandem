@@ -452,7 +452,6 @@ async function main() {
         const { resolveAppDataDir } = await import("./platform.js");
         launcherSupervisor = createSupervisor({
           integrationsBase: resolveAppDataDir(),
-          mcpPort,
         });
         await launcherSupervisor.start();
       } catch (err) {

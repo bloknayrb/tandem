@@ -101,8 +101,7 @@ pub fn run(opts: ReaperOpts) -> i32 {
     );
     if let Err(e) = kevent(kq.as_raw_fd(), &[child_kev], &mut [], 0) {
         eprintln!("tandem-reaper: kevent register on child failed: {}", e);
-        // Child likely exited between fork() and EV_ADD (ESRCH). Drain it so
-        // we don't leave a zombie + block forever on the parent-only kevent.
+        // Child likely exited between fork() and EV_ADD (ESRCH). Drain it.
         if let Ok(WaitStatus::Exited(_, code)) =
             waitpid(child_pid, Some(WaitPidFlag::WNOHANG))
         {
@@ -113,8 +112,17 @@ pub fn run(opts: ReaperOpts) -> i32 {
         {
             return 128 + (sig as i32);
         }
-        // Child still alive, kevent failed for another reason — proceed with
-        // parent-only watch.
+        // Child still alive AND kevent failed for a non-ESRCH reason (EACCES
+        // under a tightened sandbox, EBADF if the kqueue fd was clobbered,
+        // etc.). We cannot reliably watch the child, so the parent-only
+        // watch could leave Claude as a zombie when it later exits. Kill it
+        // proactively rather than block indefinitely.
+        eprintln!(
+            "tandem-reaper: cannot watch child via kqueue — killing it to avoid zombie"
+        );
+        let _ = kill(child_pid, Signal::SIGKILL);
+        let _ = waitpid(child_pid, None);
+        return 1;
     }
 
     // 5. Block until one of the two kevents fires.
