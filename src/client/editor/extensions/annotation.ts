@@ -4,6 +4,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
 import {
+  ANNOTATION_DECORATIONS_TOGGLE_KEY,
   HIGHLIGHT_COLOR_VARS,
   normalizeHighlightColor,
   Y_MAP_ANNOTATIONS,
@@ -12,7 +13,18 @@ import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { annotationToPmRange } from "../../positions";
 
-const annotationPluginKey = new PluginKey("tandemAnnotations");
+export const annotationPluginKey = new PluginKey("tandemAnnotations");
+
+/**
+ * Meta payload to toggle inline annotation decorations on/off (#596).
+ * `App.svelte` dispatches this when the `showAnnotationDecorations`
+ * setting flips; the plugin's apply() handler rebuilds (or empties)
+ * the decoration set accordingly.
+ */
+export interface AnnotationToggleMeta {
+  type: "toggle-decorations";
+  visible: boolean;
+}
 
 /**
  * Build a DecorationSet from all pending annotations in the Y.Map.
@@ -142,18 +154,38 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     let hasAnnotations = annotationsMap.size > 0;
     let recoveryAttempted = false;
 
+    // #596: localStorage mirror lets the plugin read the setting at init
+    // without coupling to the Svelte settings store. Default `true` (show
+    // marks) when unset, matching the schema default.
+    let visible = true;
+    try {
+      const stored = localStorage.getItem(ANNOTATION_DECORATIONS_TOGGLE_KEY);
+      if (stored === "false") visible = false;
+    } catch (err) {
+      console.warn("[annotation] localStorage unavailable", err);
+    }
+
     return [
       new Plugin({
         key: annotationPluginKey,
 
         state: {
           init(_, state) {
-            return buildDecorations(state.doc, annotationsMap, ydoc);
+            return visible
+              ? buildDecorations(state.doc, annotationsMap, ydoc)
+              : DecorationSet.empty;
           },
           apply(tr, decorationSet, _oldState, newState) {
-            if (tr.getMeta(annotationPluginKey)) {
-              return buildDecorations(newState.doc, annotationsMap, ydoc);
+            const meta = tr.getMeta(annotationPluginKey) as AnnotationToggleMeta | true | undefined;
+            if (meta && typeof meta === "object" && meta.type === "toggle-decorations") {
+              visible = meta.visible;
             }
+            if (meta) {
+              return visible
+                ? buildDecorations(newState.doc, annotationsMap, ydoc)
+                : DecorationSet.empty;
+            }
+            if (!visible) return DecorationSet.empty;
             if (tr.docChanged) {
               // Y.Map observer can fire before y-prosemirror populates the doc,
               // leaving decorationSet empty despite annotations in the map.

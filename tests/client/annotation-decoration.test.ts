@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 
@@ -73,10 +73,13 @@ function getPlugin(ydoc: Y.Doc) {
   return plugins[0];
 }
 
-function makeTr(opts: { docChanged: boolean; meta?: boolean }) {
+function makeTr(opts: { docChanged: boolean; meta?: boolean | object }) {
   return {
     docChanged: opts.docChanged,
-    getMeta: () => (opts.meta ? true : undefined),
+    getMeta: () => {
+      if (opts.meta === undefined) return undefined;
+      return opts.meta;
+    },
     setMeta: () => makeTr({ docChanged: false, meta: true }),
     mapping: {
       map: (pos: number) => pos,
@@ -251,6 +254,105 @@ describe("annotation plugin apply() recovery branch", () => {
     );
 
     expect(result).not.toBe(EMPTY_SENTINEL);
+  });
+});
+
+// --- #596: showAnnotationDecorations toggle ---
+
+describe("annotation plugin decoration-visibility toggle (#596)", () => {
+  function clearStoredToggle() {
+    try {
+      localStorage.removeItem("tandem:showAnnotationDecorations");
+    } catch {
+      // localStorage may not exist in this environment — fine.
+    }
+  }
+
+  beforeEach(clearStoredToggle);
+  // Avoid leaking a `"false"` setting into AR2 tests further down the file —
+  // those build plugins via init() and would otherwise see EMPTY_SENTINEL.
+  afterEach(clearStoredToggle);
+
+  it("plugin init returns empty DecorationSet when toggle is stored false", () => {
+    localStorage.setItem("tandem:showAnnotationDecorations", "false");
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const initial = plugin.spec.state.init(null, fakeState);
+
+    expect(initial).toBe(EMPTY_SENTINEL);
+  });
+
+  it("plugin init returns built decorations when toggle is stored true", () => {
+    localStorage.setItem("tandem:showAnnotationDecorations", "true");
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const initial = plugin.spec.state.init(null, fakeState);
+
+    expect(initial).not.toBe(EMPTY_SENTINEL);
+  });
+
+  it("apply() clears decorations on toggle-decorations meta with visible=false", () => {
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const result = plugin.spec.state.apply(
+      makeTr({
+        docChanged: false,
+        meta: { type: "toggle-decorations", visible: false },
+      }),
+      { _stub: "previous-set" },
+      fakeState,
+      fakeState,
+    );
+
+    expect(result).toBe(EMPTY_SENTINEL);
+  });
+
+  it("apply() rebuilds decorations on toggle-decorations meta with visible=true", () => {
+    localStorage.setItem("tandem:showAnnotationDecorations", "false");
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const result = plugin.spec.state.apply(
+      makeTr({
+        docChanged: false,
+        meta: { type: "toggle-decorations", visible: true },
+      }),
+      EMPTY_SENTINEL,
+      fakeState,
+      fakeState,
+    );
+
+    expect(result).not.toBe(EMPTY_SENTINEL);
+  });
+
+  it("apply() suppresses docChanged rebuild path when visible is false", () => {
+    localStorage.setItem("tandem:showAnnotationDecorations", "false");
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    // If the plugin ignored the toggle it would call buildDecorations on the
+    // recovery branch (empty + docChanged + hasAnnotations).
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const result = plugin.spec.state.apply(
+      makeTr({ docChanged: true }),
+      EMPTY_SENTINEL,
+      fakeState,
+      fakeState,
+    );
+
+    expect(result).toBe(EMPTY_SENTINEL);
   });
 });
 
