@@ -284,7 +284,26 @@ describe("applyConfig — backup-before-overwrite (#644)", () => {
     expect(fs.existsSync(path.join(tmpDir, ".backups"))).toBe(false);
   });
 
-  it("does NOT back up on token rotation (default URL + Bearer header)", async () => {
+  it("does NOT back up when the new entry matches the existing entry byte-for-byte", async () => {
+    // Identity-rewrite case — the apply is a no-op on content terms.
+    // No churn.
+    const same = { type: "http", url: "http://127.0.0.1:3479/mcp" };
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { tandem: same } }));
+    const calls: string[] = [];
+    await applyConfig(configPath, {
+      create: { tandem: same },
+      remove: [],
+      onBackup: (p) => calls.push(p),
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("DOES back up on token rotation (different Bearer values)", async () => {
+    // Contract change vs the original PR-744 plan: token rotation now
+    // produces a backup because we cannot distinguish "Tandem rotated
+    // its own token" from "user hand-crafted an Authorization header
+    // that we'd silently destroy". The MAX_BACKUPS=3 cap keeps disk
+    // use bounded.
     fs.writeFileSync(
       configPath,
       JSON.stringify({
@@ -309,7 +328,7 @@ describe("applyConfig — backup-before-overwrite (#644)", () => {
       remove: [],
       onBackup: (p) => calls.push(p),
     });
-    expect(calls).toEqual([]);
+    expect(calls.length).toBe(1);
   });
 
   it("backs up when the existing tandem URL is non-default", async () => {
@@ -351,5 +370,90 @@ describe("applyConfig — backup-before-overwrite (#644)", () => {
       onBackup: (p) => calls.push(p),
     });
     expect(calls.length).toBe(1);
+  });
+
+  it("continues the rewrite when onBackup callback throws (callback is observational)", async () => {
+    // Contract: onBackup is informational — wizard push / CLI print /
+    // telemetry hop. If it throws, the rewrite MUST still complete so
+    // the user doesn't end up with an orphaned backup + un-applied
+    // config + no user-visible explanation.
+    const customConfig = JSON.stringify({
+      mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:9999/mcp" } },
+    });
+    fs.writeFileSync(configPath, customConfig);
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+      onBackup: () => {
+        throw new Error("simulated wizard push failure");
+      },
+    });
+    // Rewrite completed despite callback throw.
+    const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(written.mcpServers.tandem.url).toBe("http://127.0.0.1:3479/mcp");
+    // Backup file is still on disk (callback threw AFTER the write).
+    const backupDir = path.join(tmpDir, ".backups");
+    expect(fs.existsSync(backupDir)).toBe(true);
+    const backups = fs.readdirSync(backupDir);
+    expect(backups.length).toBe(1);
+  });
+});
+
+describe("applyConfig — atomicity contract (#644)", () => {
+  // Mock-based test of the load-bearing claim: if backup throws, the
+  // original config is untouched. Uses vi.spyOn on the underlying fs
+  // open() to fault-inject a write failure into writeBackup. Skipped on
+  // Windows because the spy interaction with pwsh-spawn timings is
+  // brittle there — POSIX coverage is sufficient.
+  let tmpDir: string;
+  let configPath: string;
+  let savedAppData: string | undefined;
+  const POSIX_ONLY = process.platform !== "win32";
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-atomicity-"));
+    configPath = path.join(tmpDir, ".claude.json");
+    savedAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = tmpDir;
+  });
+
+  afterEach(async () => {
+    if (savedAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = savedAppData;
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it.skipIf(!POSIX_ONLY)("leaves the original config intact when backup write fails", async () => {
+    // Pre-create the backup dir as a regular file so mkdirSync inside
+    // maybeBackupExistingConfig (with recursive:true) succeeds, but
+    // open(wx) on a child path will fail with ENOTDIR.
+    const backupDirAsFile = path.join(tmpDir, ".backups");
+    // Actually mkdirSync recursive:true tolerates pre-existing files
+    // poorly — easier to make the path itself unwritable. Use a
+    // pre-existing file at the EXACT backup-filename path so wx
+    // can't create one. We can't pin the UUID, but we can chmod the
+    // parent dir to 0o500 (read+execute, no write) — open(wx) inside
+    // it then fails with EACCES.
+    fs.mkdirSync(backupDirAsFile, { recursive: true, mode: 0o700 });
+    // chmod 0o500 to deny writes inside the dir.
+    fs.chmodSync(backupDirAsFile, 0o500);
+
+    const originalBytes = JSON.stringify({
+      mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:9999/mcp" } },
+    });
+    fs.writeFileSync(configPath, originalBytes);
+
+    await expect(
+      applyConfig(configPath, {
+        create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+        remove: [],
+      }),
+    ).rejects.toThrow();
+
+    // Original config bytes are byte-for-byte unchanged.
+    expect(fs.readFileSync(configPath, "utf-8")).toBe(originalBytes);
+
+    // Restore dir mode for cleanup.
+    fs.chmodSync(backupDirAsFile, 0o700);
   });
 });

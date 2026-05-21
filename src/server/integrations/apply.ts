@@ -18,6 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -44,7 +45,7 @@ import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
-import { backupDir, isNonDefaultTandem, pruneOldBackups, writeBackup } from "./backup.js";
+import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -565,8 +566,23 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   // the one backup the user actually needs. The write happens BEFORE the
   // rewrite — atomicity invariant: if backup throws, the original is
   // untouched.
-  const backupPath = await maybeBackupExistingConfig(configPath, existing);
-  if (backupPath) ops.onBackup?.(backupPath);
+  const backupPath = await maybeBackupExistingConfig(configPath, existing, ops);
+  if (backupPath && ops.onBackup) {
+    // The onBackup callback is observational — a wizard push, a CLI
+    // print, a telemetry hop. If the consumer throws, log it but DO
+    // NOT abort the rewrite: doing so would orphan the just-written
+    // backup file and leave the user's config un-applied, with no
+    // user-visible explanation.
+    try {
+      ops.onBackup(backupPath);
+    } catch (cbErr) {
+      console.error(
+        `  Warning: onBackup callback threw — continuing with rewrite: ${
+          cbErr instanceof Error ? cbErr.message : cbErr
+        }`,
+      );
+    }
+  }
 
   const merged: Record<string, McpEntry> = {
     ...(existing.mcpServers ?? {}),
@@ -598,15 +614,32 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
 async function maybeBackupExistingConfig(
   configPath: string,
   existing: { mcpServers?: Record<string, McpEntry> },
+  ops: ApplyOps,
 ): Promise<string | undefined> {
-  const tandemEntry = existing.mcpServers?.tandem as Record<string, unknown> | undefined;
-  if (!isNonDefaultTandem(tandemEntry, `${MCP_URL}/mcp`)) return undefined;
+  const existingTandem = existing.mcpServers?.tandem;
+  if (!shouldBackup(existingTandem, ops.create.tandem)) return undefined;
 
   const dir = backupDir(resolveAppDataDir());
   // assertPathSafe defeats XDG_DATA_HOME poisoning — same hardening as
   // the broken-JSON backup path above.
   assertPathSafe(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  // mkdirSync's `mode` only applies on creation. If the dir already
+  // existed at a more permissive mode (older umask, manual creation,
+  // user fiddling), tighten it now. POSIX-only; on Windows the file's
+  // own ACL — set by setRestrictiveAcl inside writeBackup — is the
+  // protection. Filenames in a broader dir leak timestamps, not
+  // bytes; failing closed here would block legit setups for that.
+  if (process.platform !== "win32") {
+    try {
+      const dirStat = statSync(dir);
+      if ((dirStat.mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
+    } catch {
+      // stat/chmod failure is non-fatal — proceeds with the wider
+      // protection on the file itself.
+    }
+  }
 
   const content = readFileSync(configPath);
   const backupPath = await writeBackup(dir, content);

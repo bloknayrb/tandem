@@ -6,51 +6,74 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   backupDir,
   backupFilename,
-  isNonDefaultTandem,
   listBackups,
   MAX_BACKUPS,
   pruneOldBackups,
+  shouldBackup,
   sweepBackupsOnStartup,
   writeBackup,
 } from "../../../src/server/integrations/backup.js";
 
 const POSIX_ONLY = process.platform !== "win32";
 
-describe("isNonDefaultTandem", () => {
-  const EXPECTED = "http://127.0.0.1:3479/mcp";
+describe("shouldBackup — content-based predicate", () => {
+  const DEFAULT_NEW = { type: "http", url: "http://127.0.0.1:3479/mcp" };
 
-  it("returns false for undefined (fresh install)", () => {
-    expect(isNonDefaultTandem(undefined, EXPECTED)).toBe(false);
+  it("returns false when existing is undefined (fresh install)", () => {
+    expect(shouldBackup(undefined, DEFAULT_NEW)).toBe(false);
   });
 
-  it("returns false for the default HTTP-shape entry", () => {
-    const entry = { type: "http", url: EXPECTED };
-    expect(isNonDefaultTandem(entry, EXPECTED)).toBe(false);
+  it("returns false when existing is null", () => {
+    expect(shouldBackup(null, DEFAULT_NEW)).toBe(false);
   });
 
-  it("returns false for the default entry with a Bearer header (token rotation)", () => {
-    const entry = { type: "http", url: EXPECTED, headers: { Authorization: "Bearer xyz" } };
-    expect(isNonDefaultTandem(entry, EXPECTED)).toBe(false);
+  it("returns false when existing matches new entry byte-for-byte", () => {
+    expect(shouldBackup({ ...DEFAULT_NEW }, DEFAULT_NEW)).toBe(false);
+  });
+
+  it("returns false when existing matches new entry with different key order", () => {
+    // Canonical JSON: key order doesn't matter.
+    const reordered = { url: DEFAULT_NEW.url, type: DEFAULT_NEW.type };
+    expect(shouldBackup(reordered, DEFAULT_NEW)).toBe(false);
   });
 
   it("returns true when URL differs (custom port)", () => {
-    const entry = { type: "http", url: "http://127.0.0.1:9999/mcp" };
-    expect(isNonDefaultTandem(entry, EXPECTED)).toBe(true);
+    const existing = { type: "http", url: "http://127.0.0.1:9999/mcp" };
+    expect(shouldBackup(existing, DEFAULT_NEW)).toBe(true);
   });
 
-  it("returns true when URL points at a remote relay", () => {
-    const entry = { type: "http", url: "https://remote.example.com/mcp" };
-    expect(isNonDefaultTandem(entry, EXPECTED)).toBe(true);
+  it("returns true on token rotation (different Bearer values)", () => {
+    // Contract change from earlier shape-based predicate: token rotation
+    // now triggers a backup. Acceptable churn (MAX_BACKUPS=3 caps disk
+    // use). Closes the silent-overwrite gap where a hand-crafted
+    // Authorization header would be destroyed without a recovery file.
+    const existing = {
+      type: "http",
+      url: DEFAULT_NEW.url,
+      headers: { Authorization: "Bearer old" },
+    };
+    const newWithRotated = {
+      ...DEFAULT_NEW,
+      headers: { Authorization: "Bearer new" },
+    };
+    expect(shouldBackup(existing, newWithRotated)).toBe(true);
   });
 
-  it("returns true when the entry carries stdio-shape keys (command/args/env)", () => {
-    const entry = { command: "node", args: ["/path/to/shim.js"] };
-    expect(isNonDefaultTandem(entry, EXPECTED)).toBe(true);
+  it("returns true when existing has stdio-shape keys (command/args/env)", () => {
+    const existing = { command: "node", args: ["/path/to/shim.js"] };
+    expect(shouldBackup(existing, DEFAULT_NEW)).toBe(true);
   });
 
-  it("returns true when the entry has a custom field outside the known set", () => {
-    const entry = { type: "http", url: EXPECTED, customNote: "added by hand" };
-    expect(isNonDefaultTandem(entry, EXPECTED)).toBe(true);
+  it("returns true when existing has a hand-crafted Authorization header (security gap closed)", () => {
+    // This is the case the shape-based predicate missed: existing has
+    // a user-customised Bearer token, new has the same shape but no
+    // headers. Tandem would silently destroy the token without backup.
+    const existing = {
+      type: "http",
+      url: DEFAULT_NEW.url,
+      headers: { Authorization: "Bearer user-hand-crafted-token" },
+    };
+    expect(shouldBackup(existing, DEFAULT_NEW)).toBe(true);
   });
 });
 

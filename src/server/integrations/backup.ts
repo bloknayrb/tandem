@@ -102,14 +102,34 @@ export async function writeBackup(dir: string, content: Buffer): Promise<string>
   // is the real concern). `0o600` is honoured on POSIX; on Windows
   // we apply setRestrictiveAcl below.
   const fd = await open(backupPath, "wx", 0o600);
+  let writeFailed = false;
   try {
-    await fd.write(content);
+    try {
+      await fd.write(content);
+    } catch (writeErr) {
+      writeFailed = true;
+      throw writeErr;
+    }
   } finally {
     await fd.close();
+    if (writeFailed) {
+      // Remove the partial/zero-byte file so it doesn't count against
+      // MAX_BACKUPS or mislead a forensic read. Cleanup errors are
+      // swallowed — the write failure is what the caller needs to see.
+      await rm(backupPath, { force: true }).catch(() => {});
+    }
   }
 
   if (process.platform === "win32") {
-    await setRestrictiveAcl(backupPath);
+    try {
+      await setRestrictiveAcl(backupPath);
+    } catch (aclErr) {
+      // ACL failure leaves a bearer-token-bearing file on disk at the
+      // dir-inherited permissions. Remove it — the caller treats the
+      // throw as "abort", so an orphan would be invisible.
+      await rm(backupPath, { force: true }).catch(() => {});
+      throw aclErr;
+    }
   }
 
   return backupPath;
@@ -163,30 +183,41 @@ export async function sweepBackupsOnStartup(appDataDir: string): Promise<void> {
 }
 
 /**
- * Allowed top-level keys for a tandem HTTP-target entry. Anything else
- * is a sign the user customised the entry by hand — we treat that as
- * non-default and back it up before overwriting.
+ * Decide whether overwriting `existing` with `newEntry` could lose
+ * information the user might care about. The check is content-based,
+ * not shape-based: shape-only checks miss the case where a user
+ * hand-crafted `headers.Authorization` with a custom Bearer token —
+ * Tandem's overwrite would silently destroy it because the entry's
+ * SHAPE matches the default (URL identical, only known keys present).
  *
- * stdio-shape keys (`command`/`args`/`env`) appearing in a tandem entry
- * targeting HTTP are by definition non-default; they hit the
- * "unknown keys" branch below.
+ * Returns `true` when:
+ *   - existing entry exists, AND
+ *   - existing != newEntry under canonical-JSON equality.
+ *
+ * This trades off: token rotation now triggers a backup (the bytes
+ * change). That's acceptable churn — `MAX_BACKUPS=3` caps disk usage
+ * and the user gets a strict history of recent token-bearing configs
+ * as a side benefit. The alternative (shape-only check) had a
+ * security review-flagged silent-destruction gap that we cannot close
+ * without state we don't have (Tandem can't distinguish "token Tandem
+ * itself wrote 5 minutes ago" from "token the user added by hand").
  */
-const KNOWN_TANDEM_HTTP_KEYS = new Set(["type", "url", "headers"]);
+export function shouldBackup(existing: unknown, newEntry: unknown): boolean {
+  if (existing == null) return false;
+  return canonicalJson(existing) !== canonicalJson(newEntry);
+}
 
 /**
- * Decide whether an existing tandem entry counts as "non-default" — i.e.
- * something the user customised that we owe a backup for before
- * overwriting. Returns `true` if the entry's URL differs from
- * `expectedUrl` or it carries any key outside the HTTP-target shape.
+ * Deterministic JSON-string with sorted object keys. Defeats key-order
+ * false-positives (`{a:1,b:2}` vs `{b:2,a:1}` would otherwise
+ * stringify differently).
  */
-export function isNonDefaultTandem(
-  entry: Record<string, unknown> | undefined,
-  expectedUrl: string,
-): boolean {
-  if (!entry) return false;
-  if (entry.url !== expectedUrl) return true;
-  for (const k of Object.keys(entry)) {
-    if (!KNOWN_TANDEM_HTTP_KEYS.has(k)) return true;
-  }
-  return false;
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  const parts = keys.map(
+    (k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`,
+  );
+  return `{${parts.join(",")}}`;
 }
