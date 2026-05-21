@@ -62,6 +62,13 @@ export interface ClaudeCodeIntegration {
   url: string;
   tokenSecretRef?: string;
   apply?: ApplyIntent;
+  /**
+   * Optional cwd for the auto-spawned Claude child (PR #477 PR-4 auto-launcher).
+   * Default: user's home directory. Per-integration so users with multiple
+   * Claude installations (e.g., one for work, one for personal) can pin each
+   * to a different project root. Absolute paths only.
+   */
+  workingDirectory?: string;
 }
 
 export interface ClaudeDesktopIntegration {
