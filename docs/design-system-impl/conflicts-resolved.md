@@ -61,9 +61,9 @@ Conventions used below:
 
 ## #9 — Animation Language Rollout (Phase 4, deferred)
 
-- **Resolution:** Defer the bundle's 9 motion scenes to a follow-up PR series after the umbrella merges.
-- **Why:** Threading motion through every animated surface is roughly equal in scope to the visual re-skin itself. Doing both in one umbrella ~2x the work; the visual surfaces benefit from being in their final shape before motion lands. Phase 0k filed the follow-up tracking issue.
-- **Sub-PR constraint:** Sub-PRs in Phases 1–3 may use existing motion (don't strip what's there) but should not introduce new animation choreography. `motion.md` (Phase 0, deferred to alongside this work) is the canonical reference for future scenes.
+- **Resolution:** Defer the bundle's 9 motion scenes to a follow-up PR series after the umbrella merges. Tracked as [#798](https://github.com/bloknayrb/tandem/issues/798).
+- **Why:** Threading motion through every animated surface is roughly equal in scope to the visual re-skin itself. Doing both in one umbrella ~2x the work; the visual surfaces benefit from being in their final shape before motion lands. The umbrella merge is a v1.0-prep milestone; v1.0 GA gates on #798 closing.
+- **Sub-PR constraint:** Sub-PRs in Phases 1–3 may use existing motion (don't strip what's there) but should not introduce new animation choreography. `motion.md` (deferred to land alongside #798's pickup) is the canonical reference for future scenes.
 
 ---
 
