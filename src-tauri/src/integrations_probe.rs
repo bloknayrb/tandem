@@ -72,41 +72,167 @@ pub struct UnvalidatedSidecarLocation {
 }
 
 impl UnvalidatedSidecarLocation {
-    /// Validate the pointer payload. Spike-level checks:
+    /// Validate the pointer payload. Hardened per #642:
     ///
-    /// 1. Reject symlinks at `self.exe` (TOCTOU surface — a symlink-following
-    ///    spawn could be redirected by a non-privileged attacker who can
-    ///    write next to the install root).
-    /// 2. If `install_roots` is non-empty, require `self.exe` to live inside
-    ///    one of them.
-    ///
-    /// PR 4 must extend this with: parent-dir ownership check, group/world-
-    /// writable rejection, canonicalisation against the allowlist (current
-    /// `starts_with` is prefix-only). See GH issue tracking PR-4 acceptance
-    /// criterion #1.
+    /// 1. **Reparse-point rejection.** POSIX: reject any `is_symlink()` along
+    ///    `self.exe`. Windows: reject any path component carrying
+    ///    `FILE_ATTRIBUTE_REPARSE_POINT` — catches symlinks AND junctions,
+    ///    which `is_symlink()` does not.
+    /// 2. **Hardlink rejection (POSIX).** Assert `nlink == 1` on the exe
+    ///    itself. A pre-existing second name for the exe lets an attacker
+    ///    swap content via the other link. Windows path is `None` here
+    ///    because `MetadataExt::number_of_links()` is still unstable
+    ///    (rust-lang/rust#63010); #643's parent-directory ACL audit closes
+    ///    this attack surface on Windows by ensuring the attacker cannot
+    ///    write a second link into the restricted install directory.
+    /// 3. **POSIX parent-dir mode check.** Reject group/world-writable parents
+    ///    (`mode & 0o022 != 0`). Windows ACL audit lives in #643 — out of
+    ///    scope for this validator.
+    /// 4. **Canonicalised install-root allowlist.** Canonicalise both
+    ///    `self.exe` and every allowlist entry before `starts_with`. Raw
+    ///    `PathBuf::starts_with` is component-prefix only and bypassable via
+    ///    `..` segments or alternate-stream paths on Windows. Caller is
+    ///    responsible for deriving the allowlist from the running launcher's
+    ///    own canonical exe path (e.g. `std::env::current_exe()` →
+    ///    canonicalise → parent dir) rather than from a user-controlled env
+    ///    var like `%ProgramFiles%`.
     pub fn validate(self, install_roots: &[&Path]) -> Result<SidecarLocation, String> {
-        if let Ok(meta) = std::fs::symlink_metadata(&self.exe) {
-            if meta.file_type().is_symlink() {
+        let exe = &self.exe;
+
+        let exe_meta = std::fs::symlink_metadata(exe).map_err(|e| {
+            format!("stat sidecar exe {}: {e}", exe.display())
+        })?;
+
+        if is_reparse_or_symlink(&exe_meta) {
+            return Err(format!(
+                "sidecar exe is a symlink or reparse point, rejecting: {}",
+                exe.display()
+            ));
+        }
+
+        if let Some(nlink) = hardlink_count(&exe_meta) {
+            if nlink > 1 {
                 return Err(format!(
-                    "sidecar exe is a symlink, rejecting: {}",
-                    self.exe.display()
+                    "sidecar exe has {nlink} hardlinks (expected 1), rejecting: {}",
+                    exe.display()
                 ));
             }
         }
+
+        #[cfg(unix)]
+        {
+            let parent = exe.parent().ok_or_else(|| {
+                format!("sidecar exe has no parent directory: {}", exe.display())
+            })?;
+            check_posix_parent_mode(parent)?;
+        }
+
+        let canonical_exe = std::fs::canonicalize(exe).map_err(|e| {
+            format!("canonicalise sidecar exe {}: {e}", exe.display())
+        })?;
+
+        // Any reparse point along the resolved exe path is fatal — a junction
+        // mid-path can redirect canonicalisation result on Windows. POSIX
+        // `canonicalize` already resolves symlinks so the check is a no-op,
+        // but it costs nothing to keep symmetric.
+        for ancestor in canonical_exe.ancestors() {
+            if ancestor == canonical_exe.as_path() {
+                continue;
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(ancestor) {
+                if is_reparse_or_symlink(&meta) {
+                    return Err(format!(
+                        "ancestor of sidecar exe is a symlink or reparse point: {}",
+                        ancestor.display()
+                    ));
+                }
+            }
+        }
+
         if !install_roots.is_empty() {
-            let in_root = install_roots.iter().any(|root| self.exe.starts_with(root));
+            let canonical_roots: Vec<PathBuf> = install_roots
+                .iter()
+                .map(|root| {
+                    std::fs::canonicalize(root).map_err(|e| {
+                        format!("canonicalise install root {}: {e}", root.display())
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            let in_root = canonical_roots
+                .iter()
+                .any(|root| canonical_exe.starts_with(root));
             if !in_root {
                 return Err(format!(
                     "sidecar exe not in any allowed install root: {}",
-                    self.exe.display()
+                    canonical_exe.display()
                 ));
             }
         }
+
         Ok(SidecarLocation {
-            exe: self.exe,
+            exe: canonical_exe,
             args: self.args,
         })
     }
+}
+
+/// True for symbolic-link reparse points (POSIX + Windows) AND non-symlink
+/// reparse points like Windows directory junctions. `Metadata::file_type()
+/// .is_symlink()` returns false for junctions; the only reliable catch-all on
+/// Windows is the `FILE_ATTRIBUTE_REPARSE_POINT` bit.
+fn is_reparse_or_symlink(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Hardlink count for the file. POSIX uses stable `MetadataExt::nlink()`.
+/// Windows `number_of_links()` is still unstable behind the `windows_by_handle`
+/// feature (rust-lang/rust#63010); rather than pull in `windows-sys` for a
+/// single bit of info, the Windows branch returns `None` and relies on #643's
+/// parent-directory ACL audit — which prevents the attacker from creating a
+/// second hardlink into a user-only restricted directory in the first place.
+fn hardlink_count(meta: &std::fs::Metadata) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Some(meta.nlink());
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
+}
+
+/// POSIX-only: reject parent directories whose mode allows group or world
+/// write. A writable parent dir lets an attacker swap the exe between
+/// validation and spawn (TOCTOU). Windows ACL inspection of the parent is
+/// #643's territory.
+#[cfg(unix)]
+fn check_posix_parent_mode(parent: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(parent).map_err(|e| {
+        format!("stat sidecar parent dir {}: {e}", parent.display())
+    })?;
+    let mode = meta.permissions().mode();
+    if mode & 0o022 != 0 {
+        return Err(format!(
+            "sidecar parent dir is group/world-writable (mode {:o}): {}",
+            mode & 0o777,
+            parent.display()
+        ));
+    }
+    Ok(())
 }
 
 /// A validated sidecar location ready to spawn. Constructed only via
@@ -428,9 +554,10 @@ mod tests {
     }
 
     /// POSIX-only: validate() must reject a symlinked exe. On Windows
-    /// symlink creation requires Developer Mode or admin, so this test is
-    /// gated to Unix; the symlink-rejection logic itself runs on every
-    /// platform via `symlink_metadata`.
+    /// symlink creation requires Developer Mode or admin; the Windows
+    /// reparse-point branch is covered by `is_reparse_or_symlink` unit
+    /// behaviour (the bit-mask check) and CI Linux/macOS runners exercise
+    /// this case live.
     #[cfg(unix)]
     #[test]
     fn validate_rejects_symlink_exe() {
@@ -445,7 +572,50 @@ mod tests {
             args: vec![],
         };
         let err = loc.validate(&[]).unwrap_err();
-        assert!(err.contains("symlink"), "err was: {err}");
+        assert!(
+            err.contains("symlink") || err.contains("reparse"),
+            "err was: {err}"
+        );
+    }
+
+    /// POSIX hardlink rejection. `nlink == 2` after a second name is created;
+    /// validate must refuse to spawn from a file with siblings that could
+    /// swap content.
+    #[cfg(unix)]
+    #[test]
+    fn validate_rejects_hardlinked_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real-sidecar");
+        std::fs::write(&real, b"binary").unwrap();
+        let alt = dir.path().join("alt-name");
+        std::fs::hard_link(&real, &alt).unwrap();
+        let loc = UnvalidatedSidecarLocation {
+            exe: real,
+            args: vec![],
+        };
+        let err = loc.validate(&[]).unwrap_err();
+        assert!(err.contains("hardlink"), "err was: {err}");
+    }
+
+    /// POSIX parent-dir mode rejection. `chmod 0o777` makes the dir
+    /// world-writable — validate must refuse.
+    #[cfg(unix)]
+    #[test]
+    fn validate_rejects_world_writable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let exe = dir.path().join("node-sidecar");
+        std::fs::write(&exe, b"binary").unwrap();
+        let loc = UnvalidatedSidecarLocation {
+            exe,
+            args: vec![],
+        };
+        let err = loc.validate(&[]).unwrap_err();
+        assert!(
+            err.contains("group/world-writable"),
+            "err was: {err}"
+        );
     }
 
     #[test]
@@ -453,18 +623,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("node-sidecar");
         std::fs::write(&exe, b"binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let loc = UnvalidatedSidecarLocation {
             exe: exe.clone(),
             args: vec![],
         };
         let validated = loc.validate(&[dir.path()]).unwrap();
-        assert_eq!(validated.exe, exe);
+        // Validate returns the canonical form — assert structurally rather
+        // than byte-equal because Windows adds `\\?\` and macOS resolves
+        // `/var` → `/private/var`.
+        assert!(validated.exe.ends_with("node-sidecar"));
     }
 
     #[test]
     fn validate_with_install_root_allowlist_rejects_outside() {
         let outside_dir = tempfile::tempdir().unwrap();
         let allowed_dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(outside_dir.path(), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
         let exe = outside_dir.path().join("node-sidecar");
         std::fs::write(&exe, b"binary").unwrap();
         let loc = UnvalidatedSidecarLocation {
@@ -473,6 +657,71 @@ mod tests {
         };
         let err = loc.validate(&[allowed_dir.path()]).unwrap_err();
         assert!(err.contains("install root"), "err was: {err}");
+    }
+
+    /// Canonicalisation must defeat traversal-style allowlist bypass. An exe
+    /// at `<outside>/node-sidecar` referenced through `<allowed>/../<outside>`
+    /// must still be rejected, because `starts_with` runs on the canonical
+    /// resolved path, not the raw component prefix.
+    #[test]
+    fn validate_canonicalises_before_starts_with() {
+        let outside_dir = tempfile::tempdir().unwrap();
+        let allowed_dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(outside_dir.path(), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        let real_exe = outside_dir.path().join("node-sidecar");
+        std::fs::write(&real_exe, b"binary").unwrap();
+
+        // Build a traversal path: <allowed>/../<outside-basename>/node-sidecar.
+        // This path's raw prefix starts with `allowed_dir`, but canonicalises
+        // to `outside_dir`, so a raw `starts_with` check would falsely pass.
+        let outside_basename = outside_dir.path().file_name().unwrap();
+        let traversal = allowed_dir
+            .path()
+            .join("..")
+            .join(outside_basename)
+            .join("node-sidecar");
+
+        let loc = UnvalidatedSidecarLocation {
+            exe: traversal,
+            args: vec![],
+        };
+        let err = loc.validate(&[allowed_dir.path()]).unwrap_err();
+        assert!(err.contains("install root"), "err was: {err}");
+    }
+
+    /// Documents the intended caller pattern for PR 4 main: derive the
+    /// install-root allowlist from the running launcher's own canonical exe
+    /// path (parent dir), not from `%ProgramFiles%` or any user-controlled
+    /// env var. Here we simulate that by treating a tempdir as the
+    /// "launcher install dir" and validating an exe sibling.
+    #[test]
+    fn validate_documents_exe_derived_install_root_pattern() {
+        let install_dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(install_dir.path(), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        // Simulated launcher binary location (analogous to current_exe()).
+        let launcher = install_dir.path().join("tandem-launcher");
+        std::fs::write(&launcher, b"launcher").unwrap();
+        // Derive root from launcher path — this is the PR 4 contract.
+        let derived_root = launcher.parent().unwrap();
+
+        let sidecar = install_dir.path().join("node-sidecar");
+        std::fs::write(&sidecar, b"binary").unwrap();
+        let loc = UnvalidatedSidecarLocation {
+            exe: sidecar,
+            args: vec![],
+        };
+        let validated = loc.validate(&[derived_root]).unwrap();
+        assert!(validated.exe.ends_with("node-sidecar"));
     }
 
     /// Live spawn against a real bundled sidecar. Gated `#[ignore]` because
