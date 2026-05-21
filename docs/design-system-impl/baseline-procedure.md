@@ -1,74 +1,87 @@
-# Visual Snapshot Baseline Procedure
+# Visual Baseline Procedure
 
-Phase 0i of the design-system-impl umbrella. The spec lives at `tests/e2e/design-system-impl-baseline.spec.ts`.
+Phase 0i of the design-system-impl umbrella. The capture script lives at `scripts/design-baselines/capture.spec.ts`; baselines land in `docs/design-system-impl/preview/baselines/`.
 
-## What this gate catches
+## What this is
 
-**Cross-surface unintended drift.** Each sub-PR intentionally regenerates baselines for the surface it touches — the value of the gate is firing when an unrelated surface also changed (e.g. PR 1.2 re-skins the toolbar and accidentally restyles the annotation card).
+A **visual reference library** for the eight cross-cutting surfaces of Tandem, captured as self-contained HTML files (markup + inlined CSS). Each file opens in OpenDesign and any browser without needing the dev server.
 
-What it explicitly does NOT replace: visual review. A passing pixel diff means "no unintended drift since the last baseline." It says nothing about whether the new baseline is correct. Reviewers still look at the OD render (or the running app) to confirm intent.
+The role is reference + drift detection at PR review time, **not** automated CI assertion. When a sub-PR re-skins a surface, the HTML for that surface regenerates, the git diff shows the markup/class change to reviewers, and OpenDesign renders the visual change for visual review.
 
-## Scope rationale
+## Why HTML, not PNG
 
-Eight cross-cutting / shared-recipe surfaces, light + dark = **16 baselines total**. Not every surface in the plan.
+Previous iteration of this gate used Playwright `toHaveScreenshot()` pixel diffs. HTML is strictly better for this use case:
 
-The plan's "every surface (~30) × light/dark × two viewports = ~120 PNGs" mandate was sized for a hypothetical visual-only regression gate. In practice:
-- Most surfaces consume shared recipes (the floating-pill, AnnotationCard chrome, modal frame). Covering the recipes covers their consumers.
-- 120 PNGs is a maintenance tax that overwhelms the signal. Sub-PRs would routinely touch 5+ baselines and reviewer fatigue would normalize "yeah, update all of them."
-- Narrow viewport coverage doubles fixture count and is better captured by the Phase 5 manual claude-in-chrome walkthrough (responsive behavior is structural, not pixel-perfect).
+- **OS-portable.** PNGs differ between Windows / macOS / Linux because of font rendering, anti-aliasing, sub-pixel layout. HTML renders consistently. No platform gates or CI-only seeding needed.
+- **Viewable in OpenDesign.** OD watches `docs/design-system-impl/`. HTML files render there directly; PNG files are just images.
+- **Human-readable diffs.** A git diff on HTML shows the class added, the testid renamed, the attribute changed — actionable feedback. A pixel diff is opaque ("12% of pixels differ" — where? why?).
+- **Self-contained.** Inlined CSS means the file is portable — share via OD, drop in a Slack message, archive, whatever.
+- **No CI cost.** The capture spec is on-demand only; routine CI doesn't run it.
 
-The eight surfaces:
-1. **TitleBar** — sets type, color, and chrome density expectations for the rest of the app.
+## Scope (8 surfaces × 2 themes = 16 files)
+
+Eight cross-cutting / shared-recipe surfaces. The plan called for ~30 surfaces × 2 viewports = ~120 captures; that's too much maintenance for the signal value. Most surfaces consume shared recipes (floating-pill, card chrome, modal frame), so covering the recipes covers their consumers.
+
+1. **TitleBar** — type, color, chrome density expectations.
 2. **Editor body** — typography + authorship gutter + decoration colors.
 3. **SidePanel (annotations tab)** — rail chrome + filter bar + card list.
-4. **AnnotationCard (CommentCard)** — covers the card chrome recipe; if Note/Suggestion/Imported drift independently from CommentCard, that surfaces in their respective sub-PRs.
-5. **FormattingBar** — floating-pill recipe shared with command palette.
-6. **CommandPalette** — exercises the same floating-pill recipe.
-7. **SettingsModal** — modal frame recipe shared with help, file-open, integration wizard.
+4. **AnnotationCard (CommentCard)** — card chrome recipe.
+5. **FormattingBar** — floating-pill recipe.
+6. **CommandPalette** — exercises the floating-pill recipe in a different surface.
+7. **SettingsModal** — modal frame recipe.
 8. **ToastContainer** — status color tokens + transient animation surface.
 
-## Linux-only
+## How to capture
 
-Playwright's `toHaveScreenshot()` is sensitive to font rendering, anti-aliasing, and sub-pixel layout. These differ between Windows/macOS/Linux. CI is `ubuntu-latest`; baselines are generated and asserted only on Linux. Local Windows/macOS dev runs auto-skip the spec.
-
-If you want to run it locally on Linux: spec runs as part of `npm run test:e2e`. To regenerate baselines locally on Linux: `npx playwright test design-system-impl-baseline.spec.ts --update-snapshots`.
-
-## Seeding baselines from CI
-
-Baselines must be generated from the same OS image that runs the assertions. The repo does NOT ship pre-built PNG baselines from any contributor's local machine.
-
-To seed baselines on a fresh umbrella branch (one-shot):
-
-1. Push the spec to the umbrella branch (or its descendant). CI runs `npm run test:e2e`; the baseline spec fails because no PNGs exist yet. The `playwright-report` artifact contains the "actual" PNGs from the failing run.
-2. Trigger the `seed-design-baselines` workflow_dispatch job (`.github/workflows/seed-design-baselines.yml`). The job re-runs ONLY this spec with `--update-snapshots`, commits the generated PNGs back to the branch, and pushes.
-3. From that point on, sub-PRs that intentionally update a surface regenerate its baseline locally (Linux, Docker, or a fresh CI run) and commit the new PNG.
-
-The seeding workflow is a one-time setup — not a routine maintenance tool. Sub-PRs update baselines surface-by-surface, not by re-running the seed.
-
-## Sub-PR baseline updates
-
-When a sub-PR intentionally re-skins a surface covered by this spec:
-
-1. Run the spec on Linux with `--update-snapshots`:
-   ```
-   npx playwright test design-system-impl-baseline.spec.ts -g "surface-name" --update-snapshots
-   ```
-2. Commit ONLY the PNGs for the surfaces the sub-PR actually touched. If the diff includes unexpected PNGs (a surface the sub-PR didn't intend to touch), that IS the drift signal — investigate, don't blindly commit.
-3. The PR description's verification section explicitly lists which baselines were updated and why.
-
-## Excluding the spec from a CI run
-
-If the baseline spec is blocking unrelated CI work (e.g. a hotfix PR that legitimately doesn't need to touch the design system), use Playwright's grep-invert:
+From the repo root:
 
 ```
-npm run test:e2e -- --grep-invert "design-system-impl-baseline"
+npm run capture:design-baselines
 ```
 
-This should be an exception, not a norm. The default is "always run."
+The command spawns the dev server, runs the capture spec, and writes 16 HTML files to `docs/design-system-impl/preview/baselines/`. Takes a couple of minutes.
 
-## When this gate is retired
+After capture:
+- Open the files in OpenDesign (auto-detected) or directly in any browser.
+- `git status` shows which baselines changed since last capture.
+- `git diff` on any HTML file shows the markup/class change.
 
-The spec ships with the umbrella branch. When the umbrella merges to master:
-- Keep the spec in master as ongoing protection against design regression on the merged-in surfaces.
-- The seeding workflow can be removed (or kept as a tool for future redesigns).
-- Phase 0 docs (this file, derived-spec.md, conflicts-resolved.md) stay in `docs/design-system-impl/` as historical record of the umbrella's design decisions.
+## Sub-PR ritual
+
+When a sub-PR re-skins a surface covered by this set:
+
+1. After implementing the change, run `npm run capture:design-baselines`.
+2. `git status` will show updated HTML files for the surface (and possibly cross-cutting surfaces that consume the same recipe).
+3. Commit ONLY the HTML files for surfaces the sub-PR intentionally touched. If unexpected files changed, that IS the drift signal — investigate before committing.
+4. PR description lists which baselines updated and why.
+5. Reviewer opens the updated HTML in OD to confirm the visual matches intent; the git diff confirms the markup/class change is minimal.
+
+If a sub-PR doesn't touch any of the 8 surfaces, no baseline regeneration needed.
+
+## What the captured HTML contains
+
+- Full page body markup at the moment of capture.
+- All inlined CSS reachable from the page (own-origin stylesheets).
+- A banner at the top naming which surface the baseline focuses on (the page captures full context; the banner tells you what to look at).
+- `data-theme` attribute on `<html>` so the file renders in the correct theme when opened.
+
+What it does NOT contain:
+- Runtime-only framework IDs (radix-*, headlessui-*) — stripped to avoid spurious diffs.
+- The live dev server — files are self-contained.
+- Annotation UUIDs are kept (the seed produces stable IDs across runs).
+
+## Non-determinism handling
+
+The capture is mostly deterministic because:
+- The seed always opens the same `sample/welcome.md` content.
+- The same three annotations are created at the same offsets with the same text.
+- Annotation IDs depend on insertion order, which is stable.
+- Timestamps render as "just now" / "3m ago" — these may drift between runs (the timestamp text DOES change between captures taken hours apart). Treat these as expected diff noise; focus reviewer attention on structural changes.
+
+If a baseline shows changed timestamps but no other structural change, it's not a real drift signal — don't bother committing.
+
+## When this work retires
+
+The capture script and committed baselines stay in master after the umbrella merges, as an ongoing visual reference. Sub-PRs touching any of the 8 surfaces refresh the relevant baseline as a discipline.
+
+The Phase 0 procedure docs (this file, derived-spec.md, conflicts-resolved.md) stay in `docs/design-system-impl/` as historical record of the umbrella's design decisions.

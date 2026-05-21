@@ -1,58 +1,55 @@
 /**
- * Visual snapshot baselines — Phase 0i of the design-system-impl umbrella.
+ * Visual baseline HTML capture — Phase 0i of the design-system-impl umbrella.
  *
- * Catches **cross-surface unintended drift** during the umbrella's sub-PRs.
- * Each sub-PR intentionally regenerates baselines for the surface it touches;
- * this gate fires when an unrelated surface also changed (e.g. PR 1.2 touches
- * the toolbar but accidentally restyles the annotation card).
+ * Generates self-contained HTML files (markup + inlined CSS) for the eight
+ * cross-cutting / shared-recipe surfaces, light + dark = 16 files total.
+ * Writes to `docs/design-system-impl/preview/baselines/` so OpenDesign and
+ * any browser can render them as-is.
  *
- * Scope is intentionally narrow — 8 cross-cutting / shared-recipe surfaces
- * covered light + dark. Not every surface in the plan: the plan's "every
- * surface" mandate was too broad to maintain at 120+ PNG fixtures. See
- * docs/design-system-impl/baseline-procedure.md for the rationale and the
- * seeding procedure.
+ * NOT a test — no assertions, no regression gate. The role is **visual
+ * reference library**: a place to see what each surface currently looks
+ * like in both themes. Cross-surface drift surfaces at PR review time via
+ * the git diff of the committed HTML files (markup + class changes are
+ * human-readable), not via automated CI failure.
  *
- * **Linux-only.** Playwright pixel diffs are sensitive to font rendering,
- * anti-aliasing, and sub-pixel layout, all of which differ between
- * Windows/macOS/Linux. CI runs on ubuntu-latest; this spec asserts only on
- * Linux so a local Windows or macOS dev run doesn't fight CI-generated
- * baselines.
+ * Run:
+ *   npm run capture:design-baselines
+ *
+ * Sub-PR ritual: when a sub-PR re-skins a surface covered here, re-run
+ * this command, commit the regenerated HTML for that surface (and only
+ * that surface), and reviewers can see the markup change in the diff +
+ * the visual change in OpenDesign.
  */
-import { expect, test } from "@playwright/test";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-import { cleanupAllOpenDocuments, McpTestClient, switchToAnnotationsTab } from "./helpers";
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+  cleanupAllOpenDocuments,
+  McpTestClient,
+  switchToAnnotationsTab,
+} from "../../tests/e2e/helpers";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..");
 const welcomePath = path.join(repoRoot, "sample", "welcome.md");
+const OUT_DIR = path.join(repoRoot, "docs", "design-system-impl", "preview", "baselines");
 
-// Playwright's default snapshot directory for this spec.
-const BASELINE_DIR = path.join(__dirname, "design-system-impl-baseline.spec.ts-snapshots");
-
+// Skip unless the capture command set the gate; mirrors scripts/screenshots pattern.
 test.skip(
-  process.platform !== "linux",
-  "Design-system-impl visual baselines only run on Linux (CI); local Windows/macOS pixel diffs are unreliable.",
+  !process.env.CAPTURE_DESIGN_BASELINES,
+  "Design-baseline capture is on-demand — run `npm run capture:design-baselines`.",
 );
 
-// Until the seed-design-baselines workflow runs, the baseline directory
-// doesn't exist and the spec would fail every PR with "missing baseline".
-// Skip until baselines are seeded. The seed workflow runs with
-// --update-snapshots, which creates the directory; from that point on the
-// spec auto-enables on every subsequent run.
-test.skip(
-  !fs.existsSync(BASELINE_DIR),
-  "Design-system-impl visual baselines not yet seeded — run the seed-design-baselines workflow to bootstrap, then this spec auto-enables.",
-);
-
-// Stable viewport — single width chosen to match common laptop screens.
-// Narrow viewport is covered by the Phase 5 manual claude-in-chrome walkthrough,
-// not by pixel diff (would double the baseline maintenance burden).
 test.use({ viewport: { width: 1440, height: 900 } });
 
 let mcp: McpTestClient;
+
+test.beforeAll(() => {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+});
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
@@ -65,13 +62,7 @@ test.afterEach(async () => {
   await mcp.close();
 });
 
-/**
- * Set the resolved theme before any UI mounts so first paint matches.
- * Bypasses the tandem:settings flow — directly sets the html attribute the
- * useTheme hook reads. This is deterministic for snapshots (no race against
- * the settings load / system preference detection).
- */
-async function setThemeBeforeMount(page: import("@playwright/test").Page, theme: "light" | "dark") {
+async function setThemeBeforeMount(page: Page, theme: "light" | "dark") {
   await page.addInitScript((t) => {
     const apply = () => document.documentElement.setAttribute("data-theme", t);
     if (document.readyState === "loading") {
@@ -82,14 +73,9 @@ async function setThemeBeforeMount(page: import("@playwright/test").Page, theme:
   }, theme);
 }
 
-/** Open welcome.md with three representative annotations so card variants render. */
 async function seedAnnotations() {
   await mcp.callTool("tandem_open", { filePath: welcomePath });
-  await mcp.callTool("tandem_comment", {
-    from: 10,
-    to: 24,
-    text: "Nice opener",
-  });
+  await mcp.callTool("tandem_comment", { from: 10, to: 24, text: "Nice opener" });
   await mcp.callTool("tandem_comment", {
     from: 200,
     to: 260,
@@ -103,10 +89,84 @@ async function seedAnnotations() {
   });
 }
 
-async function waitForEditor(page: import("@playwright/test").Page) {
+async function waitForEditor(page: Page) {
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  // Settle authorship decorations + initial layout pass.
   await page.waitForTimeout(500);
+}
+
+/**
+ * Capture the full page's HTML with computed CSS inlined into a <style>
+ * block. Result is self-contained — opens in any browser or OpenDesign
+ * without needing the dev server.
+ *
+ * Banner at the top names which surface this baseline focuses on so a
+ * reviewer opening the file in OD knows what to look at (the full page
+ * is captured for context).
+ */
+async function captureBaseline(
+  page: Page,
+  surface: string,
+  theme: "light" | "dark",
+  focus: Locator,
+) {
+  const focusTag = await focus.evaluate((el) => {
+    const id = el.id ? `#${el.id}` : "";
+    const testid = el.getAttribute("data-testid");
+    const cls =
+      el.className && typeof el.className === "string" ? `.${el.className.split(/\s+/)[0]}` : "";
+    return `<${el.tagName.toLowerCase()}${id}${testid ? `[data-testid="${testid}"]` : cls}>`;
+  });
+
+  const html = await page.evaluate(
+    ({ surface, theme, focusTag }) => {
+      // Inline every accessible stylesheet. Cross-origin sheets silently
+      // skip via try/catch — those tend to be CDN fonts we don't render
+      // against in production anyway.
+      const cssText = Array.from(document.styleSheets)
+        .flatMap((sheet) => {
+          try {
+            return Array.from(sheet.cssRules).map((r) => r.cssText);
+          } catch {
+            return [];
+          }
+        })
+        .join("\n");
+
+      const bodyClone = document.body.cloneNode(true) as HTMLElement;
+
+      // Strip runtime-generated framework IDs that would otherwise create
+      // spurious diffs between captures of the same scene.
+      bodyClone.querySelectorAll("[id^='radix-'], [id^='headlessui-']").forEach((el) => {
+        el.removeAttribute("id");
+      });
+
+      const banner = `
+        <div style="position:sticky;top:0;z-index:99999;background:#111;color:#eaeaea;padding:8px 16px;font:13px/1.4 -apple-system,Segoe UI,system-ui,sans-serif;border-bottom:2px solid #ff5b3a;">
+          <strong style="color:#ff5b3a;">Design baseline:</strong>
+          ${surface} · ${theme} theme · focus: <code style="background:#222;padding:2px 6px;border-radius:3px;">${focusTag}</code>
+          <span style="float:right;opacity:0.6;">tandem · ${new Date().toISOString().slice(0, 10)}</span>
+        </div>`;
+
+      return `<!DOCTYPE html>
+<html lang="en" data-theme="${theme}">
+<head>
+<meta charset="utf-8">
+<title>Design baseline: ${surface} (${theme})</title>
+<style>
+${cssText}
+</style>
+</head>
+<body>
+${banner}
+${bodyClone.innerHTML}
+</body>
+</html>`;
+    },
+    { surface, theme, focusTag },
+  );
+
+  const outPath = path.join(OUT_DIR, `${surface}-${theme}.html`);
+  fs.writeFileSync(outPath, html, "utf-8");
 }
 
 for (const theme of ["light", "dark"] as const) {
@@ -121,17 +181,15 @@ for (const theme of ["light", "dark"] as const) {
       await waitForEditor(page);
       const titleBar = page.locator("[data-testid='title-bar']");
       await expect(titleBar).toBeVisible();
-      await expect(titleBar).toHaveScreenshot(`title-bar-${theme}.png`);
+      await captureBaseline(page, "title-bar", theme, titleBar);
     });
 
     test(`editor-body — ${theme}`, async ({ page }) => {
       await seedAnnotations();
       await page.goto("/");
       await waitForEditor(page);
-      // Editor body alone — exclude title bar + side panel to keep this
-      // baseline focused on typography, authorship gutter, decoration colors.
       const editor = page.locator(".ProseMirror").first();
-      await expect(editor).toHaveScreenshot(`editor-body-${theme}.png`);
+      await captureBaseline(page, "editor-body", theme, editor);
     });
 
     test(`side-panel-annotations — ${theme}`, async ({ page }) => {
@@ -139,13 +197,9 @@ for (const theme of ["light", "dark"] as const) {
       await page.goto("/");
       await waitForEditor(page);
       await switchToAnnotationsTab(page);
-      const firstCard = page.locator("[data-testid^='annotation-card-']").first();
-      await expect(firstCard).toBeVisible({ timeout: 10_000 });
-      // Annotation list scroll container is the stable testid for the
-      // side panel content region (per testid-manifest.md).
       const rail = page.locator("[data-testid='annotation-list-scroll-container']").first();
       await expect(rail).toBeVisible({ timeout: 5_000 });
-      await expect(rail).toHaveScreenshot(`side-panel-annotations-${theme}.png`);
+      await captureBaseline(page, "side-panel-annotations", theme, rail);
     });
 
     test(`annotation-card-comment — ${theme}`, async ({ page }) => {
@@ -155,14 +209,13 @@ for (const theme of ["light", "dark"] as const) {
       await switchToAnnotationsTab(page);
       const card = page.locator("[data-testid^='annotation-card-']").first();
       await expect(card).toBeVisible({ timeout: 10_000 });
-      await expect(card).toHaveScreenshot(`annotation-card-comment-${theme}.png`);
+      await captureBaseline(page, "annotation-card-comment", theme, card);
     });
 
     test(`formatting-bar — ${theme}`, async ({ page }) => {
       await mcp.callTool("tandem_open", { filePath: welcomePath });
       await page.goto("/");
       await waitForEditor(page);
-      // Make a selection in the first paragraph so the floating pill renders.
       await page.evaluate(() => {
         const pm = document.querySelector(".ProseMirror");
         if (!pm) return;
@@ -181,50 +234,43 @@ for (const theme of ["light", "dark"] as const) {
       await page.waitForTimeout(400);
       const pill = page.locator("[data-testid='formatting-bar']");
       await expect(pill).toBeVisible({ timeout: 5_000 });
-      await expect(pill).toHaveScreenshot(`formatting-bar-${theme}.png`);
+      await captureBaseline(page, "formatting-bar", theme, pill);
     });
 
     test(`command-palette — ${theme}`, async ({ page }) => {
       await mcp.callTool("tandem_open", { filePath: welcomePath });
       await page.goto("/");
       await waitForEditor(page);
-      // Production command palette shortcut is Ctrl+Shift+P (App.svelte:707).
       await page.keyboard.press("Control+Shift+P");
       const palette = page.locator("[data-testid='command-palette']");
       await expect(palette).toBeVisible({ timeout: 3_000 });
       await page.waitForTimeout(200);
-      await expect(palette).toHaveScreenshot(`command-palette-${theme}.png`);
+      await captureBaseline(page, "command-palette", theme, palette);
     });
 
     test(`settings-modal — ${theme}`, async ({ page }) => {
       await mcp.callTool("tandem_open", { filePath: welcomePath });
       await page.goto("/");
       await waitForEditor(page);
-      // Ctrl+Shift+, opens the SettingsModal (useSettingsShortcut.ts).
       await page.keyboard.press("Control+Shift+Comma");
       const content = page.locator("[data-testid='settings-modal-content']");
       await expect(content).toBeVisible({ timeout: 3_000 });
       await page.waitForTimeout(300);
-      await expect(content).toHaveScreenshot(`settings-modal-${theme}.png`);
+      await captureBaseline(page, "settings-modal", theme, content);
     });
 
     test(`toast-container — ${theme}`, async ({ page }) => {
       await mcp.callTool("tandem_open", { filePath: welcomePath });
       await page.goto("/");
       await waitForEditor(page);
-      // Save to fire a toast (success path).
       await mcp.callTool("tandem_save", { documentId: undefined });
       const toaster = page.locator("[data-testid='toast-container']");
-      // Toast may auto-dismiss before render; if it never appears we skip
-      // the baseline rather than fail the gate — toast surface is covered
-      // by manual walkthrough.
       try {
         await expect(toaster).toBeVisible({ timeout: 2_000 });
-        // Slight settle so the slide-in animation completes.
         await page.waitForTimeout(150);
-        await expect(toaster).toHaveScreenshot(`toast-container-${theme}.png`);
+        await captureBaseline(page, "toast-container", theme, toaster);
       } catch {
-        test.skip(true, "Toast did not render within timeout — covered by manual walkthrough.");
+        test.skip(true, "Toast did not render — surface covered by manual walkthrough.");
       }
     });
   });
