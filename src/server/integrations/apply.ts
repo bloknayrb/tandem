@@ -497,7 +497,34 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
   try {
-    existing = JSON.parse(readFileSync(configPath, "utf-8"));
+    // Strip a leading UTF-8 BOM (`﻿`) before JSON.parse. Some editors
+    // (legacy Windows tooling, certain VS Code configs) write `.claude.json`
+    // with a BOM; without this strip, `JSON.parse` throws `SyntaxError`
+    // and the file would be pushed into `.broken-backups/` as if it were
+    // malformed. The BOM is encoded as the literal three bytes
+    // `EF BB BF` which Node's "utf-8" decoder surfaces as a leading
+    // U+FEFF code point.
+    let raw = readFileSync(configPath, "utf-8");
+    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+    const parsed: unknown = JSON.parse(raw);
+
+    // Shape gate: the rewrite path spreads `existing.mcpServers` and
+    // `existing` itself into the new config. If either is the wrong
+    // shape, the spread produces a corrupted output (string-spread
+    // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
+    // null-spread throws). Reject up-front so a legitimate-looking
+    // config-shape mismatch never silently corrupts the user's file.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${configPath} root is not a JSON object — refusing to rewrite`);
+    }
+    const maybeServers = (parsed as Record<string, unknown>).mcpServers;
+    if (
+      maybeServers !== undefined &&
+      (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
+    ) {
+      throw new Error(`${configPath} mcpServers is not an object — refusing to rewrite`);
+    }
+    existing = parsed as { mcpServers?: Record<string, McpEntry> };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
