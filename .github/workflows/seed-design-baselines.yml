@@ -1,0 +1,85 @@
+name: Seed design-system-impl baselines
+
+# One-shot bootstrap for the visual snapshot baselines used by
+# tests/e2e/design-system-impl-baseline.spec.ts. See
+# docs/design-system-impl/baseline-procedure.md for the procedure context.
+#
+# Re-runs the baseline spec with --update-snapshots from ubuntu-latest (the
+# same image that asserts against the baselines in normal CI), then commits
+# the generated PNGs back to the triggering branch.
+#
+# Trigger via the GitHub Actions UI ("Run workflow") on the umbrella branch
+# (feat/design-system-impl) or any of its descendants. Not part of the
+# routine PR pipeline.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to seed baselines on (defaults to current ref)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Clear ports
+        run: |
+          fuser -k 3478/tcp 3479/tcp 5173/tcp 2>/dev/null || true
+          sleep 1
+
+      - name: Seed baselines (--update-snapshots)
+        run: |
+          npx playwright test tests/e2e/design-system-impl-baseline.spec.ts --update-snapshots
+        timeout-minutes: 10
+
+      - name: Stage generated baselines
+        id: stage
+        run: |
+          git add tests/e2e/design-system-impl-baseline.spec.ts-snapshots/ || true
+          git add tests/e2e/__snapshots__/design-system-impl-baseline* || true
+          if git diff --cached --quiet; then
+            echo "No baseline changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit + push baselines
+        if: steps.stage.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci(design-system-impl): seed visual snapshot baselines from ubuntu-latest"
+          git push
+
+      - name: Upload report on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: seed-baselines-report
+          path: |
+            playwright-report/
+            test-results/
