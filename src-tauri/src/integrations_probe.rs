@@ -72,7 +72,8 @@ pub struct UnvalidatedSidecarLocation {
 }
 
 impl UnvalidatedSidecarLocation {
-    /// Validate the pointer payload. Hardened per #642:
+    /// Validate the pointer payload. Hardens the spike validator per #642
+    /// acceptance criteria:
     ///
     /// 1. **Reparse-point rejection.** POSIX: reject any `is_symlink()` along
     ///    `self.exe`. Windows: reject any path component carrying
@@ -121,30 +122,44 @@ impl UnvalidatedSidecarLocation {
             }
         }
 
-        #[cfg(unix)]
-        {
-            let parent = exe.parent().ok_or_else(|| {
-                format!("sidecar exe has no parent directory: {}", exe.display())
-            })?;
-            check_posix_parent_mode(parent)?;
-        }
-
         let canonical_exe = std::fs::canonicalize(exe).map_err(|e| {
             format!("canonicalise sidecar exe {}: {e}", exe.display())
         })?;
 
+        // Parent-mode check runs on the CANONICAL parent: a symlinked
+        // intermediate dir would otherwise let an attacker stage the exe in
+        // a 0o777 dir while the lexical parent points at a benign 0o755
+        // dir, bypassing the mode check.
+        #[cfg(unix)]
+        {
+            let parent = canonical_exe.parent().ok_or_else(|| {
+                format!(
+                    "canonical sidecar exe has no parent directory: {}",
+                    canonical_exe.display()
+                )
+            })?;
+            check_posix_parent_mode(parent)?;
+        }
+
         // Windows-only: a junction mid-path can redirect the canonical
         // result. POSIX `canonicalize` already resolves symlinks along the
-        // path, so this loop is redundant on Unix.
+        // path, so this loop is redundant on Unix. Stat failures fail
+        // closed — an unstat-able ancestor of a canonical path is anomalous
+        // (canonicalize itself would have failed unless something raced) and
+        // we cannot prove it isn't a reparse point.
         #[cfg(windows)]
         for ancestor in canonical_exe.ancestors().skip(1) {
-            if let Ok(meta) = std::fs::symlink_metadata(ancestor) {
-                if is_reparse_or_symlink(&meta) {
-                    return Err(format!(
-                        "ancestor of sidecar exe is a symlink or reparse point: {}",
-                        ancestor.display()
-                    ));
-                }
+            let meta = std::fs::symlink_metadata(ancestor).map_err(|e| {
+                format!(
+                    "stat ancestor of sidecar exe {}: {e}",
+                    ancestor.display()
+                )
+            })?;
+            if is_reparse_or_symlink(&meta) {
+                return Err(format!(
+                    "ancestor of sidecar exe is a symlink or reparse point: {}",
+                    ancestor.display()
+                ));
             }
         }
 
@@ -371,9 +386,9 @@ mod tests {
         p
     }
 
-    /// Tempdirs default to permissive modes (often 0o700) which trip the
-    /// world-writable-parent check. Set 0o755 so install-root-allowlist
-    /// tests exercise the install-root code path, not the mode-reject path.
+    /// Normalise a tempdir to 0o755 so install-root-allowlist tests
+    /// exercise the install-root code path, not the mode-reject path,
+    /// regardless of umask variability across CI runners.
     #[cfg(unix)]
     fn chmod_755(dir: &Path) {
         use std::os::unix::fs::PermissionsExt;
@@ -561,10 +576,10 @@ mod tests {
     }
 
     /// POSIX-only: validate() must reject a symlinked exe. On Windows
-    /// symlink creation requires Developer Mode or admin; the Windows
-    /// reparse-point branch is covered by `is_reparse_or_symlink` unit
-    /// behaviour (the bit-mask check) and CI Linux/macOS runners exercise
-    /// this case live.
+    /// symlink creation requires Developer Mode or admin. The Windows
+    /// reparse-point branch (the `FILE_ATTRIBUTE_REPARSE_POINT` bit in
+    /// `is_reparse_or_symlink`) is not exercised in CI; see #643 for the
+    /// Windows-specific follow-up.
     #[cfg(unix)]
     #[test]
     fn validate_rejects_symlink_exe() {
@@ -656,7 +671,7 @@ mod tests {
             args: vec![],
         };
         let err = loc.validate(&[allowed_dir.path()]).unwrap_err();
-        assert!(err.contains("install root"), "err was: {err}");
+        assert!(err.contains("not in any allowed install root"), "err was: {err}");
     }
 
     /// Canonicalisation must defeat traversal-style allowlist bypass. An exe
@@ -687,14 +702,14 @@ mod tests {
             args: vec![],
         };
         let err = loc.validate(&[allowed_dir.path()]).unwrap_err();
-        assert!(err.contains("install root"), "err was: {err}");
+        assert!(err.contains("not in any allowed install root"), "err was: {err}");
     }
 
-    /// Documents the intended caller pattern for PR 4 main: derive the
-    /// install-root allowlist from the running launcher's own canonical exe
-    /// path (parent dir), not from `%ProgramFiles%` or any user-controlled
-    /// env var. Here we simulate that by treating a tempdir as the
-    /// "launcher install dir" and validating an exe sibling.
+    /// Documents the intended caller pattern for the eventual launcher
+    /// binary: derive the install-root allowlist from the running launcher's
+    /// own canonical exe path (parent dir), not from `%ProgramFiles%` or any
+    /// user-controlled env var. Here we simulate that by treating a tempdir
+    /// as the "launcher install dir" and validating an exe sibling.
     #[test]
     fn validate_documents_exe_derived_install_root_pattern() {
         let install_dir = tempfile::tempdir().unwrap();
@@ -703,7 +718,7 @@ mod tests {
         // Simulated launcher binary location (analogous to current_exe()).
         let launcher = install_dir.path().join("tandem-launcher");
         std::fs::write(&launcher, b"launcher").unwrap();
-        // Derive root from launcher path — this is the PR 4 contract.
+        // Derive root from launcher path — this is the launcher-spawn caller's contract.
         let derived_root = launcher.parent().unwrap();
 
         let sidecar = install_dir.path().join("node-sidecar");
@@ -714,6 +729,42 @@ mod tests {
         };
         let validated = loc.validate(&[derived_root]).unwrap();
         assert!(validated.exe.ends_with("node-sidecar"));
+    }
+
+    /// `symlink_metadata` failure path: a non-existent exe must yield the
+    /// `stat sidecar exe` error rather than panicking or silently allowing.
+    #[test]
+    fn validate_rejects_missing_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let loc = UnvalidatedSidecarLocation {
+            exe: dir.path().join("does-not-exist"),
+            args: vec![],
+        };
+        let err = loc.validate(&[]).unwrap_err();
+        assert!(err.contains("stat sidecar exe"), "err was: {err}");
+    }
+
+    /// Install-root `canonicalize` failure must surface its own distinct
+    /// error rather than falling through to the `not in any allowed install
+    /// root` path — pins the error-message contract that tests in this file
+    /// (and PR-4-main consumers) rely on.
+    #[test]
+    fn validate_rejects_unresolvable_install_root() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        chmod_755(dir.path());
+        let exe = dir.path().join("node-sidecar");
+        std::fs::write(&exe, b"binary").unwrap();
+        let bogus = dir.path().join("does-not-exist");
+        let loc = UnvalidatedSidecarLocation {
+            exe,
+            args: vec![],
+        };
+        let err = loc.validate(&[bogus.as_path()]).unwrap_err();
+        assert!(
+            err.contains("canonicalise install root"),
+            "err was: {err}"
+        );
     }
 
     /// Live spawn against a real bundled sidecar. Gated `#[ignore]` because
