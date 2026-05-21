@@ -14,13 +14,13 @@ const MODE_LABEL: Record<WordCountMode, string> = {
   pages: "pages",
 };
 
-/**
- * Word-count basis for page estimation. 250 words/page is the publishing-
- * industry standard for a manuscript page (double-spaced, 12pt). The
- * alternative — characters/page — varies with font and is less stable
- * across mixed-case prose.
- */
-export const WORDS_PER_PAGE = 250;
+// Publishing-standard manuscript page basis (double-spaced, 12pt).
+const WORDS_PER_PAGE = 250;
+
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
 
 export function nextMode(current: WordCountMode): WordCountMode {
   const i = CYCLE.indexOf(current);
@@ -65,11 +65,8 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
   switch (mode) {
     case "characters":
       return text.length;
-    case "words": {
-      const trimmed = text.trim();
-      if (!trimmed) return 0;
-      return trimmed.split(/\s+/).length;
-    }
+    case "words":
+      return countWords(text);
     case "sentences": {
       const matches = text.match(/[^.!?]+[.!?]+(?:\s|$)/g);
       return matches?.length ?? (text.trim() ? 1 : 0);
@@ -81,11 +78,7 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
       });
       return count;
     }
-    case "pages": {
-      const trimmed = text.trim();
-      if (!trimmed) return 0;
-      const words = trimmed.split(/\s+/).length;
-      return Math.ceil(words / WORDS_PER_PAGE);
-    }
+    case "pages":
+      return Math.ceil(countWords(text) / WORDS_PER_PAGE);
   }
 }
