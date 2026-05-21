@@ -424,19 +424,18 @@ describe("applyConfig — atomicity contract (#644)", () => {
   });
 
   it.skipIf(!POSIX_ONLY)("leaves the original config intact when backup write fails", async () => {
-    // Pre-create the backup dir as a regular file so mkdirSync inside
-    // maybeBackupExistingConfig (with recursive:true) succeeds, but
-    // open(wx) on a child path will fail with ENOTDIR.
-    const backupDirAsFile = path.join(tmpDir, ".backups");
-    // Actually mkdirSync recursive:true tolerates pre-existing files
-    // poorly — easier to make the path itself unwritable. Use a
-    // pre-existing file at the EXACT backup-filename path so wx
-    // can't create one. We can't pin the UUID, but we can chmod the
-    // parent dir to 0o500 (read+execute, no write) — open(wx) inside
-    // it then fails with EACCES.
-    fs.mkdirSync(backupDirAsFile, { recursive: true, mode: 0o700 });
-    // chmod 0o500 to deny writes inside the dir.
-    fs.chmodSync(backupDirAsFile, 0o500);
+    // Fault injection: pre-create `.backups` as a regular FILE, not a
+    // directory. `mkdirSync(dir, { recursive: true })` then fails with
+    // EEXIST/ENOTDIR because the path exists and is not a directory.
+    // The throw propagates from maybeBackupExistingConfig before
+    // atomicWrite runs, so the original config is untouched.
+    //
+    // Avoids the more natural `chmod 0o500 .backups` approach because
+    // maybeBackupExistingConfig deliberately re-chmods a pre-existing
+    // 0o500 dir to 0o700 as a hardening step — that would defeat the
+    // test setup. A file-at-the-dir-path can't be rescued the same way.
+    const backupPath = path.join(tmpDir, ".backups");
+    fs.writeFileSync(backupPath, "not a directory");
 
     const originalBytes = JSON.stringify({
       mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:9999/mcp" } },
@@ -452,8 +451,5 @@ describe("applyConfig — atomicity contract (#644)", () => {
 
     // Original config bytes are byte-for-byte unchanged.
     expect(fs.readFileSync(configPath, "utf-8")).toBe(originalBytes);
-
-    // Restore dir mode for cleanup.
-    fs.chmodSync(backupDirAsFile, 0o700);
   });
 });
