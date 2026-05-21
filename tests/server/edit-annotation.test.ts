@@ -171,6 +171,30 @@ describe("tandem_editAnnotation", () => {
     expect(after.content).toBe("private note");
   });
 
+  // Pins guard order: the note-type check must run BEFORE the status check.
+  // If reordered, a non-pending note would surface as ANNOTATION_RESOLVED,
+  // leaking the note's existence to Claude. INVALID_ARGUMENT is the only
+  // safe response.
+  it("rejects edit on a non-pending note with INVALID_ARGUMENT (not ANNOTATION_RESOLVED)", async () => {
+    const ydoc = setupDoc("edit-4-note-resolved", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+
+    const ann = map.get(id) as Annotation;
+    ydoc.transact(() => map.set(id, { ...ann, status: "accepted" as const }), MCP_ORIGIN);
+
+    const result = await client.callTool({
+      name: "tandem_editAnnotation",
+      arguments: { id, content: "Claude tries to edit a resolved private note" },
+    });
+    const parsed = parseResult(result as any);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_ARGUMENT");
+
+    const after = map.get(id) as Annotation;
+    expect(after.content).toBe("private note");
+  });
+
   it("rejects when no editable fields provided for non-suggestion", async () => {
     const ydoc = setupDoc("edit-5", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);

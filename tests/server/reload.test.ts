@@ -12,6 +12,7 @@ import {
   anchoredRange,
   refreshAllRanges,
   refreshRange,
+  relPosToFlatOffset,
   validateRange,
 } from "../../src/server/positions.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
@@ -165,6 +166,14 @@ describe("reload: refreshRange dead relRange recovery", () => {
     expect(stored.range).toEqual({ from: 0, to: 5 });
     expect(stored.relRange).toBeDefined();
     expect(stored.relRange).not.toEqual(originalRelRange);
+    // Structural freshness check — independent of deep-equal serialization
+    // semantics. A re-anchored relRange must resolve to a valid flat offset
+    // in the new content (proves the strip-then-re-anchor path actually
+    // produced a usable RelativePosition rather than a dead reference).
+    expect(stored.relRange?.fromRel).toBeTruthy();
+    expect(stored.relRange?.toRel).toBeTruthy();
+    expect(relPosToFlatOffset(doc, stored.relRange!.fromRel)).toBe(0);
+    expect(relPosToFlatOffset(doc, stored.relRange!.toRel)).toBe(5);
   });
 });
 

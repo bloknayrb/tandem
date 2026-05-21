@@ -302,7 +302,13 @@ describe("origin filtering", () => {
     cleanup();
   });
 
-  it("does NOT emit annotation:accepted or annotation:dismissed for user notes", () => {
+  // Synthetic `author: "claude", type: "note"` shape — structurally
+  // impossible in the live model, but we pin the observer's defense-in-depth
+  // type filter so a future code path that leaked a Claude-authored note
+  // (file-sync echo, schema drift) wouldn't surface status events. With
+  // `author: "user"` this assertion would pass via the author gate alone,
+  // which is misleading; using `author: "claude"` makes it load-bearing.
+  it("does NOT emit annotation:accepted or annotation:dismissed for claude-authored notes (synthetic)", () => {
     const { events, cleanup } = collectEvents();
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -310,7 +316,7 @@ describe("origin filtering", () => {
       map.set("ann_note_status", {
         id: "ann_note_status",
         type: "note",
-        author: "user",
+        author: "claude",
         content: "private",
         status: "pending",
         textSnapshot: "PRIVATE",
@@ -321,7 +327,7 @@ describe("origin filtering", () => {
     map.set("ann_note_status", {
       id: "ann_note_status",
       type: "note",
-      author: "user",
+      author: "claude",
       content: "private",
       status: "accepted",
       textSnapshot: "PRIVATE",
@@ -330,7 +336,7 @@ describe("origin filtering", () => {
     map.set("ann_note_status", {
       id: "ann_note_status",
       type: "note",
-      author: "user",
+      author: "claude",
       content: "private",
       status: "dismissed",
       textSnapshot: "PRIVATE",

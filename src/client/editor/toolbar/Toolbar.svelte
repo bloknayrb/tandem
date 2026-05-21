@@ -70,6 +70,11 @@ const annotationTextTrimmed = $derived(annotationText.trim());
 let lastPlacement: SelectionToolbarPlacement | undefined;
 
 let pendingAffordanceFrame = 0;
+// Bounded retry counter: prevents a 60Hz infinite-rAF loop if `coordsAtPos`
+// keeps throwing (e.g. editor mounted in a detached / display:none subtree).
+// Reset on every non-throwing path; capped at MAX_AFFORDANCE_RETRIES.
+let affordanceRetryCount = 0;
+const MAX_AFFORDANCE_RETRIES = 3;
 
 function updateSelectionAffordance(ed: TiptapEditor) {
   const { from, to } = ed.state.selection;
@@ -78,6 +83,7 @@ function updateSelectionAffordance(ed: TiptapEditor) {
   if (!next) {
     selectionPosition = null;
     lastPlacement = undefined;
+    affordanceRetryCount = 0;
     return;
   }
 
@@ -94,6 +100,7 @@ function updateSelectionAffordance(ed: TiptapEditor) {
       previousPlacement: lastPlacement,
     });
     lastPlacement = nextPosition.placement;
+    affordanceRetryCount = 0;
     if (
       selectionPosition &&
       selectionPosition.left === nextPosition.left &&
@@ -108,7 +115,16 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     // fires before the view's update cycle completes. The previous behavior
     // ("set selectionPosition = null") permanently hid the popup until
     // *another* selectionUpdate event arrived, which never happens for a
-    // one-shot `selectText()` in an E2E. Retry on the next paint instead.
+    // one-shot `selectText()` in an E2E. Retry on the next paint, bounded by
+    // MAX_AFFORDANCE_RETRIES so a persistently-unmeasured view (hidden /
+    // detached editor) can't pin the main thread.
+    if (affordanceRetryCount >= MAX_AFFORDANCE_RETRIES) {
+      affordanceRetryCount = 0;
+      selectionPosition = null;
+      lastPlacement = undefined;
+      return;
+    }
+    affordanceRetryCount += 1;
     cancelAnimationFrame(pendingAffordanceFrame);
     pendingAffordanceFrame = requestAnimationFrame(() => {
       if (!ed.isDestroyed) updateSelectionAffordance(ed);
@@ -126,7 +142,13 @@ $effect(() => {
 
   const cleanup = attachSelectionToolbarListener(ed, onSelectionUpdate);
   onSelectionUpdate();
-  return cleanup;
+  return () => {
+    // Cancel before delegating so a pending retry can't fire against a
+    // torn-down editor.
+    cancelAnimationFrame(pendingAffordanceFrame);
+    pendingAffordanceFrame = 0;
+    cleanup();
+  };
 });
 
 $effect(() => {
