@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { setRestrictiveAcl } from "./acl-win.js";
 import { migrateUp } from "./migrations.js";
 import {
   emptyIntegrationsFile,
@@ -202,7 +203,11 @@ async function backupBrokenFile(filePath: string): Promise<void> {
   const backupPath = `${filePath}.broken-${Date.now()}`;
   try {
     await fs.promises.copyFile(filePath, backupPath);
-    if (process.platform !== "win32") {
+    if (process.platform === "win32") {
+      await setRestrictiveAcl(backupPath).catch(() => {
+        /* best-effort ACL; backup is created, content is preserved */
+      });
+    } else {
       await fs.promises.chmod(backupPath, 0o600).catch(() => {
         /* best-effort chmod; backup is created, content is preserved */
       });
