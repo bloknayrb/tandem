@@ -145,32 +145,26 @@ describe("withTypingPresence", () => {
     // and completes inside. After inner's finally{}, the awareness map must
     // STILL show the outer handler's marker (its startedAt won the take-over).
     let observedMidOuterPostInner: NonNullable<ClaudeAwareness["working"]> | null = null;
-    await withTypingPresence(
-      { tool: "tandem_comment", documentId: TEST_DOC },
-      async () => {
-        const outerStartedAt = readWorking(doc)?.startedAt;
-        // Run an inner wrapped handler — its finally{} clears its OWN entry
-        // (matched by startedAt), and since the outer marker was overwritten,
-        // the inner's clear-by-startedAt mismatch should be a no-op.
-        // NOTE: this protects against the regression where clearPresenceOn
-        // unconditionally cleared whatever working entry it found.
-        await new Promise((r) => setTimeout(r, 1)); // ensure distinct Date.now()
-        await withTypingPresence(
-          { tool: "tandem_edit", documentId: TEST_DOC },
-          async () => {
-            const inner = readWorking(doc);
-            expect(inner?.tool).toBe("tandem_edit");
-            expect(inner?.startedAt).not.toBe(outerStartedAt);
-          },
-        );
-        // Inner cleared its own marker; the awareness map now reflects the
-        // last write (the inner's set). Outer's marker is gone — but that's
-        // the inherent limit of the single-slot design. Document the actual
-        // behavior here so the regression-on-stomping test below catches the
-        // bug it's meant to.
-        observedMidOuterPostInner = readWorking(doc);
-      },
-    );
+    await withTypingPresence({ tool: "tandem_comment", documentId: TEST_DOC }, async () => {
+      const outerStartedAt = readWorking(doc)?.startedAt;
+      // Run an inner wrapped handler — its finally{} clears its OWN entry
+      // (matched by startedAt), and since the outer marker was overwritten,
+      // the inner's clear-by-startedAt mismatch should be a no-op.
+      // NOTE: this protects against the regression where clearPresenceOn
+      // unconditionally cleared whatever working entry it found.
+      await new Promise((r) => setTimeout(r, 1)); // ensure distinct Date.now()
+      await withTypingPresence({ tool: "tandem_edit", documentId: TEST_DOC }, async () => {
+        const inner = readWorking(doc);
+        expect(inner?.tool).toBe("tandem_edit");
+        expect(inner?.startedAt).not.toBe(outerStartedAt);
+      });
+      // Inner cleared its own marker; the awareness map now reflects the
+      // last write (the inner's set). Outer's marker is gone — but that's
+      // the inherent limit of the single-slot design. Document the actual
+      // behavior here so the regression-on-stomping test below catches the
+      // bug it's meant to.
+      observedMidOuterPostInner = readWorking(doc);
+    });
     // Observable behavior: after the nested overlap, mid-outer post-inner is
     // null (inner cleared the slot it had taken). The match-by-startedAt
     // guard prevents inner-after-outer-finished from clearing a *later* outer.
@@ -179,32 +173,34 @@ describe("withTypingPresence", () => {
     expect(readWorking(doc)).toBeNull();
   });
 
-  it("clear-by-startedAt guard: a stale handle does not stomp a fresh marker", async () => {
-    const { setPresenceOn: _set } = {
-      // Re-derive set via a direct call: simulate the pre-fix scenario where
-      // handler A finished and its clearPresenceOn ran after handler B took
-      // over the slot. The startedAt mismatch must make A's clear a no-op.
-      setPresenceOn: undefined as never,
-    };
-    // Take A's marker
-    await withTypingPresence(
-      { tool: "tandem_comment", documentId: TEST_DOC },
-      async () => {
-        // Inside A, simulate B starting (different startedAt) by directly
-        // calling a second wrapped handler that overwrites the marker:
-        await withTypingPresence(
-          { tool: "tandem_edit", documentId: TEST_DOC },
-          async () => {
-            const inner = readWorking(doc);
-            expect(inner?.tool).toBe("tandem_edit");
-          },
-        );
-        // After the nested call resolves, both handles in the active map
-        // know their startedAt; the outer's clear (when it fires) will not
-        // find a matching startedAt in awareness (inner already cleared it),
-        // so it MUST be a no-op rather than rewriting null over something.
-      },
-    );
+  it("tandem_status-style awareness write preserves the in-flight working marker", async () => {
+    // Simulate tandem_status firing during a wrapped tool call: it rewrites
+    // the ClaudeAwareness object but must preserve `working` (#651 fix in
+    // document.ts). Here we assert the middleware's clear-by-startedAt guard
+    // cooperates: an external write that keeps `working` intact is not
+    // disturbed, and the handler's own clear still removes it on exit.
+    let workingDuringStatus: NonNullable<ClaudeAwareness["working"]> | null = null;
+    await withTypingPresence({ tool: "tandem_comment", documentId: TEST_DOC }, async () => {
+      const working = readWorking(doc);
+      expect(working).not.toBeNull();
+      // Emulate document.ts tandem_status preserving `working`.
+      const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
+      withMcp(doc, () => {
+        const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
+        awarenessMap.set(Y_MAP_CLAUDE, {
+          status: "thinking",
+          timestamp: Date.now(),
+          active: true,
+          focusParagraph: null,
+          focusOffset: null,
+          ...(prev?.working ? { working: prev.working } : {}),
+        });
+      });
+      workingDuringStatus = readWorking(doc);
+    });
+    // Marker survived the status write...
+    expect(workingDuringStatus?.tool).toBe("tandem_comment");
+    // ...and was cleared on handler exit (startedAt matched).
     expect(readWorking(doc)).toBeNull();
   });
 });
