@@ -158,6 +158,26 @@
         --tandem-text-xl: 20px;
         --tandem-text-2xl: 28px;
         --tandem-text-3xl: 48px;
+        /* Phase 1.3 ADOPT — semantic type role tokens. Theme-invariant; no
+           dark/warm overrides needed. Per token-audit.md §"Semantic type
+           roles": h1/h2 adopt serif; body STAYS sans (PROD WINS override of
+           bundle's serif body — protected by token-audit.md line 84). */
+        --tandem-h1-font: var(--tandem-font-serif);
+        --tandem-h1-size: calc(var(--tandem-text-lg) * 2);
+        --tandem-h1-weight: 600;
+        --tandem-h1-leading: 1.15;
+        --tandem-h1-tracking: -0.02em;
+        --tandem-h2-font: var(--tandem-font-serif);
+        --tandem-h2-size: calc(var(--tandem-text-lg) * 1.4);
+        --tandem-h2-weight: 600;
+        --tandem-h2-leading: 1.2;
+        --tandem-h2-tracking: -0.015em;
+        --tandem-body-font: var(--tandem-font-sans);
+        --tandem-body-size: var(--tandem-editor-font-size, 17px);
+        --tandem-body-leading: 1.65;
+        --tandem-ui-font: var(--tandem-font-sans);
+        --tandem-ui-size: 13px;
+        --tandem-ui-leading: 1.4;
         --tandem-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.08);
         --tandem-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.12);
         --tandem-shadow-3: 0 20px 60px rgba(0, 0, 0, 0.2);
@@ -485,6 +505,34 @@
       * {
         scrollbar-width: thin;
         scrollbar-color: var(--tandem-scrollbar-thumb) var(--tandem-scrollbar-track);
+      }
+
+      /* Phase 1.3 ADOPT — semantic type utility classes. Reach for these
+         from chrome surfaces (rail labels, UI captions) instead of inlining
+         font-family/size/leading. Editor heading rules live in editor.css. */
+      .tandem-h1 {
+        font-family: var(--tandem-h1-font);
+        font-size: var(--tandem-h1-size);
+        font-weight: var(--tandem-h1-weight);
+        line-height: var(--tandem-h1-leading);
+        letter-spacing: var(--tandem-h1-tracking);
+      }
+      .tandem-h2 {
+        font-family: var(--tandem-h2-font);
+        font-size: var(--tandem-h2-size);
+        font-weight: var(--tandem-h2-weight);
+        line-height: var(--tandem-h2-leading);
+        letter-spacing: var(--tandem-h2-tracking);
+      }
+      .tandem-body {
+        font-family: var(--tandem-body-font);
+        font-size: var(--tandem-body-size);
+        line-height: var(--tandem-body-leading);
+      }
+      .tandem-ui {
+        font-family: var(--tandem-ui-font);
+        font-size: var(--tandem-ui-size);
+        line-height: var(--tandem-ui-leading);
       }
     </style>
   </head>

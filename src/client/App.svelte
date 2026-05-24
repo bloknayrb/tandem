@@ -1514,13 +1514,30 @@ const tutorial = createTutorial(
      bubble in. */
   .panel-edge-collapse {
     position: absolute;
-    width: 8px;
+    width: 12px;
     top: 0;
     bottom: 0;
     cursor: pointer;
     z-index: 1;
     background: transparent;
     transition: background 140ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .panel-edge-collapse::before {
+    content: "";
+    width: 1.5px;
+    height: 28px;
+    background: var(--tandem-border-strong);
+    border-radius: 1px;
+    opacity: 0.55;
+    transition: opacity 140ms ease, height 140ms ease, background 140ms ease;
+  }
+  .panel-edge-collapse:hover::before {
+    opacity: 1;
+    height: 36px;
+    background: var(--tandem-accent);
   }
   .panel-edge-collapse-left {
     left: 0;

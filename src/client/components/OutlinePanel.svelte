@@ -223,6 +223,10 @@ function handleKeyDown(e: KeyboardEvent) {
   onkeydown={handleKeyDown}
   style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;"
 >
+  <!-- Sub-PR 1.3: static section label above the search pill. Strictly
+       non-interactive (no tabindex, no click handler) so the nav-level
+       keydown handler does not route through it. -->
+  <div class="outline-header-label tandem-ui">Outline</div>
   <!-- Search pill — no container border; surface-sunk background carries the
        shape per calm-v7 outline rail pattern. Inline magnifying-glass icon
        sits inside the input padding. -->
@@ -283,6 +287,7 @@ function handleKeyDown(e: KeyboardEvent) {
             <button
               bind:this={itemEls[i]}
               data-testid={`outline-heading-${entry.level}-${i}`}
+              class={isActive ? "outline-item-active" : ""}
               tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
               onclick={() => jumpTo(entry, i)}
               onfocus={() => (focusedIndex = i)}
@@ -308,6 +313,7 @@ function handleKeyDown(e: KeyboardEvent) {
                 if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "none";
               }}
             >
+              <span class="outline-tick" aria-hidden="true"></span>
               <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                 {entry.text || "(untitled)"}
               </span>
@@ -315,6 +321,7 @@ function handleKeyDown(e: KeyboardEvent) {
                 <span
                   style="
                     flex-shrink: 0;
+                    font-family: var(--tandem-font-mono);
                     font-size: var(--tandem-text-2xs, 10px);
                     font-weight: 500;
                     color: var(--tandem-fg-subtle);
@@ -367,5 +374,25 @@ function handleKeyDown(e: KeyboardEvent) {
   }
   .outline-search-pill:focus-within {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-accent) 30%, transparent);
+  }
+  .outline-header-label {
+    color: var(--tandem-fg-muted);
+    padding: var(--tandem-space-3) var(--tandem-space-3) 0;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .outline-tick {
+    display: block;
+    flex-shrink: 0;
+    width: 2px;
+    height: 12px;
+    background: var(--tandem-border-strong);
+    border-radius: 1px;
+    opacity: 0.55;
+    transition: background 100ms ease, opacity 100ms ease;
+  }
+  .outline-item-active .outline-tick {
+    background: var(--tandem-accent);
+    opacity: 1;
   }
 </style>

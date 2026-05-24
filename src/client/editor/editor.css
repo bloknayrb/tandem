@@ -30,17 +30,20 @@
   background-color: transparent;
 }
 .tandem-editor h1 {
-  font-family: var(--tandem-editor-font-family);
-  font-size: 2em;
-  font-weight: 600;
+  font-family: var(--tandem-h1-font);
+  font-size: var(--tandem-h1-size);
+  font-weight: var(--tandem-h1-weight);
+  letter-spacing: var(--tandem-h1-tracking);
   margin: 0 0 0.5em;
-  line-height: 1.15;
+  line-height: var(--tandem-h1-leading);
 }
 .tandem-editor h2 {
-  font-size: 1.4em;
-  font-weight: 600;
-  margin: 1.6em 0 0.4em;
-  line-height: 1.2;
+  font-family: var(--tandem-h2-font);
+  font-size: var(--tandem-h2-size);
+  font-weight: var(--tandem-h2-weight);
+  letter-spacing: var(--tandem-h2-tracking);
+  margin: 1.8em 0 0.5em;
+  line-height: var(--tandem-h2-leading);
 }
 .tandem-editor h3 {
   font-size: 1.17em;
