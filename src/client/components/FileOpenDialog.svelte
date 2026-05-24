@@ -1,6 +1,7 @@
 <script lang="ts">
 import { API_UPLOAD } from "../../shared/api-paths.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -60,6 +61,30 @@ async function openByPath(pathToOpen: string) {
 function handlePathSubmit() {
   if (!filePath.trim()) return;
   openByPath(filePath.trim());
+}
+
+async function browseNative() {
+  if (loading) return;
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      title: "Open file in Tandem",
+      filters: [
+        {
+          name: "Documents",
+          extensions: ["md", "txt", "html", "htm", "docx"],
+        },
+      ],
+    });
+    if (typeof selected === "string") {
+      filePath = selected;
+      await openByPath(selected);
+    }
+  } catch (err) {
+    error = `File picker unavailable: ${err instanceof Error ? err.message : err}`;
+  }
 }
 
 async function uploadFile(file: File) {
@@ -166,14 +191,27 @@ function handleFileSelect(e: Event) {
           style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); box-sizing: border-box; background: var(--tandem-surface); color: var(--tandem-fg);"
           data-testid="file-path-input"
         />
-        <button
-          onclick={handlePathSubmit}
-          disabled={loading || !filePath.trim()}
-          style={`margin-top: 10px; width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
-          data-testid="file-open-submit"
-        >
-          {loading ? "Opening..." : "Open"}
-        </button>
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          {#if isTauriRuntime()}
+            <button
+              onclick={browseNative}
+              disabled={loading}
+              type="button"
+              style={`flex: 0 0 auto; padding: 8px 12px; font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: var(--tandem-surface); color: var(--tandem-fg);`}
+              data-testid="file-open-browse"
+            >
+              Browse…
+            </button>
+          {/if}
+          <button
+            onclick={handlePathSubmit}
+            disabled={loading || !filePath.trim()}
+            style={`flex: 1; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
+            data-testid="file-open-submit"
+          >
+            {loading ? "Opening..." : "Open"}
+          </button>
+        </div>
 
         <!-- Recent files -->
         {#if recentFiles.length > 0}
