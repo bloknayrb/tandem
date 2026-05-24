@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -555,9 +556,40 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       );
       try {
         if (process.platform === "win32") {
+          // Windows ignores the POSIX `mode` arg on mkdir, so harden the
+          // dir with an explicit DACL BEFORE writing the backup file.
+          // Mirrors the ordering invariant in
+          // `storage.ts#backupBrokenFile`: dir-level ACL closes the
+          // TOCTOU window that a per-file ACL would otherwise open
+          // between copyFile and the ACL set. Fail loud — orphaning a
+          // half-hardened dir is worse than aborting the backup
+          // outright. The inner `catch (copyErr)` below surfaces a
+          // named error and refuses to overwrite the malformed config.
+          try {
+            await setRestrictiveAcl(brokenBackupDir);
+          } catch (aclErr) {
+            throw new Error(
+              `failed to apply restrictive ACL to broken-backups dir ${brokenBackupDir}: ${
+                aclErr instanceof Error ? aclErr.message : String(aclErr)
+              }`,
+              { cause: aclErr },
+            );
+          }
           // Windows doesn't honor POSIX modes — fall back to plain copy.
-          // The randomUUID-suffixed path makes collisions effectively impossible.
-          await copyFile(configPath, backupPath);
+          // The randomUUID-suffixed path makes collisions effectively
+          // impossible. COPYFILE_EXCL refuses to overwrite an existing
+          // target, defeating any predictable-path symlink/pre-create
+          // attack the UUID suffix might still leave reachable. NOTE:
+          // `setRestrictiveAcl` (acl-win.ts) calls `icacls /grant:r
+          // *<SID>:F` without (OI)(CI) inheritance flags, so the new
+          // file does NOT inherit the parent dir's SID-only ACE.
+          // Instead it receives the DACL synthesized from the process
+          // token's default (typically user + SYSTEM + Administrators),
+          // which is narrow enough to prevent cross-tenant leak in
+          // standard contexts. If broader access is observed, the dir
+          // ACE should be made inheritable in acl-win.ts (this would
+          // also benefit storage.ts which uses the same helper).
+          await copyFile(configPath, backupPath, fsConstants.COPYFILE_EXCL);
         } else {
           // Open with mode 0o600 + `wx` so the file is created exclusively
           // at the right mode (no copyFile + chmodSync race window where
