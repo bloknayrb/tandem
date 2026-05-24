@@ -242,6 +242,78 @@ fn windows_relative_path_with_colon_rejected_after_resolution() {
 }
 
 #[test]
+fn display_renders_diagnostic_context() {
+    // The fixer commits switched the call sites from `{reason:?}` to `{reason}`
+    // (Display) specifically to recover the path + index diagnostic context in
+    // the log line. These assertions pin the exact rendered substrings so a
+    // format regression (dropping the index, mangling the empty-ext branch, or
+    // losing the path) fails CI. Substrings match `impl Display for
+    // RejectionReason` in `src-tauri/src/lib.rs`.
+    let p = PathBuf::from("/x/y.bin");
+
+    // Non-empty `ext`: renders the dotted extension and the path.
+    let unsupported = RejectionReason::UnsupportedExtension {
+        ext: "bin".to_string(),
+        path: p.clone(),
+    }
+    .to_string();
+    assert!(
+        unsupported.contains("unsupported extension '.bin'"),
+        "non-empty ext should render the dotted extension, got: {unsupported}"
+    );
+    assert!(
+        unsupported.contains("/x/y.bin"),
+        "non-empty ext should render the path, got: {unsupported}"
+    );
+
+    // Empty `ext`: the untested `ext.is_empty()` branch renders a distinct
+    // "missing/empty extension" message rather than `'.'`.
+    let empty_ext = RejectionReason::UnsupportedExtension {
+        ext: String::new(),
+        path: p.clone(),
+    }
+    .to_string();
+    assert!(
+        empty_ext.contains("missing/empty extension"),
+        "empty-ext branch should render the missing/empty message, got: {empty_ext}"
+    );
+    assert!(
+        empty_ext.contains("/x/y.bin"),
+        "empty-ext branch should still render the path, got: {empty_ext}"
+    );
+    assert!(
+        !empty_ext.contains("'.'"),
+        "empty-ext branch must NOT render a bare dotted extension, got: {empty_ext}"
+    );
+
+    // NotAFile: renders the path after a "not a regular file" prefix.
+    let not_a_file = RejectionReason::NotAFile { path: p.clone() }.to_string();
+    assert!(
+        not_a_file.contains("not a regular file"),
+        "NotAFile should render the not-a-regular-file prefix, got: {not_a_file}"
+    );
+    assert!(
+        not_a_file.contains("/x/y.bin"),
+        "NotAFile should render the path, got: {not_a_file}"
+    );
+
+    // SuspiciousColon: the offending byte index must appear in the output.
+    let suspicious = RejectionReason::SuspiciousColon {
+        path: p,
+        index: 4,
+    }
+    .to_string();
+    assert!(
+        suspicious.contains("byte index 4"),
+        "SuspiciousColon should render the offending byte index, got: {suspicious}"
+    );
+    assert!(
+        suspicious.contains("/x/y.bin"),
+        "SuspiciousColon should render the resolved path, got: {suspicious}"
+    );
+}
+
+#[test]
 fn warm_start_single_instance_args_shape() {
     // Reproduces the arg shape passed by `tauri-plugin-single-instance`:
     // `args[0]` is the executable path (potentially with spaces), `args[1]`
