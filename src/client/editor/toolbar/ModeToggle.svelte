@@ -38,7 +38,11 @@ const { tandemMode, onModeChange }: Props = $props();
   .mode-toggle {
     display: inline-flex;
     padding: 3px;
-    background: color-mix(in srgb, var(--tandem-fg) 6%, transparent);
+    /* surface-sunk recessed track (matches the rail-tabs Annotations/Chat
+       toggle) so the lighter `surface` active pill reads as raised in both
+       themes. The original fg@6% track vanished in dark mode (white@6% over
+       the dark titlebar). */
+    background: var(--tandem-surface-sunk);
     border-radius: var(--tandem-r-pill);
     font-size: 12px;
     gap: 0;

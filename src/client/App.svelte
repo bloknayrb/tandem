@@ -1299,13 +1299,12 @@ const tutorial = createTutorial(
   ></div>
 {/snippet}
 
-<!-- Edge-click collapse zone: full-height 8px strip at the outer edge of the
-     rail. The right rail insets the top by 40px to clear the rail-tabs-row
-     tab buttons (~36px tall); the left rail has no tab bar and runs edge-
-     to-edge. The right rail's scrollbar shares the outer edge — a known
-     minor conflict; the strip stays 8px so a Windows scrollbar (~17px)
-     remains grabbable from the inside half. Sibling of panel content (not
-     a parent) so descendant clicks never bubble in. -->
+<!-- Edge-click collapse zone: full-height 12px strip at the outer edge of
+     the rail. Both rails run edge-to-edge top-to-bottom; the grip bar inside
+     is vertically centered. The right rail's scrollbar shares the outer edge
+     — a known minor conflict; the strip stays narrow so a Windows scrollbar
+     (~17px) remains grabbable from the inside half. Sibling of panel content
+     (not a parent) so descendant clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
   <!-- Not in the Tab sequence: keyboard users have Alt+Shift+Arrow for
        the same action, and tab-reachable edge zones would push other
@@ -1440,6 +1439,17 @@ const tutorial = createTutorial(
         />
       {/if}
     </div>
+    <!-- End-of-document marker — gives the editor enough trailing scroll
+         room that the last heading can reach the scroll-spy threshold zone
+         (top of the viewport) when clicked from the outline. A faint pill
+         marks where the document ends; the rest is empty whitespace.
+         Hidden when there's no active document so the EmptyState scene
+         isn't dragged down by phantom space. -->
+    {#if activeTab}
+      <div class="editor-end-marker" aria-hidden="true">
+        <span class="editor-end-pill">End of document</span>
+      </div>
+    {/if}
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar
       {editor}
@@ -1507,27 +1517,60 @@ const tutorial = createTutorial(
     font-weight: 700;
   }
 
-  /* Edge-click collapse zone. Full-height 8px strip on the rail's outer
-     edge. Left rail goes edge-to-edge; right rail starts below the
-     rail-tabs-row (40px) to clear the rail-tabs-row tab buttons (right
-     rail only). Sibling to panel content so descendant clicks don't
-     bubble in. */
+  .editor-end-marker {
+    /* Trailing scroll room so the outline's last heading can pin to the top.
+       Pill sits just below content; the remaining height is empty whitespace
+       so the user can scroll the last heading up to the threshold zone. */
+    height: 70vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: var(--tandem-space-5);
+    pointer-events: none;
+  }
+  .editor-end-pill {
+    font-size: var(--tandem-text-2xs, 10px);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tandem-fg-faint, var(--tandem-fg-subtle));
+    background: var(--tandem-surface-muted);
+    border-radius: var(--tandem-r-pill);
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+    opacity: 0.6;
+  }
   .panel-edge-collapse {
     position: absolute;
-    width: 8px;
+    width: 12px;
     top: 0;
     bottom: 0;
     cursor: pointer;
     z-index: 1;
     background: transparent;
     transition: background 140ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .panel-edge-collapse::before {
+    content: "";
+    width: 1.5px;
+    height: 28px;
+    background: var(--tandem-border-strong);
+    border-radius: 1px;
+    opacity: 0.55;
+    transition: opacity 140ms ease, height 140ms ease, background 140ms ease;
+  }
+  .panel-edge-collapse:hover::before {
+    opacity: 1;
+    height: 36px;
+    background: var(--tandem-accent);
   }
   .panel-edge-collapse-left {
     left: 0;
   }
   .panel-edge-collapse-right {
     right: 0;
-    top: 40px;
   }
   .panel-edge-collapse:hover {
     background: var(--tandem-accent-bg);
