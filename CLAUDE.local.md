@@ -20,10 +20,11 @@ The umbrella is a long-running branch off master. Sub-PRs target `feat/design-sy
 
 **Phase 0: COMPLETE** (15 commits, baselines captured in `5f08128`). Umbrella branch `feat/design-system-impl` pushed to origin on 2026-05-21.
 
-**Phase 1: IN PROGRESS.**
-- **Sub-PR 1.1 — TitleBar:** [PR #802](https://github.com/bloknayrb/tandem/pull/802) (branch `design-impl/1.1-titlebar`). Visual layer onto production TitleBar + BrandMenu + ModeToggle per Conflict #1 / Option A. 40×40 brand button with hover-scale on the logo (no chip ring — Bryan corrected the soft-fill alternative mid-implementation), 2×2 theme swatch grid with diagonal split for "system", borderless ModeToggle with `fg @ 6%` recipe. Plan reviewed by svelte-migration-reviewer at plan stage; 2 BLOCKERS + 3 IMPORTANT findings addressed before implementation.
-- **Sub-PR 1.2 — FormatBar / Toolbar:** next.
-- Sub-PRs 1.3–1.12 remaining per plan.
+**Phase 1: IN PROGRESS — sub-PRs 1.1–1.6 MERGED (as of 2026-05-24).**
+- **Merged into umbrella:** 1.1 TitleBar (#802), 1.2 FormatBar/Toolbar (authorship toggle relocated → testid `formatbar-authorship-toggle`), 1.3 Editor body + left outline rail, 1.4 peek strips, 1.5 AnnotationCard (5-file split preserved; full-card tint + 6px author dot), 1.6 CommandPalette (visual-only, registry frozen).
+- **QA follow-up fixes (spun out of Bryan's manual pass, all merged):** #837 palette Escape-dismiss (capture-phase window listener); #838 palette overlay z-index above the decorum lift; **#840** generalized it — new `--tandem-z-titlebar`/`--tandem-z-above-titlebar` tokens in `index.html`, every full-screen modal overlay lifted above the titlebar, `ReplyThreadOverlay` portaled to `<body>` (rail stacking-context trap). Closed #839. Contextual z-indexes (brand menu, selection toolbar) left at `--tandem-z-modal`.
+- **NEXT: Sub-PR 1.7 — Settings** (Conflict #4: responsive shell + tab registry frozen, Models wizard untouched, visual-only). Then 1.8 StatusBar, 1.9 NewTabMenu, 1.10 Toasts, 1.11 SelectionToolbar (Conflict #5), 1.12 SlashMenu.
+- **QA aid:** `docs/design-system-impl/preview/qa-1.1-1.6-checklist.md` (committed) — per-surface comparison vs the bundle's rendered kit (`bundle/extracted/Tandem App UI Kit.html`, open in OD). Tauri desktop pass is Bryan's (claude-in-chrome can't drive the Tauri WebView); reply-thread overlay worth a spot-check there (portal fix has no automated coverage).
 
 Note on pre-push: full vitest suite occasionally flakes `tests/cli/mcp-stdio.test.ts > process exits in <3s after half-open timeout fires` under CPU load (e.g., `cargo tauri dev` running concurrently). Stop background processes and retry; or run the failing test in isolation to confirm it passes. The test is timing-sensitive, not broken by visual changes.
 
