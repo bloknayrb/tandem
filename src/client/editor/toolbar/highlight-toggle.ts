@@ -63,8 +63,11 @@ export function toggleHighlight(
       timestamp: Date.now(),
       color,
     } as Annotation;
-    // ADR-031: browser-initiated user edit — origin-tag so observers route correctly
-    // (channel emits, durable-sync persists, tombstones record).
+    // Critical Rule #2 / ADR-031: all Y.Doc writes must be origin-tagged via a
+    // wrapper helper (raw `doc.transact` is blocked by the pre-commit hook).
+    // This is a browser-initiated user edit, so `withBrowser` is the correct
+    // tag. (The origin stays client-side — it does not cross the Hocuspocus
+    // wire; the server sees a null origin for browser-origin writes.)
     withBrowser(ydoc, () => map.set(id, annotation));
     return "added";
   }
