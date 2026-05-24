@@ -14,7 +14,9 @@ import {
   hasDoc,
   removeDoc,
   requireDocument,
+  saveDocumentAsToDisk,
   saveDocumentToDisk,
+  serializeDocument,
   setActiveDocId,
   toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
@@ -534,6 +536,115 @@ describe("broadcastStoreReadOnly", () => {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     expect(meta.get(Y_MAP_STORE_READ_ONLY)).toBe(false);
+  });
+});
+
+describe("saveDocumentAsToDisk", () => {
+  it("rejects unsupported formats", async () => {
+    addDoc("save-as-doc", {
+      id: "save-as-doc",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    // Cast through unknown so we can verify runtime guard rejects non-allowlist formats.
+    const result = await saveDocumentAsToDisk(
+      "save-as-doc",
+      "/tmp/anywhere.html",
+      "html" as unknown as "md",
+    );
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("UNSUPPORTED_FORMAT");
+  });
+
+  it("rejects when target extension doesn't match the chosen format", async () => {
+    addDoc("ext-mismatch", {
+      id: "ext-mismatch",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const result = await saveDocumentAsToDisk("ext-mismatch", "/tmp/promoted.txt", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("EXTENSION_MISMATCH");
+  });
+
+  it("rejects unknown document IDs", async () => {
+    const result = await saveDocumentAsToDisk("ghost-doc", "/tmp/anywhere.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("NOT_FOUND");
+  });
+
+  it("rejects read-only documents", async () => {
+    addDoc("ro-doc", {
+      id: "ro-doc",
+      filePath: "/tmp/locked.md",
+      format: "md",
+      readOnly: true,
+      source: "file",
+    });
+    const result = await saveDocumentAsToDisk("ro-doc", "/tmp/elsewhere.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("READ_ONLY");
+  });
+});
+
+describe("serializeDocument", () => {
+  it("serializes an upload-backed scratchpad to markdown bytes", () => {
+    addDoc("ser-doc", {
+      id: "ser-doc",
+      filePath: "upload://scratchpad/uuid/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const doc = getOrCreateDocument("ser-doc");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    p.insert(0, [new Y.XmlText("serialize me")]);
+
+    const result = serializeDocument("ser-doc", "md");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.content).toContain("serialize me");
+      // Stem preserved, extension swapped to chosen format.
+      expect(result.fileName).toBe("Scratchpad.md");
+    }
+  });
+
+  it("re-stems the proposed filename to match the requested format", () => {
+    addDoc("ser-doc-txt", {
+      id: "ser-doc-txt",
+      filePath: "upload://scratchpad/uuid/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const result = serializeDocument("ser-doc-txt", "txt");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fileName).toBe("Scratchpad.txt");
+    }
+  });
+
+  it("returns error for unknown documents", () => {
+    const result = serializeDocument("nope", "md");
+    expect(result.ok).toBe(false);
+  });
+
+  it("returns error for unsupported formats", () => {
+    addDoc("ser-doc-bad", {
+      id: "ser-doc-bad",
+      filePath: "upload://scratchpad/uuid/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const result = serializeDocument("ser-doc-bad", "html" as unknown as "md");
+    expect(result.ok).toBe(false);
   });
 });
 
