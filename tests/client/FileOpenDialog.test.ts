@@ -6,17 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import FileOpenDialog from "../../src/client/components/FileOpenDialog.svelte";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
-
-// The dialog opens in "upload" mode by default (#478). Switch to the
-// "File Path" tab so the Tauri-only Browse button is renderable.
-async function switchToPathTab(container: HTMLElement) {
-  const tab = Array.from(container.querySelectorAll("button")).find(
-    (b) => b.textContent?.trim() === "File Path",
-  );
-  if (!tab) throw new Error("File Path tab not found");
-  await fireEvent.click(tab);
-  await tick();
-}
+import { RECENT_FILES_KEY } from "../../src/shared/constants.js";
 
 vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
   isTauriRuntime: vi.fn(() => false),
@@ -30,41 +20,76 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-describe("FileOpenDialog Browse button (#378)", () => {
+vi.mock("../../src/client/utils/fileUpload.js", () => ({
+  API_BASE: "",
+  readFileForUpload: vi.fn(async () => "file-contents"),
+}));
+
+describe("FileOpenDialog unified (#378)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
     vi.mocked(serverPaths.openServerPath).mockReset();
+    fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      window.localStorage.removeItem(RECENT_FILES_KEY);
+    } catch {
+      // ignore
+    }
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
   });
 
-  it("hides the Browse button in browser runtime", async () => {
-    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
-    const { queryByTestId, container } = render(FileOpenDialog, {
+  it("renders a single Browse button (no tab toggle, no path input)", () => {
+    const { queryByTestId, getByTestId } = render(FileOpenDialog, {
       props: { onClose: vi.fn() },
     });
-    await switchToPathTab(container);
-    expect(queryByTestId("file-open-browse")).toBeNull();
-    // Sibling Open button is still present, so the path tab did render.
-    expect(queryByTestId("file-open-submit")).not.toBeNull();
+    expect(getByTestId("file-open-browse")).toBeTruthy();
+    // PR #808 testids that are intentionally gone after consolidation.
+    expect(queryByTestId("file-path-input")).toBeNull();
+    expect(queryByTestId("file-open-submit")).toBeNull();
+    expect(queryByTestId("file-upload-zone")).toBeNull();
   });
 
-  it("shows Browse, picks a file, and opens it via openServerPath", async () => {
+  it("browser runtime: Browse triggers the hidden file input and uploads on change", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
+    const onClose = vi.fn();
+    const { getByTestId, container } = render(FileOpenDialog, { props: { onClose } });
+
+    const hiddenInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(hiddenInput).toBeTruthy();
+    const clickSpy = vi.spyOn(hiddenInput, "click");
+
+    await fireEvent.click(getByTestId("file-open-browse"));
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+
+    const file = new File(["hi"], "x.md", { type: "text/markdown" });
+    Object.defineProperty(hiddenInput, "files", { value: [file], configurable: true });
+    await fireEvent.change(hiddenInput);
+    await tick();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/upload");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Tauri runtime: Browse calls plugin-dialog and opens path editable", async () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
     const { open } = await import("@tauri-apps/plugin-dialog");
     vi.mocked(open).mockResolvedValue("C:/path/to/file.md");
     vi.mocked(serverPaths.openServerPath).mockResolvedValue({ ok: true });
 
     const onClose = vi.fn();
-    const { getByTestId, container } = render(FileOpenDialog, { props: { onClose } });
-    await switchToPathTab(container);
-    const browse = getByTestId("file-open-browse");
-    await fireEvent.click(browse);
+    const { getByTestId } = render(FileOpenDialog, { props: { onClose } });
+    await fireEvent.click(getByTestId("file-open-browse"));
     await tick();
-    // Flush the awaited dynamic-import + openByPath chain.
     await new Promise((r) => setTimeout(r, 0));
 
     expect(vi.mocked(open)).toHaveBeenCalledWith(
@@ -74,7 +99,7 @@ describe("FileOpenDialog Browse button (#378)", () => {
         filters: [
           expect.objectContaining({
             name: "Documents",
-            extensions: ["md", "txt", "html", "htm", "docx"],
+            extensions: expect.arrayContaining(["md", "txt", "html", "htm", "docx"]),
           }),
         ],
       }),
@@ -83,16 +108,13 @@ describe("FileOpenDialog Browse button (#378)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op when the user cancels (open resolves null)", async () => {
+  it("Tauri runtime: cancel (null) is a no-op — no openServerPath, no onClose, no error", async () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
     const { open } = await import("@tauri-apps/plugin-dialog");
     vi.mocked(open).mockResolvedValue(null);
 
     const onClose = vi.fn();
-    const { getByTestId, queryByTestId, container } = render(FileOpenDialog, {
-      props: { onClose },
-    });
-    await switchToPathTab(container);
+    const { getByTestId, queryByTestId } = render(FileOpenDialog, { props: { onClose } });
     await fireEvent.click(getByTestId("file-open-browse"));
     await tick();
     await new Promise((r) => setTimeout(r, 0));
@@ -100,5 +122,37 @@ describe("FileOpenDialog Browse button (#378)", () => {
     expect(vi.mocked(serverPaths.openServerPath)).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(queryByTestId("file-open-error")).toBeNull();
+  });
+
+  it("Recent file click routes through openServerPath (regression guard)", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
+    vi.mocked(serverPaths.openServerPath).mockResolvedValue({ ok: true });
+    const past = "C:/notes/old.md";
+    try {
+      window.localStorage.setItem(RECENT_FILES_KEY, JSON.stringify([past]));
+    } catch {
+      // happy-dom may not have storage; the dialog itself handles that.
+    }
+
+    const onClose = vi.fn();
+    const { findByTestId } = render(FileOpenDialog, { props: { onClose } });
+    const recent = await findByTestId("recent-file-0");
+    await fireEvent.click(recent);
+    await tick();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith(past);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the drop-anywhere hint only in Tauri runtime", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
+    const browser = render(FileOpenDialog, { props: { onClose: vi.fn() } });
+    expect(browser.container.textContent).not.toContain("drop a file anywhere");
+    cleanup();
+
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const tauri = render(FileOpenDialog, { props: { onClose: vi.fn() } });
+    expect(tauri.container.textContent).toContain("drop a file anywhere");
   });
 });
