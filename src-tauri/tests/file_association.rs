@@ -48,10 +48,15 @@ fn flag_only_returns_ok_none() {
 #[test]
 fn nonexistent_file_returns_not_a_file() {
     let cwd = std::env::current_dir().unwrap();
-    let path = "/nope/does-not-exist.md";
+    // Use a relative candidate so the resolved path is `cwd.join(candidate)`
+    // on every platform. A `/`-rooted POSIX path would resolve differently on
+    // Windows (rooted-but-driveless → `is_absolute()` is false → joined onto
+    // cwd's drive as `C:\nope\...`), so asserting against `PathBuf::from(raw)`
+    // only held on Unix and broke the Windows rust-test job.
+    let candidate = "nope/does-not-exist.md";
     assert_eq!(
-        extract_file_arg(&args(&[path]), &cwd),
-        Err(RejectionReason::NotAFile { path: PathBuf::from(path) }),
+        extract_file_arg(&args(&[candidate]), &cwd),
+        Err(RejectionReason::NotAFile { path: cwd.join(candidate) }),
     );
 }
 
@@ -76,14 +81,19 @@ fn no_extension_returns_unsupported_extension_with_empty_ext() {
     // A path with no extension at all falls through the extension check with
     // an empty `ext` string (this happens before the is_file() check, so the
     // file need not exist). The variant still carries the resolved path.
+    //
+    // Use a relative candidate so the resolved path is `cwd.join(candidate)`
+    // on every platform — a `/`-rooted POSIX path resolves differently on
+    // Windows (joined onto cwd's drive), which would break the Windows
+    // rust-test job.
     let cwd = std::env::current_dir().unwrap();
-    let path = "/some/dir/README";
-    let result = extract_file_arg(&args(&[path]), &cwd);
+    let candidate = "some/dir/README";
+    let result = extract_file_arg(&args(&[candidate]), &cwd);
     assert_eq!(
         result,
         Err(RejectionReason::UnsupportedExtension {
             ext: String::new(),
-            path: PathBuf::from(path),
+            path: cwd.join(candidate),
         }),
         "a path with no extension should be rejected with an empty ext + the resolved path"
     );
