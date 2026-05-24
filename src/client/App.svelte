@@ -195,7 +195,7 @@ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileN
 
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
-initTauriFileDrop();
+initTauriFileDrop(notifications.push);
 
 // Surface sidecar restart failures (Tauri-only) as a generic toast. The
 // Rust side emits "sidecar-restart-failed" with a stable code; the message
