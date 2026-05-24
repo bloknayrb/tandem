@@ -10,6 +10,7 @@ import {
   createScratchpad,
   saveStore,
   triggerSave,
+  triggerSaveAs,
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
@@ -455,6 +456,27 @@ wireActionDeps({
     settingsState.updateSettings({
       showAuthorship: !settingsState.settings.showAuthorship,
     }),
+  saveAs: async () => {
+    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+    // Default-name hint for the native dialog: prefer the existing basename.
+    // For a synthetic upload:// path that's already "Scratchpad.md".
+    const lastSlash = tab
+      ? Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"))
+      : -1;
+    const defaultName = tab ? tab.filePath.slice(lastSlash + 1) : "Scratchpad.md";
+    await triggerSaveAs({
+      activeDocId: yjsSync.activeTabId,
+      defaultName,
+      notify: (severity, message) =>
+        notifications.push({
+          id: `save-as-${Date.now()}`,
+          type: "launcher",
+          severity,
+          message,
+          timestamp: Date.now(),
+        }),
+    });
+  },
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -706,7 +728,28 @@ $effect(() => {
         if (active?.closest?.(".ProseMirror")) return;
         e.preventDefault();
         editor?.commands.selectAll();
-      } else if (e.code === "KeyS") {
+      } else if (e.code === "KeyS" && e.shiftKey && !e.altKey) {
+        // Ctrl+Shift+S → Save As… (palette action 'save-as'). Tested before
+        // the plain Ctrl+S branch so the modifier-bearing combo wins.
+        e.preventDefault();
+        const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+        const lastSlash = tab
+          ? Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"))
+          : -1;
+        const defaultName = tab ? tab.filePath.slice(lastSlash + 1) : "Scratchpad.md";
+        void triggerSaveAs({
+          activeDocId: yjsSync.activeTabId,
+          defaultName,
+          notify: (severity, message) =>
+            notifications.push({
+              id: `save-as-${Date.now()}`,
+              type: "launcher",
+              severity,
+              message,
+              timestamp: Date.now(),
+            }),
+        });
+      } else if (e.code === "KeyS" && !e.shiftKey && !e.altKey) {
         e.preventDefault();
         void triggerSave(yjsSync.activeTabId);
       } else if (isSettingsModalShortcut(e)) {

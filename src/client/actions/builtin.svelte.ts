@@ -56,6 +56,13 @@ interface ActionDeps {
   annotationDismiss: () => void;
   selectBlock: () => void;
   toggleAuthorship: () => void;
+  /**
+   * Save the active document under a new file path. Used to promote an
+   * ephemeral scratchpad (or any `upload://`-backed doc) into a real file.
+   * Resolves once the save attempt completes (success or failure) so action
+   * runners can chain notifications.
+   */
+  saveAs: () => Promise<void>;
 }
 
 let deps: ActionDeps | null = null;
@@ -102,6 +109,184 @@ export async function createScratchpad(): Promise<void> {
     console.warn("[Tandem] New Scratchpad request failed:", err);
   } finally {
     scratchpadInflight = false;
+  }
+}
+
+/**
+ * Detect whether the page is running inside the Tauri WebView. Re-implemented
+ * here (rather than imported from `cowork/cowork-helpers`) so this module
+ * stays free of UI-tree dependencies — registering builtins at import time
+ * must not pull in Svelte component code.
+ */
+function isTauriRuntime(): boolean {
+  try {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  } catch {
+    return false;
+  }
+}
+
+/** Allowed save-as formats. Mirrors the server-side guard in
+ * `document-service.ts#saveDocumentAsToDisk`. */
+type SaveAsFormat = "md" | "txt";
+
+let saveAsInflight = false;
+
+/** Normalize a Tauri-dialog-returned path to the chosen format extension.
+ *  Examples: ("notes.md", "md") → "notes.md"; ("notes", "md") → "notes.md";
+ *  ("notes.rtf", "md") → "notes.md" (extension overridden to the chosen format
+ *  so the on-disk file matches the user's format pick). */
+export function normalizeSaveAsExtension(targetPath: string, format: SaveAsFormat): string {
+  const expectedExt = `.${format}`;
+  // No extension at all (or the trailing segment starts with no dot at all)
+  // → append the expected one.
+  const lastSlash = Math.max(targetPath.lastIndexOf("/"), targetPath.lastIndexOf("\\"));
+  const basename = targetPath.slice(lastSlash + 1);
+  if (!basename.includes(".")) return `${targetPath}${expectedExt}`;
+  const ext = targetPath.slice(targetPath.lastIndexOf(".")).toLowerCase();
+  if (ext === expectedExt) return targetPath;
+  // Trailing extension exists but doesn't match — strip and replace.
+  const stem = targetPath.slice(0, targetPath.lastIndexOf("."));
+  return `${stem}${expectedExt}`;
+}
+
+/** Trigger an anchor-based download for the given bytes. Browser save-as
+ *  fallback — exported for unit-test stubbing of the anchor click path. */
+export function downloadBlob(content: string, fileName: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  // Some browsers require the anchor to be in the DOM before .click() fires.
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Release the object URL after a tick to let the download stream attach.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+interface SaveAsOptions {
+  activeDocId: string | null;
+  notify: (severity: "info" | "warning" | "error", message: string) => void;
+  /** Hint for the native dialog's default filename. Falls back to "Scratchpad.md". */
+  defaultName?: string;
+}
+
+/**
+ * Save-as orchestrator. Tauri runtime opens the native save dialog and POSTs
+ * `{ targetPath, format }` to `/api/save`; browser runtime POSTs
+ * `{ serialize: true, format }` and triggers an anchor download with the
+ * returned bytes.
+ *
+ * Exported so App.svelte's `wireActionDeps({ saveAs })` can bind it. The
+ * inflight flag is module-scoped so the palette action and the Ctrl+Shift+S
+ * keybinding cannot race.
+ */
+export async function triggerSaveAs(opts: SaveAsOptions): Promise<void> {
+  if (saveAsInflight) return;
+  const { activeDocId, notify, defaultName } = opts;
+  if (!activeDocId) {
+    notify("warning", "No active document to save.");
+    return;
+  }
+  saveAsInflight = true;
+  try {
+    if (isTauriRuntime()) {
+      await runTauriSaveAs(activeDocId, notify, defaultName ?? "Scratchpad.md");
+    } else {
+      await runBrowserSaveAs(activeDocId, notify);
+    }
+  } finally {
+    saveAsInflight = false;
+  }
+}
+
+async function runTauriSaveAs(
+  activeDocId: string,
+  notify: SaveAsOptions["notify"],
+  defaultName: string,
+): Promise<void> {
+  let selected: string | null;
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    selected = await save({
+      defaultPath: defaultName,
+      filters: [
+        { name: "Markdown", extensions: ["md"] },
+        { name: "Plain Text", extensions: ["txt"] },
+      ],
+    });
+  } catch (err) {
+    notify("error", `Save As dialog unavailable: ${err instanceof Error ? err.message : err}`);
+    return;
+  }
+  if (typeof selected !== "string" || selected.length === 0) return; // user cancelled
+
+  // Determine format from the chosen extension; default to .md when the user
+  // typed a non-supported extension (or none) — and normalize the path so the
+  // on-disk file ends with the expected ext.
+  const lower = selected.toLowerCase();
+  const format: SaveAsFormat = lower.endsWith(".txt") ? "txt" : "md";
+  const normalizedPath = normalizeSaveAsExtension(selected, format);
+  if (normalizedPath !== selected) {
+    notify("info", `Saving as ${format.toUpperCase()} — only .md and .txt are supported.`);
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}${API_SAVE}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        documentId: activeDocId,
+        targetPath: normalizedPath,
+        format,
+      }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      notify("error", `Save As failed: ${body.message ?? res.statusText}`);
+      return;
+    }
+    const json = (await res.json().catch(() => null)) as { data?: { fileName?: string } } | null;
+    const fileName = json?.data?.fileName ?? normalizedPath;
+    notify("info", `Saved to ${fileName}.`);
+  } catch (err) {
+    notify("error", `Save As request failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+async function runBrowserSaveAs(
+  activeDocId: string,
+  notify: SaveAsOptions["notify"],
+): Promise<void> {
+  // Browser distribution can't write to arbitrary paths — fall back to a
+  // Blob + anchor download. Default to .md; user can rename after download.
+  const format: SaveAsFormat = "md";
+  try {
+    const res = await fetch(`${API_BASE}${API_SAVE}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: activeDocId, serialize: true, format }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      notify("error", `Save As failed: ${body.message ?? res.statusText}`);
+      return;
+    }
+    const json = (await res.json().catch(() => null)) as {
+      data?: { content?: string; fileName?: string };
+    } | null;
+    const content = json?.data?.content;
+    const fileName = json?.data?.fileName ?? "Scratchpad.md";
+    if (typeof content !== "string") {
+      notify("error", "Save As returned no content.");
+      return;
+    }
+    downloadBlob(content, fileName, format === "md" ? "text/markdown" : "text/plain");
+    notify("info", "Downloaded; scratchpad remains in-session.");
+  } catch (err) {
+    notify("error", `Save As request failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -348,6 +533,15 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+N",
     run() {
       void createScratchpad();
+    },
+  },
+  {
+    id: "save-as",
+    label: "Save As…",
+    group: "document",
+    shortcut: "Ctrl+Shift+S",
+    run() {
+      guardedRun("save-as", (d) => void d.saveAs());
     },
   },
   {
