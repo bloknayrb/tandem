@@ -176,4 +176,107 @@ describe("check-semantic-tokens", () => {
       expect(violations).toEqual([]);
     });
   });
+
+  describe("comment stripping (#826 review)", () => {
+    it("does not flag a bundle hex inside a mid-line-opened CSS block comment", () => {
+      // The `/*` opens AFTER live code on the same line and the comment spans
+      // several lines. Hex inside the comment body must be ignored, while the
+      // live `color: var(--x)` declaration on the opener line stays clean.
+      const violations = checkContent(
+        ["  color: var(--x); /* legacy bundle", "   was #c96442 here", "   end */"].join("\n"),
+        "src/client/components/MidLineBlock.css",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("still flags live hex BEFORE a mid-line `/*` and AFTER a mid-line `*/`", () => {
+      // Code before the opener and after the closer on the same physical line
+      // must still be scanned. Both are CSS-context hex, so both are flagged.
+      const violations = checkContent(
+        [
+          "  color: #1095d4; /* bundle blue note",
+          "    #f57018 inside comment, ignored",
+          "  */ background: #28c840;",
+        ].join("\n"),
+        "src/client/components/AroundComment.css",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/AroundComment.css:1: #1095d4",
+        "src/client/components/AroundComment.css:3: #28c840",
+      ]);
+    });
+
+    it("does not flag a bundle hex inside an HTML comment in a .html file", () => {
+      const violations = checkContent(
+        `<div>before</div><!-- palette #f57018 --><div>after</div>\n`,
+        "src/client/index.html",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("does not flag a bundle hex inside a multi-line HTML comment", () => {
+      const violations = checkContent(
+        ["<!-- palette notes", "  warm tan #c96442", "  bundle blue #1095d4", "-->"].join("\n"),
+        "src/client/index.html",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("flags a bundle hex in live HTML code (positive control)", () => {
+      // Inline style with a bundle-blocklisted hex outside any comment is real.
+      const violations = checkContent(
+        `<div style="color: #f57018;">live</div>\n`,
+        "src/client/index.html",
+      );
+
+      expect(violations).toEqual(["src/client/index.html:1: #f57018"]);
+    });
+
+    it("flags live hex following an HTML comment close on the same line", () => {
+      const violations = checkContent(
+        `<!-- skip #c96442 --><span style="color: #1095d4">x</span>\n`,
+        "src/client/index.html",
+      );
+
+      expect(violations).toEqual(["src/client/index.html:1: #1095d4"]);
+    });
+
+    it("flags a bundle hex in live CSS code (positive control)", () => {
+      const violations = checkContent(
+        `.x { color: #f57018; }\n`,
+        "src/client/components/LiveCss.css",
+      );
+
+      expect(violations).toEqual(["src/client/components/LiveCss.css:1: #f57018"]);
+    });
+
+    it("does not flag a hex inside an indented `//` line comment", () => {
+      // Regression: an indented `// ...` comment must be masked even when it
+      // contains a CSS keyword (e.g. "style" in "Word-style") that would
+      // otherwise satisfy the CSS-indicator heuristic.
+      const violations = checkContent(
+        `  // #649: opt-in Word-style margin annotation view\n`,
+        "src/client/hooks/Example.ts",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("treats `<!--` as live code in non-html files (no HTML comment stripping)", () => {
+      // HTML comment recognition is gated on the `.html` extension; a literal
+      // `<!--` in a .ts string must not swallow a following bundle hex.
+      const violations = checkContent(
+        `const s = "<!-- #f57018 -->";\n`,
+        "src/client/components/NotHtml.ts",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/NotHtml.ts:1: #f57018 [bundle-blocklist]",
+      ]);
+    });
+  });
 });

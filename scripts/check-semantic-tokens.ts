@@ -12,7 +12,6 @@ const SKIP_FILE_RELS = new Set([
   "src/client/svelte-harness/HookDebug.svelte",
 ]);
 
-const INLINE_BLOCK_COMMENT_RE = /\/\*.*?\*\//g;
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
 const RGBA_RE = /\brgba?\s*\(/g;
 const BORDER_RADIUS_RE = /\bborder-radius\s*:\s*\d+px\b/g;
@@ -83,6 +82,13 @@ export const BUNDLE_BLOCKLIST_HEX: ReadonlySet<string> = new Set([
  * component (4-char drops alpha); 8-char `#rrggbbaa` also drops alpha. So a
  * bundle color with an alpha suffix still matches its base entry. Returns
  * `null` for malformed input.
+ *
+ * Scope: only 3/4/6/8-digit hex bodies are recognized. Tokens with 9+ hex
+ * digits (e.g. `#c964421234`) are out of scope and return `null` — they also
+ * never reach this function because `HEX_RE`'s trailing `\b` won't match a
+ * blocklisted prefix embedded in a longer hex-like token. Such tokens are not
+ * valid CSS colors; treating an arbitrary-length hex run as a maskable bundle
+ * color would risk flagging unrelated identifiers/hashes.
  */
 export function normalizeHexForBlocklist(raw: string): string | null {
   const m = /^#([0-9a-fA-F]{3,8})$/.exec(raw);
@@ -107,6 +113,95 @@ function isNeutralRgba(line: string, matchIndex: number): boolean {
   return NEUTRAL_RE.test(window);
 }
 
+interface CommentState {
+  inBlockComment: boolean;
+  inHtmlComment: boolean;
+}
+
+/**
+ * Mask comment regions in a single line while preserving column indices so
+ * violation positions stay accurate. Maintains running state across lines for
+ * multi-line CSS block comments (`/* ... *\/`) and HTML comments
+ * (`<!-- ... -->`). HTML comments are only recognized when `html` is true so
+ * `<!--` sequences in JS/TS/Svelte code (rare, but possible in strings) are
+ * not treated as comment openers.
+ *
+ * Block comments and HTML comments are masked (replaced with spaces). A leading
+ * `//` line comment (after whitespace) masks the remainder of the line, but
+ * only when not already inside a block/HTML comment — matching the prior
+ * line-start `//` skip behavior without dropping code that precedes a mid-line
+ * `/*` opener.
+ */
+function maskComments(line: string, state: CommentState, html: boolean): string {
+  const out: string[] = [];
+  let i = 0;
+  const n = line.length;
+
+  while (i < n) {
+    if (state.inBlockComment) {
+      const close = line.indexOf("*/", i);
+      if (close === -1) {
+        // Rest of line is inside the block comment.
+        out.push(" ".repeat(n - i));
+        i = n;
+      } else {
+        out.push(" ".repeat(close + 2 - i));
+        i = close + 2;
+        state.inBlockComment = false;
+      }
+      continue;
+    }
+
+    if (state.inHtmlComment) {
+      const close = line.indexOf("-->", i);
+      if (close === -1) {
+        out.push(" ".repeat(n - i));
+        i = n;
+      } else {
+        out.push(" ".repeat(close + 3 - i));
+        i = close + 3;
+        state.inHtmlComment = false;
+      }
+      continue;
+    }
+
+    // Not currently inside a comment: find the next comment opener.
+    const blockOpen = line.indexOf("/*", i);
+    const htmlOpen = html ? line.indexOf("<!--", i) : -1;
+    // A line-comment opener only counts when everything before the `//` (from
+    // the absolute start of the line) is whitespace, preserving the original
+    // `trimmed.startsWith("//")` skip semantics for indented comments.
+    const slashes = line.indexOf("//", i);
+    const lineCommentOpen = slashes !== -1 && line.slice(0, slashes).trim() === "" ? slashes : -1;
+
+    const candidates = [blockOpen, htmlOpen, lineCommentOpen].filter((p) => p !== -1);
+    if (candidates.length === 0) {
+      out.push(line.slice(i));
+      break;
+    }
+
+    const next = Math.min(...candidates);
+    // Emit the visible code before the comment opener.
+    out.push(line.slice(i, next));
+
+    if (next === lineCommentOpen) {
+      // Mask the rest of the line.
+      out.push(" ".repeat(n - next));
+      i = n;
+    } else if (next === blockOpen && (htmlOpen === -1 || blockOpen <= htmlOpen)) {
+      state.inBlockComment = true;
+      out.push("  "); // mask the `/*`
+      i = next + 2;
+    } else {
+      state.inHtmlComment = true;
+      out.push("    "); // mask the `<!--`
+      i = next + 4;
+    }
+  }
+
+  return out.join("");
+}
+
 export function collectFiles(dir: string): string[] {
   const entries = readdirSync(dir, { recursive: true, withFileTypes: true });
   return entries
@@ -123,27 +218,18 @@ export function checkContent(content: string, rel: string): string[] {
   const violations: string[] = [];
 
   const lines = content.split("\n");
-  let inBlockComment = false;
+  const isHtml = rel.endsWith(".html");
+  const state: CommentState = { inBlockComment: false, inHtmlComment: false };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const trimmed = line.trimStart();
 
-    if (inBlockComment) {
-      if (line.includes("*/")) inBlockComment = false;
-      continue;
-    }
-
-    if (trimmed.startsWith("//")) continue;
-
-    if (trimmed.startsWith("/*")) {
-      if (!line.includes("*/")) {
-        inBlockComment = true;
-        continue;
-      }
-    }
-
-    const scanLine = line.replace(INLINE_BLOCK_COMMENT_RE, (m) => " ".repeat(m.length));
+    // Mask out comment regions (CSS block, HTML, and line-start `//`) while
+    // preserving column indices. The masked line is used for BOTH the
+    // CSS-keyword indicator checks and the regex passes so commented-out hex
+    // and keywords never produce false positives — including comments opened
+    // mid-line after live code, and code that follows a mid-line comment close.
+    const scanLine = maskComments(line, state, isHtml);
 
     // Per-line dedupe of hex matches by character index so the bundle-blocklist
     // pass below does not double-report a position the CSS-keyword pass
@@ -155,7 +241,7 @@ export function checkContent(content: string, rel: string): string[] {
     HEX_RE.lastIndex = 0;
     let hexMatch: RegExpExecArray | null;
     while ((hexMatch = HEX_RE.exec(scanLine)) !== null) {
-      if (hasCssIndicator(line)) {
+      if (hasCssIndicator(scanLine)) {
         violations.push(`${rel}:${i + 1}: ${hexMatch[0]}`);
         reportedHexAtIndex.add(hexMatch.index);
       }
@@ -191,7 +277,7 @@ export function checkContent(content: string, rel: string): string[] {
       violations.push(`${rel}:${i + 1}: ${radiusMatch[0]}`);
     }
 
-    if (line.includes("style")) {
+    if (scanLine.includes("style")) {
       BOX_SHADOW_RE.lastIndex = 0;
       let shadowMatch: RegExpExecArray | null;
       while ((shadowMatch = BOX_SHADOW_RE.exec(scanLine)) !== null) {
