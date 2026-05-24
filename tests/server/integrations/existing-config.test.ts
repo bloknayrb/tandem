@@ -23,8 +23,16 @@ describe("readExistingTandemEntries", () => {
     }
   });
 
+  // Pin LOCALAPPDATA into tmpHome on every call so `detectTargets`'s Windows
+  // MSIX branch doesn't read the real %LOCALAPPDATA% (which lives outside
+  // tmpHome and would either fail `assertPathSafe` early or surface
+  // user-installed Claude_* packages as targets). `homeOverride` only
+  // steers home-rooted lookups; LOCALAPPDATA is a separate env var with its
+  // own override field. See #736.
+  const detectOverrides = () => ({ homeOverride: tmpHome, localAppDataOverride: tmpHome });
+
   it("returns status: missing when ~/.claude.json does not exist (force-detected target)", async () => {
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome, force: true });
+    const installs = await readExistingTandemEntries({ ...detectOverrides(), force: true });
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc).toBeDefined();
     expect(cc?.status).toBe("missing");
@@ -33,7 +41,7 @@ describe("readExistingTandemEntries", () => {
 
   it("returns status: malformed for invalid JSON", async () => {
     await fs.promises.writeFile(path.join(tmpHome, ".claude.json"), "{ not json", "utf-8");
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("malformed");
   });
@@ -44,7 +52,7 @@ describe("readExistingTandemEntries", () => {
       JSON.stringify({ otherKey: "value" }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("ok");
     expect(cc?.tandemEntry).toBeUndefined();
@@ -61,7 +69,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("ok");
     expect(cc?.tandemEntry).toEqual({ type: "http", url: "http://127.0.0.1:3479/mcp" });
@@ -79,7 +87,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.tandemValidation?.status).toBe("invalid-url");
     // Entry surfaced verbatim so user can see what's on disk and decide.
@@ -96,7 +104,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.tandemValidation?.status).toBe("invalid-url");
   });
@@ -111,7 +119,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.tandemValidation?.status).toBe("invalid-args");
   });
@@ -131,7 +139,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.tandemEntry).toBeDefined();
     expect(cc?.channelEntry).toBeDefined();
@@ -149,7 +157,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.tandemEntry).toBeDefined();
     expect((cc as { someOtherServer?: unknown }).someOtherServer).toBeUndefined();
@@ -161,23 +169,21 @@ describe("readExistingTandemEntries", () => {
       JSON.stringify({ mcpServers: "not-an-object" }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("ok");
     expect(cc?.tandemEntry).toBeUndefined();
   });
 
-  // Flakes on Windows dev machines where the real ~/.claude/ exists,
-  // suggesting `homeOverride` isn't fully isolating from os.homedir() lookups.
-  // Passes in CI (clean home) and on non-Windows. See #736.
-  it.skipIf(process.platform === "win32")(
-    "returns no targets when no Claude install is detected (no .claude dir, no force)",
-    async () => {
-      const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
-      // No ~/.claude.json, no ~/.claude/, not forced — should be empty.
-      expect(installs).toEqual([]);
-    },
-  );
+  it("returns no targets when no Claude install is detected (no .claude dir, no force)", async () => {
+    const installs = await readExistingTandemEntries(detectOverrides());
+    // No ~/.claude.json, no ~/.claude/, not forced — should be empty.
+    // `localAppDataOverride: tmpHome` pins the Windows MSIX lookup into the
+    // empty tmpdir so real %LOCALAPPDATA%\Packages\Claude_* installs (and
+    // the `assertPathSafe` early-return that surfaces previously-pushed
+    // Desktop targets) don't leak in on Windows dev machines. See #736.
+    expect(installs).toEqual([]);
+  });
 
   it("extracts a tandem-channel entry even when no tandem entry is present", async () => {
     await fs.promises.writeFile(
@@ -192,7 +198,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("ok");
     expect(cc?.tandemEntry).toBeUndefined();
@@ -223,7 +229,7 @@ describe("readExistingTandemEntries", () => {
       }),
       "utf-8",
     );
-    const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+    const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.tandemEntry).toBeDefined();
     expect(cc?.channelEntry).toBeDefined();
@@ -251,7 +257,7 @@ describe("readExistingTandemEntries", () => {
     await fs.promises.writeFile(configPath, "{}", "utf-8");
     await fs.promises.chmod(configPath, 0o000);
     try {
-      const installs = await readExistingTandemEntries({ homeOverride: tmpHome });
+      const installs = await readExistingTandemEntries(detectOverrides());
       const cc = installs.find((i) => i.target.kind === "claude-code");
       expect(cc?.status).toBe("error");
       expect(cc?.errorMessage).toBeDefined();
