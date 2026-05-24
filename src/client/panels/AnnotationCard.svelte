@@ -80,7 +80,8 @@ const cardTint = $derived.by(() => {
 });
 
 // Review-target override wins over the type tint; the accent ring is applied
-// via the .is-review-target class (see <style>) so it composes with :hover.
+// via the .is-review-target class (see the style block below) so it composes
+// with the hover shadow.
 const cardBg = $derived(isReviewTarget ? "var(--tandem-accent-bg)" : cardTint);
 
 function enterEditMode() {
