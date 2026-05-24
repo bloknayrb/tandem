@@ -16,11 +16,19 @@ import {
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import type { Annotation } from "../../shared/types";
+import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
 import { deduplicateDocList } from "./useYjsSync";
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected";
+
+/**
+ * Typing-presence snapshot derived from `ClaudeAwareness.working` (#651).
+ * `annotationId` is present only for tools that target a specific annotation
+ * (currently `tandem_annotationReply`). Per ADR-027 the server strips note IDs
+ * before broadcasting, so consumers never receive a note's ID here.
+ */
+export type ClaudeWorking = NonNullable<ClaudeAwareness["working"]>;
 
 export interface YjsSyncState {
   readonly tabs: OpenTab[];
@@ -34,6 +42,8 @@ export interface YjsSyncState {
   readonly annotations: Annotation[];
   readonly claudeStatus: string | null;
   readonly claudeActive: boolean;
+  /** #651: current MCP tool Claude is executing on the active doc, or null. */
+  readonly claudeWorking: ClaudeWorking | null;
   readonly readOnly: boolean;
   /** True when the annotation store is locked by another Tandem instance. Annotations won't be saved. */
   readonly storeReadOnly: boolean;
@@ -76,6 +86,7 @@ export function createYjsSync(): YjsSyncState {
   let annotationsState = $state<Annotation[]>([]);
   let claudeStatus = $state<string | null>(null);
   let claudeActive = $state(false);
+  let claudeWorking = $state<ClaudeWorking | null>(null);
   let readOnly = $state(false);
   let storeReadOnly = $state(false);
   let ready = $state(false);
@@ -119,12 +130,22 @@ export function createYjsSync(): YjsSyncState {
     const awarenessMap = ydoc.getMap(Y_MAP_AWARENESS);
     let prevStatus: string | null = null;
     let prevActive = false;
+    // Track working as a stringified snapshot so we only assign a new object
+    // when it actually changes — avoids retriggering downstream $derived /
+    // $effect on every observer call (which fires on any awareness key write,
+    // e.g. status updates from `tandem_status`).
+    let prevWorkingKey: string | null = null;
+    const workingKey = (w: ClaudeAwareness["working"]): string | null => {
+      if (!w) return null;
+      // Prefer the monotonic `token` (collision-free) as the identity key;
+      // fall back to startedAt for snapshots written before #823.
+      return `${w.tool} ${w.annotationId ?? ""} ${w.token ?? w.startedAt}`;
+    };
     const awarenessObserver = () => {
-      const claude = awarenessMap.get(Y_MAP_CLAUDE) as
-        | { status: string; timestamp: number; active: boolean }
-        | undefined;
+      const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
       const newStatus = claude?.status ?? null;
       const newActive = claude?.active ?? false;
+      const newWorking = claude?.working ?? null;
       if (newStatus !== prevStatus) {
         prevStatus = newStatus;
         claudeStatus = newStatus;
@@ -132,6 +153,11 @@ export function createYjsSync(): YjsSyncState {
       if (newActive !== prevActive) {
         prevActive = newActive;
         claudeActive = newActive;
+      }
+      const newWorkingKey = workingKey(newWorking);
+      if (newWorkingKey !== prevWorkingKey) {
+        prevWorkingKey = newWorkingKey;
+        claudeWorking = newWorking;
       }
     };
     awarenessMap.observe(awarenessObserver);
@@ -402,6 +428,7 @@ export function createYjsSync(): YjsSyncState {
         annotationsState = [];
         claudeStatus = null;
         claudeActive = false;
+        claudeWorking = null;
         readOnly = false;
       }
     });
@@ -504,6 +531,9 @@ export function createYjsSync(): YjsSyncState {
     },
     get claudeActive() {
       return claudeActive;
+    },
+    get claudeWorking() {
+      return claudeWorking;
     },
     get readOnly() {
       return readOnly;

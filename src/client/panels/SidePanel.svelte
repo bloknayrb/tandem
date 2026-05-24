@@ -35,6 +35,12 @@ interface Props {
   /** True when the annotation store is locked by another Tandem instance. */
   storeReadOnly?: boolean;
   /**
+   * #651: annotation ID Claude is currently working on (subscribed once at
+   * the YjsSync layer, threaded through as a single string so each card can
+   * derive its own boolean instead of observing the awareness map directly).
+   */
+  claudeWorkingAnnotationId?: string | null;
+  /**
    * Annotation-review API lifted to App.svelte so there's exactly one
    * instance across both rails. Provides accept/dismiss/scrollToAnnotation
    * + getReviewTargets/getActiveReviewAnn for the bulk-confirm UI.
@@ -57,6 +63,7 @@ let {
   reduceMotion,
   onFilterChange,
   storeReadOnly = false,
+  claudeWorkingAnnotationId = null,
   review,
 }: Props = $props();
 
@@ -450,6 +457,7 @@ function handleClearSelection() {
           annotation={ann}
           replies={repliesMap.get(ann.id) ?? []}
           isReviewTarget={isTarget}
+          claudeTyping={claudeWorkingAnnotationId === ann.id}
           onAccept={ann.author !== "user" ? review.handleAccept : undefined}
           onDismiss={ann.author !== "user" ? review.handleDismiss : undefined}
           onRemove={ann.author === "user" ? handleRemove : undefined}

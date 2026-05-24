@@ -35,6 +35,7 @@ import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
+import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
 
 /** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
 function getDocAndAnnotations(
@@ -370,28 +371,33 @@ export function registerAnnotationTools(server: McpServer): void {
         documentId,
         textSnapshot,
       }) => {
-        if (directedAt !== undefined)
-          return mcpError(
-            "DEPRECATED",
-            "directedAt is no longer supported — comments now always reach the connected AI client. Drop the field from your call.",
-          );
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const result = anchoredRange(da.ydoc, from, to, textSnapshot, {
-          rejectHeadingOverlap: true,
+        // #651 presence: tandem_comment creates a new annotation (no pre-existing
+        // id to broadcast), so the presence marker is a generic "Claude is
+        // working on the document" indicator surfaced in the status bar.
+        return withTypingPresence({ tool: "tandem_comment", documentId }, async () => {
+          if (directedAt !== undefined)
+            return mcpError(
+              "DEPRECATED",
+              "directedAt is no longer supported — comments now always reach the connected AI client. Drop the field from your call.",
+            );
+          const da = getDocAndAnnotations(documentId);
+          if (!da) return noDocumentError();
+          const from = toFlatOffset(rawFrom);
+          const to = toFlatOffset(rawTo);
+          const result = anchoredRange(da.ydoc, from, to, textSnapshot, {
+            rejectHeadingOverlap: true,
+          });
+          if (!result.ok) {
+            notifyRangeFailure(result, "tandem_comment", documentId);
+            return rangeFailureToError(result);
+          }
+          const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
+          const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
+            textSnapshot: snap,
+            ...(suggestedText !== undefined ? { suggestedText } : {}),
+          });
+          return mcpSuccess({ annotationId: id });
         });
-        if (!result.ok) {
-          notifyRangeFailure(result, "tandem_comment", documentId);
-          return rangeFailureToError(result);
-        }
-        const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-        const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
-          textSnapshot: snap,
-          ...(suggestedText !== undefined ? { suggestedText } : {}),
-        });
-        return mcpSuccess({ annotationId: id });
       },
     ),
   );
@@ -671,19 +677,46 @@ export function registerAnnotationTools(server: McpServer): void {
       const da = getDocAndAnnotations(documentId);
       if (!da) return noDocumentError();
 
-      const result = addReplyToAnnotation(da.ydoc, da.map, annotationId, text, "claude", withMcp);
-      if (!result.ok) {
-        const code =
-          result.code === "NOT_FOUND"
-            ? "NOT_FOUND"
-            : result.code === "ANNOTATION_RESOLVED"
-              ? "ANNOTATION_RESOLVED"
-              : result.code === "INVALID_ARGUMENT"
-                ? "INVALID_ARGUMENT"
-                : "INVALID_RANGE";
-        return mcpError(code, result.error);
-      }
-      return mcpSuccess({ replyId: result.replyId, annotationId });
+      // #651 presence: surface the typing indicator on the specific card being
+      // replied to. ADR-027: `addReplyToAnnotation` already rejects non-comment
+      // parents (notes return INVALID_ARGUMENT), but we belt-and-suspenders the
+      // broadcast via `sanitizeAnnotationIdForPresence` — if the lookup says
+      // note (or absent), the annotationId is dropped and the indicator falls
+      // back to the generic status-bar one.
+      const safeId = sanitizeAnnotationIdForPresence(
+        getCurrentDoc(documentId)?.docName,
+        annotationId,
+        Y_MAP_ANNOTATIONS,
+      );
+      return withTypingPresence(
+        {
+          tool: "tandem_annotationReply",
+          documentId,
+          ...(safeId ? { annotationId: safeId } : {}),
+        },
+        async () => {
+          const result = addReplyToAnnotation(
+            da.ydoc,
+            da.map,
+            annotationId,
+            text,
+            "claude",
+            withMcp,
+          );
+          if (!result.ok) {
+            const code =
+              result.code === "NOT_FOUND"
+                ? "NOT_FOUND"
+                : result.code === "ANNOTATION_RESOLVED"
+                  ? "ANNOTATION_RESOLVED"
+                  : result.code === "INVALID_ARGUMENT"
+                    ? "INVALID_ARGUMENT"
+                    : "INVALID_RANGE";
+            return mcpError(code, result.error);
+          }
+          return mcpSuccess({ replyId: result.replyId, annotationId });
+        },
+      );
     }),
   );
 }

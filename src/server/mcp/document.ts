@@ -12,7 +12,7 @@ import {
 } from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
-import type { AuthorshipRange } from "../../shared/types.js";
+import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
@@ -51,6 +51,7 @@ import {
   noDocumentError,
   withErrorBoundary,
 } from "./response.js";
+import { withTypingPresence } from "./typing-presence.js";
 
 // ElementPosition re-exported as ResolvedOffset for backward compatibility — prefer ElementPosition.
 export type {
@@ -308,140 +309,144 @@ export function registerDocumentTools(server: McpServer): void {
     withErrorBoundary(
       "tandem_edit",
       async ({ from: rawFrom, to: rawTo, newText, documentId, textSnapshot }) => {
-        const r = requireDocument(documentId);
-        if (!r) return noDocumentError();
+        // #651 presence: tandem_edit targets text (not an annotation), so the
+        // marker is the generic status-bar "Claude is working" indicator.
+        return withTypingPresence({ tool: "tandem_edit", documentId }, async () => {
+          const r = requireDocument(documentId);
+          if (!r) return noDocumentError();
 
-        const docState = getCurrentDoc(documentId);
-        if (docState?.readOnly) {
-          return mcpError(
-            "FORMAT_ERROR",
-            "Document is read-only (.docx). Use annotations instead.",
-          );
-        }
-
-        const from = toFlatOffset(rawFrom);
-        const to = toFlatOffset(rawTo);
-        const v = validateRange(r.doc, from, to, {
-          textSnapshot,
-          rejectHeadingOverlap: true,
-        });
-        if (!v.ok) {
-          if (v.code === "RANGE_GONE") {
-            return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
-          }
-          if (v.code === "RANGE_MOVED") {
+          const docState = getCurrentDoc(documentId);
+          if (docState?.readOnly) {
             return mcpError(
-              "RANGE_MOVED",
-              "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
-              { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
+              "FORMAT_ERROR",
+              "Document is read-only (.docx). Use annotations instead.",
             );
           }
-          if (v.code === "HEADING_OVERLAP") {
+
+          const from = toFlatOffset(rawFrom);
+          const to = toFlatOffset(rawTo);
+          const v = validateRange(r.doc, from, to, {
+            textSnapshot,
+            rejectHeadingOverlap: true,
+          });
+          if (!v.ok) {
+            if (v.code === "RANGE_GONE") {
+              return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
+            }
+            if (v.code === "RANGE_MOVED") {
+              return mcpError(
+                "RANGE_MOVED",
+                "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
+                { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
+              );
+            }
+            if (v.code === "HEADING_OVERLAP") {
+              return mcpError(
+                "INVALID_RANGE",
+                'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
+                  "Use tandem_resolveRange to find the text position.",
+              );
+            }
+            return mcpError("INVALID_RANGE", v.message);
+          }
+
+          const fragment = r.doc.getXmlFragment("default");
+          const startPos = resolveToElement(fragment, from);
+          const endPos = resolveToElement(fragment, to);
+
+          if (!startPos || !endPos) {
             return mcpError(
               "INVALID_RANGE",
-              'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
-                "Use tandem_resolveRange to find the text position.",
+              `Cannot resolve offset range [${from}, ${to}] in document.`,
             );
           }
-          return mcpError("INVALID_RANGE", v.message);
-        }
 
-        const fragment = r.doc.getXmlFragment("default");
-        const startPos = resolveToElement(fragment, from);
-        const endPos = resolveToElement(fragment, to);
-
-        if (!startPos || !endPos) {
-          return mcpError(
-            "INVALID_RANGE",
-            `Cannot resolve offset range [${from}, ${to}] in document.`,
-          );
-        }
-
-        // Guard: only textblock elements (paragraph, heading, codeBlock) may be
-        // edited. This must reject before the transaction to prevent partial-commit
-        // corruption — Y.js transactions don't roll back on throw.
-        const startNode = fragment.get(startPos.elementIndex);
-        if (!(startNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(startNode.nodeName)) {
-          return mcpError(
-            "INVALID_RANGE",
-            `Target element is a container (${startNode instanceof Y.XmlElement ? startNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
-          );
-        }
-        if (startPos.elementIndex !== endPos.elementIndex) {
-          const endNode = fragment.get(endPos.elementIndex);
-          if (!(endNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(endNode.nodeName)) {
+          // Guard: only textblock elements (paragraph, heading, codeBlock) may be
+          // edited. This must reject before the transaction to prevent partial-commit
+          // corruption — Y.js transactions don't roll back on throw.
+          const startNode = fragment.get(startPos.elementIndex);
+          if (!(startNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(startNode.nodeName)) {
             return mcpError(
               "INVALID_RANGE",
-              `Target end element is a container (${endNode instanceof Y.XmlElement ? endNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
+              `Target element is a container (${startNode instanceof Y.XmlElement ? startNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
             );
           }
-        }
-
-        if (startPos.elementIndex !== endPos.elementIndex) {
-          withMcp(r.doc, () => {
-            const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-            const startText = getOrCreateXmlText(startNode);
-            const startLen = startText.length;
-            if (startPos.textOffset < startLen) {
-              startText.delete(startPos.textOffset, startLen - startPos.textOffset);
+          if (startPos.elementIndex !== endPos.elementIndex) {
+            const endNode = fragment.get(endPos.elementIndex);
+            if (!(endNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(endNode.nodeName)) {
+              return mcpError(
+                "INVALID_RANGE",
+                `Target end element is a container (${endNode instanceof Y.XmlElement ? endNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
+              );
             }
+          }
 
-            const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
-            for (let i = 0; i < deleteCount; i++) {
-              fragment.delete(startPos.elementIndex + 1, 1);
-            }
-
-            const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-            const endText = getOrCreateXmlText(endNode);
-            if (endPos.textOffset > 0) {
-              endText.delete(0, endPos.textOffset);
-            }
-            mergeXmlTextDelta(startText, endText, startPos.textOffset);
-            fragment.delete(startPos.elementIndex + 1, 1);
-
-            startText.insert(startPos.textOffset, newText);
-          });
-        } else {
-          withMcp(r.doc, () => {
-            const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-            const textNode = getOrCreateXmlText(node);
-            const deleteLen = endPos.textOffset - startPos.textOffset;
-            if (deleteLen > 0) {
-              textNode.delete(startPos.textOffset, deleteLen);
-            }
-            if (newText.length > 0) {
-              textNode.insert(startPos.textOffset, newText);
-            }
-          });
-        }
-
-        // Record authorship for the inserted text (Y.Map overlay strategy).
-        // This runs in a separate transaction because anchoredRange() reads the
-        // Y.Doc state *after* the edit to compute RelativePositions for the new
-        // text. Combining it into the edit transaction would anchor against
-        // pre-edit state. The race window is acceptable for v1 — authorship is
-        // decorative (highlight overlay), not semantic.
-        if (newText.length > 0) {
-          const newFrom = from;
-          const newTo = toFlatOffset(newFrom + newText.length);
-          const anchored = anchoredRange(r.doc, newFrom, newTo);
-          if (anchored.ok) {
-            const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
-            const rangeId = generateAuthorshipId("claude");
-            const entry: AuthorshipRange = {
-              id: rangeId,
-              author: "claude",
-              range: anchored.range,
-              relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
-              timestamp: Date.now(),
-            };
+          if (startPos.elementIndex !== endPos.elementIndex) {
             withMcp(r.doc, () => {
-              authorshipMap.set(rangeId, entry);
+              const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
+              const startText = getOrCreateXmlText(startNode);
+              const startLen = startText.length;
+              if (startPos.textOffset < startLen) {
+                startText.delete(startPos.textOffset, startLen - startPos.textOffset);
+              }
+
+              const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
+              for (let i = 0; i < deleteCount; i++) {
+                fragment.delete(startPos.elementIndex + 1, 1);
+              }
+
+              const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
+              const endText = getOrCreateXmlText(endNode);
+              if (endPos.textOffset > 0) {
+                endText.delete(0, endPos.textOffset);
+              }
+              mergeXmlTextDelta(startText, endText, startPos.textOffset);
+              fragment.delete(startPos.elementIndex + 1, 1);
+
+              startText.insert(startPos.textOffset, newText);
+            });
+          } else {
+            withMcp(r.doc, () => {
+              const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
+              const textNode = getOrCreateXmlText(node);
+              const deleteLen = endPos.textOffset - startPos.textOffset;
+              if (deleteLen > 0) {
+                textNode.delete(startPos.textOffset, deleteLen);
+              }
+              if (newText.length > 0) {
+                textNode.insert(startPos.textOffset, newText);
+              }
             });
           }
-        }
 
-        return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
+          // Record authorship for the inserted text (Y.Map overlay strategy).
+          // This runs in a separate transaction because anchoredRange() reads the
+          // Y.Doc state *after* the edit to compute RelativePositions for the new
+          // text. Combining it into the edit transaction would anchor against
+          // pre-edit state. The race window is acceptable for v1 — authorship is
+          // decorative (highlight overlay), not semantic.
+          if (newText.length > 0) {
+            const newFrom = from;
+            const newTo = toFlatOffset(newFrom + newText.length);
+            const anchored = anchoredRange(r.doc, newFrom, newTo);
+            if (anchored.ok) {
+              const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
+              const rangeId = generateAuthorshipId("claude");
+              const entry: AuthorshipRange = {
+                id: rangeId,
+                author: "claude",
+                range: anchored.range,
+                relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+                timestamp: Date.now(),
+              };
+              withMcp(r.doc, () => {
+                authorshipMap.set(rangeId, entry);
+              });
+            }
+          }
+
+          return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
+        });
       },
     ),
   );
@@ -542,15 +547,20 @@ export function registerDocumentTools(server: McpServer): void {
           }
           const doc = getOrCreateDocument(current.docName);
           const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-          withMcp(doc, () =>
+          withMcp(doc, () => {
+            // #651: preserve the in-flight `working` marker so a status
+            // update during a wrapped tool call (tandem_comment / _edit /
+            // _reply / _annotationReply) doesn't wipe the typing indicator.
+            const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
             awarenessMap.set(Y_MAP_CLAUDE, {
               status: text,
               timestamp: Date.now(),
               active: true,
               focusParagraph: focusParagraph ?? null,
               focusOffset: focusOffset ?? null,
-            }),
-          );
+              ...(prev?.working ? { working: prev.working } : {}),
+            });
+          });
           return mcpSuccess({ status: text });
         }
 

@@ -13,6 +13,14 @@ interface Props {
   disconnectedSince: number | null;
   claudeStatus: string | null;
   claudeActive: boolean;
+  /**
+   * #651: name of the MCP tool Claude is currently executing on the active
+   * document, or null when idle. Surfaces a generic "Claude is editing…"
+   * indicator next to the Claude status pill for tools without an annotation
+   * target (tandem_comment, tandem_edit, tandem_reply); annotation-targeted
+   * tools render the indicator on the corresponding AnnotationCard instead.
+   */
+  claudeWorkingTool?: string | null;
   readOnly?: boolean;
   saving?: boolean;
   /** Editor for the active document — drives the word-count cycle. */
@@ -26,10 +34,26 @@ let {
   disconnectedSince,
   claudeStatus,
   claudeActive,
+  claudeWorkingTool = null,
   readOnly,
   saving = false,
   editor,
 }: Props = $props();
+
+/**
+ * Map MCP tool name → short, user-facing verb phrase. Falls back to the raw
+ * tool name (stripped of the `tandem_` prefix) for unknown tools so future
+ * additions still render something sensible without a code change here.
+ */
+function claudeWorkingLabel(tool: string): string {
+  const labels: Record<string, string> = {
+    tandem_edit: "editing",
+    tandem_comment: "commenting",
+    tandem_reply: "replying",
+    tandem_annotationReply: "replying",
+  };
+  return labels[tool] ?? tool.replace(/^tandem_/, "");
+}
 
 const RECONNECTED_FLASH_MS = 2_000;
 
@@ -216,6 +240,24 @@ function cycleWordMode() {
     <span style="transition: color 0.3s ease; color: {claudeActive ? 'var(--tandem-fg)' : 'var(--tandem-fg-subtle)'};">
       {claudeStatus ? `Claude · ${claudeStatus}` : "Claude · idle"}
     </span>
+    {#if claudeWorkingTool}
+      <!--
+        #651: generic "Claude is {verb}…" indicator. Only renders for the
+        active document and only while a tool is in flight; per-card
+        indicators on AnnotationCard.svelte cover annotation-targeted tools.
+      -->
+      <span
+        data-testid="claude-working-indicator"
+        class="claude-working-pill"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="claude-working-dot"></span>
+        <span class="claude-working-dot"></span>
+        <span class="claude-working-dot"></span>
+        <span style="margin-left: 4px;">Claude is {claudeWorkingLabel(claudeWorkingTool)}…</span>
+      </span>
+    {/if}
   </div>
 </div>
 
@@ -238,6 +280,45 @@ function cycleWordMode() {
   @media (forced-colors: active) {
     .status-dot,
     .claude-dot {
+      outline: 1px solid ButtonText;
+      outline-offset: 1px;
+    }
+  }
+
+  /* #651 generic "Claude is …" typing-presence pill. Sits next to the
+     Claude status text in the floating status pill. */
+  .claude-working-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 8px;
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-claude-focus-bg);
+    color: var(--tandem-fg);
+    font-size: var(--tandem-text-xs);
+  }
+  .claude-working-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--tandem-author-claude);
+    display: inline-block;
+    animation: tandem-claude-working-pulse 1.2s ease-in-out infinite;
+  }
+  .claude-working-dot:nth-child(2) { animation-delay: 0.15s; }
+  .claude-working-dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes tandem-claude-working-pulse {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .claude-working-dot {
+      animation: none;
+      opacity: 0.7;
+    }
+  }
+  @media (forced-colors: active) {
+    .claude-working-dot {
       outline: 1px solid ButtonText;
       outline-offset: 1px;
     }

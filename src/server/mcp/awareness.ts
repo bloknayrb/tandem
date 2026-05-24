@@ -21,6 +21,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations, refreshRange } from "./annotations.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
+import { withTypingPresence } from "./typing-presence.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox.
 // Value = lastSurfacedEditedAt (0 for unedited annotations).
@@ -223,26 +224,30 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Document context for this reply (defaults to active document)"),
     },
     withErrorBoundary("tandem_reply", async ({ text, replyTo, documentId }) => {
-      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-      const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+      // #651 presence: tandem_reply is a chat send — no annotationId — so the
+      // marker is the generic "Claude is working" status-bar indicator.
+      return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
+        const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+        const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
 
-      const id = generateMessageId();
-      const current = getCurrentDoc(documentId);
-      const docId = documentId ?? current?.id ?? undefined;
+        const id = generateMessageId();
+        const current = getCurrentDoc(documentId);
+        const docId = documentId ?? current?.id ?? undefined;
 
-      const msg: ChatMessage = {
-        id,
-        author: "claude",
-        text,
-        timestamp: Date.now(),
-        ...(docId ? { documentId: docId } : {}),
-        ...(replyTo ? { replyTo } : {}),
-        read: true,
-      };
+        const msg: ChatMessage = {
+          id,
+          author: "claude",
+          text,
+          timestamp: Date.now(),
+          ...(docId ? { documentId: docId } : {}),
+          ...(replyTo ? { replyTo } : {}),
+          read: true,
+        };
 
-      withMcp(ctrlDoc, () => chatMap.set(id, msg));
+        withMcp(ctrlDoc, () => chatMap.set(id, msg));
 
-      return mcpSuccess({ sent: true, messageId: id });
+        return mcpSuccess({ sent: true, messageId: id });
+      });
     }),
   );
 }
