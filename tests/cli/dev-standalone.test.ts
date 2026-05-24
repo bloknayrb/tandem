@@ -4,6 +4,24 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { launchStandalone, waitForBackendReady } from "../../scripts/dev-standalone.mjs";
 
+type FakeChild = EventEmitter & {
+  command: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  killed?: boolean;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  kill: () => void;
+  stdout: PassThrough;
+  stderr: PassThrough;
+};
+
+// Track every fake child created during a test so afterEach can release them
+// without firing the `attachUnexpectedExit` listener (which would call
+// process.exit() on the vitest worker).
+const trackedFakeChildren: FakeChild[] = [];
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -15,18 +33,7 @@ function createDeferred<T>() {
 }
 
 function makeFakeChild(command: string, args: string[]) {
-  const child = new EventEmitter() as EventEmitter & {
-    command: string;
-    args: string[];
-    env?: NodeJS.ProcessEnv;
-    cwd?: string;
-    killed?: boolean;
-    exitCode: number | null;
-    signalCode: NodeJS.Signals | null;
-    kill: () => void;
-    stdout: PassThrough;
-    stderr: PassThrough;
-  };
+  const child = new EventEmitter() as FakeChild;
 
   child.command = command;
   child.args = args;
@@ -40,11 +47,35 @@ function makeFakeChild(command: string, args: string[]) {
     child.exitCode = 0;
     child.emit("exit", 0, null);
   };
+  trackedFakeChildren.push(child);
   return child;
 }
 
 describe("dev standalone runner", () => {
   afterEach(() => {
+    // Tear down every fake child the test created. `launchStandalone` calls
+    // `attachUnexpectedExit(child, ...)` which registers a `child.once("exit")`
+    // listener whose callback closes over the whole `children` array,
+    // `shutdownState`, and `process.exit`. The "does not start the monitor"
+    // test never kills its (fake) children, so without explicit teardown those
+    // listeners — plus two undestroyed PassThrough streams per child — stay
+    // retained in the shared worker after the test ends.
+    //
+    // This retention contaminated tests/cli/mcp-stdio.test.ts (#724): when that
+    // file runs next in the same vitest worker, the leftover handles slowed
+    // subprocess startup / event-loop responsiveness enough that its
+    // timing-sensitive `tandem mcp-stdio` subprocess assertions flaked
+    // ("no stdout within Nms", "expected 0 to be >= 3"). Removing the listeners
+    // also neutralizes the `kill()`-emits-"exit" path, which would otherwise
+    // let a stray emit call process.exit() on the worker itself.
+    for (const child of trackedFakeChildren) {
+      child.removeAllListeners();
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+    trackedFakeChildren.length = 0;
     vi.restoreAllMocks();
   });
 

@@ -7,6 +7,7 @@ import {
   HIGHLIGHT_COLORS,
   Y_MAP_ANNOTATIONS,
 } from "../../../shared/constants";
+import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
@@ -312,7 +313,8 @@ function createAnnotation(
     ...(extras?.color ? { color: extras.color } : {}),
   } as Annotation;
 
-  ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
+  // ADR-031: browser-initiated user edit — must be origin-tagged.
+  withBrowser(ydoc, () => ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation));
   capturedRange = null;
 }
 
@@ -334,6 +336,20 @@ function handleHighlight(color: HighlightColor) {
 
   toggleHighlight(ydoc, { from: flatFrom, to: flatTo }, color);
   capturedRange = null;
+
+  // #768 Bug 1: collapse the ProseMirror selection to its end so the newly
+  // applied highlight color is immediately visible. Without this, the blue
+  // selection rectangle paints on top of the highlight span and the user
+  // gets no feedback that the highlight was applied until they click away.
+  //
+  // We must collapse the *PM* selection — not just clear the native DOM
+  // selection. The swatch handler calls `editor.chain().focus().run()` right
+  // after this, and Tiptap's `.focus()` → `view.focus()` → `selectionToDOM()`
+  // restores the PM selection (still spanning from..to, since the highlight
+  // was written to the Y.Map, not a PM transaction) back into the DOM. A bare
+  // `window.getSelection().removeAllRanges()` would be undone immediately.
+  // Collapsing the PM selection leaves `view.focus()` nothing to restore.
+  editor.chain().setTextSelection(to).run();
 }
 
 function onKeyActivate(handler: (e: MouseEvent) => void) {

@@ -99,7 +99,7 @@ export interface TandemSettings {
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
   sidecarRetryStrategy: SidecarRetryStrategy;
-  // TODO(v0.11.0): wire to annotation queuing in useModeGate
+  // TODO(v0.11.0): wire to offline annotation queuing
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
