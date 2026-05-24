@@ -468,7 +468,7 @@ function chooseHelp() {
     min-width: 0;
     max-width: 60%;
     position: relative;
-    z-index: 99999;
+    z-index: var(--tandem-z-titlebar);
   }
 
   /* The Tandem icon IS the menu trigger — no chrome around it.
@@ -654,7 +654,7 @@ function chooseHelp() {
     /* Same z-index lift reason as .title-bar-center — buttons need to sit
        above decorum's overlay drag-region to receive clicks. */
     position: relative;
-    z-index: 99999;
+    z-index: var(--tandem-z-titlebar);
   }
 
   .status-dot {
@@ -741,7 +741,7 @@ function chooseHelp() {
     align-self: flex-start;
     flex-shrink: 0;
     position: relative;
-    z-index: 99999;
+    z-index: var(--tandem-z-titlebar);
   }
 
   .title-bar-btn {

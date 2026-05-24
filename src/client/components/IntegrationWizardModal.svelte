@@ -372,7 +372,7 @@ function configBadge(config: IntegrationConfig): string {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: var(--tandem-z-modal, 1000);
+    z-index: var(--tandem-z-above-titlebar);
   }
 
   .iw-dialog {

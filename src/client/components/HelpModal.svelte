@@ -60,7 +60,7 @@ $effect(() => {
 {#if open}
   <div
     role="presentation"
-    style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000;"
+    style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: var(--tandem-z-above-titlebar);"
     onclick={onClose}
     data-testid="help-modal"
   >

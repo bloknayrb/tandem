@@ -262,17 +262,16 @@ function handleBackdropClick(e: MouseEvent) {
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <!-- z-index 100000 sits above the title bar's z-index: 99999 lift (which
-       clears tauri-plugin-decorum's overlay). Without it the +new-tab button
-       and Solo/Tandem toggle poke through the dimming backdrop. Mirrors
-       SettingsModal. -->
+  <!-- --tandem-z-above-titlebar covers the title bar's --tandem-z-titlebar lift
+       (which clears tauri-plugin-decorum's overlay); without it the +new-tab
+       button and Solo/Tandem toggle poke through the dimming backdrop. -->
   <div
     role="presentation"
     style="
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.4);
       backdrop-filter: blur(2px);
-      z-index: 100000;
+      z-index: var(--tandem-z-above-titlebar);
       display: flex; align-items: flex-start; justify-content: center;
       padding-top: 15vh;
     "

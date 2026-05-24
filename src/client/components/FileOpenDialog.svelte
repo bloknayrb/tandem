@@ -112,7 +112,7 @@ function handleFileSelect(e: Event) {
   aria-modal="true"
   aria-label="Open File"
   tabindex={-1}
-  style="position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: rgba(0,0,0,0.3);"
+  style="position: fixed; inset: 0; z-index: var(--tandem-z-above-titlebar); display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: rgba(0,0,0,0.3);"
   onclick={(e) => {
     if (e.target === e.currentTarget) onClose();
   }}
