@@ -19,6 +19,7 @@ import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
+import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
@@ -159,6 +160,17 @@ $effect(() => {
         },
       }),
       AnnotationExtension.configure({ ydoc }),
+      // Registered AFTER AnnotationExtension so its chevron widgets render
+      // above annotation decorations and its node-hide decorations win the
+      // display: none vs annotation-class composition. Decoration ordering
+      // matters here — see issue #650.
+      HeadingCollapseExtension.configure({
+        // Captured-once via untrack: the editor is keyed by activeTab.id in
+        // App.svelte, so currentFilePath is stable for this editor's lifetime.
+        // Passing a reactive $state value here would rebuild the editor on
+        // every toggle. See the readOnly last-value guard at ~line 200.
+        filePath: untrack(() => currentFilePath ?? null),
+      }),
       AuthorshipExtension.configure({ ydoc }),
       AwarenessExtension.configure({ ydoc }),
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
