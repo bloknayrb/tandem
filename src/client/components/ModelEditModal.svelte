@@ -122,7 +122,7 @@ function startReplacingKey() {
   aria-label={isEditing ? "Edit model" : "Add model"}
   tabindex={-1}
   data-testid="model-edit-modal"
-  style="position: fixed; inset: 0; z-index: var(--tandem-z-modal); display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: rgba(0,0,0,0.3);"
+  style="position: fixed; inset: 0; z-index: var(--tandem-z-above-titlebar); display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: rgba(0,0,0,0.3);"
   onclick={(e) => {
     if (e.target === e.currentTarget) onCancel();
   }}

@@ -467,3 +467,30 @@ test("command palette overlay covers the title bar +new-tab button", async ({ pa
   // …and the +button underneath never fired, so its menu never opened.
   await expect(newTabMenu).toHaveCount(0);
 });
+
+test("Help modal overlay covers the title bar +new-tab button", async ({ page }) => {
+  // Representative case for the shared --tandem-z-above-titlebar tokenization
+  // (#839): every full-screen modal overlay must cover the title bar's
+  // --tandem-z-titlebar (99999) decorum lift. Same dimming-by-proxy proof as the
+  // palette test — clicking at the +button must hit the overlay (closing the
+  // modal), not the +button beneath it.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await page.locator("[data-testid='brand-menu-shortcuts']").click();
+  const modal = page.locator("[data-testid='help-modal']");
+  await expect(modal).toBeVisible();
+
+  const newTabMenu = page.locator("[role='dialog'][aria-label='New tab']");
+  await expect(newTabMenu).toHaveCount(0);
+
+  const box = await page.locator("[data-testid='open-file-btn']").boundingBox();
+  if (!box) throw new Error("open-file-btn has no bounding box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  // Click landed on the overlay (which dismisses on backdrop click), not the +button.
+  await expect(modal).toHaveCount(0);
+  await expect(newTabMenu).toHaveCount(0);
+});

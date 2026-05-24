@@ -301,7 +301,7 @@ function aboutRows() {
   <div
     aria-hidden="true"
     onclick={onClose}
-    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 9998;"
+    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: var(--tandem-z-above-titlebar);"
   ></div>
   <div
     bind:this={popoverEl}
@@ -660,7 +660,9 @@ function aboutRows() {
     border: 1px solid var(--tandem-border);
     border-radius: var(--tandem-r-4);
     box-shadow: var(--tandem-shadow-3);
-    z-index: 9999;
+    /* One above the scrim's --tandem-z-above-titlebar (sibling element) so the
+       popover sits over its own backdrop and clears the title bar lift. */
+    z-index: calc(var(--tandem-z-above-titlebar) + 1);
     display: grid;
     grid-template-columns: 188px minmax(0, 1fr);
     outline: none;

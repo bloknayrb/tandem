@@ -198,6 +198,12 @@
         --tandem-z-modal: 1000;
         --tandem-z-toast: 1100;
         --tandem-z-tooltip: 10000;
+        /* The title bar lifts its controls above tauri-plugin-decorum's drag
+           overlay; --tandem-z-above-titlebar is for full-screen modal overlays
+           that must cover the title bar (otherwise the +new-tab button and
+           Solo/Tandem toggle poke through the dimming backdrop). */
+        --tandem-z-titlebar: 99999;
+        --tandem-z-above-titlebar: 100000;
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
            rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
            into the floating TitleBar (44px tall, no in-flow tabs row), so

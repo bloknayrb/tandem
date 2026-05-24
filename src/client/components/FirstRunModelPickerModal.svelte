@@ -252,7 +252,7 @@ function handleSkip() {
 .frm-scrim {
   position: fixed;
   inset: 0;
-  z-index: var(--tandem-z-modal);
+  z-index: var(--tandem-z-above-titlebar);
   display: flex;
   align-items: flex-start;
   justify-content: center;

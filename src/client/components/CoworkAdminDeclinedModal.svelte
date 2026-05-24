@@ -113,7 +113,7 @@ async function handleDisable(): Promise<void> {
 {:else if uacDeclined}
   <div
     data-testid="cowork-admin-declined-backdrop"
-    style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 10000; display: flex; align-items: center; justify-content: center;"
+    style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: var(--tandem-z-above-titlebar); display: flex; align-items: center; justify-content: center;"
   >
     <div
       bind:this={modalEl}
