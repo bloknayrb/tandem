@@ -216,6 +216,52 @@ describe("resolveRouteCwd — home-confined HTTP variant (PR 4b sec I1)", () => 
   });
 });
 
+describe("resolveRouteCwd — homeOverride seam (cross-platform determinism, #803 T7)", () => {
+  /** Treat a tmpdir as "$HOME" so the home-confinement check is exercised
+   * deterministically on every platform — no dependency on whether the
+   * process's real $HOME happens to encompass `os.tmpdir()` (Windows CI
+   * sometimes does, POSIX never does). Mirrors the `refreshSkillIfStale`
+   * homeOverride pattern in `src/server/integrations/apply.ts`. */
+  let fakeHome: string;
+  let outside: string;
+
+  beforeEach(() => {
+    fakeHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fake-home-")));
+    outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "outside-home-")));
+  });
+
+  afterEach(() => {
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("accepts the override home itself", () => {
+    expect(resolveRouteCwd(fakeHome, { homeOverride: fakeHome })).toBe(fakeHome);
+  });
+
+  it("accepts a real directory inside the override home", () => {
+    const inside = fs.realpathSync(fs.mkdtempSync(path.join(fakeHome, "child-")));
+    expect(resolveRouteCwd(inside, { homeOverride: fakeHome })).toBe(inside);
+  });
+
+  it("rejects a real directory outside the override home", () => {
+    // `outside` and `fakeHome` are siblings under os.tmpdir() — path.relative
+    // produces "..something" so the rejection fires on every platform.
+    expect(resolveRouteCwd(outside, { homeOverride: fakeHome })).toBeNull();
+  });
+
+  it("rejects when the override home doesn't exist (realpathSync throws)", () => {
+    const ghost = path.join(os.tmpdir(), "does-not-exist-home-xyz-#803");
+    const inside = fs.realpathSync(fs.mkdtempSync(path.join(fakeHome, "child-")));
+    expect(resolveRouteCwd(inside, { homeOverride: ghost })).toBeNull();
+  });
+
+  it("still rejects everything resolveSafeCwd rejects when override is set", () => {
+    expect(resolveRouteCwd("relative/path", { homeOverride: fakeHome })).toBeNull();
+    expect(resolveRouteCwd("/does/not/exist/xyz", { homeOverride: fakeHome })).toBeNull();
+  });
+});
+
 describe("supervisor — concurrent operation safety (security I4)", () => {
   it("concurrent stop() calls don't reject", async () => {
     const sup = createSupervisor({ integrationsBase: tmpDir });
