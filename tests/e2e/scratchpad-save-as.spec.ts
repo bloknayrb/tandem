@@ -26,17 +26,27 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
-import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  cleanupFixtureDir,
+  createFixtureDir,
+  McpTestClient,
+} from "./helpers";
 
 const API_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api`;
 
 let mcp: McpTestClient;
 let tmpDir: string;
+let fixtureDir: string;
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-save-as-"));
+  // Open a fixture doc so the editor (`.tandem-editor`) mounts — App.svelte
+  // renders EmptyState until there is an active tab. Mirrors scratchpad.spec.ts.
+  fixtureDir = createFixtureDir("sample.md");
+  await mcp.callTool("tandem_open", { filePath: path.join(fixtureDir, "sample.md") });
 });
 
 test.afterEach(async () => {
@@ -47,6 +57,7 @@ test.afterEach(async () => {
   } catch {
     /* best effort */
   }
+  cleanupFixtureDir(fixtureDir);
 });
 
 // ---------------------------------------------------------------------------
