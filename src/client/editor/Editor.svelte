@@ -295,7 +295,10 @@ async function handleEditorClick(e: MouseEvent) {
     "[data-annotation-id]",
   ) as HTMLElement | null;
   let bestId: string | null = null;
-  let bestPriority = -1;
+  // Start below the lowest possible priority (-1 for unknown/missing types) so
+  // an id-bearing element with an unknown `data-annotation-type` (priority -1)
+  // still wins over "no match", preserving the innermost-fallback behavior.
+  let bestPriority = Number.NEGATIVE_INFINITY;
   while (cursor) {
     const id = cursor.getAttribute("data-annotation-id");
     if (id) {

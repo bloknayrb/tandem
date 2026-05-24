@@ -337,20 +337,19 @@ function handleHighlight(color: HighlightColor) {
   toggleHighlight(ydoc, { from: flatFrom, to: flatTo }, color);
   capturedRange = null;
 
-  // #768 Bug 1: clear the browser's native selection overlay so the newly
+  // #768 Bug 1: collapse the ProseMirror selection to its end so the newly
   // applied highlight color is immediately visible. Without this, the blue
   // selection rectangle paints on top of the highlight span and the user
   // gets no feedback that the highlight was applied until they click away.
-  // The editor still owns logical selection state — we only clear the
-  // visual overlay (`window.getSelection().removeAllRanges()`), not Tiptap's
-  // selection.
-  try {
-    window.getSelection()?.removeAllRanges();
-  } catch {
-    // Some browsers (e.g. embedded WebViews with permissions stripped) throw
-    // on selection API; failing closed is fine — only the visual feedback
-    // is lost.
-  }
+  //
+  // We must collapse the *PM* selection — not just clear the native DOM
+  // selection. The swatch handler calls `editor.chain().focus().run()` right
+  // after this, and Tiptap's `.focus()` → `view.focus()` → `selectionToDOM()`
+  // restores the PM selection (still spanning from..to, since the highlight
+  // was written to the Y.Map, not a PM transaction) back into the DOM. A bare
+  // `window.getSelection().removeAllRanges()` would be undone immediately.
+  // Collapsing the PM selection leaves `view.focus()` nothing to restore.
+  editor.chain().setTextSelection(to).run();
 }
 
 function onKeyActivate(handler: (e: MouseEvent) => void) {
