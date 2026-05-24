@@ -19,8 +19,9 @@ export function createFileDrop(): FileDropState {
   let fileDragOver = $state(false);
 
   const handleEditorDragOver = (e: DragEvent) => {
-    // In Tauri, dragDropEnabled: true suppresses HTML5 DnD entirely and
-    // useTauriFileDrop owns the overlay state. Guard is defense-in-depth.
+    // In Tauri with dragDropEnabled: true, native drops are routed through
+    // useTauriFileDrop. Guard prevents double-overlay-state updates if the
+    // WebView also fires HTML5 dragover during native DnD.
     if (isTauriRuntime()) return;
     if (e.dataTransfer?.types.includes("Files")) {
       e.preventDefault();

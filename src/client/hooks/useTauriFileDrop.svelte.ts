@@ -38,9 +38,10 @@ export const tauriFileDrop = {
 };
 
 function extensionAllowed(path: string): boolean {
-  const dot = path.lastIndexOf(".");
-  if (dot < 0) return false;
-  return SUPPORTED_EXTENSIONS.has(path.slice(dot).toLowerCase());
+  const basename = path.split(/[/\\]/).at(-1) ?? "";
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return false; // ≤ 0: no extension or leading-dot dotfiles (.md, .bashrc)
+  return SUPPORTED_EXTENSIONS.has(basename.slice(dot).toLowerCase());
 }
 
 function toast(message: string, severity: TandemNotification["severity"], dedupKey: string): void {
@@ -91,7 +92,7 @@ export function initTauriFileDrop(push: (n: TandemNotification) => void): void {
                 }
               }
               toast(
-                "Tandem can only open .md, .txt, .html, or .docx files",
+                "Tandem can only open .md, .txt, .html, .htm, or .docx files",
                 "warning",
                 "tauri-drop-unsupported",
               );
