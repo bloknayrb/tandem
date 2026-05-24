@@ -16,6 +16,13 @@ interface Props {
   annotation: Annotation;
   replies?: AnnotationReply[];
   isReviewTarget?: boolean;
+  /**
+   * #651: render an inline typing-dot indicator when Claude is executing an
+   * MCP tool targeting this annotation. Subscribed once at the YjsSync layer
+   * and forwarded as a plain boolean so each card doesn't observe the
+   * awareness Y.Map itself.
+   */
+  claudeTyping?: boolean;
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
   onUndo?: (id: string) => boolean;
@@ -35,6 +42,7 @@ let {
   annotation,
   replies = [],
   isReviewTarget,
+  claudeTyping = false,
   onAccept,
   onDismiss,
   onUndo,
@@ -122,6 +130,7 @@ function handleKeyDown(e: KeyboardEvent) {
   onclick={onClick}
   data-testid="annotation-card-{annotation.id}"
   data-annotation-type={annotation.type}
+  data-claude-typing={claudeTyping ? "true" : undefined}
   role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
@@ -129,6 +138,27 @@ function handleKeyDown(e: KeyboardEvent) {
     ? 'pointer'
     : 'default'};"
 >
+  {#if claudeTyping}
+    <!--
+      #651: Claude typing-presence indicator. Renders as a three-dot pulse in
+      the top-right corner of the card while the targeting MCP tool runs.
+      `aria-live="polite"` so screen readers announce the transition without
+      interrupting; `role="status"` keeps it out of the listitem accessibility
+      tree as a child semantic region.
+    -->
+    <div
+      data-testid="claude-typing-indicator-{annotation.id}"
+      class="tandem-claude-typing"
+      role="status"
+      aria-live="polite"
+      aria-label="Claude is working on this annotation"
+      title="Claude is working on this annotation"
+    >
+      <span class="tandem-claude-typing-dot"></span>
+      <span class="tandem-claude-typing-dot"></span>
+      <span class="tandem-claude-typing-dot"></span>
+    </div>
+  {/if}
   {#if annotation.author === "import"}
     <ImportedCard
       annotation={annotation as Annotation & { author: "import" }}
@@ -245,8 +275,10 @@ function handleKeyDown(e: KeyboardEvent) {
 <style>
   /* Static chrome lives here (not inline) so :hover can raise the shadow —
      an inline style= attribute would beat a class-based :hover on box-shadow.
-     The dynamic background tint / opacity / cursor stay inline on the element. */
+     The dynamic background tint / opacity / cursor stay inline on the element.
+     position: relative anchors the #651 Claude typing indicator. */
   .tandem-annotation-card {
+    position: relative;
     padding: var(--tandem-space-3);
     margin-bottom: var(--tandem-space-2);
     border: 1px solid var(--tandem-border);
@@ -261,5 +293,49 @@ function handleKeyDown(e: KeyboardEvent) {
   /* Placed after :hover so the focused-card ring wins at equal specificity. */
   .tandem-annotation-card.is-review-target {
     box-shadow: 0 0 0 3px var(--tandem-accent-bg), var(--tandem-shadow-2);
+  }
+  /* #651 Claude typing-presence indicator: three pulsing dots in the
+     card's top-right corner, colored with the Claude authorship token so
+     the affordance reads as "Claude is here" at a glance. */
+  .tandem-claude-typing {
+    position: absolute;
+    top: var(--tandem-space-2);
+    right: var(--tandem-space-2);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-claude-focus-bg);
+    pointer-events: none;
+  }
+  .tandem-claude-typing-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--tandem-author-claude);
+    animation: tandem-claude-typing-pulse 1.2s ease-in-out infinite;
+  }
+  .tandem-claude-typing-dot:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .tandem-claude-typing-dot:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  @keyframes tandem-claude-typing-pulse {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tandem-claude-typing-dot {
+      animation: none;
+      opacity: 0.7;
+    }
+  }
+  @media (forced-colors: active) {
+    .tandem-claude-typing-dot {
+      outline: 1px solid ButtonText;
+      outline-offset: 1px;
+    }
   }
 </style>

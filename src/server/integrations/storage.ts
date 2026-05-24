@@ -5,17 +5,31 @@
  * The factory requires an explicit base path — production callers wrap it with
  * `resolveAppDataDir()`; tests pass a `mkdtempSync` path. No silent default.
  *
- * Read recovery:
+ * Read recovery (intentionally lossy-to-stderr; backup loss MUST NOT crash startup):
  *   ENOENT          → empty config
- *   malformed JSON  → backup to `<file>.broken-<ts>` (0o600), empty config, stderr warning
+ *   malformed JSON  → copy to <basePath>/.broken-backups/integrations-<ts>-<uuid>.json
+ *                     (POSIX 0o600 inside a 0o700 dir; on Windows the dir is hardened
+ *                     via setRestrictiveAcl BEFORE the copy so the file inherits a
+ *                     restricted DACL at create-time — no per-file ACL needed and
+ *                     no TOCTOU window). stderr warning; empty config returned.
  *   migration error → preserve original on disk, surface error to caller
  *   dangling defaultIntegrationId → null with stderr warning
+ *
+ * `backupBrokenFile` is void-returning. The outer try/catch in that function is
+ * the single user-visible error channel — any thrown error from the hardening
+ * path is caught there and logged via `console.error`. `readIntegrationsFile`
+ * always returns an empty config when the JSON is malformed, regardless of
+ * whether the backup succeeded. Do NOT rewrap this as "fail-loud" — a corrupt
+ * config file MUST NOT crash server startup. The recovery is intentionally
+ * lossy-with-stderr.
  */
 
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { setRestrictiveAcl } from "./acl-win.js";
+import { pruneOldBackups } from "./backup.js";
 import { migrateUp } from "./migrations.js";
 import {
   emptyIntegrationsFile,
@@ -25,6 +39,21 @@ import {
 } from "./schema.js";
 
 export const INTEGRATIONS_FILE_NAME = "integrations.json";
+
+/** Subdirectory under appDataDir that holds malformed-JSON backups. */
+export const BROKEN_BACKUPS_DIR_NAME = ".broken-backups";
+
+/** Filename prefix for broken-integrations backups. */
+const BROKEN_BACKUP_PREFIX = "integrations-";
+
+/** Filename suffix for broken-integrations backups. */
+const BROKEN_BACKUP_SUFFIX = ".json";
+
+/**
+ * Cap on broken-integrations backups kept on disk. Corruption is rare;
+ * 5 gives forensic history without unbounded disk growth.
+ */
+export const MAX_BROKEN_BACKUPS = 5;
 
 export interface IntegrationsStore {
   read(): Promise<IntegrationsFile>;
@@ -198,25 +227,98 @@ async function writeViaOpen(filePath: string, content: string): Promise<void> {
   }
 }
 
+/**
+ * Resolve the broken-backups directory under `appDataDir` (which is the
+ * dir containing `integrations.json`).
+ */
+function brokenBackupsDir(appDataDir: string): string {
+  return path.join(appDataDir, BROKEN_BACKUPS_DIR_NAME);
+}
+
+/**
+ * Copy a malformed `integrations.json` into a hardened subdirectory so a
+ * human can inspect it after recovery. Void-returning; the outer try/catch
+ * is the single user-visible error channel (see the file docblock for why
+ * this codepath MUST NOT throw to the caller).
+ *
+ * Ordering invariant (do NOT reorder):
+ *   1. mkdir .broken-backups/
+ *   2. setRestrictiveAcl on the dir (Windows only — closes the TOCTOU
+ *      window that would otherwise exist between copyFile and a per-file
+ *      ACL call)
+ *   3. copyFile into the dir with COPYFILE_EXCL (defeats predictable-path
+ *      symlink attacks + ms-collision overwrites; UUID suffix makes
+ *      collisions astronomically rare anyway)
+ *   4. chmod 0o600 on POSIX (file inherits 0o700 dir but the explicit
+ *      mode is defense-in-depth)
+ *
+ * On Windows the file inherits the dir's restricted DACL at create-time;
+ * no per-file `setRestrictiveAcl` is needed (and adding one would
+ * reintroduce the TOCTOU window the dir-hardening step closes).
+ */
 async function backupBrokenFile(filePath: string): Promise<void> {
-  const backupPath = `${filePath}.broken-${Date.now()}`;
+  const dir = brokenBackupsDir(path.dirname(filePath));
+  const backupName = `${BROKEN_BACKUP_PREFIX}${Date.now()}-${randomUUID().slice(0, 8)}${BROKEN_BACKUP_SUFFIX}`;
+  const backupPath = path.join(dir, backupName);
+
   try {
-    await fs.promises.copyFile(filePath, backupPath);
+    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+
+    if (process.platform === "win32") {
+      try {
+        await setRestrictiveAcl(dir);
+      } catch (aclErr) {
+        throw new Error(
+          `failed to apply restrictive ACL to broken-backups dir ${dir}: ${
+            aclErr instanceof Error ? aclErr.message : String(aclErr)
+          }`,
+          { cause: aclErr },
+        );
+      }
+    }
+
+    await fs.promises.copyFile(filePath, backupPath, fs.constants.COPYFILE_EXCL);
+
     if (process.platform !== "win32") {
       await fs.promises.chmod(backupPath, 0o600).catch(() => {
-        /* best-effort chmod; backup is created, content is preserved */
+        /* file inherits 0o700 dir mode; the explicit chmod is defense-in-depth */
       });
     }
+
     console.error(
-      `[tandem] integrations.json was malformed; backed up to ${path.basename(backupPath)} and replaced with an empty config.`,
+      `[tandem] integrations.json was malformed; backed up to ${path.join(
+        BROKEN_BACKUPS_DIR_NAME,
+        backupName,
+      )} and replaced with an empty config.`,
     );
   } catch (err) {
+    // Best-effort cleanup of any partial backup. The outer catch is the
+    // single user-visible signal — `readIntegrationsFile` returns an
+    // empty config regardless, so a corrupt config never crashes startup.
+    await fs.promises.rm(backupPath, { force: true }).catch(() => {
+      /* nothing more to do — the throw below is the signal */
+    });
     console.error(
       `[tandem] integrations.json was malformed and the backup at ${backupPath} failed (${
         err instanceof Error ? err.message : String(err)
       }). The malformed file remains in place; an empty config is returned for this read.`,
     );
   }
+}
+
+/**
+ * Server-startup hook. Caps the broken-integrations backups dir at
+ * `MAX_BROKEN_BACKUPS` newest. Idempotent and bounded — only touches
+ * `<appDataDir>/.broken-backups/`. Partial `rm` failures are logged
+ * via `pruneOldBackups`' aggregate path and do not throw.
+ */
+export async function sweepBrokenIntegrationsBackupsOnStartup(appDataDir: string): Promise<void> {
+  await pruneOldBackups(
+    brokenBackupsDir(appDataDir),
+    BROKEN_BACKUP_PREFIX,
+    BROKEN_BACKUP_SUFFIX,
+    MAX_BROKEN_BACKUPS,
+  );
 }
 
 function readSchemaVersion(parsed: unknown): number | null {

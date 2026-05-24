@@ -22,6 +22,14 @@ export interface SettingsTabContext {
   onUpdate: (partial: Partial<TandemSettings>) => void;
   connected: boolean;
   reconnectAttempts: number;
+  /**
+   * Push a transient toast notification. Tabs use this for ephemeral
+   * "saved" / "failed" feedback that doesn't warrant a dedicated banner.
+   * Fixed strings only — never include raw `err.message` (path leak risk).
+   * Wired via `App.svelte` → `notifications.push`. Falls back to a noop
+   * when the modal is mounted without a `notify` prop (e.g. unit tests).
+   */
+  notify: (severity: "info" | "warning" | "error", message: string) => void;
 }
 
 /** Stable tab ids — exported so callers can pass `initialTabId` safely. */
@@ -177,6 +185,12 @@ interface Props {
    * tab via the existing snap-effect.
    */
   initialTabId?: string | null;
+  /**
+   * Push a transient toast notification, forwarded to every tab via
+   * `SettingsTabContext.notify`. Default is a noop so existing callers
+   * (and unit-test mounts) keep working without rewiring.
+   */
+  notify?: (severity: "info" | "warning" | "error", message: string) => void;
 }
 
 let {
@@ -190,6 +204,7 @@ let {
   reconnectAttempts = 0,
   tabs = DEFAULT_SETTINGS_TABS,
   initialTabId = null,
+  notify = () => {},
 }: Props = $props();
 
 let modalEl: HTMLDivElement | undefined = $state();
@@ -251,6 +266,7 @@ const tabContext = $derived<SettingsTabContext>({
   onUpdate,
   connected,
   reconnectAttempts,
+  notify,
 });
 
 // Keep `activeTabId` in sync with the resolved tab. Two cases matter:

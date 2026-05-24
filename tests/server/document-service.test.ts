@@ -14,13 +14,16 @@ import {
   hasDoc,
   removeDoc,
   requireDocument,
+  saveDocumentAsToDisk,
   saveDocumentToDisk,
+  serializeDocument,
   setActiveDocId,
   toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
+  Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
@@ -37,12 +40,16 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
   };
 });
 
-// Mock file-io for save tests
+// Mock file-io for save tests. `atomicWrite` delegates to the real impl so the
+// durable-annotation round-trip test (save-as promote) actually writes the
+// annotation envelope to disk; the spy wrapper still lets save tests assert it
+// was called. Doc saves in these tests target /tmp paths (harmless real writes).
 vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  const realAtomicWrite = actual.atomicWrite as (p: string, c: string) => Promise<void>;
   return {
     ...actual,
-    atomicWrite: vi.fn().mockResolvedValue(undefined),
+    atomicWrite: vi.fn((p: string, c: string) => realAtomicWrite(p, c)),
   };
 });
 
@@ -280,6 +287,27 @@ describe("broadcastOpenDocs", () => {
     const docs = meta.get("openDocuments") as any[];
     expect(docs).toEqual([]);
     expect(meta.get("activeDocumentId")).toBeNull();
+  });
+
+  it("broadcasts an advancing activation epoch to CTRL_ROOM and per-doc rooms", () => {
+    addDoc("ep-a", makeOpenDoc("ep-a"));
+    setActiveDocId("ep-a");
+    broadcastOpenDocs();
+
+    const ctrlMeta = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_DOCUMENT_META);
+    const first = ctrlMeta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number;
+    expect(typeof first).toBe("number");
+    // Mirrored into the doc's own room so a per-tab observer sees the same epoch.
+    expect(
+      getOrCreateDocument("ep-a").getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_ACTIVE_DOCUMENT_EPOCH),
+    ).toBe(first);
+
+    // Every setActiveDocId advances the epoch — even re-selecting the same id
+    // (the intentional re-focus the client must honor).
+    setActiveDocId("ep-a");
+    broadcastOpenDocs();
+    const second = ctrlMeta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number;
+    expect(second).toBeGreaterThan(first);
   });
 });
 
@@ -534,6 +562,366 @@ describe("broadcastStoreReadOnly", () => {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     const meta = ctrl.getMap(Y_MAP_DOCUMENT_META);
     expect(meta.get(Y_MAP_STORE_READ_ONLY)).toBe(false);
+  });
+});
+
+describe("saveDocumentAsToDisk", () => {
+  it("rejects unsupported formats", async () => {
+    addDoc("save-as-doc", {
+      id: "save-as-doc",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    // Cast through unknown so we can verify runtime guard rejects non-allowlist formats.
+    const result = await saveDocumentAsToDisk(
+      "save-as-doc",
+      "/tmp/anywhere.html",
+      "html" as unknown as "md",
+    );
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("UNSUPPORTED_FORMAT");
+  });
+
+  it("rejects when target extension doesn't match the chosen format", async () => {
+    addDoc("ext-mismatch", {
+      id: "ext-mismatch",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const result = await saveDocumentAsToDisk("ext-mismatch", "/tmp/promoted.txt", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("EXTENSION_MISMATCH");
+  });
+
+  it("rejects unknown document IDs", async () => {
+    const result = await saveDocumentAsToDisk("ghost-doc", "/tmp/anywhere.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("NOT_FOUND");
+  });
+
+  it("rejects read-only documents", async () => {
+    addDoc("ro-doc", {
+      id: "ro-doc",
+      filePath: "/tmp/locked.md",
+      format: "md",
+      readOnly: true,
+      source: "file",
+    });
+    const result = await saveDocumentAsToDisk("ro-doc", "/tmp/elsewhere.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("READ_ONLY");
+  });
+
+  it("rejects already-on-disk docs (source: file) with NOT_PROMOTABLE and writes nothing (#827 Medium)", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    const { deleteSession } = await import("../../src/server/session/manager.js");
+    vi.mocked(atomicWrite).mockClear();
+    vi.mocked(deleteSession).mockClear();
+
+    addDoc("real-file", {
+      id: "real-file",
+      filePath: "/tmp/already-on-disk.md",
+      format: "md",
+      readOnly: false,
+      source: "file",
+    });
+
+    const result = await saveDocumentAsToDisk("real-file", "/tmp/promoted-target.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("NOT_PROMOTABLE");
+    // Nothing is written, no session is re-keyed/deleted — the real file's
+    // annotations and session must remain untouched.
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("allows a target path outside home/tmp — Save-As is user-driven, not PATH_REJECTED (#827 user decision)", async () => {
+    const os = await import("node:os");
+    const fsReal = await import("node:fs/promises");
+    const pathMod = await import("node:path");
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+
+    // Probe 1: an absolute path that exists outside both homedir() and
+    // tmpdir() (`/etc`) must no longer be refused by the home/tmp
+    // confinement. The old behavior returned PATH_REJECTED here; the user
+    // decision is that any absolute path the user pointed the native Save
+    // dialog at passes the path-safety gate (symlink + UNC guards aside).
+    // Stub atomicWrite to a no-op so we assert the path-policy DECISION
+    // without writing into a system directory (`/etc` would pollute and may
+    // even be writable as root in CI).
+    vi.mocked(atomicWrite).mockClear();
+    vi.mocked(atomicWrite).mockResolvedValueOnce(undefined);
+    addDoc("path-allow", {
+      id: "path-allow",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const doc = getOrCreateDocument("path-allow");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    p.insert(0, [new Y.XmlText("content")]);
+
+    const result = await saveDocumentAsToDisk("path-allow", "/etc/tandem-evil-827.md", "md");
+    // The key assertion: the home/tmp confinement no longer rejects this.
+    expect(result.errorCode).not.toBe("PATH_REJECTED");
+    // The path-safety gate let it through to the (stubbed) write.
+    expect(atomicWrite).toHaveBeenCalledWith("/etc/tandem-evil-827.md", expect.any(String));
+
+    // Probe 2: end-to-end save into a freshly created dir outside the home
+    // tree, proving the widening lets a legitimate user-chosen external
+    // location through to a real disk write (atomicWrite delegates to the
+    // real impl for non-stubbed calls).
+    const writableDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-saveas-"));
+    try {
+      addDoc("path-allow-2", {
+        id: "path-allow-2",
+        filePath: "upload://scratchpad/y/Scratchpad.md",
+        format: "md",
+        readOnly: false,
+        source: "upload",
+      });
+      const doc2 = getOrCreateDocument("path-allow-2");
+      const frag2 = doc2.getXmlFragment("default");
+      const p2 = new Y.XmlElement("paragraph");
+      frag2.insert(0, [p2]);
+      p2.insert(0, [new Y.XmlText("content")]);
+
+      const okResult = await saveDocumentAsToDisk(
+        "path-allow-2",
+        pathMod.join(writableDir, "Promoted.md"),
+        "md",
+      );
+      expect(okResult.errorCode).not.toBe("PATH_REJECTED");
+      expect(okResult.status).toBe("saved");
+    } finally {
+      await fsReal.rm(writableDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("still rejects a symlinked target path with PATH_REJECTED and writes nothing (#827 keeps symlink guard)", async () => {
+    const os = await import("node:os");
+    const fsReal = await import("node:fs/promises");
+    const pathMod = await import("node:path");
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    // Create a real symlinked directory and aim the Save-As target through
+    // it. assertPathSafe's realpath/symlink walk must still refuse: a planted
+    // symlink redirecting the write is a genuine attack we keep guarding,
+    // even though the home/tmp root confinement was widened.
+    const baseDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-symlink-"));
+    const realDir = pathMod.join(baseDir, "real");
+    const linkDir = pathMod.join(baseDir, "link");
+    await fsReal.mkdir(realDir);
+    await fsReal.symlink(realDir, linkDir, "dir");
+
+    try {
+      addDoc("symlink-reject", {
+        id: "symlink-reject",
+        filePath: "upload://scratchpad/x/Scratchpad.md",
+        format: "md",
+        readOnly: false,
+        source: "upload",
+      });
+      const doc = getOrCreateDocument("symlink-reject");
+      const frag = doc.getXmlFragment("default");
+      const p = new Y.XmlElement("paragraph");
+      frag.insert(0, [p]);
+      p.insert(0, [new Y.XmlText("content")]);
+
+      const result = await saveDocumentAsToDisk(
+        "symlink-reject",
+        pathMod.join(linkDir, "Promoted.md"),
+        "md",
+      );
+      expect(result.status).toBe("error");
+      expect(result.errorCode).toBe("PATH_REJECTED");
+      expect(atomicWrite).not.toHaveBeenCalled();
+    } finally {
+      await fsReal.rm(baseDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("rejects a UNC target path on win32 with INVALID_PATH and writes nothing (#827 Low)", async () => {
+    const pathMod = (await import("node:path")).default;
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    addDoc("unc-reject", {
+      id: "unc-reject",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+
+    // Simulate win32: the UNC guard checks `process.platform === "win32"` on the
+    // resolved path. On a POSIX test host `path.resolve` won't preserve the
+    // leading `\\`, so stub both platform and resolve to reproduce the branch.
+    const origPlatform = process.platform;
+    const resolveSpy = vi.spyOn(pathMod, "resolve").mockReturnValue("\\\\server\\share\\evil.md");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const result = await saveDocumentAsToDisk("unc-reject", "\\\\server\\share\\evil.md", "md");
+      expect(result.status).toBe("error");
+      expect(result.errorCode).toBe("INVALID_PATH");
+      expect(atomicWrite).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      resolveSpy.mockRestore();
+    }
+  });
+
+  it("re-keys the durable annotation store so post-promote annotations persist under the real path's docHash (#827 Medium 2)", async () => {
+    const os = await import("node:os");
+    const fsReal = await import("node:fs/promises");
+    const pathMod = await import("node:path");
+    const { docHash } = await import("../../src/server/annotations/doc-hash.js");
+    const { createStore, resetForTesting: storeReset } = await import(
+      "../../src/server/annotations/store.js"
+    );
+    const { resetForTesting: syncReset } = await import("../../src/server/annotations/sync.js");
+    const { resetForTesting: queueReset } = await import("../../src/server/events/queue.js");
+    const { withBrowser } = await import("../../src/shared/origins.js");
+    const { Y_MAP_ANNOTATIONS } = await import("../../src/shared/constants.js");
+
+    // Isolated app-data dir so the annotation envelope round-trips on real disk.
+    const appData = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-promote-"));
+    const prevAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = appData;
+    storeReset();
+    syncReset();
+    queueReset();
+
+    // Real disk target for the promoted file (saveSession is mocked, so only
+    // the doc content + annotation envelope hit disk).
+    const targetDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-target-"));
+    const targetPath = pathMod.join(targetDir, "Promoted.md");
+
+    try {
+      const docId = "promote-annotations";
+      const uploadPath = "upload://scratchpad/promote-uuid/Scratchpad.md";
+      addDoc(docId, {
+        id: docId,
+        filePath: uploadPath,
+        format: "md",
+        readOnly: false,
+        source: "upload",
+      });
+      setActiveDocId(docId);
+
+      // Seed some content so the markdown adapter has something to serialize.
+      const doc = getOrCreateDocument(docId);
+      const frag = doc.getXmlFragment("default");
+      const p = new Y.XmlElement("paragraph");
+      frag.insert(0, [p]);
+      p.insert(0, [new Y.XmlText("scratch content")]);
+
+      const result = await saveDocumentAsToDisk(docId, targetPath, "md");
+      expect(result.status).toBe("saved");
+
+      // Add an annotation AFTER promote via a browser-origin transact so the
+      // durable-sync observer (now wired to the real path's docHash) queues a
+      // write.
+      const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+      const annotation = {
+        id: "ann-post-promote",
+        type: "comment",
+        author: "user",
+        content: "created after promote",
+        range: { from: 0, to: 5 },
+        status: "pending",
+        timestamp: Date.now(),
+        rev: 1,
+      };
+      withBrowser(doc, () => annMap.set(annotation.id, annotation));
+
+      // Flush the per-doc store (module-keyed by docHash) so the debounced
+      // write lands, then read it back through a fresh handle keyed to the
+      // PROMOTED path's docHash — proving continuity under the real-path key.
+      const promotedHash = docHash(targetPath);
+      const verifyStore = createStore(promotedHash, { filePath: targetPath });
+      await verifyStore.flush();
+      const loaded = await verifyStore.load();
+
+      expect(loaded.annotations.map((a) => a.id)).toContain("ann-post-promote");
+      // And NOT under the old upload docHash.
+      const uploadHash = docHash(uploadPath);
+      expect(uploadHash).not.toBe(promotedHash);
+    } finally {
+      // Restore env + clean module state so later tests aren't polluted.
+      if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = prevAppData;
+      storeReset();
+      syncReset();
+      queueReset();
+      await fsReal.rm(appData, { recursive: true, force: true }).catch(() => {});
+      await fsReal.rm(targetDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+describe("serializeDocument", () => {
+  it("serializes an upload-backed scratchpad to markdown bytes", () => {
+    addDoc("ser-doc", {
+      id: "ser-doc",
+      filePath: "upload://scratchpad/uuid/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const doc = getOrCreateDocument("ser-doc");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    p.insert(0, [new Y.XmlText("serialize me")]);
+
+    const result = serializeDocument("ser-doc", "md");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.content).toContain("serialize me");
+      // Stem preserved, extension swapped to chosen format.
+      expect(result.fileName).toBe("Scratchpad.md");
+    }
+  });
+
+  it("re-stems the proposed filename to match the requested format", () => {
+    addDoc("ser-doc-txt", {
+      id: "ser-doc-txt",
+      filePath: "upload://scratchpad/uuid/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const result = serializeDocument("ser-doc-txt", "txt");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fileName).toBe("Scratchpad.txt");
+    }
+  });
+
+  it("returns error for unknown documents", () => {
+    const result = serializeDocument("nope", "md");
+    expect(result.ok).toBe(false);
+  });
+
+  it("returns error for unsupported formats", () => {
+    addDoc("ser-doc-bad", {
+      id: "ser-doc-bad",
+      filePath: "upload://scratchpad/uuid/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const result = serializeDocument("ser-doc-bad", "html" as unknown as "md");
+    expect(result.ok).toBe(false);
   });
 });
 

@@ -242,6 +242,29 @@ export interface ClaudeAwareness {
   focusParagraph: number | null;
   /** Flat character offset for character-level cursor positioning. */
   focusOffset: number | null;
+  /**
+   * Typing-presence indicator (#651). When set, Claude is actively executing
+   * an MCP tool. `annotationId` (when present) lets per-card UI render an
+   * inline typing indicator; an absent annotationId indicates a generic
+   * "Claude is working" state surfaced in the status bar.
+   *
+   * ADR-027: never broadcast `annotationId` for `type === "note"` annotations
+   * (the server middleware enforces this on write).
+   */
+  working?: {
+    tool: string;
+    annotationId?: string;
+    /** Display-only wall-clock start time (ms). NOT an ownership key — see `token`. */
+    startedAt: number;
+    /**
+     * Monotonic, collision-free ownership token (#823). Two same-doc tool calls
+     * in the same millisecond would collide on `startedAt`; the clear path keys
+     * identity on this counter instead so finishing one handler never wipes
+     * another's still-active marker. Optional for back-compat with snapshots
+     * written before #823.
+     */
+    token?: number;
+  } | null;
 }
 
 export interface SessionData {
@@ -278,7 +301,8 @@ export interface TandemNotification {
     | "session-restored"
     | "general-error"
     | "file-reloaded"
-    | "review-pending";
+    | "review-pending"
+    | "launcher";
   severity: "info" | "warning" | "error";
   message: string;
   documentId?: string;

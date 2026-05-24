@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -497,7 +498,34 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
   try {
-    existing = JSON.parse(readFileSync(configPath, "utf-8"));
+    // Strip a leading UTF-8 BOM (`﻿`) before JSON.parse. Some editors
+    // (legacy Windows tooling, certain VS Code configs) write `.claude.json`
+    // with a BOM; without this strip, `JSON.parse` throws `SyntaxError`
+    // and the file would be pushed into `.broken-backups/` as if it were
+    // malformed. The BOM is encoded as the literal three bytes
+    // `EF BB BF` which Node's "utf-8" decoder surfaces as a leading
+    // U+FEFF code point.
+    let raw = readFileSync(configPath, "utf-8");
+    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+    const parsed: unknown = JSON.parse(raw);
+
+    // Shape gate: the rewrite path spreads `existing.mcpServers` and
+    // `existing` itself into the new config. If either is the wrong
+    // shape, the spread produces a corrupted output (string-spread
+    // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
+    // null-spread throws). Reject up-front so a legitimate-looking
+    // config-shape mismatch never silently corrupts the user's file.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${configPath} root is not a JSON object — refusing to rewrite`);
+    }
+    const maybeServers = (parsed as Record<string, unknown>).mcpServers;
+    if (
+      maybeServers !== undefined &&
+      (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
+    ) {
+      throw new Error(`${configPath} mcpServers is not an object — refusing to rewrite`);
+    }
+    existing = parsed as { mcpServers?: Record<string, McpEntry> };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -528,9 +556,40 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       );
       try {
         if (process.platform === "win32") {
+          // Windows ignores the POSIX `mode` arg on mkdir, so harden the
+          // dir with an explicit DACL BEFORE writing the backup file.
+          // Mirrors the ordering invariant in
+          // `storage.ts#backupBrokenFile`: dir-level ACL closes the
+          // TOCTOU window that a per-file ACL would otherwise open
+          // between copyFile and the ACL set. Fail loud — orphaning a
+          // half-hardened dir is worse than aborting the backup
+          // outright. The inner `catch (copyErr)` below surfaces a
+          // named error and refuses to overwrite the malformed config.
+          try {
+            await setRestrictiveAcl(brokenBackupDir);
+          } catch (aclErr) {
+            throw new Error(
+              `failed to apply restrictive ACL to broken-backups dir ${brokenBackupDir}: ${
+                aclErr instanceof Error ? aclErr.message : String(aclErr)
+              }`,
+              { cause: aclErr },
+            );
+          }
           // Windows doesn't honor POSIX modes — fall back to plain copy.
-          // The randomUUID-suffixed path makes collisions effectively impossible.
-          await copyFile(configPath, backupPath);
+          // The randomUUID-suffixed path makes collisions effectively
+          // impossible. COPYFILE_EXCL refuses to overwrite an existing
+          // target, defeating any predictable-path symlink/pre-create
+          // attack the UUID suffix might still leave reachable. NOTE:
+          // `setRestrictiveAcl` (acl-win.ts) calls `icacls /grant:r
+          // *<SID>:F` without (OI)(CI) inheritance flags, so the new
+          // file does NOT inherit the parent dir's SID-only ACE.
+          // Instead it receives the DACL synthesized from the process
+          // token's default (typically user + SYSTEM + Administrators),
+          // which is narrow enough to prevent cross-tenant leak in
+          // standard contexts. If broader access is observed, the dir
+          // ACE should be made inheritable in acl-win.ts (this would
+          // also benefit storage.ts which uses the same helper).
+          await copyFile(configPath, backupPath, fsConstants.COPYFILE_EXCL);
         } else {
           // Open with mode 0o600 + `wx` so the file is created exclusively
           // at the right mode (no copyFile + chmodSync race window where
@@ -664,6 +723,95 @@ export async function installSkill(opts: { homeOverride?: string } = {}): Promis
   assertPathSafe(skillPath, { allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined });
   await mkdir(dirname(skillPath), { recursive: true });
   await atomicWrite(SKILL_CONTENT, skillPath);
+}
+
+/** Parse the integer `version:` from a skill front-matter block. Returns 0
+ * if the file doesn't exist, has no version, or fails to parse — older
+ * bundled skills predate the version stamp, so 0 means "definitely upgrade". */
+function readSkillVersion(skillContent: string): number {
+  const match = skillContent.match(/^version:\s*(\d+)\s*$/m);
+  if (!match) return 0;
+  const n = parseInt(match[1], 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const BUNDLED_SKILL_VERSION = readSkillVersion(SKILL_CONTENT);
+
+/** Module-scoped last-failure record. Cleared on successful refresh; set on
+ * read/write failure. Surfaced via `GET /api/launcher/status` (loopback only)
+ * so the palette/settings UI can warn the user that the bundled skill is
+ * out of date. `null` when last refresh succeeded or was a no-op. */
+let lastSkillRefreshError: { code: "write-failed" | "read-failed"; message: string } | null = null;
+export function getSkillRefreshError(): {
+  code: "write-failed" | "read-failed";
+  message: string;
+} | null {
+  return lastSkillRefreshError;
+}
+/** Test-only — reset module state between tests. */
+export function _resetSkillRefreshErrorForTests(): void {
+  if (process.env.VITEST !== "true") return;
+  lastSkillRefreshError = null;
+}
+
+/**
+ * Idempotent skill refresh — called from supervisor startup so existing
+ * users (who already ran `tandem setup` once) pick up bundled-skill
+ * updates without re-running the wizard.
+ *
+ * Compares the bundled `version:` against the on-disk file. Writes only
+ * if bundled > on-disk. Silently no-ops on any error (read failure,
+ * write failure, missing parent dir) — this is a best-effort refresh,
+ * not a critical path. The wizard-driven `installSkill()` remains the
+ * authoritative installer.
+ */
+export async function refreshSkillIfStale(opts: { homeOverride?: string } = {}): Promise<void> {
+  if (BUNDLED_SKILL_VERSION === 0) return; // Bundled skill has no version stamp — nothing to compare.
+  const home = opts.homeOverride ?? homedir();
+  const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
+  try {
+    assertPathSafe(skillPath, {
+      allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined,
+    });
+  } catch {
+    return;
+  }
+  let onDiskVersion = -1; // -1 = file missing (treat as needing install)
+  let readErr: unknown;
+  try {
+    const fs = await import("node:fs/promises");
+    const current = await fs.readFile(skillPath, "utf8");
+    onDiskVersion = readSkillVersion(current);
+  } catch (err) {
+    // ENOENT is expected (first run); any other error is a real read failure.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") readErr = err;
+  }
+  if (onDiskVersion >= BUNDLED_SKILL_VERSION) {
+    // No-op path — clear any prior failure only if read succeeded.
+    if (readErr === undefined) lastSkillRefreshError = null;
+    else
+      lastSkillRefreshError = {
+        code: "read-failed",
+        message: readErr instanceof Error ? readErr.message : String(readErr),
+      };
+    return;
+  }
+  try {
+    await mkdir(dirname(skillPath), { recursive: true });
+    await atomicWrite(SKILL_CONTENT, skillPath);
+    lastSkillRefreshError = null;
+    console.error(
+      `[Tandem] Refreshed bundled skill at ${skillPath} (v${onDiskVersion} → v${BUNDLED_SKILL_VERSION}).`,
+    );
+  } catch (err) {
+    lastSkillRefreshError = {
+      code: "write-failed",
+      message: err instanceof Error ? err.message : String(err),
+    };
+    console.error(
+      `[Tandem] Skill refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
+  }
 }
 
 /**

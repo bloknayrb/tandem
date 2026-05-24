@@ -1,6 +1,8 @@
 <script lang="ts">
 import { API_UPLOAD } from "../../shared/api-paths.js";
+import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -16,16 +18,14 @@ interface Props {
 
 const { onClose }: Props = $props();
 
-type Mode = "path" | "upload";
-
-// #478: Default to "upload" (OS file picker) instead of "path"
-let mode = $state<Mode>("upload");
-let filePath = $state("");
 let error = $state<string | null>(null);
 let loading = $state(false);
-let dragOver = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
 let recentFiles = $state<string[]>(loadRecentFiles());
+
+const extensionList = Array.from(SUPPORTED_EXTENSIONS).sort();
+const acceptAttr = extensionList.join(",");
+const filterExtensions = extensionList.map((ext) => ext.replace(/^\./, ""));
 
 function pushRecent(path: string) {
   recentFiles = (() => {
@@ -57,9 +57,22 @@ async function openByPath(pathToOpen: string) {
   }
 }
 
-function handlePathSubmit() {
-  if (!filePath.trim()) return;
-  openByPath(filePath.trim());
+async function browseNative() {
+  if (loading) return;
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      title: "Open file in Tandem",
+      filters: [{ name: "Documents", extensions: filterExtensions }],
+    });
+    if (typeof selected === "string") {
+      await openByPath(selected);
+    }
+  } catch (err) {
+    error = `File picker unavailable: ${err instanceof Error ? err.message : err}`;
+  }
 }
 
 async function uploadFile(file: File) {
@@ -93,17 +106,18 @@ async function uploadFile(file: File) {
   }
 }
 
-function handleFileDrop(e: DragEvent) {
-  e.preventDefault();
-  dragOver = false;
-  const file = e.dataTransfer?.files[0];
-  if (file) uploadFile(file);
-}
-
 function handleFileSelect(e: Event) {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   if (file) uploadFile(file);
+}
+
+function handleBrowse() {
+  if (isTauriRuntime()) {
+    void browseNative();
+  } else {
+    fileInputEl?.click();
+  }
 }
 </script>
 
@@ -136,132 +150,84 @@ function handleFileSelect(e: Event) {
       </button>
     </div>
 
-    <!-- Mode toggle — #478: "Upload" renamed to "Open" -->
-    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
-      <button
-        onclick={() => (mode = "path")}
-        style={`flex: 1; padding: 6px; font-size: 13px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); cursor: pointer; background: ${mode === "path" ? "var(--tandem-accent)" : "var(--tandem-surface)"}; color: ${mode === "path" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
-      >
-        File Path
-      </button>
-      <button
-        onclick={() => (mode = "upload")}
-        style={`flex: 1; padding: 6px; font-size: 13px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); cursor: pointer; background: ${mode === "upload" ? "var(--tandem-accent)" : "var(--tandem-surface)"}; color: ${mode === "upload" ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
-      >
-        Open
-      </button>
-    </div>
+    <!-- svelte-ignore a11y_autofocus -->
+    <button
+      autofocus
+      onclick={handleBrowse}
+      disabled={loading}
+      type="button"
+      style={`width: 100%; padding: 12px; font-size: 14px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg);`}
+      data-testid="file-open-browse"
+    >
+      {loading ? "Opening…" : "Browse…"}
+    </button>
+    {#if !isTauriRuntime()}
+      <input
+        bind:this={fileInputEl}
+        type="file"
+        accept={acceptAttr}
+        onchange={handleFileSelect}
+        style="display: none;"
+      />
+    {/if}
 
-    {#if mode === "path"}
-      <div>
-        <!-- svelte-ignore a11y_autofocus -->
-        <input
-          autofocus
-          type="text"
-          placeholder="Paste absolute file path..."
-          bind:value={filePath}
-          onkeydown={(e) => {
-            if (e.key === "Enter") handlePathSubmit();
-          }}
-          style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); box-sizing: border-box; background: var(--tandem-surface); color: var(--tandem-fg);"
-          data-testid="file-path-input"
-        />
-        <button
-          onclick={handlePathSubmit}
-          disabled={loading || !filePath.trim()}
-          style={`margin-top: 10px; width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
-          data-testid="file-open-submit"
+    {#if isTauriRuntime()}
+      <p
+        style="margin: 8px 0 0; font-size: 11px; color: var(--tandem-fg-subtle); text-align: center;"
+      >
+        …or drop a file anywhere in the window
+      </p>
+    {/if}
+
+    {#if recentFiles.length > 0}
+      <div data-testid="recent-files-list" style="margin-top: 16px;">
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;"
         >
-          {loading ? "Opening..." : "Open"}
-        </button>
-
-        <!-- Recent files -->
-        {#if recentFiles.length > 0}
-          <div data-testid="recent-files-list" style="margin-top: 14px;">
-            <div
-              style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;"
-            >
-              <span
-                style="font-size: 11px; color: var(--tandem-fg-subtle); text-transform: uppercase; letter-spacing: 0.05em;"
-              >
-                Recent
-              </span>
-              <button
-                data-testid="clear-recent-files"
-                onclick={handleClearRecent}
-                type="button"
-                style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
-              >
-                Clear all
-              </button>
-            </div>
-            <div
-              class="tandem-scroll-fade-y"
-              use:scrollFade={"y"}
-              style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;"
-            >
-              {#each recentFiles as p, i (p)}
-                {@const parts = p.split(/[/\\]/)}
-                {@const filename = parts.at(-1) ?? p}
-                {@const dir = parts.slice(0, -1).join("/") || "/"}
-                <button
-                  type="button"
-                  data-testid={`recent-file-${i}`}
-                  onclick={() => {
-                    filePath = p;
-                    openByPath(p);
-                  }}
-                  style="background: none; border: none; padding: 6px 8px; border-radius: var(--tandem-r-2); cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 1px;"
-                  onmouseenter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "var(--tandem-surface-muted)";
-                  }}
-                  onmouseleave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-                  }}
-                >
-                  <span style="font-size: 13px; color: var(--tandem-fg);">{filename}</span>
-                  <span
-                    style="font-size: 11px; color: var(--tandem-fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;"
-                  >
-                    {dir}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {:else}
-      <!-- #478: "Uploading..." renamed to "Opening..." -->
-      <div
-        role="button"
-        tabindex={0}
-        ondragover={(e) => {
-          e.preventDefault();
-          dragOver = true;
-        }}
-        ondragleave={() => (dragOver = false)}
-        ondrop={handleFileDrop}
-        onclick={() => fileInputEl?.click()}
-        onkeydown={(e) => {
-          if (e.key === "Enter" || e.key === " ") fileInputEl?.click();
-        }}
-        style={`border: 2px dashed ${dragOver ? "var(--tandem-accent)" : "var(--tandem-border-strong)"}; border-radius: var(--tandem-r-3); padding: 32px 16px; text-align: center; cursor: ${loading ? "wait" : "pointer"}; background: ${dragOver ? "var(--tandem-accent-bg)" : "var(--tandem-surface-muted)"}; transition: border-color 0.15s, background 0.15s;`}
-        data-testid="file-upload-zone"
-      >
-        <input
-          bind:this={fileInputEl}
-          type="file"
-          accept=".md,.txt,.html,.htm,.docx"
-          onchange={handleFileSelect}
-          style="display: none;"
-        />
-        <div style="font-size: 13px; color: var(--tandem-fg-muted);">
-          {loading ? "Opening..." : "Drop a file here or click to browse"}
+          <span
+            style="font-size: 11px; color: var(--tandem-fg-subtle); text-transform: uppercase; letter-spacing: 0.05em;"
+          >
+            Recent
+          </span>
+          <button
+            data-testid="clear-recent-files"
+            onclick={handleClearRecent}
+            type="button"
+            style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
+          >
+            Clear all
+          </button>
         </div>
-        <div style="font-size: 11px; color: var(--tandem-fg-subtle); margin-top: 6px;">
-          .md, .txt, .html, .docx
+        <div
+          class="tandem-scroll-fade-y"
+          use:scrollFade={"y"}
+          style="max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;"
+        >
+          {#each recentFiles as p, i (p)}
+            {@const parts = p.split(/[/\\]/)}
+            {@const filename = parts.at(-1) ?? p}
+            {@const dir = parts.slice(0, -1).join("/") || "/"}
+            <button
+              type="button"
+              data-testid={`recent-file-${i}`}
+              onclick={() => openByPath(p)}
+              style="background: none; border: none; padding: 6px 8px; border-radius: var(--tandem-r-2); cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 1px;"
+              onmouseenter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background =
+                  "var(--tandem-surface-muted)";
+              }}
+              onmouseleave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+              }}
+            >
+              <span style="font-size: 13px; color: var(--tandem-fg);">{filename}</span>
+              <span
+                style="font-size: 11px; color: var(--tandem-fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;"
+              >
+                {dir}
+              </span>
+            </button>
+          {/each}
         </div>
       </div>
     {/if}

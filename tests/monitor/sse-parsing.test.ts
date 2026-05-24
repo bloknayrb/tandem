@@ -31,7 +31,12 @@ describe("SSE parsing error isolation", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("advances past a malformed-JSON frame WITHOUT updating lastEventId", async () => {
+  it("advances past a malformed-JSON frame (drops the event; reconnect must not re-deliver)", async () => {
+    // Behavior unified with the channel shim in #282: a permanently
+    // unparseable frame advances lastEventId past it, otherwise a
+    // reconnect would re-deliver the same garbage forever. Without the
+    // advance, the server replays from the bad event on every retry and
+    // the monitor wedges in an infinite parse-fail loop.
     const onEventId = vi.fn();
     const promise = connectAndStream(undefined, onEventId);
 
@@ -52,9 +57,8 @@ describe("SSE parsing error isolation", () => {
     stream.end();
 
     await promise.catch(() => {}); // "SSE stream ended" is expected
-    // onEventId should have been called for evt_ok but NOT evt_bad
+    expect(onEventId).toHaveBeenCalledWith("evt_bad");
     expect(onEventId).toHaveBeenCalledWith("evt_ok");
-    expect(onEventId).not.toHaveBeenCalledWith("evt_bad");
   });
 
   it("logs the specific parse error message (not just 'malformed')", async () => {

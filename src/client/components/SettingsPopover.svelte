@@ -262,6 +262,12 @@ function handleViewChangelog(): Promise<void> {
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 
+// Noop notifier for the tab bodies whose Props type (`SettingsTabContext`)
+// requires a `notify` callback. The legacy popover doesn't surface toasts —
+// once `SettingsModal` retires this component the field becomes purely a
+// modal concern and the noop drops with it.
+const noopNotify: (severity: "info" | "warning" | "error", message: string) => void = () => {};
+
 function panelHeading(section: SettingsSection): string {
   return SECTIONS.find((s) => s.id === section)?.label ?? "Settings";
 }
@@ -495,9 +501,23 @@ function aboutRows() {
               restores when you return to Tandem.
             </div>
           {:else if activeSection === "appearance"}
-            <AppearanceSettings {open} {settings} {onUpdate} {connected} {reconnectAttempts} />
+            <AppearanceSettings
+              {open}
+              {settings}
+              {onUpdate}
+              {connected}
+              {reconnectAttempts}
+              notify={noopNotify}
+            />
           {:else if activeSection === "editor"}
-            <EditorSettings {open} {settings} {onUpdate} {connected} {reconnectAttempts} />
+            <EditorSettings
+              {open}
+              {settings}
+              {onUpdate}
+              {connected}
+              {reconnectAttempts}
+              notify={noopNotify}
+            />
           {:else if activeSection === "network"}
             <NetworkSettings
               {open}
@@ -505,9 +525,17 @@ function aboutRows() {
               {onUpdate}
               {connected}
               {reconnectAttempts}
+              notify={noopNotify}
             />
           {:else if activeSection === "accessibility"}
-            <AccessibilitySettings {open} {settings} {onUpdate} {connected} {reconnectAttempts} />
+            <AccessibilitySettings
+              {open}
+              {settings}
+              {onUpdate}
+              {connected}
+              {reconnectAttempts}
+              notify={noopNotify}
+            />
           {:else if activeSection === "claude-code"}
             <div>
               <div style={sectionLabelStyle}>

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   backupDir,
@@ -109,24 +109,27 @@ describe("backup filename + write + prune", () => {
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
-  it("listBackups returns newest-first, ignores non-backup files", async () => {
-    // Write 3 backups separated by ~1s to ensure distinct timestamps.
-    const paths: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      paths.push(await writeBackup(dir, Buffer.from(`v${i}`)));
-      // Force a unique timestamp by sleeping ≥1s — backupFilename uses
-      // second-resolution timestamps, so sub-second writes share a
-      // sort prefix and rely on the UUID tiebreaker.
-      await new Promise((r) => setTimeout(r, 1100));
-    }
-    // Drop a stray non-backup file that listBackups must ignore.
+  it("listBackups returns newest-first, ignores non-backup files", () => {
+    // Construct filenames manually with lexicographically-monotonic
+    // timestamps so the test doesn't depend on real time (and doesn't
+    // burn ~3s of wall clock sleeping). The production `writeBackup`
+    // is exercised by the round-trip test above; here we're testing
+    // `listBackups`' sorting + filtering, not write semantics.
+    const names = [
+      "claude-json-20260601-100000-aaaaaaaa.json",
+      "claude-json-20260601-100001-bbbbbbbb.json",
+      "claude-json-20260601-100002-cccccccc.json",
+    ];
+    for (const n of names) fs.writeFileSync(path.join(dir, n), "x");
     fs.writeFileSync(path.join(dir, "stray.txt"), "ignored");
-    const listed = await listBackups(dir);
-    expect(listed.length).toBe(3);
-    // Newest first — last-written comes first.
-    expect(listed[0]).toBe(path.basename(paths[2]));
-    expect(listed.includes("stray.txt")).toBe(false);
-  }, 10_000);
+    const listed = listBackups(dir);
+    return listed.then((l) => {
+      expect(l.length).toBe(3);
+      // Newest first — last lexicographically.
+      expect(l[0]).toBe(names[2]);
+      expect(l.includes("stray.txt")).toBe(false);
+    });
+  });
 
   it("listBackups returns empty array when dir does not exist", async () => {
     const missing = path.join(tmpDir, "no-such-dir");
@@ -134,17 +137,56 @@ describe("backup filename + write + prune", () => {
     expect(listed).toEqual([]);
   });
 
+  it("pruneOldBackups continues + logs aggregate when one rm fails (partial-failure path)", async () => {
+    // Create 5 backup files (max=2 means 3 will be marked for removal).
+    // Then make one of them un-removable by replacing it with a non-empty
+    // directory — `rm({force: true})` without `recursive` rejects EISDIR.
+    // The sweep MUST continue past the failure and still remove the others;
+    // it MUST NOT throw.
+    const names: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const name = `claude-json-2026010${i}-000000-deadbeef.json`;
+      names.push(name);
+      fs.writeFileSync(path.join(dir, name), `v${i}`);
+    }
+    // Oldest is names[0]; make it un-removable.
+    fs.unlinkSync(path.join(dir, names[0]));
+    fs.mkdirSync(path.join(dir, names[0]));
+    fs.writeFileSync(path.join(dir, names[0], "lock"), "x");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(pruneOldBackups(dir, "claude-json-", ".json", 2)).resolves.not.toThrow();
+      const aggregateLogged = errSpy.mock.calls
+        .map((c) => String(c[0]))
+        .some((m) => m.includes("backup sweep") && m.includes("could not be removed"));
+      expect(aggregateLogged).toBe(true);
+      // The two newer-than-failure entries (names[1], names[2]) were removed;
+      // names[0] survives as the directory. names[3] and names[4] are kept (max=2).
+      const remaining = fs.readdirSync(dir).sort();
+      expect(remaining).toContain(names[0]);
+      expect(remaining).toContain(names[3]);
+      expect(remaining).toContain(names[4]);
+      expect(remaining).not.toContain(names[1]);
+      expect(remaining).not.toContain(names[2]);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("pruneOldBackups keeps the MAX_BACKUPS newest and removes the rest", async () => {
-    // Write MAX_BACKUPS + 2 backups with distinct timestamps.
+    // Manually constructed lexicographically-monotonic filenames so
+    // the test doesn't depend on wall-clock sleeps. Exercises the
+    // prune logic against a deterministic set of inputs.
     for (let i = 0; i < MAX_BACKUPS + 2; i++) {
-      await writeBackup(dir, Buffer.from(`v${i}`));
-      await new Promise((r) => setTimeout(r, 1100));
+      const name = `claude-json-2026060${i}-000000-deadbeef.json`;
+      fs.writeFileSync(path.join(dir, name), `v${i}`);
     }
     const removed = await pruneOldBackups(dir);
     expect(removed.length).toBe(2);
     const remaining = await listBackups(dir);
     expect(remaining.length).toBe(MAX_BACKUPS);
-  }, 30_000);
+  });
 
   it("writeBackup with `wx` exclusive-create rejects a pre-existing symlink at the predicted path", async () => {
     // Symlink attack: predict the filename and pre-create a symlink.

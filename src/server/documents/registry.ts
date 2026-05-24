@@ -38,6 +38,13 @@ const openDocs = new Map<string, OpenDoc>();
 /** The active document ID — tools default to this when no documentId is specified. */
 let activeDocId: string | null = null;
 
+// Monotonic activation counter. Every setActiveDocId call advances it, even when
+// the id is unchanged — clients treat an advance as an intentional focus event
+// (e.g. re-opening the already-active doc). Broadcast alongside the active id so
+// clients can distinguish a genuine (re)activation from a stale CRDT re-broadcast
+// of unchanged state, which must not clobber a local (keyboard/click) tab switch.
+let activeDocEpoch = 0;
+
 // Prevent Hocuspocus from evicting Y.Docs that MCP still tracks as open,
 // or the bootstrap channel (CTRL_ROOM) which holds persistent chat history.
 setShouldKeepDocument((name) => openDocs.has(name) || name === CTRL_ROOM);
@@ -68,6 +75,13 @@ export function getActiveDocId(): string | null {
 
 export function setActiveDocId(id: string | null): void {
   activeDocId = id;
+  activeDocEpoch++;
+}
+
+/** Current activation epoch — broadcast in documentMeta so clients can tell a
+ * genuine (re)activation from a redundant re-broadcast. See `activeDocEpoch`. */
+export function getActiveDocEpoch(): number {
+  return activeDocEpoch;
 }
 
 /**

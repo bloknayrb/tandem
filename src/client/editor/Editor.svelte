@@ -19,6 +19,7 @@ import { AnnotationExtension } from "./extensions/annotation";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
+import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
@@ -159,6 +160,17 @@ $effect(() => {
         },
       }),
       AnnotationExtension.configure({ ydoc }),
+      // Registered AFTER AnnotationExtension so its chevron widgets render
+      // above annotation decorations and its node-hide decorations win the
+      // display: none vs annotation-class composition. Decoration ordering
+      // matters here — see issue #650.
+      HeadingCollapseExtension.configure({
+        // Captured-once via untrack: the editor is keyed by activeTab.id in
+        // App.svelte, so currentFilePath is stable for this editor's lifetime.
+        // Passing a reactive $state value here would rebuild the editor on
+        // every toggle. See the readOnly last-value guard at ~line 200.
+        filePath: untrack(() => currentFilePath ?? null),
+      }),
       AuthorshipExtension.configure({ ydoc }),
       AwarenessExtension.configure({ ydoc }),
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
@@ -271,11 +283,49 @@ async function handleEditorClick(e: MouseEvent) {
   }
 
   // --- Annotation click ----------------------------------------------------
-  const annotationTarget = (e.target as HTMLElement).closest("[data-annotation-id]");
-  if (!annotationTarget) return;
-  const annotationId = annotationTarget.getAttribute("data-annotation-id");
-  if (annotationId && onAnnotationClick) {
-    onAnnotationClick(annotationId);
+  // #768 Bug 2: when annotations overlap (e.g. a highlight inside a Claude
+  // comment span), ProseMirror's `Decoration.inline()` nests the wrapper
+  // spans. Nesting order comes from `annotationsMap.forEach()` iteration in
+  // buildDecorations — not user-meaningful. Using `closest()` alone returns
+  // the *innermost* match, so a user's recent highlight could be hidden
+  // under a Claude comment wrapper and clicking would focus the comment.
+  //
+  // Fix: enumerate ALL `[data-annotation-id]` ancestors at the click point
+  // and apply a stable priority tiebreaker:
+  //   highlight (2) > comment (1) > note (0)
+  // Rationale: a highlight is typically the most-recent intentional user
+  // action and the most visually obvious target at the click point; notes
+  // are user-private; comments live between. Ties (two annotations of the
+  // same type at overlapping ranges) resolve to the innermost — `>` rather
+  // than `>=` preserves the first-seen (innermost) winner on equal priority.
+  const TYPE_PRIORITY: Record<string, number> = {
+    highlight: 2,
+    comment: 1,
+    note: 0,
+  };
+  let cursor: HTMLElement | null = (e.target as HTMLElement).closest(
+    "[data-annotation-id]",
+  ) as HTMLElement | null;
+  let bestId: string | null = null;
+  // Start below the lowest possible priority (-1 for unknown/missing types) so
+  // an id-bearing element with an unknown `data-annotation-type` (priority -1)
+  // still wins over "no match", preserving the innermost-fallback behavior.
+  let bestPriority = Number.NEGATIVE_INFINITY;
+  while (cursor) {
+    const id = cursor.getAttribute("data-annotation-id");
+    if (id) {
+      const type = cursor.getAttribute("data-annotation-type") ?? "";
+      const priority = TYPE_PRIORITY[type] ?? -1;
+      if (priority > bestPriority) {
+        bestPriority = priority;
+        bestId = id;
+      }
+    }
+    const parent = cursor.parentElement;
+    cursor = parent ? (parent.closest("[data-annotation-id]") as HTMLElement | null) : null;
+  }
+  if (bestId && onAnnotationClick) {
+    onAnnotationClick(bestId);
   }
 }
 </script>

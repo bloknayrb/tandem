@@ -78,6 +78,9 @@ const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT)
 
 let httpServer: Server | null = null;
 let isShuttingDown = false;
+let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
+let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
+  process.env.TANDEM_DISABLE_LAUNCHER === "1" ? "disabled-by-env" : "stdio-mode";
 
 // Swallow known Hocuspocus/ws protocol errors but crash on genuine bugs.
 function handleFatalError(label: string, value: unknown): void {
@@ -126,6 +129,18 @@ async function shutdown(signal: string) {
   } catch (err) {
     console.error("[Tandem] MCP session close on shutdown failed:", err);
   }
+  // Stop the launcher BEFORE we tear down everything else — supervisor.stop()
+  // sends SIGTERM to the reaper which gracefully reaps Claude. If we skip this
+  // and just process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG
+  // (Linux) / kqueue (macOS) still kills Claude — but cleanly going through
+  // SIGTERM gives Claude a chance to flush.
+  if (launcherSupervisor) {
+    try {
+      await launcherSupervisor.stop();
+    } catch (err) {
+      console.error("[Tandem] Launcher stop on shutdown failed:", err);
+    }
+  }
   // Release the durable-annotation store lockfile last so a crash between
   // session save and lock release still leaves the lockfile reclaimable on
   // next boot (the reclaim path checks liveness via PID).
@@ -151,8 +166,11 @@ async function main() {
   // annoying, not a security regression).
   try {
     const { sweepBackupsOnStartup } = await import("./integrations/backup.js");
+    const { sweepBrokenIntegrationsBackupsOnStartup } = await import("./integrations/storage.js");
     const { resolveAppDataDir } = await import("./platform.js");
-    await sweepBackupsOnStartup(resolveAppDataDir());
+    const appDataDir = resolveAppDataDir();
+    await sweepBackupsOnStartup(appDataDir);
+    await sweepBrokenIntegrationsBackupsOnStartup(appDataDir);
   } catch (err) {
     console.error(
       `[Tandem] Warning: backup sweep failed: ${err instanceof Error ? err.message : err}`,
@@ -412,7 +430,10 @@ async function main() {
     }
 
     const [srv] = await Promise.all([
-      startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP),
+      startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP, {
+        getSupervisor: () => launcherSupervisor,
+        unavailableReason: () => launcherUnavailableReason,
+      }),
       startHocuspocus(wsPort).then(() => {
         console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
       }),
@@ -428,6 +449,31 @@ async function main() {
     console.error("");
     console.error("  Open your AI client (Claude by default) and ask it to review a document.");
     console.error("");
+
+    // Auto-launcher: spawn Claude Code as a managed child via tandem-reaper.
+    // HTTP mode only. Gated by integrations.json having a claude-code entry
+    // with apply !== "skip". Kill switch: TANDEM_DISABLE_LAUNCHER=1 for
+    // debugging the server in isolation. PR #477 PR-4.
+    if (process.env.TANDEM_DISABLE_LAUNCHER !== "1") {
+      try {
+        const { createSupervisor } = await import("./launcher/supervisor.js");
+        const { resolveAppDataDir } = await import("./platform.js");
+        launcherSupervisor = createSupervisor({
+          integrationsBase: resolveAppDataDir(),
+        });
+        // Refresh the bundled skill on-disk if the version stamp moved
+        // forward — existing users pick up skill updates without re-running
+        // `tandem setup`. Best-effort, non-blocking.
+        const { refreshSkillIfStale } = await import("./integrations/apply.js");
+        void refreshSkillIfStale();
+        await launcherSupervisor.start();
+      } catch (err) {
+        launcherUnavailableReason = "spawn-failed";
+        console.error(
+          `[Tandem] Launcher supervisor failed to start (non-fatal): ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
