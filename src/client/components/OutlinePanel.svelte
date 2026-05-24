@@ -75,13 +75,21 @@ $effect(() => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return;
 
+  const scrollEl = (ed.view.dom.closest(".editor-scroll") ??
+    ed.view.dom.parentElement) as HTMLElement | null;
+
   function updateScrollSpy() {
     if (!ed || ed.isDestroyed || headings.length === 0) {
       scrollSpyIndex = -1;
       return;
     }
-    const editorRect = ed.view.dom.getBoundingClientRect();
-    const threshold = editorRect.top + 48;
+    // Threshold is measured from the SCROLL CONTAINER's viewport top, not the
+    // ProseMirror element's. The ProseMirror DIV scrolls with content inside
+    // .editor-scroll, so its getBoundingClientRect().top goes negative as the
+    // user scrolls — using it makes the threshold drift below every heading
+    // except the topmost, freezing scrollSpyIndex at 0.
+    const referenceTop = scrollEl?.getBoundingClientRect().top ?? 0;
+    const threshold = referenceTop + 48;
     let activeIdx = -1;
     for (let i = 0; i < headings.length; i++) {
       try {
@@ -96,7 +104,6 @@ $effect(() => {
 
   updateScrollSpy();
 
-  const scrollEl = ed.view.dom.closest(".editor-scroll") ?? ed.view.dom.parentElement;
   scrollEl?.addEventListener("scroll", updateScrollSpy);
   return () => scrollEl?.removeEventListener("scroll", updateScrollSpy);
 });
