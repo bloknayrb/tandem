@@ -63,13 +63,18 @@ export function toggleHighlight(
       timestamp: Date.now(),
       color,
     } as Annotation;
-    map.set(id, annotation);
+    // Critical Rule #2 / ADR-031: all Y.Doc writes must be origin-tagged via a
+    // wrapper helper (raw `doc.transact` is blocked by the pre-commit hook).
+    // This is a browser-initiated user edit, so `withBrowser` is the correct
+    // tag. (The origin stays client-side — it does not cross the Hocuspocus
+    // wire; the server sees a null origin for browser-origin writes.)
+    withBrowser(ydoc, () => map.set(id, annotation));
     return "added";
   }
 
   if (matchColor === color) {
     // Same color — toggle off.
-    map.delete(matchKey);
+    withBrowser(ydoc, () => map.delete(matchKey as string));
     return "removed";
   }
 
