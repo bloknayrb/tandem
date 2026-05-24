@@ -63,13 +63,15 @@ export function toggleHighlight(
       timestamp: Date.now(),
       color,
     } as Annotation;
-    map.set(id, annotation);
+    // ADR-031: browser-initiated user edit — origin-tag so observers route correctly
+    // (channel emits, durable-sync persists, tombstones record).
+    withBrowser(ydoc, () => map.set(id, annotation));
     return "added";
   }
 
   if (matchColor === color) {
     // Same color — toggle off.
-    map.delete(matchKey);
+    withBrowser(ydoc, () => map.delete(matchKey as string));
     return "removed";
   }
 

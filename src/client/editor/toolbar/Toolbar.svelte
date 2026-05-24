@@ -7,6 +7,7 @@ import {
   HIGHLIGHT_COLORS,
   Y_MAP_ANNOTATIONS,
 } from "../../../shared/constants";
+import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
@@ -312,7 +313,8 @@ function createAnnotation(
     ...(extras?.color ? { color: extras.color } : {}),
   } as Annotation;
 
-  ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation);
+  // ADR-031: browser-initiated user edit — must be origin-tagged.
+  withBrowser(ydoc, () => ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation));
   capturedRange = null;
 }
 
@@ -334,6 +336,21 @@ function handleHighlight(color: HighlightColor) {
 
   toggleHighlight(ydoc, { from: flatFrom, to: flatTo }, color);
   capturedRange = null;
+
+  // #768 Bug 1: clear the browser's native selection overlay so the newly
+  // applied highlight color is immediately visible. Without this, the blue
+  // selection rectangle paints on top of the highlight span and the user
+  // gets no feedback that the highlight was applied until they click away.
+  // The editor still owns logical selection state — we only clear the
+  // visual overlay (`window.getSelection().removeAllRanges()`), not Tiptap's
+  // selection.
+  try {
+    window.getSelection()?.removeAllRanges();
+  } catch {
+    // Some browsers (e.g. embedded WebViews with permissions stripped) throw
+    // on selection API; failing closed is fine — only the visual feedback
+    // is lost.
+  }
 }
 
 function onKeyActivate(handler: (e: MouseEvent) => void) {
