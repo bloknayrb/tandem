@@ -68,7 +68,7 @@ onDestroy(clearUndoTimer);
           e.stopPropagation();
           onAccept!(annotationId);
         }}
-        style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-success-bg); color: var(--tandem-success-fg-strong); cursor: pointer;"
+        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-success-bg); color: var(--tandem-success-fg-strong); cursor: pointer;"
       >
         Accept
       </button>
@@ -80,7 +80,7 @@ onDestroy(clearUndoTimer);
           e.stopPropagation();
           onDismiss!(annotationId);
         }}
-        style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); cursor: pointer;"
+        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); cursor: pointer;"
       >
         Reject
       </button>
@@ -95,7 +95,7 @@ onDestroy(clearUndoTimer);
           e.stopPropagation();
           onRemove!(annotationId);
         }}
-        style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
+        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
       >
         Archive
       </button>
@@ -107,7 +107,7 @@ onDestroy(clearUndoTimer);
           e.stopPropagation();
           onSendToClaude!(annotationId);
         }}
-        style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-1); background: var(--tandem-accent-bg); color: var(--tandem-accent); cursor: pointer;"
+        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-pill); background: var(--tandem-accent-bg); color: var(--tandem-accent); cursor: pointer;"
       >
         Send to Claude
       </button>
@@ -120,7 +120,7 @@ onDestroy(clearUndoTimer);
       e.stopPropagation();
       onRemove!(annotationId);
     }}
-    style="margin-top: 4px; padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
+    style="margin-top: 4px; padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
   >
     Remove
   </button>
