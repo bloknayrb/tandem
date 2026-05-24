@@ -20,32 +20,45 @@ import {
  *   as a side effect of collapsing the PM selection.
  *
  * Bug 2 — Clicking highlighted text focuses the wrong annotation.
- *   When a highlight overlaps a Claude comment, ProseMirror nests the
- *   `Decoration.inline()` spans. The previous `closest()` lookup returned
- *   the *innermost* `[data-annotation-id]` ancestor, which depended on
- *   `annotationsMap.forEach()` iteration order — not user intent. Fix:
- *   enumerate every ancestor with `[data-annotation-id]` and pick the
- *   highest priority via `highlight > comment > note`.
+ *   When a user highlight overlaps a Claude comment on the SAME range,
+ *   ProseMirror coalesces the two `Decoration.inline()` decorations into a
+ *   SINGLE DOM `<span>` (it does NOT nest them). The span keeps one
+ *   `data-annotation-id` / `data-annotation-type` — whichever decoration was
+ *   applied last in `buildDecorations`'s `annotationsMap.forEach()` walk wins
+ *   the single-valued attributes, but it carries BOTH the highlight and the
+ *   comment CSS classes.
  *
- *   buildDecorations iterates `annotationsMap.forEach()` in Y.Map insertion
- *   order, and ProseMirror renders the earlier-inserted overlapping inline
- *   decoration as the OUTER span. The two Bug-2 cases below cover BOTH nesting
- *   orders: comment-outer/highlight-inner (where `closest()` alone already
- *   returns the highlight) and highlight-outer/comment-inner (where `closest()`
- *   returns the comment and the priority walk MUST override it). A third case
- *   covers the `?? -1` / `NEGATIVE_INFINITY`-seed fallback for an id-bearing
- *   element whose `data-annotation-type` is unknown to the priority table.
+ *   The original symptom: clicking the highlight reported the click against
+ *   the highlight (the click handler's priority walk picked it correctly), but
+ *   the focus immediately bounced back to the Claude comment. Root cause was
+ *   in `useAnnotationReview`'s auto-advance `$effect`: it fell back to the
+ *   bulk-review target whenever the active id was absent from
+ *   `getReviewTargets()`. User highlights (`author === "user"`) are NOT review
+ *   targets, so a freshly-clicked highlight was clobbered straight back to the
+ *   overlapping comment. Fix: the effect now only falls back when the active
+ *   annotation no longer EXISTS as a live pending annotation (deleted /
+ *   accepted / dismissed), not merely when it is a non-review-target.
+ *
+ *   The two Bug-2 cases below cover both directions of the same invariant:
+ *   (a) clicking an overlapping highlight focuses it and the focus STICKS;
+ *   (b) focusing a highlight, then having a Claude comment land on the same
+ *   range via MCP, must NOT steal focus away from the user's highlight.
  *
  * The tests mirror `toolbar-redesign.spec.ts` — fresh fixture dir per test,
- * MCP control plane for state setup, `tandem_getAnnotations` as the
- * authoritative server-side snapshot for negative assertions.
+ * MCP control plane for state setup, the side-panel annotation card's
+ * `aria-current="true"` (set by `AnnotationCard` when `isReviewTarget`, which
+ * SidePanel binds to `activeAnnotationId === ann.id`) as the authoritative
+ * "this annotation is focused" signal. We deliberately do NOT assert on the
+ * editor's `.tandem-annotation-active` class: that class is applied
+ * imperatively to ProseMirror-owned decoration spans and is wiped on the next
+ * decoration rebuild, so it is not a reliable focus oracle.
  */
 
 let mcp: McpTestClient;
 let tmpDir: string;
 
-// "# Test Document" — heading prefix "# " (2 chars), so "Test" spans 2..6
-// in flat-text coordinates. Used for Bug 2's Claude comment overlap test.
+// "# Test Document" — heading prefix "# " (2 chars), so "Test Document" spans
+// 2..15 in flat-text coordinates. Used for Bug 2's Claude comment overlap test.
 const TITLE_FROM = 2;
 const TITLE_TO = 15;
 const TITLE_TEXT = "Test Document";
@@ -101,14 +114,14 @@ test("#768 Bug 1: highlight applies without lingering browser selection overlay"
   expect(selectionTextLen).toBe(0);
 });
 
-test("#768 Bug 2 (comment outer): clicking a highlight nested inside an overlapping Claude comment focuses the highlight", async ({
+test("#768 Bug 2 (click): clicking a highlight overlapping a Claude comment focuses the highlight and the focus sticks", async ({
   page,
 }) => {
-  // Open with a Claude comment over the title FIRST so the comment span is
-  // the *outer* wrapper when the user-created highlight nests inside it.
-  // In this nesting, clicking the highlight makes `closest()` already return
-  // the highlight — so this case alone does NOT exercise the priority walk
-  // overriding `closest()`. The reverse-nesting case below covers that.
+  // Open with a Claude comment over the title FIRST, then add the user
+  // highlight over the SAME range. ProseMirror coalesces the two inline
+  // decorations into ONE span; because the highlight is inserted into the
+  // annotations Y.Map SECOND, it wins the single-valued attributes, so the
+  // merged span reports `data-annotation-type="highlight"`.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
@@ -123,7 +136,7 @@ test("#768 Bug 2 (comment outer): clicking a highlight nested inside an overlapp
   const editor = page.locator(".tiptap");
   await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
-  // Wait for the Claude comment decoration to mount.
+  // Wait for the Claude comment decoration to mount, then capture its id.
   const commentSpan = page.locator("[data-annotation-id][data-annotation-type='comment']");
   await expect(commentSpan.first()).toBeVisible({ timeout: 10_000 });
   const commentId = await commentSpan.first().getAttribute("data-annotation-id");
@@ -131,7 +144,7 @@ test("#768 Bug 2 (comment outer): clicking a highlight nested inside an overlapp
 
   // Select the title text in the H1 and apply a yellow highlight via the
   // selection popup. The new highlight covers the same range as the Claude
-  // comment, producing nested decoration spans.
+  // comment, so the two decorations coalesce into one span.
   const heading = editor.locator("h1").first();
   await heading.selectText();
 
@@ -139,52 +152,43 @@ test("#768 Bug 2 (comment outer): clicking a highlight nested inside an overlapp
   await expect(yellowSwatch).toBeVisible({ timeout: 5_000 });
   await yellowSwatch.click();
 
-  // Both annotations now exist.
+  // Both annotations now exist as cards.
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
     timeout: 10_000,
   });
 
-  // Verify nesting: there are two distinct `[data-annotation-id]` spans
-  // overlapping the title. The exact nesting order depends on Y.Map
-  // iteration, but both should be findable.
+  // The merged span reports the highlight's id/type.
   const highlightSpan = page.locator("[data-annotation-id][data-annotation-type='highlight']");
   await expect(highlightSpan.first()).toBeVisible({ timeout: 5_000 });
   const highlightId = await highlightSpan.first().getAttribute("data-annotation-id");
   expect(highlightId).not.toBeNull();
   expect(highlightId).not.toBe(commentId);
 
-  // Click on the highlighted (and commented) text — the highlight should win
-  // the tiebreaker regardless of which span happens to be innermost.
+  // Click the highlighted (and commented) text.
   await highlightSpan.first().click();
 
-  // The active annotation card should be the highlight, not the comment.
-  // `tandem-annotation-active` is added by App.svelte's $effect on the
-  // matching `[data-annotation-id]` span(s); the side-panel card carries
-  // `data-testid="annotation-card-{id}"`.
-  const activeCard = page.locator(`[data-testid='annotation-card-${highlightId}']`);
-  await expect(activeCard).toBeVisible({ timeout: 5_000 });
+  // The highlight card must become — and STAY — the focused annotation. Before
+  // the #768 fix, the review effect bounced focus back to the overlapping
+  // comment because the highlight is not a review target. `aria-current="true"`
+  // is set by AnnotationCard whenever the card is the active/review target.
+  const highlightCard = page.locator(`[data-testid='annotation-card-${highlightId}']`);
+  await expect(highlightCard).toHaveAttribute("aria-current", "true", { timeout: 5_000 });
 
-  // The comment card should not be the focused one. We assert this by
-  // checking that the focused-card CSS state lives on the highlight, not
-  // the comment. Implementation detail: SidePanel.svelte scrolls the
-  // focused card into view; both cards render in DOM, so we verify by
-  // looking at which `[data-annotation-id]` span got `tandem-annotation-active`.
-  const activeSpans = page.locator(".tandem-annotation-active");
-  await expect(activeSpans.first()).toBeVisible({ timeout: 3_000 });
-  const activeAnnotationId = await activeSpans.first().getAttribute("data-annotation-id");
-  expect(activeAnnotationId).toBe(highlightId);
+  // The comment card must NOT be the focused one.
+  const commentCard = page.locator(`[data-testid='annotation-card-${commentId}']`);
+  await expect(commentCard).not.toHaveAttribute("aria-current", "true");
 });
 
-test("#768 Bug 2 (highlight outer): clicking a comment nested inside an overlapping highlight still focuses the highlight", async ({
+test("#768 Bug 2 (no steal): a new Claude comment on the same range must not steal focus from a clicked highlight", async ({
   page,
 }) => {
-  // This is the nesting order the tiebreaker actually exists to fix. The
-  // user-created highlight is inserted into the annotations Y.Map FIRST, so
-  // buildDecorations renders it as the *outer* span; the Claude comment added
-  // SECOND nests inside as the innermost span. Clicking the comment text makes
-  // `closest("[data-annotation-id]")` return the COMMENT — so without the
-  // `highlight > comment` priority walk, the comment would win and the wrong
-  // annotation would focus. The walk must climb to the outer highlight.
+  // The reverse direction: focus a user highlight first, then introduce a NEW
+  // overlapping Claude comment via MCP. The comment is a review target; the
+  // highlight is not. The auto-advance review effect re-runs whenever the
+  // annotation set changes — it must NOT clobber the user's focused highlight
+  // just because a new review target appeared. This is the exact `$effect`
+  // regression the #768 fix addresses (full-live-set membership check instead
+  // of review-targets membership check).
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
@@ -193,8 +197,7 @@ test("#768 Bug 2 (highlight outer): clicking a comment nested inside an overlapp
   const editor = page.locator(".tiptap");
   await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
-  // 1) Create the highlight FIRST via the selection popup (earliest insertion
-  //    → outer span).
+  // 1) Create and focus the highlight.
   const heading = editor.locator("h1").first();
   await heading.selectText();
   const yellowSwatch = page.locator("[data-testid='popup-highlight-yellow']");
@@ -206,8 +209,12 @@ test("#768 Bug 2 (highlight outer): clicking a comment nested inside an overlapp
   const highlightId = await highlightSpan.first().getAttribute("data-annotation-id");
   expect(highlightId).not.toBeNull();
 
-  // 2) Add the Claude comment over the SAME range SECOND (later insertion →
-  //    inner/nested span).
+  await highlightSpan.first().click();
+  const highlightCard = page.locator(`[data-testid='annotation-card-${highlightId}']`);
+  await expect(highlightCard).toHaveAttribute("aria-current", "true", { timeout: 5_000 });
+
+  // 2) Add a Claude comment over the SAME range via MCP — a brand-new review
+  //    target appears in the annotation set.
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
     to: TITLE_TO,
@@ -215,87 +222,18 @@ test("#768 Bug 2 (highlight outer): clicking a comment nested inside an overlapp
     textSnapshot: TITLE_TEXT,
   });
 
+  // Both annotations now exist as cards.
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
+    timeout: 10_000,
+  });
   const commentSpan = page.locator("[data-annotation-id][data-annotation-type='comment']");
   await expect(commentSpan.first()).toBeVisible({ timeout: 10_000 });
   const commentId = await commentSpan.first().getAttribute("data-annotation-id");
   expect(commentId).not.toBeNull();
   expect(commentId).not.toBe(highlightId);
 
-  // Both annotations now exist.
-  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
-    timeout: 10_000,
-  });
-
-  // Click the INNER comment span — `closest()` resolves to the comment, so the
-  // priority walk must override it and focus the outer highlight instead.
-  await commentSpan.first().click();
-
-  // The focused annotation must be the highlight, proving the `>`-priority walk
-  // overrode `closest()`'s innermost (comment) result.
-  const activeSpans = page.locator(".tandem-annotation-active");
-  await expect(activeSpans.first()).toBeVisible({ timeout: 3_000 });
-  const activeAnnotationId = await activeSpans.first().getAttribute("data-annotation-id");
-  expect(activeAnnotationId).toBe(highlightId);
-
-  const activeCard = page.locator(`[data-testid='annotation-card-${highlightId}']`);
-  await expect(activeCard).toBeVisible({ timeout: 5_000 });
-});
-
-test("#768 Bug 2 (unknown type): clicking an id-bearing span with an unknown annotation type still focuses it", async ({
-  page,
-}) => {
-  // The priority walk seeds `bestPriority` at `Number.NEGATIVE_INFINITY` and
-  // maps unknown/missing `data-annotation-type` values to `-1` via `?? -1`.
-  // This guarantees an id-bearing element whose type the priority table does
-  // not recognise (e.g. a future annotation type) still beats the
-  // "no match" seed and focuses, preserving the innermost-fallback behavior.
-  // We exercise that branch by stripping `data-annotation-type` off a real
-  // comment span (no Y.Doc transaction fires, so buildDecorations does not
-  // rebuild the decoration before the click), then clicking it.
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await mcp.callTool("tandem_comment", {
-    from: TITLE_FROM,
-    to: TITLE_TO,
-    text: "Claude comment on title",
-    textSnapshot: TITLE_TEXT,
-  });
-
-  await page.goto("/");
-  await switchToAnnotationsTab(page);
-
-  const editor = page.locator(".tiptap");
-  await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
-
-  const commentSpan = page.locator("[data-annotation-id][data-annotation-type='comment']");
-  await expect(commentSpan.first()).toBeVisible({ timeout: 10_000 });
-  const commentId = await commentSpan.first().getAttribute("data-annotation-id");
-  expect(commentId).not.toBeNull();
-
-  // Strip the type attribute so the priority table no longer recognises it.
-  // The element keeps its `data-annotation-id`, exercising the `?? -1` /
-  // NEGATIVE_INFINITY-seed fallback in the click handler's priority walk.
-  await page.evaluate((id) => {
-    document
-      .querySelectorAll(`[data-annotation-id="${id}"]`)
-      .forEach((el) => el.removeAttribute("data-annotation-type"));
-  }, commentId as string);
-
-  // The span no longer matches the typed locator, but still bears the id.
-  const untypedSpan = page.locator(
-    `[data-annotation-id="${commentId}"]:not([data-annotation-type])`,
-  );
-  await expect(untypedSpan.first()).toBeVisible({ timeout: 3_000 });
-
-  await untypedSpan.first().click();
-
-  // Even with an unknown type, the id-bearing span wins over "no match" and
-  // focuses — `tandem-annotation-active` lands on the matching span and the
-  // side-panel card is visible.
-  const activeSpans = page.locator(".tandem-annotation-active");
-  await expect(activeSpans.first()).toBeVisible({ timeout: 3_000 });
-  const activeAnnotationId = await activeSpans.first().getAttribute("data-annotation-id");
-  expect(activeAnnotationId).toBe(commentId);
-
-  const activeCard = page.locator(`[data-testid='annotation-card-${commentId}']`);
-  await expect(activeCard).toBeVisible({ timeout: 5_000 });
+  // The user's highlight must remain focused; the new comment must not steal it.
+  await expect(highlightCard).toHaveAttribute("aria-current", "true");
+  const commentCard = page.locator(`[data-testid='annotation-card-${commentId}']`);
+  await expect(commentCard).not.toHaveAttribute("aria-current", "true");
 });
