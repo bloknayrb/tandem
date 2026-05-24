@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
+import { SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
 
 vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
   isTauriRuntime: vi.fn(() => false),
@@ -205,6 +206,32 @@ describe("useTauriFileDrop", () => {
       dedupKey: "tauri-drop-unsupported",
     });
     expect(push.mock.calls[0][0].message).toContain(".md");
+  });
+
+  it("unsupported-drop toast lists every supported extension as a delimited token", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const push = vi.fn();
+    const { initTauriFileDrop, _resetForTests } = await loadFreshHook();
+    _resetForTests();
+    initTauriFileDrop(push);
+    await flushMicrotasks();
+    registered!({ payload: { type: "drop", paths: ["/x.exe"] } });
+
+    // Pin the toast we're reading before asserting on its content, so
+    // a future refactor that fires a different toast first can't shift
+    // the target silently.
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0][0].dedupKey).toBe("tauri-drop-unsupported");
+
+    const msg = push.mock.calls[0][0].message as string;
+    for (const ext of SUPPORTED_EXTENSIONS) {
+      // Delimited-token match: ext must NOT be followed by another letter.
+      // Rejects substring-only matches like `.htm` inside `.html` (the very
+      // hazard that hid the original bug 8e73059 fixed) or `.md` inside a
+      // future `.markdown`.
+      const escaped = ext.replace(/\./g, "\\.");
+      expect(msg).toMatch(new RegExp(`${escaped}(?![a-zA-Z])`));
+    }
   });
 
   it("surfaces openServerPath failure as an error toast", async () => {

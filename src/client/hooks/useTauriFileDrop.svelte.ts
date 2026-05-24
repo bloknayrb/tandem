@@ -44,6 +44,16 @@ function extensionAllowed(path: string): boolean {
   return SUPPORTED_EXTENSIONS.has(basename.slice(dot).toLowerCase());
 }
 
+// Derived once at module load so the unsupported-drop toast lists exactly
+// what SUPPORTED_EXTENSIONS contains — no hand-maintained duplicate that
+// can drift (the original literal omitted .htm; caught in 8e73059).
+const SUPPORTED_EXTENSION_LIST = (() => {
+  const exts = Array.from(SUPPORTED_EXTENSIONS).sort();
+  if (exts.length <= 1) return exts[0] ?? "";
+  if (exts.length === 2) return `${exts[0]} or ${exts[1]}`;
+  return `${exts.slice(0, -1).join(", ")}, or ${exts.at(-1)}`;
+})();
+
 function toast(message: string, severity: TandemNotification["severity"], dedupKey: string): void {
   _notify({
     id: `tauri-drop-${dedupKey}-${Date.now()}`,
@@ -92,7 +102,7 @@ export function initTauriFileDrop(push: (n: TandemNotification) => void): void {
                 }
               }
               toast(
-                "Tandem can only open .md, .txt, .html, .htm, or .docx files",
+                `Tandem can only open ${SUPPORTED_EXTENSION_LIST} files`,
                 "warning",
                 "tauri-drop-unsupported",
               );
