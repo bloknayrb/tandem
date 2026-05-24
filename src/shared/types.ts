@@ -254,7 +254,16 @@ export interface ClaudeAwareness {
   working?: {
     tool: string;
     annotationId?: string;
+    /** Display-only wall-clock start time (ms). NOT an ownership key — see `token`. */
     startedAt: number;
+    /**
+     * Monotonic, collision-free ownership token (#823). Two same-doc tool calls
+     * in the same millisecond would collide on `startedAt`; the clear path keys
+     * identity on this counter instead so finishing one handler never wipes
+     * another's still-active marker. Optional for back-compat with snapshots
+     * written before #823.
+     */
+    token?: number;
   } | null;
 }
 

@@ -44,7 +44,10 @@ interface ActiveEntry {
   tool: string;
   annotationId?: string;
   docName: string;
+  /** Display-only wall-clock start (ms). */
   startedAt: number;
+  /** Monotonic ownership token — the identity key for clear-by-owner. */
+  token: number;
 }
 
 /**
@@ -52,6 +55,14 @@ interface ActiveEntry {
  * handlers (different tool calls in flight at once) don't stomp on each other.
  */
 const active = new Map<symbol, ActiveEntry>();
+
+/**
+ * Module-level monotonic counter (#823). Used as the ownership key for the
+ * `working` marker instead of `startedAt` (ms resolution), which collides when
+ * two same-doc tool calls start in the same millisecond — one would clear the
+ * other's still-active marker.
+ */
+let presenceTokenSeq = 0;
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -68,7 +79,7 @@ function ensureSweep(): void {
     for (const handle of stale) {
       const entry = active.get(handle);
       if (entry) {
-        clearPresenceOn(entry.docName, entry.startedAt);
+        clearPresenceOn(entry.docName, entry.token);
         active.delete(handle);
       }
     }
@@ -121,22 +132,24 @@ function setPresenceOn(docName: string, marker: NonNullable<ClaudeAwareness["wor
 /**
  * Clear the presence marker on a specific document (no-op if absent).
  *
- * `expectedHandle` carries the same startedAt that setPresenceOn wrote; if the
- * current `working` entry has a different startedAt, another concurrent
- * handler owns the marker now and we MUST NOT clear it (overlapping tool
- * calls — finishing one shouldn't wipe the other's indicator).
+ * `expectedToken` is the monotonic ownership token that setPresenceOn wrote; if
+ * the current `working` entry has a different token, another concurrent handler
+ * owns the marker now and we MUST NOT clear it (overlapping tool calls —
+ * finishing one shouldn't wipe the other's indicator). A monotonic counter is
+ * collision-free even when two handlers start in the same millisecond (#823);
+ * `startedAt` was not (ms resolution).
  *
  * The prev read happens INSIDE the withMcp transaction to avoid clobbering
  * an unrelated awareness write that lands between the read and the
  * transact (e.g. a concurrent `tandem_status` update).
  */
-function clearPresenceOn(docName: string, expectedStartedAt: number): void {
+function clearPresenceOn(docName: string, expectedToken: number): void {
   const doc = getOrCreateDocument(docName);
   const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
   withMcp(doc, () => {
     const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
     if (!prev || prev.working == null) return;
-    if (prev.working.startedAt !== expectedStartedAt) return;
+    if (prev.working.token !== expectedToken) return;
     awarenessMap.set(Y_MAP_CLAUDE, withWorking(prev, null));
   });
 }
@@ -214,17 +227,20 @@ export async function withTypingPresence<T>(
 
   const handle = Symbol("typing-presence");
   const startedAt = Date.now();
+  const token = ++presenceTokenSeq;
   try {
     setPresenceOn(docName, {
       tool: opts.tool,
       ...(opts.annotationId ? { annotationId: opts.annotationId } : {}),
       startedAt,
+      token,
     });
     active.set(handle, {
       tool: opts.tool,
       ...(opts.annotationId ? { annotationId: opts.annotationId } : {}),
       docName,
       startedAt,
+      token,
     });
     ensureSweep();
   } catch (err) {
@@ -236,9 +252,9 @@ export async function withTypingPresence<T>(
     return await handler();
   } finally {
     try {
-      // Pass startedAt so an overlapping concurrent handler that took over
-      // the marker (its startedAt differs from ours) is not stomped.
-      clearPresenceOn(docName, startedAt);
+      // Pass our monotonic token so an overlapping concurrent handler that
+      // took over the marker (a different token) is not stomped.
+      clearPresenceOn(docName, token);
     } catch (err) {
       console.error("[Tandem] withTypingPresence: failed to clear presence:", err);
     }

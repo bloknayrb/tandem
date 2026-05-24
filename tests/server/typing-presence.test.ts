@@ -143,34 +143,91 @@ describe("withTypingPresence", () => {
   it("overlapping handlers on the same doc: completion of one does not stomp the other's marker", async () => {
     // Outer handler holds the marker for the full window; inner handler runs
     // and completes inside. After inner's finally{}, the awareness map must
-    // STILL show the outer handler's marker (its startedAt won the take-over).
+    // reflect the documented single-slot behavior — the inner's clear matched
+    // its OWN token, so a later outer (different token) would not be stomped.
+    // NOTE: this protects against the regression where clearPresenceOn
+    // unconditionally cleared whatever working entry it found. No timer needed:
+    // ownership is keyed on a monotonic token (#823), not wall-clock time.
     let observedMidOuterPostInner: NonNullable<ClaudeAwareness["working"]> | null = null;
     await withTypingPresence({ tool: "tandem_comment", documentId: TEST_DOC }, async () => {
-      const outerStartedAt = readWorking(doc)?.startedAt;
-      // Run an inner wrapped handler — its finally{} clears its OWN entry
-      // (matched by startedAt), and since the outer marker was overwritten,
-      // the inner's clear-by-startedAt mismatch should be a no-op.
-      // NOTE: this protects against the regression where clearPresenceOn
-      // unconditionally cleared whatever working entry it found.
-      await new Promise((r) => setTimeout(r, 1)); // ensure distinct Date.now()
+      const outerToken = readWorking(doc)?.token;
       await withTypingPresence({ tool: "tandem_edit", documentId: TEST_DOC }, async () => {
         const inner = readWorking(doc);
         expect(inner?.tool).toBe("tandem_edit");
-        expect(inner?.startedAt).not.toBe(outerStartedAt);
+        // Distinct ownership token even without any time gap.
+        expect(inner?.token).not.toBe(outerToken);
       });
-      // Inner cleared its own marker; the awareness map now reflects the
-      // last write (the inner's set). Outer's marker is gone — but that's
-      // the inherent limit of the single-slot design. Document the actual
-      // behavior here so the regression-on-stomping test below catches the
-      // bug it's meant to.
       observedMidOuterPostInner = readWorking(doc);
     });
     // Observable behavior: after the nested overlap, mid-outer post-inner is
-    // null (inner cleared the slot it had taken). The match-by-startedAt
-    // guard prevents inner-after-outer-finished from clearing a *later* outer.
+    // null (inner cleared the slot it had taken). The match-by-token guard
+    // prevents inner-after-outer-finished from clearing a *later* outer.
     expect(observedMidOuterPostInner).toBeNull();
     // After outermost finishes, awareness is fully clear.
     expect(readWorking(doc)).toBeNull();
+  });
+
+  it("#823: same-millisecond starts get distinct ownership tokens; clearing one leaves the other", async () => {
+    // Two overlapping handlers whose `setPresenceOn` calls happen in the same
+    // event-loop tick (so `Date.now()` collides) must NOT collide on ownership.
+    // Earlier the marker was keyed on `startedAt` (ms resolution): clearing the
+    // first wiped the second's still-active marker. With the monotonic token,
+    // clearing the first is a no-op because the live marker carries the
+    // second's token.
+    //
+    // We freeze Date.now() so both starts share an identical `startedAt`, then
+    // drive the lifecycle with hand-controlled promise latches (no real timers,
+    // so the same-ms collision is guaranteed, not racy).
+    const realNow = Date.now;
+    const FROZEN = 1_700_000_000_000;
+    Date.now = () => FROZEN;
+    try {
+      let releaseFirst!: () => void;
+      let releaseSecond!: () => void;
+      const firstGate = new Promise<void>((r) => {
+        releaseFirst = r;
+      });
+      const secondGate = new Promise<void>((r) => {
+        releaseSecond = r;
+      });
+
+      // Start both handlers. setPresenceOn runs synchronously on entry, so by
+      // the time withTypingPresence yields at the first await, the marker is
+      // already written. Both share FROZEN as startedAt.
+      const first = withTypingPresence({ tool: "tandem_comment", documentId: TEST_DOC }, () =>
+        firstGate.then(() => "first"),
+      );
+      const second = withTypingPresence({ tool: "tandem_edit", documentId: TEST_DOC }, () =>
+        secondGate.then(() => "second"),
+      );
+
+      // Yield so both synchronous setPresenceOn writes have landed.
+      await Promise.resolve();
+
+      const live = readWorking(doc);
+      // The last set wins the single slot — that's the second handler.
+      expect(live?.startedAt).toBe(FROZEN);
+      expect(live?.tool).toBe("tandem_edit");
+      const secondToken = live?.token;
+
+      // Finish the FIRST handler. Its clear is keyed on the first token, which
+      // does NOT match the live (second) marker — so it must be a no-op. Before
+      // #823 this cleared the second's marker (same startedAt collision).
+      releaseFirst();
+      await first;
+
+      const afterFirstCleared = readWorking(doc);
+      expect(afterFirstCleared).not.toBeNull();
+      expect(afterFirstCleared?.tool).toBe("tandem_edit");
+      expect(afterFirstCleared?.token).toBe(secondToken);
+
+      // Finish the SECOND handler — now the slot clears (token matches).
+      releaseSecond();
+      await second;
+      expect(readWorking(doc)).toBeNull();
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   it("tandem_status-style awareness write preserves the in-flight working marker", async () => {

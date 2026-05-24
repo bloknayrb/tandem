@@ -50,14 +50,23 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     if (docId) {
       const doc = getOrCreateDocument(docId);
       const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-      const state: ClaudeAwareness = {
-        status,
-        timestamp: Date.now(),
-        active: active === true,
-        focusParagraph: typeof focusParagraph === "number" ? focusParagraph : null,
-        focusOffset: typeof focusOffset === "number" ? focusOffset : null,
-      };
-      withMcp(doc, () => awarenessMap.set(Y_MAP_CLAUDE, state));
+      withMcp(doc, () => {
+        // #651/#823: preserve the in-flight `working` marker so this
+        // shim-driven status write (auto-fired on a debounce, and the 3s
+        // post-flush `clearAwareness()` idle write) doesn't wipe the typing
+        // indicator mid tool-call. Read prev INSIDE the transaction to avoid
+        // clobbering a concurrent awareness write. Mirrors document.ts:559.
+        const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
+        const state: ClaudeAwareness = {
+          status,
+          timestamp: Date.now(),
+          active: active === true,
+          focusParagraph: typeof focusParagraph === "number" ? focusParagraph : null,
+          focusOffset: typeof focusOffset === "number" ? focusOffset : null,
+          ...(prev?.working ? { working: prev.working } : {}),
+        };
+        awarenessMap.set(Y_MAP_CLAUDE, state);
+      });
     }
     res.json({ ok: true, written: !!docId });
   });
