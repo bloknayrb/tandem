@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   backupDir,
@@ -135,6 +135,43 @@ describe("backup filename + write + prune", () => {
     const missing = path.join(tmpDir, "no-such-dir");
     const listed = await listBackups(missing);
     expect(listed).toEqual([]);
+  });
+
+  it("pruneOldBackups continues + logs aggregate when one rm fails (partial-failure path)", async () => {
+    // Create 5 backup files (max=2 means 3 will be marked for removal).
+    // Then make one of them un-removable by replacing it with a non-empty
+    // directory — `rm({force: true})` without `recursive` rejects EISDIR.
+    // The sweep MUST continue past the failure and still remove the others;
+    // it MUST NOT throw.
+    const names: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const name = `claude-json-2026010${i}-000000-deadbeef.json`;
+      names.push(name);
+      fs.writeFileSync(path.join(dir, name), `v${i}`);
+    }
+    // Oldest is names[0]; make it un-removable.
+    fs.unlinkSync(path.join(dir, names[0]));
+    fs.mkdirSync(path.join(dir, names[0]));
+    fs.writeFileSync(path.join(dir, names[0], "lock"), "x");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(pruneOldBackups(dir, "claude-json-", ".json", 2)).resolves.not.toThrow();
+      const aggregateLogged = errSpy.mock.calls
+        .map((c) => String(c[0]))
+        .some((m) => m.includes("backup sweep") && m.includes("could not be removed"));
+      expect(aggregateLogged).toBe(true);
+      // The two newer-than-failure entries (names[1], names[2]) were removed;
+      // names[0] survives as the directory. names[3] and names[4] are kept (max=2).
+      const remaining = fs.readdirSync(dir).sort();
+      expect(remaining).toContain(names[0]);
+      expect(remaining).toContain(names[3]);
+      expect(remaining).toContain(names[4]);
+      expect(remaining).not.toContain(names[1]);
+      expect(remaining).not.toContain(names[2]);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("pruneOldBackups keeps the MAX_BACKUPS newest and removes the rest", async () => {

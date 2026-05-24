@@ -137,14 +137,22 @@ export async function writeBackup(dir: string, content: Buffer): Promise<string>
 
 /**
  * List backups currently in `dir`, newest first. Files are matched by
- * the `claude-json-...json` prefix/suffix so stray non-backup files in
- * the dir aren't touched.
+ * the supplied prefix/suffix (defaults match the `.claude.json` backup
+ * scheme) so stray non-backup files in the dir aren't touched.
+ *
+ * The prefix/suffix parameters let a second caller (the broken-
+ * integrations.json backup sweep in `storage.ts`) share this
+ * implementation. Both call sites filter by a constant pair.
  *
  * Sorting is by filename, which works because the timestamp segment is
- * lexicographically monotonic (`YYYYMMDD-HHMMSS`). The UUID suffix is a
- * tiebreaker within the same second.
+ * lexicographically monotonic (`YYYYMMDD-HHMMSS` or `Date.now()`). The
+ * UUID suffix is a tiebreaker within the same millisecond.
  */
-export async function listBackups(dir: string): Promise<string[]> {
+export async function listBackups(
+  dir: string,
+  prefix: string = BACKUP_PREFIX,
+  suffix: string = BACKUP_SUFFIX,
+): Promise<string[]> {
   let entries: string[];
   try {
     entries = await readdir(dir);
@@ -153,21 +161,49 @@ export async function listBackups(dir: string): Promise<string[]> {
     throw err;
   }
   return entries
-    .filter((e) => e.startsWith(BACKUP_PREFIX) && e.endsWith(BACKUP_SUFFIX))
+    .filter((e) => e.startsWith(prefix) && e.endsWith(suffix))
     .sort()
     .reverse();
 }
 
 /**
- * Delete backups beyond the `MAX_BACKUPS` newest. Returns the list of
- * paths removed. Called from `writeBackup`'s caller (after a successful
- * write) and from server startup (covers crash-mid-prune).
+ * Delete backups beyond the `max` newest. Returns the list of paths
+ * removed (best-effort — entries that failed to remove are still
+ * reported in the return list and logged via `console.error`, but the
+ * loop never throws).
+ *
+ * The aggregate-failure shape exists because this runs at server
+ * startup: an AV-locked file on Windows or a transient EACCES MUST NOT
+ * abandon the rest of the sweep. The previous shape threw on the first
+ * `rm` failure and silently skipped the rest.
+ *
+ * Defaults match the `claude-json-...json` scheme; the broken-
+ * integrations sweep passes its own constants.
  */
-export async function pruneOldBackups(dir: string): Promise<string[]> {
-  const all = await listBackups(dir);
-  const toRemove = all.slice(MAX_BACKUPS);
+export async function pruneOldBackups(
+  dir: string,
+  prefix: string = BACKUP_PREFIX,
+  suffix: string = BACKUP_SUFFIX,
+  max: number = MAX_BACKUPS,
+): Promise<string[]> {
+  const all = await listBackups(dir, prefix, suffix);
+  const toRemove = all.slice(max);
+  const failures: Array<{ path: string; err: unknown }> = [];
   for (const name of toRemove) {
-    await rm(join(dir, name), { force: true });
+    const fullPath = join(dir, name);
+    try {
+      await rm(fullPath, { force: true });
+    } catch (err) {
+      failures.push({ path: fullPath, err });
+    }
+  }
+  if (failures.length > 0) {
+    const summary = failures
+      .map((f) => `${f.path}: ${f.err instanceof Error ? f.err.message : String(f.err)}`)
+      .join("; ");
+    console.error(
+      `[tandem] backup sweep: ${failures.length} entries could not be removed (${summary})`,
+    );
   }
   return toRemove.map((name) => join(dir, name));
 }

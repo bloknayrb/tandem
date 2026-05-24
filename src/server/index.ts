@@ -166,8 +166,11 @@ async function main() {
   // annoying, not a security regression).
   try {
     const { sweepBackupsOnStartup } = await import("./integrations/backup.js");
+    const { sweepBrokenIntegrationsBackupsOnStartup } = await import("./integrations/storage.js");
     const { resolveAppDataDir } = await import("./platform.js");
-    await sweepBackupsOnStartup(resolveAppDataDir());
+    const appDataDir = resolveAppDataDir();
+    await sweepBackupsOnStartup(appDataDir);
+    await sweepBrokenIntegrationsBackupsOnStartup(appDataDir);
   } catch (err) {
     console.error(
       `[Tandem] Warning: backup sweep failed: ${err instanceof Error ? err.message : err}`,
