@@ -249,6 +249,7 @@ function handleBackdropClick(e: MouseEvent) {
     style="
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(2px);
       z-index: var(--tandem-z-overlay, 200);
       display: flex; align-items: flex-start; justify-content: center;
       padding-top: 15vh;
@@ -263,10 +264,10 @@ function handleBackdropClick(e: MouseEvent) {
       aria-modal="true"
       aria-label="Command palette"
       style="
-        width: 560px; max-width: 90vw;
+        width: 640px; max-width: 92vw;
         background: var(--tandem-surface);
         border: 1px solid var(--tandem-border);
-        border-radius: var(--tandem-r-4);
+        border-radius: var(--tandem-r-5);
         box-shadow: var(--tandem-shadow-4);
         overflow: hidden;
         display: flex; flex-direction: column;
@@ -275,21 +276,40 @@ function handleBackdropClick(e: MouseEvent) {
     >
       <!-- Search input -->
       <div style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border);">
-        <input
-          bind:this={inputEl}
-          data-testid="palette-input"
-          type="text"
-          {placeholder}
-          aria-label="Search commands"
-          aria-controls="palette-results"
-          aria-activedescendant={allResults[selectedIndex] ? `palette-item-${allResults[selectedIndex].id}` : undefined}
-          bind:value={query}
-          style="
-            width: 100%; padding: 6px 0;
-            font-size: var(--tandem-text-md); color: var(--tandem-fg);
-            background: transparent; border: none; outline: none;
-          "
-        />
+        <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
+          <!-- Decorative leading search glyph; the input keeps the accessible name. -->
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="var(--tandem-fg-faint)"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            style="flex-shrink: 0;"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            bind:this={inputEl}
+            data-testid="palette-input"
+            type="text"
+            {placeholder}
+            aria-label="Search commands"
+            aria-controls="palette-results"
+            aria-activedescendant={allResults[selectedIndex] ? `palette-item-${allResults[selectedIndex].id}` : undefined}
+            bind:value={query}
+            style="
+              flex: 1; min-width: 0; padding: 6px 0;
+              font-size: var(--tandem-text-md); color: var(--tandem-fg);
+              background: transparent; border: none; outline: none;
+            "
+          />
+          <span class="palette-kbd" aria-hidden="true">Esc</span>
+        </div>
         {#if activePrefix}
           <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
             {#if activePrefix === "#"}Searching document headings{/if}
@@ -307,7 +327,7 @@ function handleBackdropClick(e: MouseEvent) {
         aria-label="Results"
         class="tandem-scroll-fade-y"
         use:scrollFade={"y"}
-        style="max-height: 400px; overflow-y: auto; padding: var(--tandem-space-1) 0; list-style: none; margin: 0;"
+        style="max-height: 400px; overflow-y: auto; padding: var(--tandem-space-1); list-style: none; margin: 0;"
       >
         {#if allResults.length === 0}
           <li
@@ -329,7 +349,9 @@ function handleBackdropClick(e: MouseEvent) {
               onmouseenter={() => (selectedIndex = i)}
               style="
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 8px var(--tandem-space-4);
+                padding: 8px var(--tandem-space-3);
+                border-radius: var(--tandem-r-3);
+                transition: background 80ms;
                 cursor: {result.kind === 'shortcut' ? 'default' : 'pointer'};
                 background: {isSelected ? 'var(--tandem-accent-bg)' : 'transparent'};
                 color: {isSelected ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg)'};
@@ -377,14 +399,31 @@ function handleBackdropClick(e: MouseEvent) {
       <div style="
         padding: var(--tandem-space-2) var(--tandem-space-4);
         border-top: 1px solid var(--tandem-border);
-        display: flex; gap: var(--tandem-space-3);
+        background: var(--tandem-surface-muted);
+        display: flex; align-items: center; gap: var(--tandem-space-3);
         font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);
       ">
-        <span><kbd style="font-family: var(--tandem-font-mono);">#</kbd> headings</span>
-        <span><kbd style="font-family: var(--tandem-font-mono);">@</kbd> annotations</span>
-        <span><kbd style="font-family: var(--tandem-font-mono);">?</kbd> shortcuts</span>
-        <span><kbd style="font-family: var(--tandem-font-mono);">&gt;</kbd> commands</span>
+        <span><kbd class="palette-kbd">#</kbd> headings</span>
+        <span><kbd class="palette-kbd">@</kbd> annotations</span>
+        <span><kbd class="palette-kbd">?</kbd> shortcuts</span>
+        <span><kbd class="palette-kbd">&gt;</kbd> commands</span>
       </div>
     </div>
   </div>
 {/if}
+
+<style>
+  /* Keycap chip — bundle recipe (the thicker bottom border reads as a key
+     edge). Shared by the input-row Esc hint and the footer prefix hints. */
+  .palette-kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-bottom-width: 2px;
+    border-radius: var(--tandem-r-1);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    color: var(--tandem-fg-muted);
+  }
+</style>
