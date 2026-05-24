@@ -222,6 +222,23 @@ export async function saveDocumentAsToDisk(
   if (docState.readOnly) {
     return { status: "error", reason: "Read-only document", errorCode: "READ_ONLY" };
   }
+  // Save-As is a PROMOTION path: it only makes sense for ephemeral upload/
+  // scratchpad docs (no durable annotation store, no real session, no
+  // file-watch). Running it on an already-on-disk doc (`source: "file"`)
+  // would silently destroy data: re-keying the durable annotation store to
+  // the new path's docHash WITHOUT migrating the original's annotations
+  // (they vanish), `deleteSession(oldPath)` deleting the REAL file's session,
+  // and `notifyDocumentPromoted` being a no-op (Claude's channel stays stale).
+  // Gate it to uploads so a misdirected client call (or future affordance
+  // regression) can't trash a real file. See #827 review (Medium).
+  if (docState.source !== "upload") {
+    return {
+      status: "error",
+      reason:
+        "Save As is only available for scratchpads/uploads; this document is already on disk.",
+      errorCode: "NOT_PROMOTABLE",
+    };
+  }
   if (!SAVE_AS_FORMATS.has(format)) {
     return {
       status: "error",
@@ -348,6 +365,15 @@ export async function saveDocumentAsToDisk(
     // path's key and reload on reopen-by-path. Best-effort: a wiring failure
     // must not fail the save (the disk write is the contract), and the helper
     // itself swallows + surfaces its own errors via the notification bus.
+    //
+    // Note (#827 review, flush Low): wireAnnotationStore → setFileSyncContext
+    // disposes any prior file-sync context with phase "close" WITHOUT flushing
+    // its debounced writes. For a SECOND Save-As on the same doc that would
+    // drop unflushed annotations — but the `source === "upload"` gate above
+    // closes that window: the first promote flips `source` to "file", so a
+    // second Save-As is rejected with NOT_PROMOTABLE before reaching here. The
+    // first promote is safe because a scratchpad/upload doc has no prior
+    // file-sync context to dispose (openScratchpad skips wireAnnotationStore).
     const { wireAnnotationStore } = await import("./file-opener.js");
     await wireAnnotationStore(docId, doc, resolved);
 

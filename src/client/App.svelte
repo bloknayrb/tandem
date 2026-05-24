@@ -459,16 +459,29 @@ wireActionDeps({
     }),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+    // Save-As is a PROMOTION path — only offer it for ephemeral upload://
+    // (scratchpad) docs. A doc already on disk would be silently corrupted by
+    // a promote (orphaned annotations, deleted session). The server enforces
+    // this too (NOT_PROMOTABLE); guard the affordance here so the user gets a
+    // clear toast instead of a server error. See #827 review (Medium).
+    if (!tab || !isUploadPath(tab.filePath)) {
+      notifications.push({
+        id: generateNotificationId(),
+        type: "launcher",
+        severity: "info",
+        message: "Save As is only available for scratchpads; this document is already on disk.",
+        timestamp: Date.now(),
+      });
+      return;
+    }
     // Default-name hint for the native dialog: prefer the existing basename.
     // For a synthetic upload:// path that's already "Scratchpad.md".
-    const lastSlash = tab
-      ? Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"))
-      : -1;
-    const defaultName = tab ? tab.filePath.slice(lastSlash + 1) : "Scratchpad.md";
+    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
+    const defaultName = tab.filePath.slice(lastSlash + 1);
     await triggerSaveAs({
       activeDocId: yjsSync.activeTabId,
       defaultName,
-      sourceFormat: tab?.format,
+      sourceFormat: tab.format,
       notify: (severity, message) =>
         notifications.push({
           id: generateNotificationId(),
@@ -739,14 +752,25 @@ $effect(() => {
         if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
         e.preventDefault();
         const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
-        const lastSlash = tab
-          ? Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"))
-          : -1;
-        const defaultName = tab ? tab.filePath.slice(lastSlash + 1) : "Scratchpad.md";
+        // Save-As is a promotion path — only for ephemeral upload:// docs.
+        // Mirror the palette `saveAs` gate so a real on-disk doc isn't
+        // corrupted. See #827 review (Medium).
+        if (!tab || !isUploadPath(tab.filePath)) {
+          notifications.push({
+            id: generateNotificationId(),
+            type: "launcher",
+            severity: "info",
+            message: "Save As is only available for scratchpads; this document is already on disk.",
+            timestamp: Date.now(),
+          });
+          return;
+        }
+        const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
+        const defaultName = tab.filePath.slice(lastSlash + 1);
         void triggerSaveAs({
           activeDocId: yjsSync.activeTabId,
           defaultName,
-          sourceFormat: tab?.format,
+          sourceFormat: tab.format,
           notify: (severity, message) =>
             notifications.push({
               id: generateNotificationId(),

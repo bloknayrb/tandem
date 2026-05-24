@@ -594,6 +594,80 @@ describe("saveDocumentAsToDisk", () => {
     expect(result.errorCode).toBe("READ_ONLY");
   });
 
+  it("rejects already-on-disk docs (source: file) with NOT_PROMOTABLE and writes nothing (#827 Medium)", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    const { deleteSession } = await import("../../src/server/session/manager.js");
+    vi.mocked(atomicWrite).mockClear();
+    vi.mocked(deleteSession).mockClear();
+
+    addDoc("real-file", {
+      id: "real-file",
+      filePath: "/tmp/already-on-disk.md",
+      format: "md",
+      readOnly: false,
+      source: "file",
+    });
+
+    const result = await saveDocumentAsToDisk("real-file", "/tmp/promoted-target.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("NOT_PROMOTABLE");
+    // Nothing is written, no session is re-keyed/deleted — the real file's
+    // annotations and session must remain untouched.
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects a target path outside the allowed roots with PATH_REJECTED and writes nothing (#827 Low)", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    addDoc("path-reject", {
+      id: "path-reject",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+
+    // `/etc` exists, is not a symlink, and is outside both homedir() and
+    // tmpdir() — assertPathSafe walks up to it and refuses. This locks the
+    // primary path-traversal defense for an attacker-reachable write sink.
+    const result = await saveDocumentAsToDisk("path-reject", "/etc/tandem-evil-827.md", "md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("PATH_REJECTED");
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it("rejects a UNC target path on win32 with INVALID_PATH and writes nothing (#827 Low)", async () => {
+    const pathMod = (await import("node:path")).default;
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    addDoc("unc-reject", {
+      id: "unc-reject",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+
+    // Simulate win32: the UNC guard checks `process.platform === "win32"` on the
+    // resolved path. On a POSIX test host `path.resolve` won't preserve the
+    // leading `\\`, so stub both platform and resolve to reproduce the branch.
+    const origPlatform = process.platform;
+    const resolveSpy = vi.spyOn(pathMod, "resolve").mockReturnValue("\\\\server\\share\\evil.md");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const result = await saveDocumentAsToDisk("unc-reject", "\\\\server\\share\\evil.md", "md");
+      expect(result.status).toBe("error");
+      expect(result.errorCode).toBe("INVALID_PATH");
+      expect(atomicWrite).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      resolveSpy.mockRestore();
+    }
+  });
+
   it("re-keys the durable annotation store so post-promote annotations persist under the real path's docHash (#827 Medium 2)", async () => {
     const os = await import("node:os");
     const fsReal = await import("node:fs/promises");
