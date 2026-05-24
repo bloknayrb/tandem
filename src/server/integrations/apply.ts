@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  constants as fsConstants,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -555,9 +556,34 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       );
       try {
         if (process.platform === "win32") {
+          // Windows ignores the POSIX `mode` arg on mkdir, so harden the
+          // dir with an explicit DACL BEFORE writing the backup file.
+          // Mirrors the ordering invariant in
+          // `storage.ts#backupBrokenFile`: dir-level ACL closes the
+          // TOCTOU window that a per-file ACL would otherwise open
+          // between copyFile and the ACL set. Fail loud — orphaning a
+          // half-hardened dir is worse than aborting the backup
+          // outright. The inner `catch (copyErr)` below surfaces a
+          // named error and refuses to overwrite the malformed config.
+          try {
+            await setRestrictiveAcl(brokenBackupDir);
+          } catch (aclErr) {
+            throw new Error(
+              `failed to apply restrictive ACL to broken-backups dir ${brokenBackupDir}: ${
+                aclErr instanceof Error ? aclErr.message : String(aclErr)
+              }`,
+              { cause: aclErr },
+            );
+          }
           // Windows doesn't honor POSIX modes — fall back to plain copy.
-          // The randomUUID-suffixed path makes collisions effectively impossible.
-          await copyFile(configPath, backupPath);
+          // The randomUUID-suffixed path makes collisions effectively
+          // impossible. COPYFILE_EXCL refuses to overwrite an existing
+          // target, defeating any predictable-path symlink/pre-create
+          // attack the UUID suffix might still leave reachable. The
+          // newly-created file inherits the hardened DACL of the parent
+          // dir at create-time (see the ACL call above), so no per-file
+          // ACL is required.
+          await copyFile(configPath, backupPath, fsConstants.COPYFILE_EXCL);
         } else {
           // Open with mode 0o600 + `wx` so the file is created exclusively
           // at the right mode (no copyFile + chmodSync race window where
