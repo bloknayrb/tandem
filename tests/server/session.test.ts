@@ -2,7 +2,12 @@ import fs from "fs/promises";
 import path from "path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATIONS, Y_MAP_CHAT, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
+import {
+  Y_MAP_ACTIVE_DOCUMENT_EPOCH,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
+  Y_MAP_DOCUMENT_META,
+} from "../../src/shared/constants.js";
 
 // Isolate session tests in a unique temp directory to avoid races with other test files
 vi.mock("../../src/server/platform", async (importOriginal) => {
@@ -183,6 +188,7 @@ describe("Session persistence", () => {
         },
       ]);
       meta.set("activeDocumentId", "stale-doc-1");
+      meta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, 7);
 
       // Save it
       await saveCtrlSession(ctrlDoc);
@@ -197,6 +203,7 @@ describe("Session persistence", () => {
       const restoredMeta = restored.getMap(Y_MAP_DOCUMENT_META);
       restoredMeta.delete("openDocuments");
       restoredMeta.delete("activeDocumentId");
+      restoredMeta.delete(Y_MAP_ACTIVE_DOCUMENT_EPOCH);
 
       // Chat should survive
       const restoredChat = restored.getMap(Y_MAP_CHAT);
@@ -207,6 +214,7 @@ describe("Session persistence", () => {
       // Document metadata should be cleared
       expect(restoredMeta.get("openDocuments")).toBeUndefined();
       expect(restoredMeta.get("activeDocumentId")).toBeUndefined();
+      expect(restoredMeta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH)).toBeUndefined();
     });
 
     it("round-trips ctrl doc with only chat (no stale metadata)", async () => {

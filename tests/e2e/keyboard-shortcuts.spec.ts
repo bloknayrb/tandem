@@ -79,20 +79,24 @@ test("Ctrl+N switches to the Nth tab", async ({ page }) => {
   // Tabs are role="tab" with aria-selected.
   const tabs = page.locator("[role='tab']");
 
-  // Press Ctrl+1 — first tab becomes active. Generous timeout because the
-  // store update + Svelte effect + Tiptap re-render can exceed the default 5s
-  // on cold-start CI runners. 15s tolerates a worst-case CI runner under
-  // load — the 10s ceiling flaked under retry on the #730 PR run.
+  // Settle gate: wait for the server's active doc (the last-opened, link-target.md
+  // → tab index 2) to land before issuing keyboard switches. This guarantees the
+  // authoritative documentMeta sync has applied, so a keypress can't race a late
+  // reconcile that would revert it. Load-bearing, not cosmetic — it is the precondition
+  // the previous timeout-bump fix was missing.
+  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+
+  // Press Ctrl+1 — first tab becomes active.
   await page.keyboard.press("Control+1");
-  await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+  await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true", { timeout: 5_000 });
 
   // Press Ctrl+2 — second tab.
   await page.keyboard.press("Control+2");
-  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true", { timeout: 5_000 });
 
   // Press Ctrl+9 — clamps to last (3rd) tab.
   await page.keyboard.press("Control+9");
-  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true", { timeout: 5_000 });
 });
 
 test("Ctrl+W is ignored while a form input has focus", async ({ page }) => {
