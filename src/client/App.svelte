@@ -1168,6 +1168,7 @@ const tutorial = createTutorial(
             onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
             reduceMotion={settingsState.settings.reduceMotion}
             storeReadOnly={yjsSync.storeReadOnly}
+            claudeWorkingAnnotationId={yjsSync.claudeWorking?.annotationId ?? null}
             {review}
             visible={activeRailTab === "annotations"}
           />
@@ -1184,6 +1185,7 @@ const tutorial = createTutorial(
       disconnectedSince={yjsSync.disconnectedSince}
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
+      claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={yjsSync.readOnly}
       saving={saveStore.saving}
       heldCount={modeGate.heldCount}
