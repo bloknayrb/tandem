@@ -15,14 +15,29 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
  *   broadcasting via awareness would leak it in tandem mode (not expected). See
  *   issue #650 "Out of scope: Yjs-synced collapse".
  * - **localStorage persistence**, keyed by document path. Each collapsed heading
- *   is anchored by `hash(level, normalizedText, ordinalIndex)` — survives
- *   in-session text edits because we re-compute on every doc change.
+ *   is anchored by `hash(level, normalizedText, ordinalIndex)`. Persistence is
+ *   skipped for ephemeral `upload://` paths (scratchpads / uploaded files use a
+ *   per-session UUID key that would otherwise leak into localStorage forever).
+ * - **Collapse survives in-session text edits.** Editing a collapsed heading's
+ *   text changes its hash. The on-edit reconciliation distinguishes a real
+ *   deletion (heading *count* dropped → garbage-collect the vanished hash from
+ *   localStorage) from a text edit (count unchanged → migrate the collapsed
+ *   entry positionally to the heading's new hash so the section stays
+ *   collapsed). A text edit must NEVER erase persisted collapse state.
  * - **Positions live in plugin state**, mapped through `tr.mapping.map()` on
  *   every transaction so collapse decorations stay aligned during edits.
  * - **No Svelte $state into .configure().** The `filePath` option is read once
  *   when the editor is constructed. Editor instances are keyed by tab id in
  *   App.svelte, so the file path is stable for the editor's lifetime; switching
  *   tabs rebuilds the editor (and re-hydrates from localStorage).
+ *
+ * # Known limitation: duplicate-heading positional ordinals
+ * Headings with identical level + text are disambiguated by a positional
+ * ordinal (0, 1, 2 … in document order). This is inherent to "basic scope" —
+ * there's no stable per-heading identity. Reordering or deleting one of several
+ * identical headings shifts the ordinals, so a collapse can re-target a
+ * *different* duplicate after such an edit. Acceptable for the common case
+ * (distinct heading text); a future scope could anchor to a CRDT-stable id.
  */
 
 export const headingCollapseKey = new PluginKey<HeadingCollapseState>("tandemHeadingCollapse");
@@ -81,10 +96,14 @@ const LS_KEY_PREFIX = "tandem:headingCollapse:";
 
 function lsKey(filePath: string | null): string | null {
   if (!filePath) return null;
+  // Skip ephemeral documents: scratchpads / uploaded files use a per-session
+  // UUID path under the `upload://` scheme. Persisting their collapse state
+  // would leak a localStorage key per session that never gets reclaimed.
+  if (filePath.startsWith("upload://")) return null;
   return LS_KEY_PREFIX + filePath;
 }
 
-function loadCollapsed(filePath: string | null): Set<string> {
+export function loadCollapsed(filePath: string | null): Set<string> {
   const key = lsKey(filePath);
   if (!key) return new Set();
   try {
@@ -99,7 +118,7 @@ function loadCollapsed(filePath: string | null): Set<string> {
   }
 }
 
-function saveCollapsed(filePath: string | null, collapsed: Set<string>): void {
+export function saveCollapsed(filePath: string | null, collapsed: Set<string>): void {
   const key = lsKey(filePath);
   if (!key) return;
   try {
@@ -118,7 +137,7 @@ function saveCollapsed(filePath: string | null, collapsed: Set<string>): void {
 // ---------------------------------------------------------------------------
 
 /** Normalize heading text for hashing: lowercase, collapse whitespace. */
-function normalizeHeadingText(text: string): string {
+export function normalizeHeadingText(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
@@ -129,7 +148,7 @@ function normalizeHeadingText(text: string): string {
  * Duplicates (same level + text) are distinguished by an ordinal counter so
  * "## Notes" appearing three times still produces three distinct hashes.
  */
-function walkHeadings(doc: PmNode): HeadingEntry[] {
+export function walkHeadings(doc: PmNode): HeadingEntry[] {
   const entries: HeadingEntry[] = [];
   const seen = new Map<string, number>();
 
@@ -151,6 +170,82 @@ function walkHeadings(doc: PmNode): HeadingEntry[] {
   });
 
   return entries;
+}
+
+/**
+ * Reconcile the collapsed-hash set against a doc edit.
+ *
+ * The HIGH bug (#815 review): a naive "drop any persisted hash not in the
+ * current heading set" prune destroys collapse state the instant the user types
+ * into a collapsed heading — the text edit re-hashes the heading, the old hash
+ * looks "vanished", and we'd both re-expand the section AND erase localStorage.
+ *
+ * Fix: distinguish two cases by comparing heading *count* before/after:
+ *
+ *  - **Count decreased** → a heading was genuinely removed. Garbage-collect any
+ *    collapsed hash that no longer resolves to a heading, and persist.
+ *
+ *  - **Count unchanged** → no deletion; any hash mismatch is a text edit in
+ *    progress. We MUST NOT erase persistence. Better still, migrate the
+ *    collapsed entry positionally to the heading's new hash so the section
+ *    stays collapsed across the keystroke. Because the count is identical, the
+ *    old and new heading arrays are index-aligned (document order), so an
+ *    index-by-index hash diff tells us exactly which entry was retyped.
+ *
+ *  - **Count increased** → a heading was added; nothing to prune.
+ *
+ * Returns the (possibly new) collapsed set. Persists to localStorage only when
+ * the set actually changed.
+ */
+export function reconcileOnEdit(
+  prevHeadings: HeadingEntry[],
+  nextHeadings: HeadingEntry[],
+  collapsed: Set<string>,
+  filePath: string | null,
+): Set<string> {
+  if (collapsed.size === 0) return collapsed;
+  const validHashes = new Set(nextHeadings.map((h) => h.hash));
+
+  // Same count → treat hash mismatches as in-progress text edits and migrate
+  // the collapsed entry to the heading's new hash (index-aligned by position).
+  if (prevHeadings.length === nextHeadings.length) {
+    let changed = false;
+    const migrated = new Set(collapsed);
+    for (let i = 0; i < prevHeadings.length; i++) {
+      const oldHash = prevHeadings[i].hash;
+      const newHash = nextHeadings[i].hash;
+      if (oldHash !== newHash && migrated.has(oldHash)) {
+        migrated.delete(oldHash);
+        migrated.add(newHash);
+        changed = true;
+      }
+    }
+    if (!changed) return collapsed;
+    saveCollapsed(filePath, migrated);
+    return migrated;
+  }
+
+  // Count increased → a heading was added; retain everything (a still-valid
+  // collapsed hash stays, any transiently-mismatched one is left untouched and
+  // will reconcile on a later settling edit). Never erase here.
+  if (nextHeadings.length > prevHeadings.length) {
+    return collapsed;
+  }
+
+  // Count decreased → a real deletion. Garbage-collect hashes that no longer
+  // resolve to any heading.
+  let needsSave = false;
+  const filtered = new Set<string>();
+  for (const hash of collapsed) {
+    if (validHashes.has(hash)) {
+      filtered.add(hash);
+    } else {
+      needsSave = true;
+    }
+  }
+  if (!needsSave) return collapsed;
+  saveCollapsed(filePath, filtered);
+  return filtered;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,8 +331,8 @@ function buildHideDecorations(doc: PmNode, headings: HeadingEntry[], index: numb
   const decos: Decoration[] = [];
   // Iterate top-level siblings between (start.pos + startNode.size) and endPos.
   // Use doc.forEach for direct top-level children — this is the structural unit
-  // a heading section is composed of in markdown documents.
-  let cursor = 0;
+  // a heading section is composed of in markdown documents. The offset-based
+  // window (start.pos / endPos) is self-sufficient; no running cursor needed.
   doc.forEach((child, offset) => {
     if (offset > start.pos && offset < endPos) {
       const from = offset;
@@ -249,9 +344,7 @@ function buildHideDecorations(doc: PmNode, headings: HeadingEntry[], index: numb
         }),
       );
     }
-    cursor = offset + child.nodeSize;
   });
-  void cursor;
 
   return decos;
 }
@@ -370,31 +463,16 @@ export const HeadingCollapseExtension = Extension.create<HeadingCollapseOptions>
               return prev;
             }
 
-            // Doc changed: recompute headings, rebuild decorations. We may also
-            // need to reconcile the collapsed set against vanished headings,
-            // but ONLY once we've seen real content — otherwise a transient
-            // empty-doc transaction during initial sync would wipe the
-            // persisted set before rehydrate fires.
+            // Doc changed: recompute headings, rebuild decorations, and
+            // reconcile the collapsed set — but ONLY once we've seen real
+            // content, otherwise a transient empty-doc transaction during
+            // initial sync would wipe the persisted set before rehydrate fires.
             const headings = walkHeadings(newState.doc);
             const hasSeenContent = prev.hasSeenContent || headings.length > 0;
 
             let collapsed = prev.collapsed;
             if (prev.hasSeenContent) {
-              // Filter out hashes whose heading vanished (deleted or text changed).
-              const validHashes = new Set(headings.map((h) => h.hash));
-              let needsSave = false;
-              const filtered = new Set<string>();
-              for (const hash of collapsed) {
-                if (validHashes.has(hash)) {
-                  filtered.add(hash);
-                } else {
-                  needsSave = true;
-                }
-              }
-              if (needsSave) {
-                collapsed = filtered;
-                saveCollapsed(filePath, collapsed);
-              }
+              collapsed = reconcileOnEdit(prev.headings, headings, prev.collapsed, filePath);
             }
 
             return {
@@ -410,31 +488,55 @@ export const HeadingCollapseExtension = Extension.create<HeadingCollapseOptions>
             };
           },
         },
-        view() {
+        view(editorView) {
           // After the YDoc finishes its initial Hocuspocus sync, the doc gains
           // content via a transaction we don't initiate. Watch for the first
-          // such transaction with real headings and dispatch `rehydrate` so the
-          // plugin can prune its persisted set against the now-populated doc.
+          // update where the doc has real headings and dispatch `rehydrate` so
+          // the plugin reconciles its persisted set against the populated doc.
           //
-          // We also rehydrate whenever a previously-empty doc gains content
-          // (e.g. a force-reload clears then repopulates). Guarded by
-          // `hasSeenContent` so we only fire once per content arrival.
-          return {
-            update(editorView, prevState) {
+          // This must run EXACTLY ONCE per editor lifetime — and crucially even
+          // when the doc was ALREADY populated at plugin construction (the
+          // common `{#key activeTab.id}` tab-switch remount / HMR / y-prosemirror
+          // fast-populate path, where init() sets hasSeenContent=true). The
+          // `rehydrated` closure flag — independent of plugin-state
+          // `hasSeenContent` — guarantees the localStorage reconciliation is not
+          // silently skipped on that path. See MEDIUM(b) in #815 review.
+          //
+          // The dispatch is deferred via requestAnimationFrame so we don't
+          // re-enter ProseMirror's updateState() synchronously inside update()
+          // (matches annotation.ts's rAF-deferred convention — MEDIUM(a)).
+          let rehydrated = false;
+          let rafId: number | null = null;
+
+          function scheduleRehydrate() {
+            if (rehydrated || rafId !== null) return;
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              if (rehydrated) return;
               const state = headingCollapseKey.getState(editorView.state);
-              if (!state || state.hasSeenContent) return;
-              if (state.headings.length === 0) return;
-              // Avoid re-dispatch if the previous transaction was our own
-              // rehydrate (defensive — the hasSeenContent guard above already
-              // covers this since rehydrate flips it true).
-              const prevPluginState = prevState
-                ? headingCollapseKey.getState(prevState)
-                : undefined;
-              if (prevPluginState?.hasSeenContent) return;
+              if (!state || state.headings.length === 0) return;
+              rehydrated = true;
               const tr = editorView.state.tr
                 .setMeta(headingCollapseKey, { type: "rehydrate" } satisfies HeadingCollapseMeta)
                 .setMeta("addToHistory", false);
               editorView.dispatch(tr);
+            });
+          }
+
+          // Cover the doc-already-populated-at-init case: update() may not fire
+          // a second time if no further transactions arrive, so kick a check on
+          // mount too. Both paths share the `rehydrated` one-shot guard.
+          scheduleRehydrate();
+
+          return {
+            update(view) {
+              if (rehydrated) return;
+              const state = headingCollapseKey.getState(view.state);
+              if (!state || state.headings.length === 0) return;
+              scheduleRehydrate();
+            },
+            destroy() {
+              if (rafId !== null) cancelAnimationFrame(rafId);
             },
           };
         },
