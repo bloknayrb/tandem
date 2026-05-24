@@ -12,6 +12,7 @@ interface Props {
   disabled?: boolean;
   disabledTitle?: string;
   active?: boolean;
+  ariaPressed?: boolean;
   onMouseDown?: (e: MouseEvent) => void;
   onClick?: (e: MouseEvent) => void;
   /** Layout/typography escape hatch only (font-weight, font-style, font-family,
@@ -30,6 +31,7 @@ const {
   disabled = false,
   disabledTitle,
   active = false,
+  ariaPressed,
   onMouseDown,
   onClick,
   style = "",
@@ -50,6 +52,7 @@ const titleAttr = $derived(
   {disabled}
   title={titleAttr}
   aria-label={ariaLabelValue}
+  aria-pressed={ariaPressed}
   onmousedown={onMouseDown}
   onclick={onClick}
   {style}

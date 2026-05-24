@@ -89,11 +89,12 @@ function handleHighlight(color: HighlightColor) {
       {#if onAuthorshipChange}
         <div class="fmtbar-divider"></div>
         <ToolbarButton
-          ariaLabel="Toggle authorship colors"
+          ariaLabel={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
           shortcut="Ctrl+Alt+A"
           active={showAuthorship}
+          ariaPressed={showAuthorship}
           testId="formatbar-authorship-toggle"
-          onClick={() => onAuthorshipChange(!showAuthorship)}
+          onClick={() => onAuthorshipChange?.(!showAuthorship)}
         >
           {#snippet children()}
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
