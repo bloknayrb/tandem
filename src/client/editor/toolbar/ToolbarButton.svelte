@@ -14,6 +14,10 @@ interface Props {
   active?: boolean;
   onMouseDown?: (e: MouseEvent) => void;
   onClick?: (e: MouseEvent) => void;
+  /** Layout/typography escape hatch only (font-weight, font-style, font-family,
+   * width quirks). Do NOT inject background, color, border, or border-radius
+   * via this prop — those properties belong to the .toolbar-btn CSS rules so
+   * :hover, .is-active, :disabled, and :focus-visible can win the cascade. */
   style?: string;
 }
 
@@ -31,45 +35,60 @@ const {
   style = "",
 }: Props = $props();
 
-const computed = $derived.by(() => {
-  let border = "1px solid transparent";
-  let background = "transparent";
-  let color = "var(--tandem-fg-muted)";
-
-  if (disabled) {
-    background = "transparent";
-    color = "var(--tandem-fg-subtle)";
-  } else if (active) {
-    background = "var(--tandem-accent-bg)";
-    border = "1px solid var(--tandem-accent-border)";
-    color = "var(--tandem-accent-fg-strong)";
-  }
-  return { border, background, color };
-});
-
 const ariaLabelValue = $derived(ariaLabel ?? (typeof label === "string" ? label : undefined));
 const titleText = $derived(ariaLabelValue ?? "");
 const titleAttr = $derived(
   disabled && disabledTitle ? disabledTitle : shortcut ? `${titleText} (${shortcut})` : titleText,
 );
-
-const baseStyle =
-  "height: 28px; padding: 0 8px; font-size: 12px; border-radius: var(--tandem-r-2); display: inline-flex; align-items: center; justify-content: center; gap: 5px;";
-
-const fullStyle = $derived(
-  `${baseStyle} cursor: ${disabled ? "not-allowed" : "pointer"}; ${style}; border: ${computed.border}; background: ${computed.background}; color: ${computed.color};`,
-);
 </script>
 
 <button
   type="button"
+  class="toolbar-btn"
+  class:is-active={active}
   data-testid={testId}
   {disabled}
   title={titleAttr}
   aria-label={ariaLabelValue}
   onmousedown={onMouseDown}
   onclick={onClick}
-  style={fullStyle}
+  {style}
 >
   {#if children}{@render children()}{:else}{label}{/if}
 </button>
+
+<style>
+  .toolbar-btn {
+    height: 26px;
+    min-width: 26px;
+    padding: 0 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    border-radius: var(--tandem-r-pill);
+    font-size: 12px;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .toolbar-btn:hover:not(:disabled):not(.is-active) {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .toolbar-btn.is-active {
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+  }
+  .toolbar-btn:disabled {
+    cursor: not-allowed;
+    color: var(--tandem-fg-subtle);
+  }
+  .toolbar-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+</style>

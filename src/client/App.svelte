@@ -993,8 +993,6 @@ const tutorial = createTutorial(
     claudeActive={yjsSync.claudeActive}
     theme={settingsState.settings.theme}
     onSetTheme={(t) => settingsState.updateSettings({ theme: t })}
-    showAuthorship={settingsState.settings.showAuthorship}
-    onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
     onOpenSettings={toggleSettings}
     onOpenSettingsModal={openSettingsModalWithAck}
@@ -1046,6 +1044,8 @@ const tutorial = createTutorial(
     <FormattingBar
       {editor}
       ydoc={activeTab?.ydoc ?? null}
+      showAuthorship={settingsState.settings.showAuthorship}
+      onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same

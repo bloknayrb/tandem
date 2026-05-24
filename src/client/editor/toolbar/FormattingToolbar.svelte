@@ -155,13 +155,12 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
 </script>
 
 {#if editor}
-  <div style="display: flex; align-items: center; gap: 2px;">
+  <div style="display: flex; align-items: center; gap: 1px;">
     <ToolbarButton
       ariaLabel="Undo"
       shortcut="Ctrl+Z"
       disabled={!canUndo}
       onMouseDown={withPreventDefault(() => editor.commands.undo())}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -175,7 +174,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+Shift+Z"
       disabled={!canRedo}
       onMouseDown={withPreventDefault(() => editor.commands.redo())}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -192,7 +190,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveBold}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBold().run())}
-      style="font-weight: 700; min-width: 30px;"
+      style="font-weight: 700;"
     />
     <ToolbarButton
       label="I"
@@ -200,7 +198,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveItalic}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleItalic().run())}
-      style="font-style: italic; min-width: 30px;"
+      style="font-style: italic;"
     />
     <ToolbarButton
       label="S"
@@ -208,7 +206,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveStrike}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleStrike().run())}
-      style="text-decoration: line-through; min-width: 30px;"
+      style="text-decoration: line-through;"
     />
     <ToolbarButton
       label="<>"
@@ -216,7 +214,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveCode}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleCode().run())}
-      style="font-family: monospace; min-width: 30px;"
+      style="font-family: monospace;"
     />
 
     <!-- Heading dropdown -->
@@ -236,7 +234,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
           e.preventDefault();
           showHeadingMenu = !showHeadingMenu;
         }}
-        style="min-width: 30px;"
       />
       {#if showHeadingMenu}
         <div
@@ -274,7 +271,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveBulletList}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBulletList().run())}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -293,7 +289,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveOrderedList}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleOrderedList().run())}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -312,7 +307,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       active={isActiveBlockquote}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBlockquote().run())}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -340,7 +334,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
         disabled={linkDisabled}
         active={isActiveLink || showLinkInput}
         onMouseDown={handleLinkMouseDown}
-        style="min-width: 30px; padding: 4px 6px;"
       >
         {#snippet children()}
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -396,14 +389,12 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       ariaLabel="Horizontal rule"
       disabled={isDisabled}
       onMouseDown={withPreventDefault(() => editor.chain().focus().setHorizontalRule().run())}
-      style="min-width: 30px;"
     />
     <ToolbarButton
       ariaLabel="Code block"
       disabled={isDisabled}
       active={isActiveCodeBlock}
       onMouseDown={withPreventDefault(() => editor.chain().focus().toggleCodeBlock().run())}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">

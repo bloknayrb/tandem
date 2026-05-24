@@ -61,7 +61,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
-- `formatting-bar`, `toolbar-authorship-toggle`,
+- `formatting-bar`, `formatbar-authorship-toggle`,
   `toolbar-link-{input,submit,cancel}`,
   `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`
 - `mode-{toggle,solo-btn,tandem-btn}`

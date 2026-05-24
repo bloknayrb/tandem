@@ -276,7 +276,6 @@ toast-container
 toast-count-{*}
 toast-dismiss-{*}
 toast-{*}
-toolbar-authorship-toggle
 toolbar-highlight-color-toggle
 toolbar-highlight-color-{*}
 toolbar-link-cancel
