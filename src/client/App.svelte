@@ -54,13 +54,13 @@ import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
 import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
-import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
@@ -170,19 +170,7 @@ const modeState = createTandemModeBroadcast(
   () => settingsState.settings.selectionDwellMs,
 );
 const layoutModel = createLayoutModel(settingsState, modeState);
-const modeGate = $derived.by(() => {
-  const annotations = yjsSync.annotations;
-  const mode = modeState.tandemMode;
-  const visibleAnnotations = [];
-  let heldCount = 0;
-
-  for (const ann of annotations) {
-    if (shouldShowInMode(ann, mode)) visibleAnnotations.push(ann);
-    else if (ann.status === "pending") heldCount++;
-  }
-
-  return { visibleAnnotations, heldCount };
-});
+const visibleAnnotations = $derived(yjsSync.annotations);
 const connectionBanner = createConnectionBanner(
   () => yjsSync.disconnectedSince,
   () => settingsState.settings.degradedBannerDelayMs,
@@ -194,6 +182,7 @@ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileN
 
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
+initTauriFileDrop(notifications.push);
 
 // Surface sidecar restart failures (Tauri-only) as a generic toast. The
 // Rust side emits "sidecar-restart-failed" with a stable code; the message
@@ -423,7 +412,7 @@ wireActionDeps({
   toggleRightPanel: () => toggleRightPanel(),
   reopenClosedTab: () => void reopenClosedTab(),
   annotationNext: () => {
-    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const sorted = sortAnnotationsByPosition(visibleAnnotations);
     const nextId = nextAnnotationId(sorted, activeAnnotationId);
     if (nextId) {
       activeAnnotationId = nextId;
@@ -432,7 +421,7 @@ wireActionDeps({
     }
   },
   annotationPrev: () => {
-    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const sorted = sortAnnotationsByPosition(visibleAnnotations);
     const prevId = prevAnnotationId(sorted, activeAnnotationId);
     if (prevId) {
       activeAnnotationId = prevId;
@@ -441,11 +430,11 @@ wireActionDeps({
     }
   },
   annotationAccept: () => {
-    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
     if (cur && cur.author !== "user") review.handleAccept(cur.id);
   },
   annotationDismiss: () => {
-    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
@@ -518,9 +507,7 @@ let activeRailTab = $state<"annotations" | "chat">(
 );
 
 const pendingAnnotationBadge = $derived(
-  activeRailTab === "annotations"
-    ? 0
-    : modeGate.visibleAnnotations.filter(isPendingReviewTarget).length,
+  activeRailTab === "annotations" ? 0 : visibleAnnotations.filter(isPendingReviewTarget).length,
 );
 
 let activeAnnotationId = $state<string | null>(null);
@@ -803,7 +790,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-accept-or-dismiss": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
     if (cur && cur.author !== "user") {
       if (ctx?.shift) review.handleDismiss(cur.id);
       else review.handleAccept(cur.id);
@@ -875,7 +862,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-next": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const sorted = sortAnnotationsByPosition(visibleAnnotations);
     const nextId = nextAnnotationId(sorted, activeAnnotationId);
     if (nextId) {
       activeAnnotationId = nextId;
@@ -886,7 +873,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-prev": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const sorted = sortAnnotationsByPosition(visibleAnnotations);
     const prevId = prevAnnotationId(sorted, activeAnnotationId);
     if (prevId) {
       activeAnnotationId = prevId;
@@ -923,7 +910,7 @@ const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId
 const review = useAnnotationReview({
   getYdoc: () => activeTab?.ydoc ?? null,
   getEditor: () => editor,
-  getAnnotations: () => modeGate.visibleAnnotations,
+  getAnnotations: () => visibleAnnotations,
   onActiveAnnotationChange: (id) => {
     activeAnnotationId = id;
   },
@@ -938,11 +925,11 @@ const review = useAnnotationReview({
 // via DOM nesting in the positioning layer. Collision resolution lands in
 // PR 2; rail-collapse and narrow-layout auto-disable in PR 3.
 const marginNotes = $derived(
-  marginViewEffectivelyOn ? modeGate.visibleAnnotations.filter((a) => a.type === "note") : [],
+  marginViewEffectivelyOn ? visibleAnnotations.filter((a) => a.type === "note") : [],
 );
 const marginComments = $derived(
   marginViewEffectivelyOn
-    ? modeGate.visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
+    ? visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
     : [],
 );
 const marginPositions = createMarginPositions({
@@ -976,7 +963,7 @@ const marginHandlers = $derived.by(() => {
 });
 
 const tutorial = createTutorial(
-  () => modeGate.visibleAnnotations,
+  () => visibleAnnotations,
   () => editor,
   () => activeTab?.fileName,
 );
@@ -1142,12 +1129,9 @@ const tutorial = createTutorial(
           />
           <PanelSlot
             kind="side"
-            annotations={modeGate.visibleAnnotations}
+            annotations={visibleAnnotations}
             {editor}
             ydoc={activeTab?.ydoc ?? null}
-            heldCount={modeGate.heldCount}
-            tandemMode={modeState.tandemMode}
-            onModeChange={modeState.setTandemMode}
             activeDocFormat={activeTab?.format}
             documentId={activeTab?.id}
             {activeAnnotationId}
@@ -1172,9 +1156,6 @@ const tutorial = createTutorial(
       claudeActive={yjsSync.claudeActive}
       readOnly={yjsSync.readOnly}
       saving={saveStore.saving}
-      heldCount={modeGate.heldCount}
-      mode={modeState.tandemMode}
-      onShowHeld={() => modeState.setTandemMode("tandem")}
       {editor}
     />
 
@@ -1222,7 +1203,7 @@ const tutorial = createTutorial(
       open={paletteOpen}
       onClose={() => (paletteOpen = false)}
       {editor}
-      annotations={modeGate.visibleAnnotations}
+      annotations={visibleAnnotations}
       onFocusAnnotation={(id) => { activeAnnotationId = id; }}
     />
 
@@ -1326,7 +1307,7 @@ const tutorial = createTutorial(
     use:scrollFade={"y"}
     role="region"
     aria-label="Document editor"
-    style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+    style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}

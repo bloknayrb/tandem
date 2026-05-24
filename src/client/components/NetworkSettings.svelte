@@ -166,7 +166,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     </select>
   </div>
 
-  <!-- Hold Annotations While Offline — TODO(v0.11.0): wire to annotation queuing in useModeGate -->
+  <!-- Hold Annotations While Offline — TODO(v0.11.0): wire to offline annotation queuing -->
   <label style={rowStyle}>
     <input
       type="checkbox"
