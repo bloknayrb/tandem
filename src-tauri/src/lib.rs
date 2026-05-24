@@ -85,6 +85,31 @@ struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 /// events post directly.
 struct PendingOpens(Mutex<Vec<std::path::PathBuf>>);
 
+/// Why `extract_file_arg` rejected a candidate path. Carried in the `Err`
+/// variant of its return so callers can log a typed reason (and, in the
+/// future, surface a typed event to the WebView). See issue #630 — this is
+/// sub-task #1 of the broader rejection-surfacing work; downstream sub-tasks
+/// (Tauri event emission, buffered drain summaries, etc.) are tracked in a
+/// follow-up issue.
+///
+/// `Ok(None)` is used for the "no candidate arg" case (the user did not pass
+/// a file at all — e.g. cold-start with only flags). Only paths that were
+/// supplied but failed validation produce an `Err`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RejectionReason {
+    /// On Windows, the resolved absolute path contains a `:` outside the
+    /// drive-letter slot (index 1). Catches NTFS Alternate Data Stream
+    /// syntax like `file.md:Zone.Identifier`.
+    SuspiciousColon,
+    /// The candidate's extension (lowercased) is not in
+    /// `SUPPORTED_FILE_ASSOC_EXTS`. The string is the offending extension
+    /// (empty when the path had no extension at all).
+    UnsupportedExtension(String),
+    /// The resolved path does not exist as a regular file (missing, a
+    /// directory, or some other non-file inode).
+    NotAFile,
+}
+
 /// Extract a file path to open from a process's command-line args.
 ///
 /// Rules:
@@ -101,13 +126,24 @@ struct PendingOpens(Mutex<Vec<std::path::PathBuf>>);
 /// - Verify the extension is in `SUPPORTED_FILE_ASSOC_EXTS` (case-insensitive).
 /// - Verify the path exists as a regular file.
 ///
+/// Returns:
+/// - `Ok(Some(path))` — a validated, openable file path.
+/// - `Ok(None)` — no candidate file arg was supplied (cold-start without a
+///   file, all args were flags, etc.). Not a rejection.
+/// - `Err(RejectionReason::...)` — a candidate was supplied but failed
+///   validation. Callers log the typed reason at `log::warn!`.
+///
 /// This is `pub` so the integration test in `tests/file_association.rs` can
 /// exercise it.
 pub fn extract_file_arg(
     args: &[String],
     cwd: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    let candidate = args.iter().skip(1).find(|a| !a.starts_with('-') && a.as_str() != "--")?;
+) -> Result<Option<std::path::PathBuf>, RejectionReason> {
+    let Some(candidate) =
+        args.iter().skip(1).find(|a| !a.starts_with('-') && a.as_str() != "--")
+    else {
+        return Ok(None);
+    };
 
     let p = std::path::Path::new(candidate);
     let absolute: std::path::PathBuf =
@@ -128,10 +164,7 @@ pub fn extract_file_arg(
         let absolute_str = absolute.to_string_lossy();
         for (i, b) in absolute_str.as_bytes().iter().enumerate() {
             if *b == b':' && i != 1 {
-                log::warn!(
-                    "extract_file_arg: rejecting path with suspicious ':' at index {i}: {absolute_str}"
-                );
-                return None;
+                return Err(RejectionReason::SuspiciousColon);
             }
         }
     }
@@ -139,13 +172,10 @@ pub fn extract_file_arg(
     let ext = absolute
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())?;
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
     if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
-        log::warn!(
-            "extract_file_arg: rejecting unsupported extension '.{ext}' for {}",
-            absolute.display()
-        );
-        return None;
+        return Err(RejectionReason::UnsupportedExtension(ext));
     }
 
     // is_file() follows symlinks intentionally — the final read goes through
@@ -154,14 +184,10 @@ pub fn extract_file_arg(
     // duplicate that check without adding defense in depth, since a symlink
     // pointing at a disallowed target would be rejected on the server hop.
     if !absolute.is_file() {
-        log::warn!(
-            "extract_file_arg: path is not a regular file: {}",
-            absolute.display()
-        );
-        return None;
+        return Err(RejectionReason::NotAFile);
     }
 
-    Some(absolute)
+    Ok(Some(absolute))
 }
 
 /// POST `{ filePath }` to the sidecar's `/api/open` endpoint with the auth
@@ -381,23 +407,31 @@ pub fn run() {
             // Apple Events (RunEvent::Opened) — args won't contain the file
             // path. This call is a no-op there, intentionally defensive for
             // shell-invoke edge cases.
-            if let Some(path) = extract_file_arg(&args, &cwd_path) {
-                let app_handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let client = app_handle.state::<reqwest::Client>().inner().clone();
-                    let token = match token_store::get_or_create_token() {
-                        Ok(t) => Some(t),
-                        Err(e) => {
-                            log::warn!("Token retrieval failed for second-instance POST: {e}");
-                            None
+            match extract_file_arg(&args, &cwd_path) {
+                Ok(Some(path)) => {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let client = app_handle.state::<reqwest::Client>().inner().clone();
+                        let token = match token_store::get_or_create_token() {
+                            Ok(t) => Some(t),
+                            Err(e) => {
+                                log::warn!("Token retrieval failed for second-instance POST: {e}");
+                                None
+                            }
+                        };
+                        if let Err(e) =
+                            request_open_file(&client, token.as_deref(), &path).await
+                        {
+                            log::warn!("request_open_file (second-instance) failed: {e}");
                         }
-                    };
-                    if let Err(e) =
-                        request_open_file(&client, token.as_deref(), &path).await
-                    {
-                        log::warn!("request_open_file (second-instance) failed: {e}");
-                    }
-                });
+                    });
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    log::warn!(
+                        "extract_file_arg (second-instance) rejected candidate: {reason:?}"
+                    );
+                }
             }
         }))
         // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
@@ -443,7 +477,15 @@ pub fn run() {
             let cold_start_file: Option<std::path::PathBuf> = {
                 let args: Vec<String> = std::env::args().collect();
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                extract_file_arg(&args, &cwd)
+                match extract_file_arg(&args, &cwd) {
+                    Ok(opt) => opt,
+                    Err(reason) => {
+                        log::warn!(
+                            "extract_file_arg (cold-start) rejected candidate: {reason:?}"
+                        );
+                        None
+                    }
+                }
             };
             if let Some(ref p) = cold_start_file {
                 log::info!(

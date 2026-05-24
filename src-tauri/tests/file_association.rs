@@ -8,7 +8,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 
-use app_lib::extract_file_arg;
+use app_lib::{extract_file_arg, RejectionReason};
 use tempfile::TempDir;
 
 /// Build a [exe, ...rest] arg list, mimicking the OS shape.
@@ -25,48 +25,55 @@ fn touch(dir: &TempDir, name: &str) -> PathBuf {
 }
 
 #[test]
-fn empty_args_returns_none() {
+fn empty_args_returns_ok_none() {
     let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&[], &cwd).is_none());
+    assert_eq!(extract_file_arg(&[], &cwd), Ok(None));
 }
 
 #[test]
-fn exe_only_returns_none() {
+fn exe_only_returns_ok_none() {
     let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&args(&[]), &cwd).is_none());
+    assert_eq!(extract_file_arg(&args(&[]), &cwd), Ok(None));
 }
 
 #[test]
-fn flag_only_returns_none() {
+fn flag_only_returns_ok_none() {
     let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&args(&["--debug", "-v", "--help"]), &cwd).is_none());
-}
-
-#[test]
-fn nonexistent_file_returns_none() {
-    let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&args(&["/nope/does-not-exist.md"]), &cwd).is_none());
-}
-
-#[test]
-fn unsupported_extension_returns_none() {
-    let dir = TempDir::new().unwrap();
-    let p = touch(&dir, "secret.exe");
-    let cwd = std::env::current_dir().unwrap();
-    let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert!(
-        result.is_none(),
-        "extract_file_arg should reject unsupported .exe extension"
+    assert_eq!(
+        extract_file_arg(&args(&["--debug", "-v", "--help"]), &cwd),
+        Ok(None),
     );
 }
 
 #[test]
-fn absolute_md_path_returns_some() {
+fn nonexistent_file_returns_not_a_file() {
+    let cwd = std::env::current_dir().unwrap();
+    assert_eq!(
+        extract_file_arg(&args(&["/nope/does-not-exist.md"]), &cwd),
+        Err(RejectionReason::NotAFile),
+    );
+}
+
+#[test]
+fn unsupported_extension_returns_unsupported_extension() {
+    let dir = TempDir::new().unwrap();
+    let p = touch(&dir, "secret.exe");
+    let cwd = std::env::current_dir().unwrap();
+    let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
+    assert_eq!(
+        result,
+        Err(RejectionReason::UnsupportedExtension("exe".to_string())),
+        "extract_file_arg should reject unsupported .exe extension with typed reason"
+    );
+}
+
+#[test]
+fn absolute_md_path_returns_ok_some() {
     let dir = TempDir::new().unwrap();
     let p = touch(&dir, "doc.md");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[test]
@@ -75,7 +82,7 @@ fn relative_path_resolves_against_cwd() {
     touch(&dir, "notes.md");
     // Pretend the OS launched us with cwd=dir and a bare filename on argv.
     let result = extract_file_arg(&args(&["notes.md"]), dir.path());
-    assert_eq!(result, Some(dir.path().join("notes.md")));
+    assert_eq!(result, Ok(Some(dir.path().join("notes.md"))));
 }
 
 #[test]
@@ -87,7 +94,7 @@ fn leading_flags_then_file_takes_file() {
         &args(&["--debug", "-v", p.to_str().unwrap()]),
         &cwd,
     );
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[test]
@@ -96,7 +103,7 @@ fn double_dash_separator_is_skipped() {
     let p = touch(&dir, "y.md");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&["--", p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[test]
@@ -109,7 +116,7 @@ fn multiple_paths_takes_first() {
         &args(&[first.to_str().unwrap(), second.to_str().unwrap()]),
         &cwd,
     );
-    assert_eq!(result, Some(first));
+    assert_eq!(result, Ok(Some(first)));
     let _ = second; // suppress unused warning
 }
 
@@ -122,8 +129,9 @@ fn key_equals_value_flag_is_skipped_not_parsed() {
     let bogus = format!("--open={}", p.display());
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[bogus.as_str()]), &cwd);
-    assert!(
-        result.is_none(),
+    assert_eq!(
+        result,
+        Ok(None),
         "`--open=path` style flags must not have their value parsed as a file"
     );
 }
@@ -136,8 +144,8 @@ fn each_supported_extension_is_accepted() {
         let p = touch(&dir, &format!("doc.{ext}"));
         let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
         assert_eq!(
-            result.as_ref(),
-            Some(&p),
+            result,
+            Ok(Some(p.clone())),
             "extension '.{ext}' should be accepted"
         );
     }
@@ -149,7 +157,7 @@ fn extension_check_is_case_insensitive() {
     let p = touch(&dir, "DOC.MD");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[cfg(target_os = "windows")]
@@ -160,9 +168,10 @@ fn windows_alternate_data_stream_path_is_rejected() {
     // real ADS — we just verify the parser rejects the shape.
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&["C:\\tmp\\file.md:Zone.Identifier"]), &cwd);
-    assert!(
-        result.is_none(),
-        "Path with colon outside drive-letter slot must be rejected"
+    assert_eq!(
+        result,
+        Err(RejectionReason::SuspiciousColon),
+        "Path with colon outside drive-letter slot must be rejected with SuspiciousColon"
     );
 }
 
@@ -176,9 +185,10 @@ fn windows_relative_path_with_colon_rejected_after_resolution() {
     // post-join colon position is what matters.
     let cwd = PathBuf::from("C:\\Users\\bryan");
     let result = extract_file_arg(&args(&["notes.md:Zone.Identifier"]), &cwd);
-    assert!(
-        result.is_none(),
-        "Relative path with ADS colon must be rejected after resolution against cwd"
+    assert_eq!(
+        result,
+        Err(RejectionReason::SuspiciousColon),
+        "Relative path with ADS colon must be rejected with SuspiciousColon after resolution against cwd"
     );
 }
 
@@ -200,7 +210,7 @@ fn warm_start_single_instance_args_shape() {
     let result = extract_file_arg(&warm_args, &cwd);
     assert_eq!(
         result,
-        Some(target),
+        Ok(Some(target)),
         "warm-start arg shape must resolve the file path"
     );
 }
