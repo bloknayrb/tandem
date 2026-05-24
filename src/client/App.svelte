@@ -61,6 +61,7 @@ import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShor
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
@@ -194,6 +195,7 @@ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileN
 
 const notifications = createNotifications();
 const fileDrop = createFileDrop();
+initTauriFileDrop(notifications.push);
 
 // Surface sidecar restart failures (Tauri-only) as a generic toast. The
 // Rust side emits "sidecar-restart-failed" with a stable code; the message
@@ -1340,7 +1342,7 @@ const tutorial = createTutorial(
     use:scrollFade={"y"}
     role="region"
     aria-label="Document editor"
-    style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+    style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
     ondragover={fileDrop.handleEditorDragOver}
     ondragleave={fileDrop.handleEditorDragLeave}
     ondrop={fileDrop.handleEditorDrop}
