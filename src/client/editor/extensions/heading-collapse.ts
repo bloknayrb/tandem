@@ -31,13 +31,26 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
  *   App.svelte, so the file path is stable for the editor's lifetime; switching
  *   tabs rebuilds the editor (and re-hydrates from localStorage).
  *
- * # Known limitation: duplicate-heading positional ordinals
- * Headings with identical level + text are disambiguated by a positional
- * ordinal (0, 1, 2 … in document order). This is inherent to "basic scope" —
- * there's no stable per-heading identity. Reordering or deleting one of several
- * identical headings shifts the ordinals, so a collapse can re-target a
- * *different* duplicate after such an edit. Acceptable for the common case
- * (distinct heading text); a future scope could anchor to a CRDT-stable id.
+ * # Known limitation: positional anchoring (duplicates, reorder, replace)
+ * Headings have no stable per-heading identity in "basic scope" — collapse is
+ * anchored positionally:
+ *   - **Identical-duplicate headings** (same level + text) are disambiguated by
+ *     a positional ordinal (0, 1, 2 … in document order). Reordering or deleting
+ *     one of several identical headings shifts the ordinals, so a collapse can
+ *     re-target a *different* duplicate after such an edit.
+ *   - **Reorder / replace of distinct headings.** The count-stable on-edit
+ *     migration (`reconcileOnEdit`) only migrates a collapsed entry when EXACTLY
+ *     ONE index changed hash between transactions — the single-keystroke text
+ *     edit case. A same-count REORDER (two distinct headings swap positions) or
+ *     a net-zero ADD+DELETE produces multiple simultaneous index mismatches;
+ *     index-by-index pairing would mis-migrate the collapse onto an unrelated
+ *     section, so we deliberately retain the collapsed set unchanged in that
+ *     case (never erase, never mis-target — the collapse simply stays anchored
+ *     to whatever section now occupies the original hash, or harmlessly
+ *     dangles until a settling edit reconciles it).
+ * All of these are acceptable for the common case (distinct, stable heading
+ * text edited a keystroke at a time); a future scope could anchor to a
+ * CRDT-stable id to remove the positional dependency entirely.
  */
 
 export const headingCollapseKey = new PluginKey<HeadingCollapseState>("tandemHeadingCollapse");
@@ -190,7 +203,11 @@ export function walkHeadings(doc: PmNode): HeadingEntry[] {
  *    collapsed entry positionally to the heading's new hash so the section
  *    stays collapsed across the keystroke. Because the count is identical, the
  *    old and new heading arrays are index-aligned (document order), so an
- *    index-by-index hash diff tells us exactly which entry was retyped.
+ *    index-by-index hash diff tells us which entry was retyped — but ONLY when
+ *    EXACTLY ONE index differs. Multiple simultaneous index mismatches mean a
+ *    reorder or a net-zero add+delete, where index-pairing would mis-migrate a
+ *    collapsed entry onto an unrelated section (Finding 2, #815 re-review). In
+ *    that case we retain the set unchanged.
  *
  *  - **Count increased** → a heading was added; nothing to prune.
  *
@@ -209,18 +226,24 @@ export function reconcileOnEdit(
   // Same count → treat hash mismatches as in-progress text edits and migrate
   // the collapsed entry to the heading's new hash (index-aligned by position).
   if (prevHeadings.length === nextHeadings.length) {
-    let changed = false;
-    const migrated = new Set(collapsed);
+    // Count how many indices changed hash. A single-keystroke text edit touches
+    // exactly one heading; >1 mismatch is a reorder / net-zero add+delete where
+    // index-by-index pairing would migrate a collapsed entry onto an unrelated
+    // section. Retain the set unchanged on the ambiguous multi-change case
+    // (Finding 2): never erase, never mis-target.
+    const mismatches: number[] = [];
     for (let i = 0; i < prevHeadings.length; i++) {
-      const oldHash = prevHeadings[i].hash;
-      const newHash = nextHeadings[i].hash;
-      if (oldHash !== newHash && migrated.has(oldHash)) {
-        migrated.delete(oldHash);
-        migrated.add(newHash);
-        changed = true;
-      }
+      if (prevHeadings[i].hash !== nextHeadings[i].hash) mismatches.push(i);
     }
-    if (!changed) return collapsed;
+    if (mismatches.length !== 1) return collapsed;
+
+    const i = mismatches[0];
+    const oldHash = prevHeadings[i].hash;
+    const newHash = nextHeadings[i].hash;
+    if (!collapsed.has(oldHash)) return collapsed;
+    const migrated = new Set(collapsed);
+    migrated.delete(oldHash);
+    migrated.add(newHash);
     saveCollapsed(filePath, migrated);
     return migrated;
   }
@@ -229,6 +252,21 @@ export function reconcileOnEdit(
   // collapsed hash stays, any transiently-mismatched one is left untouched and
   // will reconcile on a later settling edit). Never erase here.
   if (nextHeadings.length > prevHeadings.length) {
+    return collapsed;
+  }
+
+  // Count decreased to zero while we've already seen content → this is almost
+  // certainly a force-reload (tandem_open {force:true}) clearing the Y.Doc in
+  // place before repopulating it, NOT a genuine deletion of every section. The
+  // editor is keyed by tab id so it is NOT remounted across a force-reload; the
+  // plugin view's one-shot `rehydrated` flag survives, so rehydrate will not
+  // re-run to recover state. If we pruned here, an intermediate empty-doc
+  // transaction (which y-prosemirror may emit separately from the repopulate —
+  // its population timing is non-deterministic, see annotation.ts:183/227)
+  // would garbage-collect EVERY collapsed hash and erase localStorage with no
+  // recovery path. Suppress the prune on the empty-doc transition — the direct
+  // mirror of the init-time empty-doc guard (Finding 1, #815 re-review).
+  if (nextHeadings.length === 0) {
     return collapsed;
   }
 

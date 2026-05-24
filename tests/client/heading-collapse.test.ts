@@ -267,6 +267,76 @@ describe("reconcileOnEdit (HIGH: editing a collapsed heading must not wipe state
     const collapsed = new Set<string>();
     expect(reconcileOnEdit(prev, next, collapsed, "/tmp/doc.md")).toBe(collapsed);
   });
+
+  // --- Finding 2 (#815 re-review): multi-index change → retain, no mis-migrate
+  it("does NOT mis-migrate a collapsed entry on a same-count reorder of distinct headings", () => {
+    // "A" and "B" swap positions (count unchanged, two indices differ).
+    const prev = walkHeadings(fakeDoc([heading(2, "A"), heading(2, "B")]));
+    const next = walkHeadings(fakeDoc([heading(2, "B"), heading(2, "A")]));
+    const collapsed = new Set(["2::a::0"]);
+
+    const result = reconcileOnEdit(prev, next, collapsed, "/tmp/doc.md");
+
+    // Multiple index mismatches → retain unchanged (same instance), no blind
+    // index-pairing that would migrate "a::0" onto the unrelated "b::0" slot.
+    expect(result).toBe(collapsed);
+    expect(result).toEqual(new Set(["2::a::0"]));
+    // Nothing persisted (no spurious save on the ambiguous case).
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set());
+  });
+
+  it("does NOT mis-migrate on a net-zero add+delete (two indices differ, count stable)", () => {
+    // "Old" replaced by "New" at index 0 AND a new tail heading swaps in at
+    // index 1 — two simultaneous mismatches with identical count.
+    const prev = walkHeadings(fakeDoc([heading(2, "Old"), heading(2, "Keep")]));
+    const next = walkHeadings(fakeDoc([heading(2, "New"), heading(2, "Other")]));
+    const collapsed = new Set(["2::old::0"]);
+
+    const result = reconcileOnEdit(prev, next, collapsed, "/tmp/doc.md");
+
+    // Retain unchanged rather than pairing index 0 → "new::0".
+    expect(result).toBe(collapsed);
+    expect(result.has("2::new::0")).toBe(false);
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set());
+  });
+
+  // --- Finding 1 (#815 re-review): force-reload empty transaction must not erase
+  it("does NOT erase localStorage when a force-reload drops the doc to zero headings then restores it", () => {
+    // Simulate the y-prosemirror split-swap: clear (full → empty) then
+    // populate (empty → full). The intermediate empty transaction must NOT
+    // garbage-collect the collapsed set, since the editor is not remounted and
+    // rehydrate will not re-run to recover it.
+    saveCollapsed("/tmp/doc.md", new Set(["2::a::0", "2::b::0"]));
+    const content = walkHeadings(fakeDoc([heading(2, "A"), heading(2, "B")]));
+    const empty = walkHeadings(fakeDoc([]));
+    const collapsed = new Set(["2::a::0", "2::b::0"]);
+
+    // Step 1: full → empty (clear transaction during force-reload). hasSeenContent
+    // is true at this point (the caller only invokes reconcileOnEdit after the
+    // initial sync). Count drops to 0.
+    const afterClear = reconcileOnEdit(content, empty, collapsed, "/tmp/doc.md");
+    // Suppressed: collapsed set survives untouched, localStorage NOT erased.
+    expect(afterClear).toBe(collapsed);
+    expect(afterClear).toEqual(new Set(["2::a::0", "2::b::0"]));
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set(["2::a::0", "2::b::0"]));
+
+    // Step 2: empty → full (repopulate transaction). Count increases → retain.
+    const afterRepopulate = reconcileOnEdit(empty, content, afterClear, "/tmp/doc.md");
+    expect(afterRepopulate).toEqual(new Set(["2::a::0", "2::b::0"]));
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set(["2::a::0", "2::b::0"]));
+  });
+
+  it("still prunes a genuine single-heading deletion (count drops to non-zero)", () => {
+    // Regression guard: the empty-doc suppression must not over-broaden to all
+    // count-decreased cases. Deleting one of two headings still GCs the vanished
+    // hash because the post-edit count is > 0.
+    const prev = walkHeadings(fakeDoc([heading(2, "A"), heading(2, "B")]));
+    const next = walkHeadings(fakeDoc([heading(2, "B")]));
+    const collapsed = new Set(["2::a::0", "2::b::0"]);
+    const result = reconcileOnEdit(prev, next, collapsed, "/tmp/doc.md");
+    expect(result).toEqual(new Set(["2::b::0"]));
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set(["2::b::0"]));
+  });
 });
 
 // --- Plugin spec: init(empty) → rehydrate(content) → apply ----------------
@@ -353,6 +423,48 @@ describe("plugin lifecycle: empty-init → content-arrival rehydrate → on-edit
     expect(s2.collapsed.has("2::first section::0")).toBe(false);
     expect(s2.collapsed.has("2::first sectionz::0")).toBe(true);
     expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set(["2::first sectionz::0"]));
+  });
+
+  it("force-reload through apply(): clear-to-empty then restore preserves collapse + localStorage", () => {
+    // Finding 1, exercised end-to-end through the plugin's apply() arm.
+    saveCollapsed("/tmp/doc.md", new Set(["2::first section::0"]));
+    const spec = getPluginSpec("/tmp/doc.md");
+
+    // init populated → hasSeenContent true from the start (force-reload does NOT
+    // remount the editor, so we model the pre-reload populated state).
+    const populated = fakeDoc([heading(2, "First Section"), para("body")]);
+    const s0 = spec.state.init({}, { doc: populated });
+    expect(s0.hasSeenContent).toBe(true);
+    expect(s0.collapsed).toEqual(new Set(["2::first section::0"]));
+
+    // Force-reload clear: doc → empty (count drops to 0). The empty-doc
+    // suppression must keep the collapsed set + localStorage intact.
+    const s1 = spec.state.apply(
+      {
+        docChanged: true,
+        getMeta: () => undefined,
+        mapping: { map: (p: number) => p },
+      },
+      s0,
+      {},
+      { doc: fakeDoc([]) },
+    );
+    expect(s1.collapsed).toEqual(new Set(["2::first section::0"]));
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set(["2::first section::0"]));
+
+    // Force-reload repopulate: empty → full content returns. Collapse survives.
+    const s2 = spec.state.apply(
+      {
+        docChanged: true,
+        getMeta: () => undefined,
+        mapping: { map: (p: number) => p },
+      },
+      s1,
+      {},
+      { doc: fakeDoc([heading(2, "First Section"), para("body")]) },
+    );
+    expect(s2.collapsed).toEqual(new Set(["2::first section::0"]));
+    expect(loadCollapsed("/tmp/doc.md")).toEqual(new Set(["2::first section::0"]));
   });
 
   it("populated-at-init still reconciles edits (hasSeenContent true from the start)", () => {
