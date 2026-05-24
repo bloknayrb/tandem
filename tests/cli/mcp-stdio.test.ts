@@ -770,6 +770,7 @@ describe("mcp-stdio per-request timeout", () => {
     //  3. Test destroys the server connection after the timer has fired.
     //  4. forwardToUpstream.catch fires: pendingRequests.delete() returns false → no second -32000.
     let heldRes: ServerResponse | undefined;
+    const postsReceived = { count: 0 };
     timeoutServer = createServer((req, res) => {
       if (req.method === "GET" && req.url === "/health") {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -781,6 +782,7 @@ describe("mcp-stdio per-request timeout", () => {
         req.on("data", (c: Buffer) => chunks.push(c));
         req.on("end", () => {
           heldRes = res;
+          postsReceived.count += 1;
         });
         return;
       }
@@ -807,21 +809,23 @@ describe("mcp-stdio per-request timeout", () => {
     const stdoutChunks: string[] = [];
     child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
 
-    // Wait for httpReady, then send the request.
-    await new Promise((r) => setTimeout(r, 500));
+    // Send the request immediately — preReadyBuffer holds it until httpReady
+    // flips, then forwardToUpstream fires and the 300ms timer starts. Polling
+    // on postsReceived (below) replaces a fixed setTimeout(500) — under
+    // full-suite parallelism, subprocess startup can easily exceed 500ms and
+    // the old fixed delay was flaky (see #687).
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 30, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
 
-    // Poll until server has the POST, then wait for timer to fire first.
-    for (let i = 0; i < 60; i++) {
-      if (heldRes) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    // Poll until the POST reaches the fake server — proves the per-request
+    // timer is now running. Generous budget for full-suite load.
+    await waitForPosts(postsReceived, 1);
     expect(heldRes).toBeDefined();
 
-    // Wait for the 300ms timer to fire and produce the -32000.
-    const firstLine = await readOneLine(child, 3_000);
+    // Wait for the 300ms timer to fire and produce the -32000. Loose bound
+    // (5s) to absorb scheduling jitter under parallel test load.
+    const firstLine = await readOneLine(child, 5_000);
     const first = JSON.parse(firstLine) as { id: number; error?: { code: number } };
     expect(first.id).toBe(30);
     expect(first.error?.code).toBe(-32000);
@@ -843,7 +847,7 @@ describe("mcp-stdio per-request timeout", () => {
     }).length;
     // Exactly one -32000 for id=30 — timer fired first, catch found map empty.
     expect(errorCount).toBe(1);
-  }, 10_000);
+  }, 20_000);
 
   it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
     // Regression guard: after the per-request timer fires and the proxy sends a
@@ -853,7 +857,7 @@ describe("mcp-stdio per-request timeout", () => {
     // exercising the real natural-exit path. SIGTERM would bypass the Node event
     // loop entirely and cannot detect orphan timer handles that block clean exit.
     // The timer has already fired and been cleared from the map before stdin.end().
-    const { port } = await makeHalfOpenServer();
+    const { port, postsReceived } = await makeHalfOpenServer();
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
       env: {
@@ -864,13 +868,15 @@ describe("mcp-stdio per-request timeout", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    await new Promise((r) => setTimeout(r, 500));
+    // Send immediately; preReadyBuffer holds it until httpReady. Poll on
+    // postsReceived instead of a fixed setTimeout(500) — see #687.
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 40, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
+    await waitForPosts(postsReceived, 1);
 
-    // Wait for the -32000 to arrive (timer fired).
-    const line = await readOneLine(child, 3_000);
+    // Wait for the -32000 to arrive (timer fired). Loose bound for full-suite load.
+    const line = await readOneLine(child, 5_000);
     const parsed = JSON.parse(line) as { id: number; error?: { code: number } };
     expect(parsed.id).toBe(40);
     expect(parsed.error?.code).toBe(-32000);
@@ -887,7 +893,7 @@ describe("mcp-stdio per-request timeout", () => {
       });
     });
     expect(closed).toBe(true);
-  }, 10_000);
+  }, 20_000);
 });
 
 describe("parseTimeoutMs", () => {

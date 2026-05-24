@@ -24,9 +24,6 @@ interface Props {
   theme?: ThemePreference;
   /** Set theme directly — wired from the brand menu's Color scheme section. */
   onSetTheme?: (theme: ThemePreference) => void;
-  /** Authorship-color visibility toggle. */
-  showAuthorship?: boolean;
-  onAuthorshipChange?: (visible: boolean) => void;
   /** Open Help modal. */
   onOpenHelp?: () => void;
   /** Open Settings popover. */
@@ -66,8 +63,6 @@ let {
   claudeActive = false,
   theme = "system",
   onSetTheme,
-  showAuthorship = false,
-  onAuthorshipChange,
   onOpenHelp,
   onOpenSettings,
   onOpenSettingsModal: _onOpenSettingsModal,
@@ -326,24 +321,6 @@ function chooseHelp() {
       ></span>
     {/if}
 
-    {#if onAuthorshipChange}
-      <button
-        type="button"
-        class="icon-btn"
-        class:active={showAuthorship}
-        data-testid="toolbar-authorship-toggle"
-        data-tauri-drag-region="false"
-        aria-label={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
-        aria-pressed={showAuthorship}
-        title={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
-        onclick={() => onAuthorshipChange(!showAuthorship)}
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="5.5" cy="8" r="3.2" fill="var(--tandem-author-user)" />
-          <circle cx="10.5" cy="8" r="3.2" fill="var(--tandem-author-claude)" opacity="0.85" />
-        </svg>
-      </button>
-    {/if}
     {#if defaultModelLabel && onOpenModelsSettings}
       <button
         type="button"
@@ -690,36 +667,6 @@ function chooseHelp() {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-author-claude) 18%, transparent);
   }
 
-  /* 30×30 circular soft-fill chip — always visible, not transparent-until-hover. */
-  .icon-btn {
-    display: inline-grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
-    border: 1px solid transparent;
-    border-radius: var(--tandem-r-pill);
-    background: var(--tandem-surface-sunk);
-    color: var(--tandem-fg-muted);
-    cursor: pointer;
-    padding: 0;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
-  }
-
-  .icon-btn:hover {
-    background: var(--tandem-surface);
-    color: var(--tandem-fg);
-  }
-
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--tandem-accent);
-    outline-offset: 1px;
-  }
-
-  .icon-btn.active {
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent);
-  }
-
   /* #659 default-model chip. Sits in the right action cluster; clicking
      opens Settings → Models. Compact so it doesn't crowd the toolbar; the
      accent-tinted dot signals "active model" without occupying the same
@@ -838,14 +785,12 @@ function chooseHelp() {
       forced-color-adjust: auto;
     }
 
-    .icon-btn,
     .title-bar-btn {
       background: ButtonFace;
       color: ButtonText;
       border: 1px solid ButtonText;
     }
 
-    .icon-btn:hover:not(:disabled),
     .title-bar-btn:hover:not(:disabled) {
       background: Highlight;
       color: HighlightText;
