@@ -43,6 +43,7 @@ import {
 } from "./hooks/useAnnotationOrder.js";
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
+import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
@@ -55,7 +56,6 @@ import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { shouldShowInMode } from "./hooks/useModeGate";
 import { createNotifications } from "./hooks/useNotifications.svelte";
-import { isSettingsModalShortcut, isSettingsShortcut } from "./hooks/useSettingsShortcut.js";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
@@ -682,244 +682,230 @@ function captureSelectionForChat() {
   };
 }
 
-$effect(() => {
-  function handler(e: KeyboardEvent) {
-    if (e.key === "?") {
-      const el = e.target as HTMLElement;
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
-      showHelp = untrack(() => !showHelp);
+/**
+ * App-level keydown handler. The pure shortcut-matching logic lives in
+ * `matchShortcut` (see `hooks/useAppShortcuts.ts`) so it's testable in
+ * isolation against Dvorak / macOS Option-letter / IME edge cases. This
+ * dispatch table holds the side-effecting branches (editor commands,
+ * modal state, findState, notification toasts) so the helper stays pure.
+ *
+ * Each handler is responsible for its own `preventDefault()` policy —
+ * some shortcuts intentionally let the event through when focus is in a
+ * form field (e.g. Ctrl+W / Ctrl+O via `shouldIgnoreShortcut`), and some
+ * always claim the event (e.g. Ctrl+F to suppress the browser's native
+ * find-in-page) regardless of input focus.
+ */
+type ShortcutHandler = (e: KeyboardEvent, ctx: ShortcutContext | undefined) => void;
+const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
+  "toggle-help": (e) => {
+    // INPUT/TEXTAREA/contenteditable guard: "?" and Ctrl+/ both fall through
+    // in form fields so the keystroke remains usable as input.
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
       return;
     }
-    if (e.ctrlKey || e.metaKey) {
-      // Letter shortcuts use `e.code` ("KeyA" etc.) instead of `e.key` so they
-      // remain layout-independent on Dvorak/AZERTY AND fire correctly on macOS
-      // when Option is held (Option+letter produces alt characters like "†"/"µ"
-      // that don't match e.key === "t" or "m"). Digit-1..9 already used e.code;
-      // Backslash already used e.code; Enter is layout-stable and stays on
-      // e.key. Shift/Alt modifier discrimination is explicit so intent is on
-      // the page (e.g. Ctrl+M vs Ctrl+Shift+M).
-      if (e.code === "KeyA" && !e.altKey && !e.shiftKey) {
-        const active = document.activeElement;
-        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
-        if (active?.closest?.(".ProseMirror")) return;
-        e.preventDefault();
-        editor?.commands.selectAll();
-      } else if (e.code === "KeyS") {
-        e.preventDefault();
-        void triggerSave(yjsSync.activeTabId);
-      } else if (isSettingsModalShortcut(e)) {
-        // Wave 1: Ctrl+Shift+, opens the new SettingsModal sibling component
-        // (see `components/SettingsModal.svelte`). Must be tested before
-        // `isSettingsShortcut` even though that predicate also rejects shift —
-        // shielding the order against future predicate edits.
-        e.preventDefault();
-        openSettingsModalWithAck();
-      } else if (isSettingsShortcut(e)) {
-        e.preventDefault();
-        openSettingsPopoverWithAck();
-      } else if (e.shiftKey && e.code === "KeyP") {
-        e.preventDefault();
-        paletteOpen = !untrack(() => paletteOpen);
-      } else if (e.code === "KeyN") {
-        const el = e.target as HTMLElement;
-        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
-        e.preventDefault();
-        void createScratchpad();
-      } else if (e.key === "/") {
-        const el = e.target as HTMLElement;
-        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
-        e.preventDefault();
-        showHelp = untrack(() => !showHelp);
-      } else if (e.code === "KeyW") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        const id = yjsSync.activeTabId;
-        if (id) closeTabAndRecord(id);
-      } else if (e.code === "KeyO") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        fileOpenDialogOpen = true;
-      } else if (/^Digit[1-9]$/.test(e.code)) {
-        if (shouldIgnoreShortcut(e)) return;
-        const nextId = pickTabByDigit(yjsSync.tabs, Number(e.code.slice(5)));
-        if (nextId) {
-          e.preventDefault();
-          yjsSync.setActiveTabId(nextId);
-        }
-      } else if (e.shiftKey && !e.altKey && e.code === "KeyM") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
-      } else if (e.altKey && e.code === "KeyT") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        void reopenClosedTab();
-      }
+    e.preventDefault();
+    showHelp = untrack(() => !showHelp);
+  },
+  "select-all": (e) => {
+    // Skip when focus is in a real form field or anywhere inside ProseMirror —
+    // the editor's own select-all should win in both cases.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+    if (active?.closest?.(".ProseMirror")) return;
+    e.preventDefault();
+    editor?.commands.selectAll();
+  },
+  save: (e) => {
+    e.preventDefault();
+    void triggerSave(yjsSync.activeTabId);
+  },
+  "settings-modal": (e) => {
+    e.preventDefault();
+    openSettingsModalWithAck();
+  },
+  settings: (e) => {
+    e.preventDefault();
+    openSettingsPopoverWithAck();
+  },
+  "toggle-palette": (e) => {
+    e.preventDefault();
+    paletteOpen = !untrack(() => paletteOpen);
+  },
+  "new-scratchpad": (e) => {
+    // Slightly looser than `shouldIgnoreShortcut`: only the tagName check, no
+    // isComposing fallthrough — preserves the legacy behavior.
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
+    e.preventDefault();
+    void createScratchpad();
+  },
+  "close-tab": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    const id = yjsSync.activeTabId;
+    if (id) closeTabAndRecord(id);
+  },
+  "open-file": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    fileOpenDialogOpen = true;
+  },
+  "pick-tab": (e, ctx) => {
+    if (shouldIgnoreShortcut(e)) return;
+    const digit = ctx?.tabIndex;
+    if (digit === undefined) return;
+    const nextId = pickTabByDigit(yjsSync.tabs, digit);
+    if (nextId) {
+      e.preventDefault();
+      yjsSync.setActiveTabId(nextId);
     }
-    // Ctrl/Cmd+F — focus outline search if outline panel visible; else open find bar (doc scope).
-    // Ctrl/Cmd+Shift+F — open find bar pre-scoped to "Open tabs" (bypasses outline route).
-    // Note: intentionally NOT gated on shouldIgnoreShortcut — Ctrl+F should always
+  },
+  "toggle-mode": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo");
+  },
+  "reopen-closed-tab": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    void reopenClosedTab();
+  },
+  find: (e, ctx) => {
+    // Intentionally NOT gated on shouldIgnoreShortcut — Ctrl+F should always
     // claim find behavior to prevent the browser's native find-in-page from firing.
-    if ((e.ctrlKey || e.metaKey) && e.code === "KeyF") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        findBarForceScope = "tabs";
-        findBarOpen = true;
-        return;
-      }
-      const isOutlineVisible = effectiveLeftVisible;
-      if (isOutlineVisible) {
-        outlineFocusTrigger += 1;
-      } else {
-        findBarForceScope = "doc";
-        findBarOpen = true;
-      }
-    }
-    // Ctrl/Cmd+G — find next; Ctrl/Cmd+Shift+G — find previous.
-    // With no active query, fall back to opening the find bar.
-    if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
-      if (shouldIgnoreShortcut(e)) return;
-      e.preventDefault();
-      const ed = editor;
-      const findState = ed ? getFindState(ed.state) : undefined;
-      if (ed && shouldDispatchFindNav(findState)) {
-        if (e.shiftKey) ed.commands.findPrev();
-        else ed.commands.findNext();
-      } else {
-        findBarForceScope = "doc";
-        findBarOpen = true;
-      }
-    }
-    // Alt+Shift+Left / Alt+Shift+Right — toggle left / right panel. No ctrl/meta
-    // so the browser's Alt+Arrow history navigation is unaffected (history nav
-    // doesn't use Shift). Outside the ctrl/meta block above on purpose.
-    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
-      if (e.code === "ArrowLeft") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        toggleLeftPanel();
-        return;
-      }
-      if (e.code === "ArrowRight") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        toggleRightPanel();
-        return;
-      }
-    }
-    // Alt+] / Alt+[ — next / previous annotation. Plain Alt (no ctrl/meta/shift)
-    // so they work cross-platform without an fn-key on Mac (unlike F8).
-    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      if (e.code === "BracketRight") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
-        const nextId = nextAnnotationId(sorted, activeAnnotationId);
-        if (nextId) {
-          activeAnnotationId = nextId;
-          const ann = sorted.find((a) => a.id === nextId);
-          if (ann) review.scrollToAnnotation(ann);
-        }
-        return;
-      }
-      if (e.code === "BracketLeft") {
-        if (shouldIgnoreShortcut(e)) return;
-        e.preventDefault();
-        const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
-        const prevId = prevAnnotationId(sorted, activeAnnotationId);
-        if (prevId) {
-          activeAnnotationId = prevId;
-          const ann = sorted.find((a) => a.id === prevId);
-          if (ann) review.scrollToAnnotation(ann);
-        }
-        return;
-      }
-    }
-    // Ctrl/Cmd+Enter — accept focused annotation; Ctrl/Cmd+Shift+Enter — dismiss.
-    // Only Claude- or import-authored annotations can be accepted/dismissed
-    // (mirrors the SidePanel.svelte:440 prop gate). User-authored notes never
-    // become review-targets so the underlying handler is also gated.
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      if (shouldIgnoreShortcut(e)) return;
-      e.preventDefault();
-      const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
-      if (cur && cur.author !== "user") {
-        if (e.shiftKey) review.handleDismiss(cur.id);
-        else review.handleAccept(cur.id);
-      }
+    e.preventDefault();
+    if (ctx?.shift) {
+      findBarForceScope = "tabs";
+      findBarOpen = true;
       return;
     }
-    // Ctrl/Cmd+Alt+M — open the comment popup focused on its textarea, using
-    // whatever text is currently selected in the editor. Intentionally NOT
-    // gated on shouldIgnoreShortcut: contenteditable focus is the common case
-    // (user has selected text in the editor) and we want this to fire there.
-    //
-    // Three orthogonal preconditions gate the popup; branch feedback so a
-    // disabled-setting toast doesn't misfire when the real cause is "no
-    // selection" or "read-only doc". Suppression from palette/find is silent
-    // — the user is already in a different UI context.
-    if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === "KeyM") {
-      e.preventDefault();
-      const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
-      const reviewOnly = activeTab?.readOnly === true;
-      const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
-      if (popupSuppressed) {
-        // Palette/find UI is the active context; user understands why.
-        return;
-      }
-      if (!hasSelection) {
-        notifications.push({
-          id: `comment-shortcut-no-selection-${Date.now()}`,
-          type: "general-error",
-          severity: "info",
-          message: "Select text to comment",
-          dedupKey: "comment-shortcut-no-selection",
-          timestamp: Date.now(),
-        });
-        return;
-      }
-      if (reviewOnly) {
-        notifications.push({
-          id: `comment-shortcut-readonly-${Date.now()}`,
-          type: "general-error",
-          severity: "info",
-          message: "Document is read-only",
-          dedupKey: "comment-shortcut-readonly",
-          timestamp: Date.now(),
-        });
-        return;
-      }
-      if (!settingsState.settings.selectionToolbar) {
-        notifications.push({
-          id: `comment-shortcut-toolbar-off-${Date.now()}`,
-          type: "general-error",
-          severity: "info",
-          message: "Enable selection toolbar in Settings to comment via keyboard",
-          dedupKey: "comment-shortcut-toolbar-off",
-          timestamp: Date.now(),
-        });
-        return;
-      }
-      commentFocusTrigger += 1;
+    if (effectiveLeftVisible) {
+      outlineFocusTrigger += 1;
+    } else {
+      findBarForceScope = "doc";
+      findBarOpen = true;
+    }
+  },
+  "find-nav": (e, ctx) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    const ed = editor;
+    const findState = ed ? getFindState(ed.state) : undefined;
+    if (ed && shouldDispatchFindNav(findState)) {
+      if (ctx?.shift) ed.commands.findPrev();
+      else ed.commands.findNext();
+    } else {
+      findBarForceScope = "doc";
+      findBarOpen = true;
+    }
+  },
+  "annotation-accept-or-dismiss": (e, ctx) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    const cur = modeGate.visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    if (cur && cur.author !== "user") {
+      if (ctx?.shift) review.handleDismiss(cur.id);
+      else review.handleAccept(cur.id);
+    }
+  },
+  "comment-on-selection": (e) => {
+    // Intentionally NOT gated on shouldIgnoreShortcut: contenteditable focus
+    // is the common case (user has selected text in the editor).
+    e.preventDefault();
+    const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
+    const reviewOnly = activeTab?.readOnly === true;
+    const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
+    if (popupSuppressed) {
+      // Palette/find UI is the active context; user understands why.
       return;
     }
-    // Alt+L — select the containing block (paragraph / heading / list item).
-    // Chosen over Ctrl+L to avoid the browser address-bar conflict in dev mode.
-    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyL") {
-      if (shouldIgnoreShortcut(e)) return;
-      e.preventDefault();
-      if (editor) editor.chain().focus().selectParentNode().run();
-      return;
-    }
-    // Ctrl/Cmd+Alt+A — toggle authorship colors. Works even when focus is in
-    // a form input (it's a global UI preference, not a contextual action).
-    if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === "KeyA") {
-      e.preventDefault();
-      settingsState.updateSettings({
-        showAuthorship: !settingsState.settings.showAuthorship,
+    if (!hasSelection) {
+      notifications.push({
+        id: `comment-shortcut-no-selection-${Date.now()}`,
+        type: "general-error",
+        severity: "info",
+        message: "Select text to comment",
+        dedupKey: "comment-shortcut-no-selection",
+        timestamp: Date.now(),
       });
       return;
     }
+    if (reviewOnly) {
+      notifications.push({
+        id: `comment-shortcut-readonly-${Date.now()}`,
+        type: "general-error",
+        severity: "info",
+        message: "Document is read-only",
+        dedupKey: "comment-shortcut-readonly",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    if (!settingsState.settings.selectionToolbar) {
+      notifications.push({
+        id: `comment-shortcut-toolbar-off-${Date.now()}`,
+        type: "general-error",
+        severity: "info",
+        message: "Enable selection toolbar in Settings to comment via keyboard",
+        dedupKey: "comment-shortcut-toolbar-off",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    commentFocusTrigger += 1;
+  },
+  "toggle-authorship": (e) => {
+    // Works even when focus is in a form input (global UI preference).
+    e.preventDefault();
+    settingsState.updateSettings({
+      showAuthorship: !settingsState.settings.showAuthorship,
+    });
+  },
+  "toggle-left-panel": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    toggleLeftPanel();
+  },
+  "toggle-right-panel": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    toggleRightPanel();
+  },
+  "annotation-next": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const nextId = nextAnnotationId(sorted, activeAnnotationId);
+    if (nextId) {
+      activeAnnotationId = nextId;
+      const ann = sorted.find((a) => a.id === nextId);
+      if (ann) review.scrollToAnnotation(ann);
+    }
+  },
+  "annotation-prev": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    const sorted = sortAnnotationsByPosition(modeGate.visibleAnnotations);
+    const prevId = prevAnnotationId(sorted, activeAnnotationId);
+    if (prevId) {
+      activeAnnotationId = prevId;
+      const ann = sorted.find((a) => a.id === prevId);
+      if (ann) review.scrollToAnnotation(ann);
+    }
+  },
+  "select-block": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    if (editor) editor.chain().focus().selectParentNode().run();
+  },
+};
+
+$effect(() => {
+  function handler(e: KeyboardEvent) {
+    const match = matchShortcut(e);
+    if (!match) return;
+    dispatch[match.id]?.(e, match.context);
   }
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
