@@ -12,12 +12,22 @@ import {
 
 describe("readExistingTandemEntries", () => {
   let tmpHome: string;
+  let prevAppData: string | undefined;
 
   beforeEach(async () => {
     tmpHome = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-existing-"));
+    // `detectTargets`'s non-MSIX "Claude Desktop" branch reads `process.env.APPDATA`
+    // directly and there is no `appDataOverride` field in DetectOptions. Pin it into
+    // the empty tmpHome so a real `%APPDATA%\Claude\claude_desktop_config.json` on a
+    // Windows dev machine can't leak a "Claude Desktop" target into the assertions.
+    // See #736.
+    prevAppData = process.env.APPDATA;
+    process.env.APPDATA = tmpHome;
   });
 
   afterEach(async () => {
+    if (prevAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = prevAppData;
     if (tmpHome) {
       await fs.promises.rm(tmpHome, { recursive: true, force: true });
     }
@@ -28,7 +38,8 @@ describe("readExistingTandemEntries", () => {
   // tmpHome and would either fail `assertPathSafe` early or surface
   // user-installed Claude_* packages as targets). `homeOverride` only
   // steers home-rooted lookups; LOCALAPPDATA is a separate env var with its
-  // own override field. See #736.
+  // own override field. APPDATA (non-MSIX Desktop branch) is pinned via
+  // beforeEach since DetectOptions has no override field for it. See #736.
   const detectOverrides = () => ({ homeOverride: tmpHome, localAppDataOverride: tmpHome });
 
   it("returns status: missing when ~/.claude.json does not exist (force-detected target)", async () => {
