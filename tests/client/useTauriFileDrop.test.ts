@@ -102,6 +102,65 @@ describe("useTauriFileDrop", () => {
     expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith("C:/first.md");
   });
 
+  // Regression coverage for the basename-extraction + dot<=0 fix in
+  // commit 8e73059. Each row pins one equivalence class of the
+  // extensionAllowed() invariant. Adding a new extension to
+  // SUPPORTED_EXTENSIONS should not need to change any of these rows.
+  it.each([
+    // Negative: drop should reject AND fire the "unsupported" toast.
+    {
+      path: "/my.files/readme",
+      expected: "reject",
+      why: "dot in parent dir, no extension on file",
+    },
+    { path: "/home/user/.md", expected: "reject", why: "bare dotfile, basename starts with dot" },
+    { path: "/file.", expected: "reject", why: "trailing dot, empty extension" },
+    // Positive: drop should call openServerPath with the path.
+    {
+      path: "/my.files/notes.md",
+      expected: "open",
+      why: "forward-slash, dot in parent dir, valid ext",
+    },
+    {
+      path: "C:\\Users\\foo\\notes.md",
+      expected: "open",
+      why: "pure backslash, no dot-in-parent confound",
+    },
+    {
+      path: "C:\\my.docs\\notes.md",
+      expected: "open",
+      why: "backslash + dot in parent dir + valid ext",
+    },
+    {
+      path: "C:/dir\\sub.files/x.md",
+      expected: "open",
+      why: "mixed forward/back separator with dot-in-parent",
+    },
+    {
+      path: "/home/user/.notes.md",
+      expected: "open",
+      why: "dotfile with real extension (dot <= 0 didn't overshoot)",
+    },
+  ])("path-edge: $why — $path → $expected", async ({ path, expected }) => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const push = vi.fn();
+    const { initTauriFileDrop, _resetForTests } = await loadFreshHook();
+    _resetForTests();
+    initTauriFileDrop(push);
+    await flushMicrotasks();
+    registered!({ payload: { type: "drop", paths: [path] } });
+
+    if (expected === "open") {
+      expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith(path);
+    } else {
+      expect(vi.mocked(serverPaths.openServerPath)).not.toHaveBeenCalled();
+      // Dual assertion: prove the rejection reached the "unsupported"
+      // branch rather than silently falling through a future bug.
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(push.mock.calls[0][0]).toMatchObject({ dedupKey: "tauri-drop-unsupported" });
+    }
+  });
+
   it("flips fileDragOver true on enter and false on leave", async () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
     const { initTauriFileDrop, tauriFileDrop, _resetForTests } = await loadFreshHook();
