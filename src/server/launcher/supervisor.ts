@@ -490,13 +490,23 @@ export function resolveSafeCwd(candidate: string): string | null {
  * can't pivot Claude into system directories via a junction/symlink the user
  * happens to have under their home tree. The integration-file path bypasses
  * this — advanced users who hand-edit `integrations.json` opt into wider
- * scope. */
-export function resolveRouteCwd(candidate: string): string | null {
+ * scope.
+ *
+ * `opts.homeOverride` is a test-only seam: passing an explicit "home" lets
+ * cross-platform unit tests stand up a tmpdir, treat it as $HOME, and
+ * assert outside-home rejection deterministically on every platform.
+ * Mirrors the `refreshSkillIfStale(opts: { homeOverride? })` pattern in
+ * `src/server/integrations/apply.ts`. Production callers leave it unset
+ * and get `os.homedir()`. */
+export function resolveRouteCwd(
+  candidate: string,
+  opts: { homeOverride?: string } = {},
+): string | null {
   const safe = resolveSafeCwd(candidate);
   if (safe === null) return null;
   let homeReal: string;
   try {
-    homeReal = fs.realpathSync(os.homedir());
+    homeReal = fs.realpathSync(opts.homeOverride ?? os.homedir());
   } catch {
     return null;
   }
