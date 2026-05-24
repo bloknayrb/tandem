@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
+import { onMount } from "svelte";
 import type { Annotation } from "../../shared/types.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
@@ -168,6 +169,23 @@ $effect(() => {
     selectedIndex = 0;
     Promise.resolve().then(() => inputEl?.focus());
   }
+});
+
+// Escape must close the palette regardless of which descendant holds focus and
+// ahead of any nested handler that might consume the key. A capture-phase
+// window listener (gated on `open`) is the robust pattern the other modals use;
+// the modal-div `onkeydown` alone was unreliable. Registered once via onMount —
+// the handler reads `open`/`onClose` through the closure, so there's no
+// prop-read-in-cleanup retry-storm hazard.
+onMount(() => {
+  const onEscape = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || !open) return;
+    e.preventDefault();
+    e.stopPropagation();
+    close();
+  };
+  window.addEventListener("keydown", onEscape, { capture: true });
+  return () => window.removeEventListener("keydown", onEscape, { capture: true });
 });
 
 // ---------------------------------------------------------------------------

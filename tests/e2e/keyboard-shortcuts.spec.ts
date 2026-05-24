@@ -420,3 +420,20 @@ test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", as
   await page.keyboard.press("Control+Alt+t");
   await expect(sample2).toBeVisible();
 });
+
+test("Escape closes the command palette even when focus is outside it", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.locator("[data-testid='command-palette']");
+  await expect(palette).toBeVisible({ timeout: 3_000 });
+
+  // Move focus out of the palette (the modal-level onkeydown only fired while a
+  // palette descendant held focus — the regression). A window-level Escape
+  // handler must dismiss the palette regardless of where focus sits.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+});
