@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
@@ -25,23 +26,49 @@ let wdInflight = $state(false);
 let wdError = $state<string | null>(null);
 let wdLoaded = $state(false);
 let hasIntegration = $state(false);
+/**
+ * Captures the load-failure reason so the UI can surface a banner instead
+ * of silently hiding the working-directory section. `null` means either
+ * "load hasn't completed yet" (gated by `wdLoaded`) or "load succeeded but
+ * no claude-code integration was returned" — both pre-existing states.
+ */
+let lastLoadError = $state<string | null>(null);
+
+// Mounted-guard for async fetch — matches the pattern in TitleBar.svelte
+// (search "mounted = true" / "if (!mounted) return"). Without it,
+// `loadWorkingDirectory` writes to `$state` after the component unmounts,
+// which Svelte will not warn about but is a leak nonetheless.
+let mounted = true;
+onDestroy(() => {
+  mounted = false;
+});
 
 async function loadWorkingDirectory() {
   try {
     const res = await fetch(`${API_BASE}/api/integrations`);
-    if (!res.ok) return;
+    if (!mounted) return;
+    if (!res.ok) {
+      lastLoadError = `Failed to load integrations (HTTP ${res.status}).`;
+      return;
+    }
     const file = (await res.json()) as {
       integrations?: { kind?: string; workingDirectory?: string }[];
     };
+    if (!mounted) return;
     const entry = file.integrations?.find((i) => i.kind === "claude-code");
     if (entry) {
       hasIntegration = true;
       workingDirectory = entry.workingDirectory ?? null;
     }
   } catch (err) {
+    if (!mounted) return;
+    // Fixed-string banner — don't leak `err.message` to the user (the message
+    // can contain absolute paths and URLs from the underlying fetch error).
+    // Debug detail still goes to the console for developer triage.
     console.warn("[Settings] Failed to load workingDirectory:", err);
+    lastLoadError = "Couldn't load Claude working directory.";
   } finally {
-    wdLoaded = true;
+    if (mounted) wdLoaded = true;
   }
 }
 
@@ -63,6 +90,10 @@ async function persistWorkingDirectory(value: string | null) {
     }
     const body = (await res.json()) as { workingDirectory?: string | null };
     workingDirectory = body.workingDirectory ?? null;
+    // Fixed-string success toast (E5). Never include `err.message` or the
+    // resolved path — the toast surface is shared with other warnings and
+    // path leakage isn't appropriate there.
+    ctx.notify("info", "Working directory saved.");
   } catch (err) {
     wdError = err instanceof Error ? err.message : String(err);
   } finally {
@@ -71,9 +102,21 @@ async function persistWorkingDirectory(value: string | null) {
 }
 
 async function pickFolder() {
+  // Split the try-blocks so a dynamic-import failure (plugin missing /
+  // not registered) is distinguishable from an `open()` rejection
+  // (permission denied, IPC failure, user-cancel-with-error). Both
+  // notifications use fixed strings — raw `err.message` can include
+  // absolute paths from Tauri's IPC error envelopes.
+  let openFn: typeof import("@tauri-apps/plugin-dialog").open;
   try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({
+    ({ open: openFn } = await import("@tauri-apps/plugin-dialog"));
+  } catch (err) {
+    console.warn("[Settings] Folder picker import failed:", err);
+    ctx.notify("error", "Folder picker plugin unavailable");
+    return;
+  }
+  try {
+    const selected = await openFn({
       directory: true,
       multiple: false,
       title: "Choose Claude working directory",
@@ -82,7 +125,8 @@ async function pickFolder() {
       void persistWorkingDirectory(selected);
     }
   } catch (err) {
-    wdError = `Folder picker unavailable: ${err instanceof Error ? err.message : err}`;
+    console.warn("[Settings] Folder picker open() failed:", err);
+    ctx.notify("error", "Folder picker permission denied or IPC error");
   }
 }
 
@@ -163,6 +207,16 @@ function handleReset() {
   />
   <span>Margin annotation view (Word-style)</span>
 </label>
+
+{#if wdLoaded && !hasIntegration && lastLoadError}
+  <div
+    role="alert"
+    data-testid="settings-modal-working-directory-load-error"
+    style="font-size: 11px; color: var(--tandem-error-fg); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); padding: var(--tandem-space-2);"
+  >
+    {lastLoadError}
+  </div>
+{/if}
 
 {#if wdLoaded && hasIntegration}
   <div data-testid="settings-modal-working-directory" style="display: flex; flex-direction: column; gap: var(--tandem-space-2);">

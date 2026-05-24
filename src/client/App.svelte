@@ -1220,6 +1220,14 @@ const tutorial = createTutorial(
       connected={yjsSync.connected}
       reconnectAttempts={yjsSync.reconnectAttempts}
       initialTabId={nextSettingsTabId}
+      notify={(severity, message) =>
+        notifications.push({
+          id: `settings-${Date.now()}`,
+          type: "launcher",
+          severity,
+          message,
+          timestamp: Date.now(),
+        })}
     />
 
     <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
