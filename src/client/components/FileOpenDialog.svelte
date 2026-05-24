@@ -161,13 +161,15 @@ function handleBrowse() {
     >
       {loading ? "Opening…" : "Browse…"}
     </button>
-    <input
-      bind:this={fileInputEl}
-      type="file"
-      accept={acceptAttr}
-      onchange={handleFileSelect}
-      style="display: none;"
-    />
+    {#if !isTauriRuntime()}
+      <input
+        bind:this={fileInputEl}
+        type="file"
+        accept={acceptAttr}
+        onchange={handleFileSelect}
+        style="display: none;"
+      />
+    {/if}
 
     {#if isTauriRuntime()}
       <p
