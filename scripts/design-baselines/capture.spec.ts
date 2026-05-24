@@ -140,6 +140,15 @@ async function captureBaseline(
         el.removeAttribute("id");
       });
 
+      // Strip every <script>. Captured baselines are inert visual references;
+      // any script in the clone (e.g. index.html's theme pre-seed) would
+      // re-derive theme from `prefers-color-scheme` and override the
+      // <html data-theme="..."> set above, making a "-light" baseline render
+      // as dark on a viewer with dark OS preference.
+      bodyClone.querySelectorAll("script").forEach((el) => {
+        el.remove();
+      });
+
       const banner = `
         <div style="position:sticky;top:0;z-index:99999;background:#111;color:#eaeaea;padding:8px 16px;font:13px/1.4 -apple-system,Segoe UI,system-ui,sans-serif;border-bottom:2px solid #ff5b3a;">
           <strong style="color:#ff5b3a;">Design baseline:</strong>
@@ -190,6 +199,21 @@ for (const theme of ["light", "dark"] as const) {
       await waitForEditor(page);
       const editor = page.locator(".ProseMirror").first();
       await captureBaseline(page, "editor-body", theme, editor);
+    });
+
+    test(`outline-panel — ${theme}`, async ({ page }) => {
+      await mcp.callTool("tandem_open", { filePath: welcomePath });
+      await page.goto("/");
+      await waitForEditor(page);
+      // Left panel may default to collapsed; click the peek strip to expand
+      // it so the outline panel renders into the DOM.
+      const peekLeft = page.locator("[data-testid='peek-strip-left']");
+      if (await peekLeft.isVisible().catch(() => false)) {
+        await peekLeft.click();
+      }
+      const outline = page.locator("[data-testid='outline-panel']");
+      await expect(outline).toBeVisible({ timeout: 5_000 });
+      await captureBaseline(page, "outline-panel", theme, outline);
     });
 
     test(`side-panel-annotations — ${theme}`, async ({ page }) => {
