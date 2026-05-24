@@ -287,7 +287,6 @@ function handleKeyDown(e: KeyboardEvent) {
             <button
               bind:this={itemEls[i]}
               data-testid={`outline-heading-${entry.level}-${i}`}
-              class={isActive ? "outline-item-active" : ""}
               tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
               onclick={() => jumpTo(entry, i)}
               onfocus={() => (focusedIndex = i)}
@@ -313,7 +312,13 @@ function handleKeyDown(e: KeyboardEvent) {
                 if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "none";
               }}
             >
-              <span class="outline-tick" aria-hidden="true"></span>
+              <span
+                class="outline-tick"
+                aria-hidden="true"
+                style={isActive
+                  ? "background-color: var(--tandem-accent); opacity: 1;"
+                  : ""}
+              ></span>
               <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                 {entry.text || "(untitled)"}
               </span>
@@ -386,13 +391,14 @@ function handleKeyDown(e: KeyboardEvent) {
     flex-shrink: 0;
     width: 2px;
     height: 12px;
-    background: var(--tandem-border-strong);
+    background-color: var(--tandem-border-strong);
     border-radius: 1px;
     opacity: 0.55;
-    transition: background 100ms ease, opacity 100ms ease;
-  }
-  .outline-item-active .outline-tick {
-    background: var(--tandem-accent);
-    opacity: 1;
+    /* No transition. A scoped-CSS descendant override
+       (.outline-item-active .outline-tick) failed to settle on first paint
+       — discovered via live smoke in claude-in-chrome during sub-PR 1.3.
+       Active state is now driven via reactive style= on the span itself
+       (matches how the parent button already conditionally applies
+       background/color). Snapping looks fine at 2x12px. */
   }
 </style>
