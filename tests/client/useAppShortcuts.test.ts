@@ -264,9 +264,9 @@ describe("matchShortcut — legacy no-modifier-gate preservation", () => {
       id: "save",
     });
   });
-  it("Ctrl+Shift+S still matches save", () => {
+  it("Ctrl+Shift+S matches save-as (#827 scratchpad promotion)", () => {
     expect(matchShortcut(evt({ code: "KeyS", ctrlKey: true, shiftKey: true }))).toEqual({
-      id: "save",
+      id: "save-as",
     });
   });
   it("Ctrl+Alt+N still matches new-scratchpad", () => {

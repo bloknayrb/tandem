@@ -233,7 +233,33 @@ export function createYjsSync(): YjsSyncState {
       t.ydoc.destroy();
     }
 
-    const kept = currentTabs.filter((t) => serverIds.has(t.id));
+    // Kept tabs reuse their live ydoc/provider, but refresh the server-owned
+    // metadata fields (fileName / filePath / format / readOnly). This matters
+    // for in-place promotion: Save As keeps the same documentId/room but
+    // rewrites filePath + fileName, so a kept tab must pick up the new basename
+    // or the tab title stays stale ("Scratchpad.md").
+    const docById = new Map(docList.map((d) => [d.id, d]));
+    const kept = currentTabs
+      .filter((t) => serverIds.has(t.id))
+      .map((t) => {
+        const entry = docById.get(t.id);
+        if (!entry) return t;
+        if (
+          entry.fileName === t.fileName &&
+          entry.filePath === t.filePath &&
+          entry.format === t.format &&
+          entry.readOnly === t.readOnly
+        ) {
+          return t; // no metadata drift — preserve identity to avoid needless rerenders
+        }
+        return {
+          ...t,
+          fileName: entry.fileName,
+          filePath: entry.filePath,
+          format: entry.format,
+          readOnly: entry.readOnly,
+        };
+      });
     tabsState = [...kept, ...newTabs];
 
     // Keep the client's current tab when a *different* tab was closed and the

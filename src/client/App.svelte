@@ -6,10 +6,12 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
+import { generateNotificationId } from "../shared/utils";
 import {
   createScratchpad,
   saveStore,
   triggerSave,
+  triggerSaveAs,
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
@@ -442,6 +444,41 @@ wireActionDeps({
     settingsState.updateSettings({
       showAuthorship: !settingsState.settings.showAuthorship,
     }),
+  saveAs: async () => {
+    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+    // Save-As is a PROMOTION path — only offer it for ephemeral upload://
+    // (scratchpad) docs. A doc already on disk would be silently corrupted by
+    // a promote (orphaned annotations, deleted session). The server enforces
+    // this too (NOT_PROMOTABLE); guard the affordance here so the user gets a
+    // clear toast instead of a server error. See #827 review (Medium).
+    if (!tab || !isUploadPath(tab.filePath)) {
+      notifications.push({
+        id: generateNotificationId(),
+        type: "launcher",
+        severity: "info",
+        message: "Save As is only available for scratchpads; this document is already on disk.",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    // Default-name hint for the native dialog: prefer the existing basename.
+    // For a synthetic upload:// path that's already "Scratchpad.md".
+    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
+    const defaultName = tab.filePath.slice(lastSlash + 1);
+    await triggerSaveAs({
+      activeDocId: yjsSync.activeTabId,
+      defaultName,
+      sourceFormat: tab.format,
+      notify: (severity, message) =>
+        notifications.push({
+          id: generateNotificationId(),
+          type: "launcher",
+          severity,
+          message,
+          timestamp: Date.now(),
+        }),
+    });
+  },
 });
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -706,6 +743,42 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   save: (e) => {
     e.preventDefault();
     void triggerSave(yjsSync.activeTabId);
+  },
+  "save-as": (e) => {
+    // Don't hijack Ctrl+Shift+S while typing in a chat / annotation input.
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+      return;
+    }
+    e.preventDefault();
+    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+    // Save-As is a PROMOTION path — only for ephemeral upload:// (scratchpad)
+    // docs; mirrors the palette `saveAs` gate + server NOT_PROMOTABLE. See #827.
+    if (!tab || !isUploadPath(tab.filePath)) {
+      notifications.push({
+        id: generateNotificationId(),
+        type: "launcher",
+        severity: "info",
+        message: "Save As is only available for scratchpads; this document is already on disk.",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
+    const defaultName = tab.filePath.slice(lastSlash + 1);
+    void triggerSaveAs({
+      activeDocId: yjsSync.activeTabId,
+      defaultName,
+      sourceFormat: tab.format,
+      notify: (severity, message) =>
+        notifications.push({
+          id: generateNotificationId(),
+          type: "launcher",
+          severity,
+          message,
+          timestamp: Date.now(),
+        }),
+    });
   },
   "settings-modal": (e) => {
     e.preventDefault();

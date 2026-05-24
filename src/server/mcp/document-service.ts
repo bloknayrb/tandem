@@ -10,12 +10,14 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
-import { withInternal, withMcp } from "../../shared/origins.js";
+import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { closeStore } from "../annotations/store.js";
-import { clearFileSyncContext } from "../events/queue.js";
+import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
+import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
+import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import {
   deleteSession,
@@ -36,6 +38,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 // Save / auto-save / broadcast / session-restore concerns stay here for now.
 
 import {
+  addDoc,
   docCount,
   getActiveDocId,
   getOpenDocs,
@@ -166,6 +169,295 @@ export async function saveDocumentToDisk(
   } finally {
     savingDocs.delete(docId);
   }
+}
+
+/** Allowed formats for save-as. Mirrors AUTO_SAVE_FORMATS. */
+const SAVE_AS_FORMATS = new Set(["md", "txt"]);
+
+export interface SaveAsResult {
+  status: "saved" | "error";
+  /** When status === "saved", the on-disk path that was written + promoted. */
+  targetPath?: string;
+  /** When status === "saved", the new fileName the tab will display. */
+  fileName?: string;
+  /** When status === "saved", the format the doc was promoted to. */
+  format?: string;
+  reason?: string;
+  errorCode?: string;
+}
+
+/**
+ * Save the in-memory document content of `docId` to `targetPath` and PROMOTE
+ * the document in place: switch `OpenDoc.source` from `"upload"` to `"file"`,
+ * point `filePath` at the new path, and update Y_MAP_DOCUMENT_META so clients
+ * see the new tab title.
+ *
+ * Critically, we keep the same `documentId` (Hocuspocus room name). Changing
+ * it would orphan every connected client (see CLAUDE.md "Stale browser tabs
+ * merge old CRDT state back" / Y.js gotchas). The room keeps its
+ * `upload://scratchpad/<uuid>/...` ID; from auto-save's point of view the
+ * doc now looks like a `source === "file"` doc with a real `filePath`, so
+ * the 60s timer will round-trip it through `atomicWrite` going forward.
+ *
+ * Path safety: Save-As is a USER-DRIVEN flow — the path comes from the
+ * native Save dialog, so the user explicitly chose where to write
+ * (external drives, network mounts, project dirs outside $HOME are all
+ * legitimate). We therefore do NOT confine the target to the home/tmp
+ * roots. We DO still reject:
+ *  - symlinked path components (a planted symlink could redirect the write
+ *    to a protected file). `assertPathSafe()` runs its full realpath/
+ *    symlink walk; we widen only its allowed-roots confinement by passing
+ *    the resolved path's own filesystem root, so any absolute path passes
+ *    the root check while the symlink rejection stays intact.
+ *  - UNC paths on Windows (NTLM-relay attack surface — see the explicit
+ *    guard below).
+ *
+ * Bypasses two guards that normal `saveDocumentToDisk` enforces:
+ *  - upload-only short-circuit (the whole point is to write an upload doc out)
+ *  - external-mtime check (the target file does not exist yet)
+ *
+ * Does NOT wire a file watcher for the new path; that's an intentional v1
+ * limitation since scratchpads are typically saved to fresh locations and
+ * the existing file-watch attach point (`finalizeDocOpen`) is in
+ * file-opener.ts. Auto-save still picks the promoted doc up.
+ */
+export async function saveDocumentAsToDisk(
+  docId: string,
+  targetPath: string,
+  format: "md" | "txt",
+): Promise<SaveAsResult> {
+  const docState = openDocs.get(docId);
+  if (!docState) return { status: "error", reason: "Document not open", errorCode: "NOT_FOUND" };
+  if (docState.readOnly) {
+    return { status: "error", reason: "Read-only document", errorCode: "READ_ONLY" };
+  }
+  // Save-As is a PROMOTION path: it only makes sense for ephemeral upload/
+  // scratchpad docs (no durable annotation store, no real session, no
+  // file-watch). Running it on an already-on-disk doc (`source: "file"`)
+  // would silently destroy data: re-keying the durable annotation store to
+  // the new path's docHash WITHOUT migrating the original's annotations
+  // (they vanish), `deleteSession(oldPath)` deleting the REAL file's session,
+  // and `notifyDocumentPromoted` being a no-op (Claude's channel stays stale).
+  // Gate it to uploads so a misdirected client call (or future affordance
+  // regression) can't trash a real file. See #827 review (Medium).
+  if (docState.source !== "upload") {
+    return {
+      status: "error",
+      reason:
+        "Save As is only available for scratchpads/uploads; this document is already on disk.",
+      errorCode: "NOT_PROMOTABLE",
+    };
+  }
+  if (!SAVE_AS_FORMATS.has(format)) {
+    return {
+      status: "error",
+      reason: `Unsupported save-as format: '${format}'. Supported: md, txt.`,
+      errorCode: "UNSUPPORTED_FORMAT",
+    };
+  }
+
+  // Resolve once so the path we validate, the path we write, and the path we
+  // record in `OpenDoc.filePath` are identical. Otherwise the auto-save
+  // mtime-check would compare stat(promoted-path) against a session baseline
+  // keyed on a slightly different string and never converge.
+  const resolved = path.resolve(targetPath);
+
+  // Reject UNC paths on Windows — mirrors openFileByPath's resolveAndValidatePath.
+  if (process.platform === "win32" && (resolved.startsWith("\\\\") || resolved.startsWith("//"))) {
+    return {
+      status: "error",
+      reason: "UNC paths are not supported for security reasons.",
+      errorCode: "INVALID_PATH",
+    };
+  }
+
+  // The extension on disk must match the chosen format — otherwise auto-save
+  // and the format-detection round-trip would diverge from what the user sees.
+  const ext = path.extname(resolved).toLowerCase();
+  const expectedExt = `.${format}`;
+  if (ext !== expectedExt) {
+    return {
+      status: "error",
+      reason: `Target path extension '${ext || "(none)"}' does not match format '${format}'.`,
+      errorCode: "EXTENSION_MISMATCH",
+    };
+  }
+
+  // Save-As is user-driven: the path came from the native Save dialog, so
+  // the user is allowed to write anywhere they point it (external drives,
+  // network shares, project dirs outside $HOME). We keep assertPathSafe's
+  // symlink-rejection walk — a planted symlink redirecting the write is a
+  // genuine attack — but widen its allowed-roots confinement so no
+  // home/tmp restriction applies. Passing the resolved path's own
+  // filesystem root means the root check always passes (a path is always
+  // under its own root) while the realpath/symlink walk still rejects any
+  // symlinked component. UNC is rejected separately above.
+  try {
+    assertPathSafe(resolved, { allowedRoots: [path.parse(resolved).root] });
+  } catch (err) {
+    return {
+      status: "error",
+      reason: err instanceof Error ? err.message : String(err),
+      errorCode: "PATH_REJECTED",
+    };
+  }
+
+  const adapter = getAdapter(format);
+  if (!adapter.save) {
+    return {
+      status: "error",
+      reason: `Adapter for '${format}' cannot save`,
+      errorCode: "NO_ADAPTER",
+    };
+  }
+
+  // Per-document lock — shares the same set used by saveDocumentToDisk so a
+  // concurrent auto-save and save-as on the same doc cannot race.
+  if (savingDocs.has(docId)) {
+    return { status: "error", reason: "Save already in progress", errorCode: "SAVE_IN_PROGRESS" };
+  }
+  savingDocs.add(docId);
+  try {
+    const doc = getOrCreateDocument(docId);
+    const output = adapter.save(doc);
+
+    // The file shouldn't exist yet (we're saving as new), but if it does,
+    // pre-arm the watcher suppress so its first change event after we write
+    // doesn't bounce back as an external-edit reload. Safe no-op if the path
+    // isn't being watched.
+    suppressNextChange(resolved);
+    await atomicWrite(resolved, output);
+
+    // Persist a session for the promoted path so a restart restores the
+    // newly-saved doc rather than dropping content on the floor.
+    try {
+      await saveSession(resolved, format, doc);
+    } catch (err) {
+      // Session persistence is best-effort; the disk write is the contract.
+      console.error("[SaveAs] saveSession failed for", resolved, err);
+    }
+
+    // Capture the pre-promote upload:// path BEFORE `addDoc` overwrites it.
+    // Used to delete the stale upload session below so a restart doesn't try
+    // to restore a now-promoted doc under its old synthetic key.
+    const oldUploadPath = docState.filePath;
+
+    // Delete the pre-promote upload session. Best-effort — a leftover session
+    // for an upload:// path is skipped by listSessionFilePaths on restart, but
+    // leaving it behind is dead state. Do it after the new session write so a
+    // crash between the two leaves the durable copy, not nothing.
+    try {
+      await deleteSession(oldUploadPath);
+    } catch (err) {
+      console.error("[SaveAs] deleteSession failed for", oldUploadPath, err);
+    }
+
+    // Promote in place — keep the Hocuspocus room ID, swap source/filePath/format.
+    const fileName = path.basename(resolved);
+    addDoc(docId, {
+      id: docId,
+      filePath: resolved,
+      format,
+      readOnly: false,
+      source: "file",
+    });
+
+    // Refresh meta + dirty-tracking baseline. `withFileSync` is the right
+    // origin per ADR-031 — this is post-save bookkeeping (the file-writer
+    // echo), not user-intent (`withMcp`) and not setup (`withInternal`).
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    const now = Date.now();
+    withFileSync(doc, () => {
+      meta.set("format", format);
+      meta.set("fileName", fileName);
+      meta.set(Y_MAP_SAVED_AT_VERSION, now);
+    });
+
+    // Re-key the durable annotation store to the promoted path. Scratchpads
+    // open WITHOUT a file-sync context (openScratchpad skips wireAnnotationStore
+    // — ephemeral docs shouldn't orphan JSON on close). Once promoted to a real
+    // file, annotations SHOULD persist under `docHash(resolved)`, so wire the
+    // store now. wireAnnotationStore runs loadAndMerge (no prior on-disk state
+    // for a fresh path) and registers the file-sync context keyed to the new
+    // docHash, so annotations created post-promote serialize under the real
+    // path's key and reload on reopen-by-path. Best-effort: a wiring failure
+    // must not fail the save (the disk write is the contract), and the helper
+    // itself swallows + surfaces its own errors via the notification bus.
+    //
+    // Note (#827 review, flush Low): wireAnnotationStore → setFileSyncContext
+    // disposes any prior file-sync context with phase "close" WITHOUT flushing
+    // its debounced writes. For a SECOND Save-As on the same doc that would
+    // drop unflushed annotations — but the `source === "upload"` gate above
+    // closes that window: the first promote flips `source` to "file", so a
+    // second Save-As is rejected with NOT_PROMOTABLE before reaching here. The
+    // first promote is safe because a scratchpad/upload doc has no prior
+    // file-sync context to dispose (openScratchpad skips wireAnnotationStore).
+    const { wireAnnotationStore } = await import("./file-opener.js");
+    await wireAnnotationStore(docId, doc, resolved);
+
+    // The doc is now a real file — its channel observers were attached as an
+    // upload doc (uploadDoc: true → annotation/reply events suppressed). Re-
+    // attach as a non-upload doc so post-promote annotations reach Claude.
+    attachObservers(docId, doc);
+
+    // Broadcast the new openDocuments list so every connected tab bar reflects
+    // the new basename + format.
+    broadcastOpenDocs();
+
+    // Emit a synthetic `document:opened` so Claude can read/edit the now-real
+    // file by path. Because promote keeps the same documentId, the ctrl-meta
+    // observer sees no openDocuments ID change and would otherwise leave the
+    // doc in its `uploadDocIds` suppression set (invisible to Claude). This
+    // clears that suppression and surfaces the file on the channel.
+    notifyDocumentPromoted(docId, { fileName, format });
+
+    return { status: "saved", targetPath: resolved, fileName, format };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    pushNotification({
+      id: generateNotificationId(),
+      type: "save-error",
+      severity: "error",
+      message: `Save As failed for ${path.basename(resolved)}: ${msg}`,
+      toolName: "manual",
+      errorCode: errCode,
+      documentId: docId,
+      dedupKey: `save-as:${docId}`,
+      timestamp: Date.now(),
+    });
+    return { status: "error", reason: msg, errorCode: errCode };
+  } finally {
+    savingDocs.delete(docId);
+  }
+}
+
+/**
+ * Serialize a document to a string in the requested format WITHOUT writing
+ * to disk. Used by the browser save-as fallback so the client can wrap the
+ * result in a Blob + anchor download (the browser distribution has no native
+ * file save dialog).
+ */
+export function serializeDocument(
+  docId: string,
+  format: "md" | "txt",
+): { ok: true; content: string; fileName: string } | { ok: false; reason: string } {
+  const docState = openDocs.get(docId);
+  if (!docState) return { ok: false, reason: "Document not open" };
+  if (!SAVE_AS_FORMATS.has(format)) {
+    return { ok: false, reason: `Unsupported serialize format: '${format}'. Supported: md, txt.` };
+  }
+  const adapter = getAdapter(format);
+  if (!adapter.save) {
+    return { ok: false, reason: `Adapter for '${format}' cannot save` };
+  }
+  const doc = getOrCreateDocument(docId);
+  const content = adapter.save(doc);
+  // For upload:// docs the basename is the synthetic name (e.g. "Scratchpad.md").
+  // The caller wraps in a Blob and lets the browser propose the filename, so
+  // we re-stem to match the requested format here (Scratchpad.md → Scratchpad.txt).
+  const baseStem = path.basename(docState.filePath, path.extname(docState.filePath)) || "document";
+  return { ok: true, content, fileName: `${baseStem}.${format}` };
 }
 
 /**

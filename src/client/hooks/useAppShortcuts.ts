@@ -34,6 +34,7 @@ export type ShortcutId =
   // ctrl/meta + letter
   | "select-all"
   | "save"
+  | "save-as"
   | "settings"
   | "settings-modal"
   | "toggle-palette"
@@ -145,6 +146,13 @@ export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
     // toggle-authorship and Ctrl+Shift+A doesn't accidentally claim select-all.
     if (!e.altKey && !e.shiftKey && e.code === "KeyA") {
       return { id: "select-all" };
+    }
+
+    // Ctrl+Shift+S → Save As… (scratchpad promotion). Checked before plain
+    // Ctrl+S so the shift-bearing combo wins. `!altKey` so Ctrl+Shift+Alt+S
+    // falls through to the ungated save branch (legacy behavior).
+    if (e.shiftKey && !e.altKey && e.code === "KeyS") {
+      return { id: "save-as" };
     }
 
     // Ctrl+S → save. Legacy: no modifier gate.

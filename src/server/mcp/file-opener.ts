@@ -658,7 +658,7 @@ async function finalizeDocOpen(
  * Errors here MUST NOT fail the open — annotations are additive durability,
  * not required for rendering. We log and continue.
  */
-async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Promise<void> {
+export async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Promise<void> {
   try {
     const hash = docHash(filePath);
     const store = createStore(hash, { filePath });
