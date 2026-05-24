@@ -225,8 +225,8 @@ export function useAnnotationReview({
 
   // Auto-set activeAnnotationId to the bulk-review target (default: first
   // pending annotation) on initial mount AND whenever the previously-active
-  // annotation goes missing from `targets` (e.g., it was resolved). DOES NOT
-  // clobber an externally-set active id — that's the contract that makes
+  // annotation goes missing entirely (e.g., it was resolved or deleted). DOES
+  // NOT clobber an externally-set active id — that's the contract that makes
   // App.svelte's Alt+]/Alt+[ keyboard nav stick.
   $effect(() => {
     const targets = getReviewTargets();
@@ -236,9 +236,17 @@ export function useAnnotationReview({
       onActiveAnnotationChange(fallbackId);
       return;
     }
-    // If current active is gone from targets (was resolved or filtered out),
-    // fall back to the bulk-review target. Otherwise leave it alone.
-    if (!targets.some((t) => t.id === currentActive)) {
+    // #768 Bug 2: only fall back when the active annotation no longer EXISTS as
+    // a live, pending annotation (it was deleted, accepted, or dismissed). A
+    // user-clicked highlight that overlaps a Claude comment is a valid focus
+    // target even though it is NOT a review target (`author === "user"`); the
+    // old `!targets.some(...)` check wrongly clobbered it back to the comment
+    // because highlights are excluded from `getReviewTargets()`. Checking the
+    // full live annotation set instead keeps the clicked highlight focused.
+    const stillLive = getAnnotations().some(
+      (a) => a.id === currentActive && a.status === "pending",
+    );
+    if (!stillLive) {
       onActiveAnnotationChange(fallbackId);
     }
   });

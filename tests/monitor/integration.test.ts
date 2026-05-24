@@ -3,12 +3,15 @@ import { TANDEM_MODE_DEFAULT } from "../../src/shared/constants.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { createFetchStub, installMonitorFakeTimers } from "./fetch-harness.js";
 
-// Fences the asymmetry documented in docs/architecture.md "Contract Asymmetry:
-// Mode Check": the server-side /api/mode handler defaults missing/malformed
-// values to "tandem" (fails open); the monitor-side getCachedMode() defaults
-// to "solo" (fails closed). Having both sides in one file makes the asymmetry
-// visible at a glance — if either side drifts, this test file fails.
-describe("mode default asymmetry", () => {
+// Both the server-side /api/mode handler and the monitor/channel-side
+// getCachedMode() now converge on the SAME cold-start default
+// (TANDEM_MODE_DEFAULT, "tandem"). The monitor side additionally became
+// stale-preserving (#822): once a real mode has been observed, a transient
+// /api/mode failure leaves the mode unchanged — it only ever reverts to the
+// cold-start default when no successful fetch has landed yet. Having both
+// sides in one file makes the shared default visible at a glance — if either
+// side drifts, this test file fails.
+describe("mode default convergence", () => {
   let stub: ReturnType<typeof createFetchStub>;
 
   beforeEach(async () => {
@@ -27,7 +30,7 @@ describe("mode default asymmetry", () => {
   // TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE)).
   // Re-exercise that exact expression here so a regression to a different
   // default (e.g. "solo", removing the catch() clause) trips this test.
-  it("server side fails open to 'tandem' for missing/malformed values", () => {
+  it("server side defaults to 'tandem' for missing/malformed values", () => {
     const parseWithServerDefault = (input: unknown) =>
       TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(input);
 
@@ -36,13 +39,27 @@ describe("mode default asymmetry", () => {
     expect(parseWithServerDefault("")).toBe("tandem");
     expect(parseWithServerDefault("enterprise")).toBe("tandem");
     expect(parseWithServerDefault(42)).toBe("tandem");
-    // TANDEM_MODE_DEFAULT itself must remain "tandem" for the asymmetry to hold.
+    // TANDEM_MODE_DEFAULT itself must remain "tandem".
     expect(TANDEM_MODE_DEFAULT).toBe("tandem");
   });
 
-  it("monitor side fails closed to 'solo' when /api/mode omits the mode field", async () => {
+  it("monitor side uses the cold-start default 'tandem' when /api/mode omits the mode field on a cold start", async () => {
     stub.on("/api/mode", () => new Response(JSON.stringify({}), { status: 200 }));
     const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe(TANDEM_MODE_DEFAULT);
+  });
+
+  it("monitor side preserves an observed 'solo' across a later malformed /api/mode response (does NOT revert to the default)", async () => {
+    let serveMalformed = false;
+    stub.on("/api/mode", () => {
+      if (serveMalformed) return new Response(JSON.stringify({}), { status: 200 });
+      return new Response(JSON.stringify({ mode: "solo" }), { status: 200 });
+    });
+    const { getCachedMode } = await import("../../src/monitor/index.js");
     expect(await getCachedMode()).toBe("solo");
+
+    serveMalformed = true;
+    await vi.advanceTimersByTimeAsync(2_500); // past TTL so the next call re-fetches
+    expect(await getCachedMode()).toBe("solo"); // stale-preserved, NOT TANDEM_MODE_DEFAULT
   });
 });

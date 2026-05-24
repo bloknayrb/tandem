@@ -16,7 +16,7 @@ describe("fetch timeout", () => {
     vi.useRealTimers();
   });
 
-  it("aborts a hung /api/mode fetch via AbortSignal.timeout and falls back to solo", async () => {
+  it("aborts a hung /api/mode fetch via AbortSignal.timeout and falls back to the cold-start default", async () => {
     stub.on("/api/mode", (_url, init) => {
       const signal = init?.signal;
       // Return a promise that never resolves unless aborted
@@ -32,7 +32,10 @@ describe("fetch timeout", () => {
     // Advance past the 2000ms mode-check timeout
     await vi.advanceTimersByTimeAsync(2500);
     const mode = await modePromise;
-    expect(mode).toBe("solo");
+    // True cold start (no prior successful fetch) → documented cold-start
+    // default TANDEM_MODE_DEFAULT ("tandem"). Stale-preserving only applies
+    // once a real mode has been observed.
+    expect(mode).toBe("tandem");
   });
 });
 

@@ -156,6 +156,90 @@ test.skip("Ctrl+Shift+, keypress opens the SettingsModal (manual path)", async (
   // Intentionally empty — left as a documentation anchor for the gap.
 });
 
+// #821 PR review (L99) — coverage for the AI Assistant tab's working-directory
+// states introduced by #803 E5/E7. Both tests route-mock the integrations and
+// launcher endpoints so the UI flow runs end-to-end against a fake network
+// layer (no real claude-code integration / supervisor required in CI).
+
+test("E7: working-directory load-error banner shows on non-2xx /api/integrations", async ({
+  page,
+}) => {
+  // Force the integrations fetch to fail so the load-error banner path fires.
+  await page.route("**/api/integrations", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "INTERNAL_ERROR" }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+
+  // The banner only renders once the load completes (wdLoaded) with no
+  // integration found AND a captured load error.
+  await expect(
+    page.locator("[data-testid='settings-modal-working-directory-load-error']"),
+  ).toBeVisible({ timeout: 5_000 });
+  // The working-directory editor section must stay hidden when no integration
+  // resolved.
+  await expect(page.locator("[data-testid='settings-modal-working-directory']")).toHaveCount(0);
+});
+
+test("E5: saving the working directory surfaces the success toast", async ({ page }) => {
+  // Return a claude-code integration so the working-directory section renders,
+  // and accept the launcher POST so the full notify chain (ctx.notify →
+  // SettingsModal → App → ToastContainer) fires.
+  await page.route("**/api/integrations", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ integrations: [{ kind: "claude-code" }] }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.route("**/api/launcher/working-directory", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, workingDirectory: null }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+
+  // Section renders because the mocked integration resolved.
+  await expect(page.locator("[data-testid='settings-modal-working-directory']")).toBeVisible({
+    timeout: 5_000,
+  });
+
+  await page.locator("[data-testid='settings-modal-working-directory-save']").click();
+
+  const toast = page.locator("[data-testid='toast-container']");
+  await expect(toast).toBeVisible({ timeout: 5_000 });
+  await expect(toast).toContainText("Working directory saved.");
+});
+
 // PR 6 — Network two-tier refactor.
 // Advanced controls live under a `<CollapsibleSection>` that ships collapsed
 // each time the modal opens (no persisted disclosure state). These tests pin
