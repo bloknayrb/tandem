@@ -99,15 +99,45 @@ struct PendingOpens(Mutex<Vec<std::path::PathBuf>>);
 pub enum RejectionReason {
     /// On Windows, the resolved absolute path contains a `:` outside the
     /// drive-letter slot (index 1). Catches NTFS Alternate Data Stream
-    /// syntax like `file.md:Zone.Identifier`.
-    SuspiciousColon,
+    /// syntax like `file.md:Zone.Identifier`. Carries the resolved absolute
+    /// `path` and the byte `index` of the offending colon — both are
+    /// security-relevant (ADS detection) and were logged inline before the
+    /// typed-reason refactor.
+    SuspiciousColon { path: std::path::PathBuf, index: usize },
     /// The candidate's extension (lowercased) is not in
-    /// `SUPPORTED_FILE_ASSOC_EXTS`. The string is the offending extension
-    /// (empty when the path had no extension at all).
-    UnsupportedExtension(String),
-    /// The resolved path does not exist as a regular file (missing, a
+    /// `SUPPORTED_FILE_ASSOC_EXTS`. `ext` is the offending extension (empty
+    /// when the path had no extension at all); `path` is the resolved
+    /// absolute path.
+    UnsupportedExtension { ext: String, path: std::path::PathBuf },
+    /// The resolved `path` does not exist as a regular file (missing, a
     /// directory, or some other non-file inode).
-    NotAFile,
+    NotAFile { path: std::path::PathBuf },
+}
+
+impl std::fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RejectionReason::SuspiciousColon { path, index } => write!(
+                f,
+                "suspicious colon at byte index {index} in resolved path {}",
+                path.display()
+            ),
+            RejectionReason::UnsupportedExtension { ext, path } => {
+                if ext.is_empty() {
+                    write!(f, "missing/empty extension on path {}", path.display())
+                } else {
+                    write!(
+                        f,
+                        "unsupported extension '.{ext}' on path {}",
+                        path.display()
+                    )
+                }
+            }
+            RejectionReason::NotAFile { path } => {
+                write!(f, "not a regular file: {}", path.display())
+            }
+        }
+    }
 }
 
 /// Extract a file path to open from a process's command-line args.
@@ -131,7 +161,11 @@ pub enum RejectionReason {
 /// - `Ok(None)` — no candidate file arg was supplied (cold-start without a
 ///   file, all args were flags, etc.). Not a rejection.
 /// - `Err(RejectionReason::...)` — a candidate was supplied but failed
-///   validation. Callers log the typed reason at `log::warn!`.
+///   validation. Each variant carries the resolved absolute path (and, for
+///   `SuspiciousColon`, the offending byte index) so callers can log a
+///   human-readable, diagnostic reason via the `Display` impl (`{reason}`,
+///   not `{reason:?}`) — matching the path + index detail logged inline
+///   before the typed-reason refactor.
 ///
 /// This is `pub` so the integration test in `tests/file_association.rs` can
 /// exercise it.
@@ -164,7 +198,10 @@ pub fn extract_file_arg(
         let absolute_str = absolute.to_string_lossy();
         for (i, b) in absolute_str.as_bytes().iter().enumerate() {
             if *b == b':' && i != 1 {
-                return Err(RejectionReason::SuspiciousColon);
+                return Err(RejectionReason::SuspiciousColon {
+                    path: absolute.clone(),
+                    index: i,
+                });
             }
         }
     }
@@ -175,7 +212,7 @@ pub fn extract_file_arg(
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
     if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
-        return Err(RejectionReason::UnsupportedExtension(ext));
+        return Err(RejectionReason::UnsupportedExtension { ext, path: absolute });
     }
 
     // is_file() follows symlinks intentionally — the final read goes through
@@ -184,7 +221,7 @@ pub fn extract_file_arg(
     // duplicate that check without adding defense in depth, since a symlink
     // pointing at a disallowed target would be rejected on the server hop.
     if !absolute.is_file() {
-        return Err(RejectionReason::NotAFile);
+        return Err(RejectionReason::NotAFile { path: absolute });
     }
 
     Ok(Some(absolute))
@@ -429,7 +466,7 @@ pub fn run() {
                 Ok(None) => {}
                 Err(reason) => {
                     log::warn!(
-                        "extract_file_arg (second-instance) rejected candidate: {reason:?}"
+                        "extract_file_arg (second-instance) rejected candidate: {reason}"
                     );
                 }
             }
@@ -481,7 +518,7 @@ pub fn run() {
                     Ok(opt) => opt,
                     Err(reason) => {
                         log::warn!(
-                            "extract_file_arg (cold-start) rejected candidate: {reason:?}"
+                            "extract_file_arg (cold-start) rejected candidate: {reason}"
                         );
                         None
                     }

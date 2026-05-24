@@ -48,9 +48,10 @@ fn flag_only_returns_ok_none() {
 #[test]
 fn nonexistent_file_returns_not_a_file() {
     let cwd = std::env::current_dir().unwrap();
+    let path = "/nope/does-not-exist.md";
     assert_eq!(
-        extract_file_arg(&args(&["/nope/does-not-exist.md"]), &cwd),
-        Err(RejectionReason::NotAFile),
+        extract_file_arg(&args(&[path]), &cwd),
+        Err(RejectionReason::NotAFile { path: PathBuf::from(path) }),
     );
 }
 
@@ -62,8 +63,29 @@ fn unsupported_extension_returns_unsupported_extension() {
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
     assert_eq!(
         result,
-        Err(RejectionReason::UnsupportedExtension("exe".to_string())),
+        Err(RejectionReason::UnsupportedExtension {
+            ext: "exe".to_string(),
+            path: p,
+        }),
         "extract_file_arg should reject unsupported .exe extension with typed reason"
+    );
+}
+
+#[test]
+fn no_extension_returns_unsupported_extension_with_empty_ext() {
+    // A path with no extension at all falls through the extension check with
+    // an empty `ext` string (this happens before the is_file() check, so the
+    // file need not exist). The variant still carries the resolved path.
+    let cwd = std::env::current_dir().unwrap();
+    let path = "/some/dir/README";
+    let result = extract_file_arg(&args(&[path]), &cwd);
+    assert_eq!(
+        result,
+        Err(RejectionReason::UnsupportedExtension {
+            ext: String::new(),
+            path: PathBuf::from(path),
+        }),
+        "a path with no extension should be rejected with an empty ext + the resolved path"
     );
 }
 
@@ -165,14 +187,23 @@ fn extension_check_is_case_insensitive() {
 fn windows_alternate_data_stream_path_is_rejected() {
     // NTFS ADS syntax `file.md:Zone.Identifier` contains a `:` at a position
     // other than the drive-letter slot (index 1). The test does NOT create a
-    // real ADS — we just verify the parser rejects the shape.
+    // real ADS — we just verify the parser rejects the shape and carries the
+    // resolved path + the offending colon's byte index.
     let cwd = std::env::current_dir().unwrap();
-    let result = extract_file_arg(&args(&["C:\\tmp\\file.md:Zone.Identifier"]), &cwd);
-    assert_eq!(
-        result,
-        Err(RejectionReason::SuspiciousColon),
-        "Path with colon outside drive-letter slot must be rejected with SuspiciousColon"
-    );
+    let candidate = "C:\\tmp\\file.md:Zone.Identifier";
+    let result = extract_file_arg(&args(&[candidate]), &cwd);
+    match result {
+        Err(RejectionReason::SuspiciousColon { path, index }) => {
+            assert_eq!(path, PathBuf::from(candidate));
+            assert_eq!(
+                path.to_string_lossy().as_bytes()[index],
+                b':',
+                "reported index must point at a colon"
+            );
+            assert_ne!(index, 1, "the offending colon must not be the drive-letter slot");
+        }
+        other => panic!("expected SuspiciousColon, got {other:?}"),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -182,14 +213,22 @@ fn windows_relative_path_with_colon_rejected_after_resolution() {
     // in the candidate string, which the candidate-only scan correctly
     // rejects. The harder case is when `cwd.join(candidate)` is what would
     // be passed to the filesystem. We scan the resolved absolute path so the
-    // post-join colon position is what matters.
+    // post-join colon position is what matters — and the reported index lands
+    // on the resolved-path colon.
     let cwd = PathBuf::from("C:\\Users\\bryan");
     let result = extract_file_arg(&args(&["notes.md:Zone.Identifier"]), &cwd);
-    assert_eq!(
-        result,
-        Err(RejectionReason::SuspiciousColon),
-        "Relative path with ADS colon must be rejected with SuspiciousColon after resolution against cwd"
-    );
+    match result {
+        Err(RejectionReason::SuspiciousColon { path, index }) => {
+            assert_eq!(path, cwd.join("notes.md:Zone.Identifier"));
+            assert_eq!(
+                path.to_string_lossy().as_bytes()[index],
+                b':',
+                "reported index must point at the resolved-path colon"
+            );
+            assert_ne!(index, 1, "the offending colon must not be the drive-letter slot");
+        }
+        other => panic!("expected SuspiciousColon, got {other:?}"),
+    }
 }
 
 #[test]
