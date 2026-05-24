@@ -6,6 +6,11 @@ interface Props {
 
 const { side, onActivate }: Props = $props();
 
+// Left rail is locked to the outline; right rail hosts annotations + chat.
+// The collapsed-state label names the panel so the user knows what they're
+// bringing back. "Annotations" for the right rail matches the default tab.
+const label = $derived(side === "left" ? "Outline" : "Annotations");
+
 function handleKey(e: KeyboardEvent) {
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
@@ -33,6 +38,10 @@ function handleKey(e: KeyboardEvent) {
   <span class="peek-chevron" aria-hidden="true">
     {side === "left" ? "›" : "‹"}
   </span>
+  <!-- Rotated panel name, revealed on hover/focus once the strip widens.
+       Decorative (the button's aria-label is the accessible name); its
+       surface-muted background masks the chevron it sits over. -->
+  <span class="peek-label" aria-hidden="true">{label}</span>
 </button>
 
 <style>
@@ -73,14 +82,39 @@ function handleKey(e: KeyboardEvent) {
     opacity: 0.7;
     transition: opacity 160ms ease;
   }
+  /* Rotated vertical panel name, centered over the chevron. Hidden at rest;
+     fades in once the strip widens on hover/focus. Its surface-muted
+     background masks the chevron underneath so the two don't visually clash. */
+  .peek-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    font-family: var(--tandem-font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--tandem-fg-muted);
+    background: var(--tandem-surface-muted);
+    padding: 2px 6px;
+    border-radius: var(--tandem-r-1);
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease 60ms;
+  }
   .peek-strip:hover,
   .peek-strip:focus-visible {
-    width: 20px;
+    width: 28px;
     box-shadow: var(--tandem-shadow-3);
     outline: none;
   }
   .peek-strip:hover .peek-chevron,
   .peek-strip:focus-visible .peek-chevron {
+    opacity: 1;
+  }
+  .peek-strip:hover .peek-label,
+  .peek-strip:focus-visible .peek-label {
     opacity: 1;
   }
   .peek-strip:focus-visible {
