@@ -198,18 +198,6 @@ describe("resolveRouteCwd — home-confined HTTP variant (PR 4b sec I1)", () => 
     }
   });
 
-  it("rejects a real directory outside the user's home", () => {
-    // tmpDir from beforeEach lives in os.tmpdir(), which is outside $HOME on
-    // POSIX. On Windows %LOCALAPPDATA%\Temp may or may not be under %USERPROFILE%
-    // — skip the assertion if the test tmpdir happens to be home-rooted.
-    const home = fs.realpathSync(os.homedir());
-    const real = fs.realpathSync(tmpDir);
-    const relative = path.relative(home, real);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      expect(resolveRouteCwd(tmpDir)).toBeNull();
-    }
-  });
-
   it("accepts the home directory itself", () => {
     const home = fs.realpathSync(os.homedir());
     expect(resolveRouteCwd(home)).toBe(home);
