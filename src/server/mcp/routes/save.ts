@@ -86,6 +86,7 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
           result.errorCode === "INVALID_PATH" ||
           result.errorCode === "EXTENSION_MISMATCH" ||
           result.errorCode === "READ_ONLY" ||
+          result.errorCode === "NOT_PROMOTABLE" ||
           result.errorCode === "NOT_FOUND"
             ? 400
             : 500;
