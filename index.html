@@ -85,6 +85,8 @@
         --tandem-author-user: oklch(0.55 0.14 245);
         --tandem-author-claude: #d97757;
         --tandem-author-claude-fg: oklch(0.24 0.03 55);
+        --tandem-author-user-bg: color-mix(in srgb, var(--tandem-author-user) 10%, var(--tandem-surface));
+        --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
         --tandem-success: oklch(0.55 0.14 150);
@@ -338,6 +340,12 @@
         --tandem-author-user: oklch(0.72 0.13 245);
         --tandem-author-claude: #e89a78;
         --tandem-author-claude-fg: oklch(0.24 0.03 55);
+        /* Hand-coded saturated card tints (color-mix washes out against the dark
+           neutral, per the dark-mode -bg convention). Chosen distinct from
+           --tandem-warning-bg (#451a03, orange) and --tandem-suggestion-bg
+           (#2e1065, violet): navy-leaning for user, red-peach for claude. */
+        --tandem-author-user-bg: #11243f;
+        --tandem-author-claude-bg: #4d2419;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
         --tandem-success: #22c55e;
@@ -465,6 +473,8 @@
           --tandem-accent-fg-strong: HighlightText;
           --tandem-author-user: CanvasText;
           --tandem-author-claude: CanvasText;
+          --tandem-author-user-bg: Canvas;
+          --tandem-author-claude-bg: Canvas;
           --tandem-claude-focus-bg: Canvas;
           --tandem-claude-focus-border: Highlight;
           --tandem-scrollbar-track: Canvas;

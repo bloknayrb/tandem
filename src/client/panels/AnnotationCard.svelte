@@ -65,14 +65,23 @@ const visibleReplies = $derived(getVisibleReplies(annotation, replies));
 const canExpandThread = $derived(visibleReplies.length >= 1);
 let isThreadOverlayOpen = $state(false);
 
-const borderColor = $derived.by(() => {
-  if (annotation.type === "highlight") return getHighlightBorder(annotation);
-  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)";
-  if (annotation.type === "note") return "var(--tandem-warning)";
-  return "var(--tandem-author-user)";
+// Per-type body tint replaces the old 3px left-edge border (Conflict #8
+// "lift color" interpretation, sub-PR 1.5 — full-taxonomy tints so every type
+// stays differentiated, not just the two the bundle tints). getHighlightBorder
+// is called inside the derivation so the highlight tint re-tracks annotation.color.
+const cardTint = $derived.by(() => {
+  if (annotation.author === "import") return "var(--tandem-surface-muted)";
+  if (annotation.type === "highlight")
+    return `color-mix(in srgb, ${getHighlightBorder(annotation)} 18%, var(--tandem-surface))`;
+  if (annotation.type === "note") return "var(--tandem-warning-bg)";
+  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion-bg)";
+  if (annotation.author === "claude") return "var(--tandem-author-claude-bg)";
+  return "var(--tandem-author-user-bg)";
 });
 
-const cardBg = $derived(isReviewTarget ? "var(--tandem-accent-bg)" : "var(--tandem-surface)");
+// Review-target override wins over the type tint; the accent ring is applied
+// via the .is-review-target class (see <style>) so it composes with :hover.
+const cardBg = $derived(isReviewTarget ? "var(--tandem-accent-bg)" : cardTint);
 
 function enterEditMode() {
   if (hasSuggestedText) {
@@ -108,19 +117,16 @@ function handleKeyDown(e: KeyboardEvent) {
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="tandem-annotation-card"
+  class:is-review-target={isReviewTarget}
   onclick={onClick}
   data-testid="annotation-card-{annotation.id}"
   data-annotation-type={annotation.type}
   role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
-  style="padding: var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border: 1px solid var(--tandem-border); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: var(--tandem-r-3); font-size: var(--tandem-text-base); opacity: {isPending
-    ? 1
-    : 0.6}; cursor: {onClick
+  style="background: {cardBg}; opacity: {isPending ? 1 : 0.6}; cursor: {onClick
     ? 'pointer'
-    : 'default'}; box-shadow: {isReviewTarget
-    ? '0 0 0 3px var(--tandem-accent-bg)'
-    : 'none'}; transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;"
+    : 'default'};"
 >
   {#if annotation.author === "import"}
     <ImportedCard
@@ -234,3 +240,25 @@ function handleKeyDown(e: KeyboardEvent) {
     onClose={() => (isThreadOverlayOpen = false)}
   />
 {/if}
+
+<style>
+  /* Static chrome lives here (not inline) so :hover can raise the shadow —
+     an inline style= attribute would beat a class-based :hover on box-shadow.
+     The dynamic background tint / opacity / cursor stay inline on the element. */
+  .tandem-annotation-card {
+    padding: var(--tandem-space-3);
+    margin-bottom: var(--tandem-space-2);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-5);
+    font-size: var(--tandem-text-base);
+    box-shadow: var(--tandem-shadow-1);
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+  }
+  .tandem-annotation-card:hover {
+    box-shadow: var(--tandem-shadow-2);
+  }
+  /* Placed after :hover so the focused-card ring wins at equal specificity. */
+  .tandem-annotation-card.is-review-target {
+    box-shadow: 0 0 0 3px var(--tandem-accent-bg), var(--tandem-shadow-2);
+  }
+</style>

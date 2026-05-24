@@ -30,6 +30,12 @@ let {
 
 const displayType = $derived(getDisplayType(annotation));
 const authorLabel = $derived(getAuthorLabel(annotation.author));
+// 6px authorship dot before the author label. Only user/claude carry an
+// author color (the two --tandem-author-* tokens); imports show the byline
+// instead, so the dot is omitted for them in the markup below.
+const dotColor = $derived(
+  annotation.author === "claude" ? "var(--tandem-author-claude)" : "var(--tandem-author-user)",
+);
 </script>
 
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px;">
@@ -73,6 +79,12 @@ const authorLabel = $derived(getAuthorLabel(annotation.author));
       <span style="font-style: italic; font-size: 10px; color: var(--tandem-fg-subtle);">
         (edited)
       </span>
+    {/if}
+    {#if annotation.author !== "import"}
+      <span
+        aria-hidden="true"
+        style="width: 6px; height: 6px; border-radius: var(--tandem-r-circle); background: {dotColor}; flex-shrink: 0;"
+      ></span>
     {/if}
     {authorLabel}
   </span>
