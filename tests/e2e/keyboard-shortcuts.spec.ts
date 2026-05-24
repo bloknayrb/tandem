@@ -437,3 +437,33 @@ test("Escape closes the command palette even when focus is outside it", async ({
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);
 });
+
+test("command palette overlay covers the title bar +new-tab button", async ({ page }) => {
+  // Dimming-by-proxy: the title bar's +button and Solo/Tandem toggle use a
+  // z-index: 99999 decorum lift. If the palette overlay (z-index 100000) sits
+  // below it, those controls poke through the backdrop and remain clickable.
+  // Clicking at the +button's coordinates must hit the overlay (closing the
+  // palette via handleBackdropClick), NOT the +button underneath.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.locator("[data-testid='command-palette']");
+  await expect(palette).toBeVisible({ timeout: 3_000 });
+
+  // The +button's recent-files menu (role=dialog, aria-label="New tab") must be
+  // absent before and after the click — its presence would prove the click
+  // reached the +button beneath the overlay.
+  const newTabMenu = page.locator("[role='dialog'][aria-label='New tab']");
+  await expect(newTabMenu).toHaveCount(0);
+
+  const box = await page.locator("[data-testid='open-file-btn']").boundingBox();
+  if (!box) throw new Error("open-file-btn has no bounding box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  // Click landed on the overlay → handleBackdropClick closed the palette.
+  await expect(palette).toHaveCount(0);
+  // …and the +button underneath never fired, so its menu never opened.
+  await expect(newTabMenu).toHaveCount(0);
+});
