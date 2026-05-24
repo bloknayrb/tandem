@@ -2,9 +2,40 @@
 import { onDestroy } from "svelte";
 import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
+import {
+  LAUNCHER_ERROR_IN_PROGRESS,
+  LAUNCHER_ERROR_INVALID_BODY,
+  LAUNCHER_ERROR_NO_INTEGRATION,
+  LAUNCHER_ERROR_NOT_AVAILABLE,
+  LAUNCHER_ERROR_PATH_REJECTED,
+} from "../../../shared/launcher/contract";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { API_BASE } from "../../utils/fileUpload";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
+
+// Map the server's stable `code` field (POST /api/launcher/working-directory,
+// `src/server/launcher/api-routes.ts`) to fixed client strings. We deliberately
+// DO NOT render the server's `body.message` — it's free-form text and rendering
+// it verbatim would violate the "fixed strings only — never include raw
+// err.message/paths in the banner" invariant the moment a future server change
+// interpolated the submitted path into `message`. Unknown codes fall back to a
+// generic string so a new server-side code can't leak through.
+function workingDirErrorForCode(code: unknown): string {
+  switch (code) {
+    case LAUNCHER_ERROR_PATH_REJECTED:
+      return "Working directory must be a folder inside your home directory.";
+    case LAUNCHER_ERROR_INVALID_BODY:
+      return "Working directory path is invalid.";
+    case LAUNCHER_ERROR_IN_PROGRESS:
+      return "Another working-directory update is in progress. Try again.";
+    case LAUNCHER_ERROR_NO_INTEGRATION:
+      return "No Claude Code integration is configured.";
+    case LAUNCHER_ERROR_NOT_AVAILABLE:
+      return "Auto-launcher is not available in this Tandem build.";
+    default:
+      return "Couldn't save working directory.";
+  }
+}
 
 // Keep `$props()` as a single proxy variable and read fields via `ctx.foo`.
 // Capturing into a local and then destructuring (`let c = $props(); let { settings } = c`)
@@ -85,9 +116,11 @@ async function persistWorkingDirectory(value: string | null) {
     });
     if (!mounted) return;
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const body = (await res.json().catch(() => ({}))) as { code?: string };
       if (!mounted) return;
-      wdError = body.message ?? `Save failed (${res.status})`;
+      // Map the server's stable `code` to a fixed string — never render the
+      // server's free-form `message` (see `workingDirErrorForCode`).
+      wdError = workingDirErrorForCode(body.code);
       return;
     }
     const body = (await res.json()) as { workingDirectory?: string | null };
