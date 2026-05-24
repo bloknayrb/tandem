@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../shared/constants";
-import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
+import type { Annotation, AnnotationReply } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
@@ -26,9 +26,6 @@ interface Props {
   annotations: Annotation[];
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
-  heldCount?: number;
-  tandemMode?: TandemMode;
-  onModeChange?: (mode: TandemMode) => void;
   activeDocFormat?: string;
   documentId?: string;
   activeAnnotationId: string | null;
@@ -51,9 +48,6 @@ let {
   // here — App.svelte passes the editor to the lifted useAnnotationReview.
   editor: _editor,
   ydoc,
-  heldCount = 0,
-  tandemMode: _tandemMode,
-  onModeChange,
   activeDocFormat,
   documentId,
   activeAnnotationId,
@@ -355,23 +349,6 @@ function handleClearSelection() {
         style="flex-shrink: 0; font-size: var(--tandem-text-xs); padding: 2px 8px; border: none; border-radius: var(--tandem-r-2); background: none; color: {warningStateColors.color}; cursor: pointer; font-weight: 500;"
       >
         Dismiss
-      </button>
-    </div>
-  {/if}
-
-  <!-- Held-annotation banner -->
-  {#if heldCount > 0}
-    <div
-      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: var(--tandem-r-4); font-size: var(--tandem-text-xs); color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: center; gap: 10px;"
-    >
-      <span data-testid="held-banner">
-        {heldCount} annotation{heldCount !== 1 ? "s" : ""} held
-      </span>
-      <button
-        onclick={() => onModeChange?.("tandem")}
-        style="font-size: var(--tandem-text-xs); padding: 4px 10px; border: 1px solid var(--tandem-author-claude); border-radius: var(--tandem-r-2); background: var(--tandem-author-claude); color: var(--tandem-author-claude-fg); cursor: pointer; font-weight: 500;"
-      >
-        Show all
       </button>
     </div>
   {/if}
