@@ -1,6 +1,7 @@
 <script lang="ts">
 import { API_UPLOAD } from "../../shared/api-paths.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -25,6 +26,11 @@ let error = $state<string | null>(null);
 let loading = $state(false);
 let dragOver = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
+// Separate hidden input for the "Browse..." button (#378). The drop-zone input
+// (`fileInputEl`) is wrapped inside the upload region and not in the DOM when
+// `mode === "path"`, so the Browse button — which appears in path mode —
+// needs its own input element to trigger the browser's native file picker.
+let browseInputEl: HTMLInputElement | undefined = $state();
 let recentFiles = $state<string[]>(loadRecentFiles());
 
 function pushRecent(path: string) {
@@ -105,6 +111,42 @@ function handleFileSelect(e: Event) {
   const file = input.files?.[0];
   if (file) uploadFile(file);
 }
+
+/**
+ * #378 — "Browse..." button. In the Tauri desktop runtime we use the native
+ * OS file picker via `@tauri-apps/plugin-dialog`, which returns the absolute
+ * path on disk — we then POST it to `/api/open` (the same flow as the
+ * path-paste input). In the browser we fall back to a hidden `<input
+ * type="file">` and route the selected `File` through the existing upload
+ * flow. Reference pattern: `pickFolder()` in `SettingsClaudeCodeTab.svelte`.
+ */
+async function pickFile() {
+  if (loading) return;
+  if (isTauriRuntime()) {
+    error = null;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Supported", extensions: ["md", "txt", "docx", "html"] }],
+      });
+      if (typeof selected === "string") {
+        void openByPath(selected);
+      }
+    } catch (err) {
+      error = `File picker unavailable: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } else {
+    // Browser path — reuse the existing hidden file input + upload flow.
+    // Reset value so re-selecting the same file still fires `change`.
+    error = null;
+    if (browseInputEl) {
+      browseInputEl.value = "";
+      browseInputEl.click();
+    }
+  }
+}
 </script>
 
 <div
@@ -166,14 +208,34 @@ function handleFileSelect(e: Event) {
           style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); box-sizing: border-box; background: var(--tandem-surface); color: var(--tandem-fg);"
           data-testid="file-path-input"
         />
-        <button
-          onclick={handlePathSubmit}
-          disabled={loading || !filePath.trim()}
-          style={`margin-top: 10px; width: 100%; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
-          data-testid="file-open-submit"
-        >
-          {loading ? "Opening..." : "Open"}
-        </button>
+        <!-- #378 — Browse button. Hidden file input is used in the browser
+             fallback (Tauri uses the native dialog instead). -->
+        <input
+          bind:this={browseInputEl}
+          type="file"
+          accept=".md,.txt,.html,.htm,.docx"
+          onchange={handleFileSelect}
+          style="display: none;"
+        />
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <button
+            onclick={handlePathSubmit}
+            disabled={loading || !filePath.trim()}
+            style={`flex: 1; padding: 8px; font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: ${loading ? "var(--tandem-fg-subtle)" : "var(--tandem-accent)"}; color: var(--tandem-accent-fg); opacity: ${!filePath.trim() ? 0.5 : 1};`}
+            data-testid="file-open-submit"
+          >
+            {loading ? "Opening..." : "Open"}
+          </button>
+          <button
+            type="button"
+            onclick={pickFile}
+            disabled={loading}
+            data-testid="file-browse-btn"
+            style={`flex: 0 0 auto; padding: 8px 14px; font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: ${loading ? "wait" : "pointer"}; background: var(--tandem-surface); color: var(--tandem-fg);`}
+          >
+            Browse...
+          </button>
+        </div>
 
         <!-- Recent files -->
         {#if recentFiles.length > 0}
