@@ -198,6 +198,14 @@ describe("matchShortcut — toggle-help", () => {
   it("Cmd+/ → toggle-help", () => {
     expect(matchShortcut(evt({ key: "/", metaKey: true }))).toEqual({ id: "toggle-help" });
   });
+
+  it("Ctrl+Shift+/ (key '?' on US layouts) → toggle-help", () => {
+    // Ctrl+Shift+/ produces e.key === "?" on US layouts; the top-of-function
+    // `e.key === "?"` branch routes it to toggle-help regardless of modifiers.
+    expect(matchShortcut(evt({ key: "?", ctrlKey: true, shiftKey: true }))).toEqual({
+      id: "toggle-help",
+    });
+  });
 });
 
 describe("matchShortcut — Alt-only shortcuts (layout panels + annotations + select-block)", () => {
@@ -223,6 +231,20 @@ describe("matchShortcut — Alt-only shortcuts (layout panels + annotations + se
 
   it("Ctrl+Alt+L does NOT match select-block (it's Alt-only)", () => {
     expect(matchShortcut(evt({ code: "KeyL", altKey: true, ctrlKey: true }))).toBeNull();
+  });
+
+  it("Alt+Shift+[ does NOT match annotation-prev (alt branch requires !shift)", () => {
+    // The alt-only branches gate on !e.shiftKey so Alt+Shift+arrow panel toggles
+    // own that space; Alt+Shift+[ falls through to null.
+    expect(matchShortcut(evt({ code: "BracketLeft", altKey: true, shiftKey: true }))).toBeNull();
+  });
+
+  it("Alt+Shift+] does NOT match annotation-next (alt branch requires !shift)", () => {
+    expect(matchShortcut(evt({ code: "BracketRight", altKey: true, shiftKey: true }))).toBeNull();
+  });
+
+  it("Alt+Shift+L does NOT match select-block (alt branch requires !shift)", () => {
+    expect(matchShortcut(evt({ code: "KeyL", altKey: true, shiftKey: true }))).toBeNull();
   });
 });
 
