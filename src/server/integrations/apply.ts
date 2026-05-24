@@ -579,10 +579,16 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
           // The randomUUID-suffixed path makes collisions effectively
           // impossible. COPYFILE_EXCL refuses to overwrite an existing
           // target, defeating any predictable-path symlink/pre-create
-          // attack the UUID suffix might still leave reachable. The
-          // newly-created file inherits the hardened DACL of the parent
-          // dir at create-time (see the ACL call above), so no per-file
-          // ACL is required.
+          // attack the UUID suffix might still leave reachable. NOTE:
+          // `setRestrictiveAcl` (acl-win.ts) calls `icacls /grant:r
+          // *<SID>:F` without (OI)(CI) inheritance flags, so the new
+          // file does NOT inherit the parent dir's SID-only ACE.
+          // Instead it receives the DACL synthesized from the process
+          // token's default (typically user + SYSTEM + Administrators),
+          // which is narrow enough to prevent cross-tenant leak in
+          // standard contexts. If broader access is observed, the dir
+          // ACE should be made inheritable in acl-win.ts (this would
+          // also benefit storage.ts which uses the same helper).
           await copyFile(configPath, backupPath, fsConstants.COPYFILE_EXCL);
         } else {
           // Open with mode 0o600 + `wx` so the file is created exclusively
