@@ -83,21 +83,28 @@ async function persistWorkingDirectory(value: string | null) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workingDirectory: value }),
     });
+    if (!mounted) return;
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { message?: string };
+      if (!mounted) return;
       wdError = body.message ?? `Save failed (${res.status})`;
       return;
     }
     const body = (await res.json()) as { workingDirectory?: string | null };
+    if (!mounted) return;
     workingDirectory = body.workingDirectory ?? null;
     // Fixed-string success toast (E5). Never include `err.message` or the
     // resolved path — the toast surface is shared with other warnings and
     // path leakage isn't appropriate there.
     ctx.notify("info", "Working directory saved.");
   } catch (err) {
-    wdError = err instanceof Error ? err.message : String(err);
+    if (!mounted) return;
+    // Fixed-string banner — `err.message` can carry absolute paths / URLs
+    // from the underlying fetch failure. Detail goes to the console only.
+    console.warn("[Settings] Failed to save workingDirectory:", err);
+    wdError = "Couldn't save working directory.";
   } finally {
-    wdInflight = false;
+    if (mounted) wdInflight = false;
   }
 }
 
