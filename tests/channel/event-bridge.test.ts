@@ -218,6 +218,79 @@ describe("event-bridge: solo-mode suppression", () => {
   });
 });
 
+describe("event-bridge: mode is stale-preserving across /api/mode failure", () => {
+  let h: Harness;
+  let stream: ControllableStream;
+  let modeShouldFail: boolean;
+
+  beforeEach(() => {
+    installMonitorFakeTimers();
+    h = {
+      stub: createFetchStub(),
+      mcp: mockMcpServer(),
+      exitSpy: vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit called");
+      }) as never),
+      awarenessCalls: [],
+      errorReports: [],
+    };
+    h.stub.install();
+    modeShouldFail = false;
+    // First fetch succeeds with "tandem"; once modeShouldFail flips it fails.
+    h.stub.on("/api/mode", () => {
+      if (modeShouldFail) throw new Error("ECONNREFUSED");
+      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
+    });
+    h.stub.on("/api/channel-awareness", (_url, init) => {
+      h.awarenessCalls.push(JSON.parse(String(init?.body ?? "{}")));
+      return new Response("", { status: 200 });
+    });
+    h.stub.on("/api/channel-error", (_url, init) => {
+      h.errorReports.push(JSON.parse(String(init?.body ?? "{}")));
+      return new Response("", { status: 200 });
+    });
+    stream = new ControllableStream();
+    h.stub.on("/api/events", () => sseResponse(stream));
+  });
+
+  afterEach(() => {
+    teardownHarness(h);
+  });
+
+  it("still delivers non-chat events after /api/mode starts failing (mode stays 'tandem', NOT flipped to solo)", async () => {
+    const start = await loadStartEventBridge();
+    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+
+    // Startup warm-up observed "tandem". Now make /api/mode fail.
+    modeShouldFail = true;
+    await vi.advanceTimersByTimeAsync(2_500); // past mode-cache TTL
+
+    stream.push(
+      sseFrame(
+        {
+          id: "evt_open",
+          type: "document:opened",
+          timestamp: 1,
+          documentId: "doc-stale",
+          payload: { fileName: "a.md", format: "md" },
+        },
+        "evt_open",
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    stream.end();
+    await vi.advanceTimersByTimeAsync(200_000);
+    await promise;
+
+    // The non-chat event was delivered — mode was NOT flipped to "solo".
+    const channelNotifs = h.mcp.notification.mock.calls.filter(
+      (c) => c[0]?.method === "notifications/claude/channel",
+    );
+    expect(channelNotifs.length).toBeGreaterThanOrEqual(1);
+    expect(channelNotifs[0]![0].params.meta.event_type).toBe("document:opened");
+  });
+});
+
 describe("event-bridge: SSE resume + eventId advance", () => {
   let h: Harness;
 

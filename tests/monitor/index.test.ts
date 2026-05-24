@@ -171,6 +171,77 @@ describe("monitor: solo-mode suppression", () => {
   });
 });
 
+describe("monitor: mode is stale-preserving across /api/mode failure", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let stream: ControllableStream;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  let modeShouldFail: boolean;
+
+  beforeEach(async () => {
+    installMonitorFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stream = new ControllableStream();
+    modeShouldFail = false;
+    stub.on("/api/events", () => sseResponse(stream));
+    // First call succeeds with "tandem"; once modeShouldFail flips, /api/mode
+    // hard-fails. The directive: a transient failure must NOT flip the mode.
+    stub.on("/api/mode", () => {
+      if (modeShouldFail) throw new Error("ECONNREFUSED");
+      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
+    });
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+
+  afterEach(() => {
+    stub.restore();
+    vi.useRealTimers();
+    stdoutSpy.mockRestore();
+  });
+
+  it("keeps delivering non-chat events after /api/mode starts failing (mode stays 'tandem', NOT flipped to solo)", async () => {
+    const { connectAndStream, getCachedMode, getModeSync } = await import(
+      "../../src/monitor/index.js"
+    );
+    // Observe the real mode "tandem" first.
+    await getCachedMode();
+    expect(getModeSync()).toBe("tandem");
+
+    const promise = connectAndStream(undefined, () => {});
+
+    // /api/mode now fails on every subsequent fetch. The background
+    // refresh on the non-chat hot path will fail repeatedly.
+    modeShouldFail = true;
+
+    // Push a non-chat event past the mode-cache TTL so refreshMode fires.
+    await vi.advanceTimersByTimeAsync(2_500);
+    stream.push(
+      sseFrame(
+        {
+          id: "evt_open",
+          type: "document:opened",
+          timestamp: 1,
+          payload: { fileName: "x.md", format: "md" },
+        },
+        "evt_open",
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(50);
+
+    // Mode preserved as "tandem" — the non-chat event was NOT suppressed.
+    const writes = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(writes).toMatch(/User opened document: x\.md/);
+    expect(getModeSync()).toBe("tandem");
+
+    stream.end();
+    await promise.catch(() => {});
+    expect(getModeSync()).toBe("tandem"); // never flipped to "solo"/default
+  });
+});
+
 describe("monitor: awareness POSTs", () => {
   let stub: ReturnType<typeof createFetchStub>;
   let stream: ControllableStream;

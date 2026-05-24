@@ -16,11 +16,19 @@
  * OOM us. Without these, a half-open Tandem server wedges the consumer
  * silently.
  *
- * Mode-cache policy: fail-closed to "solo" on any failure (monitor's
- * privacy-sensitive default). The channel previously failed open to
- * "tandem" — fail-closed is strictly safer (leaking events when the mode
- * endpoint is broken is worse than temporarily over-suppressing them) and
- * unifies the two consumers on the same contract.
+ * Mode-cache policy: stale-preserving. Once a real mode has been observed
+ * from `/api/mode`, a transient fetch failure (network error or non-OK)
+ * NEVER changes the cached mode — the consumer keeps reporting the last
+ * successfully-fetched value. The mode only changes when the server reports
+ * a different mode (i.e. the user actually toggled Solo/Tandem). This holds
+ * for ALL failure paths, including the startup warm-up / first-fetch path:
+ * a failure after a successful fetch can never downgrade a known mode.
+ * The hardcoded `TANDEM_MODE_DEFAULT` is used ONLY on a genuine cold start —
+ * a failure before any successful fetch has ever landed. The channel and
+ * monitor previously diverged here (channel failed open to "tandem", monitor
+ * failed closed to "solo"); both flipped the mode to a default on a hiccup.
+ * Neither honored the user directive that mode must not change unless the
+ * user changes it — stale-preserving does.
  *
  * Retry policy: exponential backoff with stable-uptime reset (monitor's
  * pattern). The channel previously reset retries on every successful event
@@ -120,7 +128,8 @@ let _modeRefreshInFlight: Promise<void> | null = null;
 export async function runEventConsumer(opts: EventConsumerOptions): Promise<void> {
   // Warm the mode cache before the first event so we don't default-suppress
   // or default-deliver under an unknown user setting. Errors are already
-  // logged inside getCachedMode (fail-closed to "solo") — keep going.
+  // logged inside getCachedMode (stale-preserving; cold-start default only
+  // when no fetch has ever succeeded) — keep going.
   await getCachedMode(opts.tandemUrl, opts.logPrefix).catch(() => {});
 
   let retries = 0;
@@ -449,26 +458,45 @@ async function fetchMode(tandemUrl: string): Promise<FetchModeResult> {
 /**
  * Get the current collaboration mode, with a 2s TTL cache.
  *
- * **Fail-closed to "solo"** on any failure. Solo is a user-driven privacy
- * signal; leaking events when the mode endpoint is broken is strictly worse
- * than temporarily over-suppressing them.
+ * **Stale-preserving** on any failure: once a real mode has been fetched
+ * successfully, a transient `/api/mode` failure (network error or non-OK)
+ * NEVER changes the cached mode — `cachedMode` is left untouched and the last
+ * known value is returned. The mode only ever changes when the server reports
+ * a new mode, i.e. when the user actually toggles Solo/Tandem.
  *
- * On failure, `cachedMode` is set to "solo" so getModeSync() on the hot path
- * also reports solo — but `cachedModeAt` is NOT updated, so the next call
- * retries immediately rather than waiting out MODE_CACHE_TTL_MS.
+ * `cachedModeAt === 0` is the cold-start sentinel (no successful fetch ever).
+ * In that one case — and only that case — a failure falls back to the
+ * documented `TANDEM_MODE_DEFAULT`. After the first success, `cachedModeAt`
+ * is non-zero forever, so failures can never revert to the cold-start default.
+ *
+ * On failure, `cachedModeAt` is NOT updated, so the next call retries
+ * immediately rather than waiting out MODE_CACHE_TTL_MS.
  */
 export async function getCachedMode(
   tandemUrl: string,
   logPrefix = "[Tandem]",
 ): Promise<TandemMode> {
   const now = Date.now();
-  if (now - cachedModeAt < MODE_CACHE_TTL_MS) return cachedMode;
+  if (now - cachedModeAt < MODE_CACHE_TTL_MS && cachedModeAt !== 0) return cachedMode;
 
   const result = await fetchMode(tandemUrl);
   if (!result.ok) {
-    console.error(`${logPrefix} Mode check failed (${result.reason}), failing closed to 'solo'`);
-    cachedMode = "solo"; // propagate to hot path; do NOT update cachedModeAt
-    return "solo";
+    // Stale-preserving: keep the last known mode. A failure must never
+    // overwrite a successfully-observed mode. Only on a genuine cold start
+    // (no successful fetch ever, cachedModeAt === 0) do we fall back to the
+    // documented default. cachedModeAt is left untouched so the next call
+    // retries immediately instead of serving a stale cache window.
+    if (cachedModeAt !== 0) {
+      console.error(
+        `${logPrefix} Mode check failed (${result.reason}), preserving last known mode '${cachedMode}'`,
+      );
+      return cachedMode;
+    }
+    console.error(
+      `${logPrefix} Mode check failed (${result.reason}), no prior mode — using cold-start default '${TANDEM_MODE_DEFAULT}'`,
+    );
+    cachedMode = TANDEM_MODE_DEFAULT; // propagate cold-start default to hot path; do NOT update cachedModeAt
+    return TANDEM_MODE_DEFAULT;
   }
   cachedMode = result.mode;
   cachedModeAt = now;
