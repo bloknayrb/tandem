@@ -299,7 +299,7 @@ export async function saveDocumentAsToDisk(
       await saveSession(resolved, format, doc);
     } catch (err) {
       // Session persistence is best-effort; the disk write is the contract.
-      console.error(`[SaveAs] saveSession failed for ${resolved}:`, err);
+      console.error("[SaveAs] saveSession failed for", resolved, err);
     }
 
     // Capture the pre-promote upload:// path BEFORE `addDoc` overwrites it.
@@ -314,7 +314,7 @@ export async function saveDocumentAsToDisk(
     try {
       await deleteSession(oldUploadPath);
     } catch (err) {
-      console.error(`[SaveAs] deleteSession failed for ${oldUploadPath}:`, err);
+      console.error("[SaveAs] deleteSession failed for", oldUploadPath, err);
     }
 
     // Promote in place — keep the Hocuspocus room ID, swap source/filePath/format.
