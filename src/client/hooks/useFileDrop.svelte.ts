@@ -1,4 +1,5 @@
 import { API_UPLOAD } from "../../shared/api-paths.js";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 
 export interface FileDropState {
@@ -18,6 +19,10 @@ export function createFileDrop(): FileDropState {
   let fileDragOver = $state(false);
 
   const handleEditorDragOver = (e: DragEvent) => {
+    // In Tauri with dragDropEnabled: true, native drops are routed through
+    // useTauriFileDrop. Guard prevents double-overlay-state updates if the
+    // WebView also fires HTML5 dragover during native DnD.
+    if (isTauriRuntime()) return;
     if (e.dataTransfer?.types.includes("Files")) {
       e.preventDefault();
       fileDragOver = true;
@@ -25,6 +30,7 @@ export function createFileDrop(): FileDropState {
   };
 
   const handleEditorDragLeave = (e: DragEvent) => {
+    if (isTauriRuntime()) return;
     if (
       e.currentTarget === e.target ||
       !(e.currentTarget as Node).contains(e.relatedTarget as Node)
@@ -34,6 +40,7 @@ export function createFileDrop(): FileDropState {
   };
 
   const handleEditorDrop = async (e: DragEvent) => {
+    if (isTauriRuntime()) return;
     fileDragOver = false;
     if (!e.dataTransfer?.files.length) return;
     e.preventDefault();

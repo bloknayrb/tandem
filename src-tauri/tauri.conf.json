@@ -22,7 +22,7 @@
         "decorations": false,
         "fullscreen": false,
         "zoomHotkeysEnabled": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       }
     ],
     "security": {

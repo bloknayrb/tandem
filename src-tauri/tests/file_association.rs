@@ -8,7 +8,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 
-use app_lib::extract_file_arg;
+use app_lib::{extract_file_arg, RejectionReason};
 use tempfile::TempDir;
 
 /// Build a [exe, ...rest] arg list, mimicking the OS shape.
@@ -25,48 +25,87 @@ fn touch(dir: &TempDir, name: &str) -> PathBuf {
 }
 
 #[test]
-fn empty_args_returns_none() {
+fn empty_args_returns_ok_none() {
     let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&[], &cwd).is_none());
+    assert_eq!(extract_file_arg(&[], &cwd), Ok(None));
 }
 
 #[test]
-fn exe_only_returns_none() {
+fn exe_only_returns_ok_none() {
     let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&args(&[]), &cwd).is_none());
+    assert_eq!(extract_file_arg(&args(&[]), &cwd), Ok(None));
 }
 
 #[test]
-fn flag_only_returns_none() {
+fn flag_only_returns_ok_none() {
     let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&args(&["--debug", "-v", "--help"]), &cwd).is_none());
-}
-
-#[test]
-fn nonexistent_file_returns_none() {
-    let cwd = std::env::current_dir().unwrap();
-    assert!(extract_file_arg(&args(&["/nope/does-not-exist.md"]), &cwd).is_none());
-}
-
-#[test]
-fn unsupported_extension_returns_none() {
-    let dir = TempDir::new().unwrap();
-    let p = touch(&dir, "secret.exe");
-    let cwd = std::env::current_dir().unwrap();
-    let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert!(
-        result.is_none(),
-        "extract_file_arg should reject unsupported .exe extension"
+    assert_eq!(
+        extract_file_arg(&args(&["--debug", "-v", "--help"]), &cwd),
+        Ok(None),
     );
 }
 
 #[test]
-fn absolute_md_path_returns_some() {
+fn nonexistent_file_returns_not_a_file() {
+    let cwd = std::env::current_dir().unwrap();
+    // Use a relative candidate so the resolved path is `cwd.join(candidate)`
+    // on every platform. A `/`-rooted POSIX path would resolve differently on
+    // Windows (rooted-but-driveless → `is_absolute()` is false → joined onto
+    // cwd's drive as `C:\nope\...`), so asserting against `PathBuf::from(raw)`
+    // only held on Unix and broke the Windows rust-test job.
+    let candidate = "nope/does-not-exist.md";
+    assert_eq!(
+        extract_file_arg(&args(&[candidate]), &cwd),
+        Err(RejectionReason::NotAFile { path: cwd.join(candidate) }),
+    );
+}
+
+#[test]
+fn unsupported_extension_returns_unsupported_extension() {
+    let dir = TempDir::new().unwrap();
+    let p = touch(&dir, "secret.exe");
+    let cwd = std::env::current_dir().unwrap();
+    let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
+    assert_eq!(
+        result,
+        Err(RejectionReason::UnsupportedExtension {
+            ext: "exe".to_string(),
+            path: p,
+        }),
+        "extract_file_arg should reject unsupported .exe extension with typed reason"
+    );
+}
+
+#[test]
+fn no_extension_returns_unsupported_extension_with_empty_ext() {
+    // A path with no extension at all falls through the extension check with
+    // an empty `ext` string (this happens before the is_file() check, so the
+    // file need not exist). The variant still carries the resolved path.
+    //
+    // Use a relative candidate so the resolved path is `cwd.join(candidate)`
+    // on every platform — a `/`-rooted POSIX path resolves differently on
+    // Windows (joined onto cwd's drive), which would break the Windows
+    // rust-test job.
+    let cwd = std::env::current_dir().unwrap();
+    let candidate = "some/dir/README";
+    let result = extract_file_arg(&args(&[candidate]), &cwd);
+    assert_eq!(
+        result,
+        Err(RejectionReason::UnsupportedExtension {
+            ext: String::new(),
+            path: cwd.join(candidate),
+        }),
+        "a path with no extension should be rejected with an empty ext + the resolved path"
+    );
+}
+
+#[test]
+fn absolute_md_path_returns_ok_some() {
     let dir = TempDir::new().unwrap();
     let p = touch(&dir, "doc.md");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[test]
@@ -75,7 +114,7 @@ fn relative_path_resolves_against_cwd() {
     touch(&dir, "notes.md");
     // Pretend the OS launched us with cwd=dir and a bare filename on argv.
     let result = extract_file_arg(&args(&["notes.md"]), dir.path());
-    assert_eq!(result, Some(dir.path().join("notes.md")));
+    assert_eq!(result, Ok(Some(dir.path().join("notes.md"))));
 }
 
 #[test]
@@ -87,7 +126,7 @@ fn leading_flags_then_file_takes_file() {
         &args(&["--debug", "-v", p.to_str().unwrap()]),
         &cwd,
     );
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[test]
@@ -96,7 +135,7 @@ fn double_dash_separator_is_skipped() {
     let p = touch(&dir, "y.md");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&["--", p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[test]
@@ -109,7 +148,7 @@ fn multiple_paths_takes_first() {
         &args(&[first.to_str().unwrap(), second.to_str().unwrap()]),
         &cwd,
     );
-    assert_eq!(result, Some(first));
+    assert_eq!(result, Ok(Some(first)));
     let _ = second; // suppress unused warning
 }
 
@@ -122,8 +161,9 @@ fn key_equals_value_flag_is_skipped_not_parsed() {
     let bogus = format!("--open={}", p.display());
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[bogus.as_str()]), &cwd);
-    assert!(
-        result.is_none(),
+    assert_eq!(
+        result,
+        Ok(None),
         "`--open=path` style flags must not have their value parsed as a file"
     );
 }
@@ -136,8 +176,8 @@ fn each_supported_extension_is_accepted() {
         let p = touch(&dir, &format!("doc.{ext}"));
         let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
         assert_eq!(
-            result.as_ref(),
-            Some(&p),
+            result,
+            Ok(Some(p.clone())),
             "extension '.{ext}' should be accepted"
         );
     }
@@ -149,7 +189,7 @@ fn extension_check_is_case_insensitive() {
     let p = touch(&dir, "DOC.MD");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Some(p));
+    assert_eq!(result, Ok(Some(p)));
 }
 
 #[cfg(target_os = "windows")]
@@ -157,13 +197,23 @@ fn extension_check_is_case_insensitive() {
 fn windows_alternate_data_stream_path_is_rejected() {
     // NTFS ADS syntax `file.md:Zone.Identifier` contains a `:` at a position
     // other than the drive-letter slot (index 1). The test does NOT create a
-    // real ADS — we just verify the parser rejects the shape.
+    // real ADS — we just verify the parser rejects the shape and carries the
+    // resolved path + the offending colon's byte index.
     let cwd = std::env::current_dir().unwrap();
-    let result = extract_file_arg(&args(&["C:\\tmp\\file.md:Zone.Identifier"]), &cwd);
-    assert!(
-        result.is_none(),
-        "Path with colon outside drive-letter slot must be rejected"
-    );
+    let candidate = "C:\\tmp\\file.md:Zone.Identifier";
+    let result = extract_file_arg(&args(&[candidate]), &cwd);
+    match result {
+        Err(RejectionReason::SuspiciousColon { path, index }) => {
+            assert_eq!(path, PathBuf::from(candidate));
+            assert_eq!(
+                path.to_string_lossy().as_bytes()[index],
+                b':',
+                "reported index must point at a colon"
+            );
+            assert_ne!(index, 1, "the offending colon must not be the drive-letter slot");
+        }
+        other => panic!("expected SuspiciousColon, got {other:?}"),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -173,12 +223,93 @@ fn windows_relative_path_with_colon_rejected_after_resolution() {
     // in the candidate string, which the candidate-only scan correctly
     // rejects. The harder case is when `cwd.join(candidate)` is what would
     // be passed to the filesystem. We scan the resolved absolute path so the
-    // post-join colon position is what matters.
+    // post-join colon position is what matters — and the reported index lands
+    // on the resolved-path colon.
     let cwd = PathBuf::from("C:\\Users\\bryan");
     let result = extract_file_arg(&args(&["notes.md:Zone.Identifier"]), &cwd);
+    match result {
+        Err(RejectionReason::SuspiciousColon { path, index }) => {
+            assert_eq!(path, cwd.join("notes.md:Zone.Identifier"));
+            assert_eq!(
+                path.to_string_lossy().as_bytes()[index],
+                b':',
+                "reported index must point at the resolved-path colon"
+            );
+            assert_ne!(index, 1, "the offending colon must not be the drive-letter slot");
+        }
+        other => panic!("expected SuspiciousColon, got {other:?}"),
+    }
+}
+
+#[test]
+fn display_renders_diagnostic_context() {
+    // The fixer commits switched the call sites from `{reason:?}` to `{reason}`
+    // (Display) specifically to recover the path + index diagnostic context in
+    // the log line. These assertions pin the exact rendered substrings so a
+    // format regression (dropping the index, mangling the empty-ext branch, or
+    // losing the path) fails CI. Substrings match `impl Display for
+    // RejectionReason` in `src-tauri/src/lib.rs`.
+    let p = PathBuf::from("/x/y.bin");
+
+    // Non-empty `ext`: renders the dotted extension and the path.
+    let unsupported = RejectionReason::UnsupportedExtension {
+        ext: "bin".to_string(),
+        path: p.clone(),
+    }
+    .to_string();
     assert!(
-        result.is_none(),
-        "Relative path with ADS colon must be rejected after resolution against cwd"
+        unsupported.contains("unsupported extension '.bin'"),
+        "non-empty ext should render the dotted extension, got: {unsupported}"
+    );
+    assert!(
+        unsupported.contains("/x/y.bin"),
+        "non-empty ext should render the path, got: {unsupported}"
+    );
+
+    // Empty `ext`: the untested `ext.is_empty()` branch renders a distinct
+    // "missing/empty extension" message rather than `'.'`.
+    let empty_ext = RejectionReason::UnsupportedExtension {
+        ext: String::new(),
+        path: p.clone(),
+    }
+    .to_string();
+    assert!(
+        empty_ext.contains("missing/empty extension"),
+        "empty-ext branch should render the missing/empty message, got: {empty_ext}"
+    );
+    assert!(
+        empty_ext.contains("/x/y.bin"),
+        "empty-ext branch should still render the path, got: {empty_ext}"
+    );
+    assert!(
+        !empty_ext.contains("'.'"),
+        "empty-ext branch must NOT render a bare dotted extension, got: {empty_ext}"
+    );
+
+    // NotAFile: renders the path after a "not a regular file" prefix.
+    let not_a_file = RejectionReason::NotAFile { path: p.clone() }.to_string();
+    assert!(
+        not_a_file.contains("not a regular file"),
+        "NotAFile should render the not-a-regular-file prefix, got: {not_a_file}"
+    );
+    assert!(
+        not_a_file.contains("/x/y.bin"),
+        "NotAFile should render the path, got: {not_a_file}"
+    );
+
+    // SuspiciousColon: the offending byte index must appear in the output.
+    let suspicious = RejectionReason::SuspiciousColon {
+        path: p,
+        index: 4,
+    }
+    .to_string();
+    assert!(
+        suspicious.contains("byte index 4"),
+        "SuspiciousColon should render the offending byte index, got: {suspicious}"
+    );
+    assert!(
+        suspicious.contains("/x/y.bin"),
+        "SuspiciousColon should render the resolved path, got: {suspicious}"
     );
 }
 
@@ -200,7 +331,7 @@ fn warm_start_single_instance_args_shape() {
     let result = extract_file_arg(&warm_args, &cwd);
     assert_eq!(
         result,
-        Some(target),
+        Ok(Some(target)),
         "warm-start arg shape must resolve the file path"
     );
 }

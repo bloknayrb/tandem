@@ -364,7 +364,7 @@ The plugin monitor (`src/monitor/index.ts`) is the recommended modern alternativ
 
 ### Startup
 
-`main()` warms the mode cache with a blocking `getCachedMode()` call before entering the reconnect loop. On error, this call fails closed to "solo" — the privacy-safe default. If the Tandem server is not yet running, the startup warm-up fails closed and the reconnect loop begins immediately.
+`main()` warms the mode cache with a blocking `getCachedMode()` call before entering the reconnect loop. On a true cold start (no successful fetch ever), this call falls back to the documented cold-start default `TANDEM_MODE_DEFAULT` (`"tandem"`). The mode cache is otherwise **stale-preserving** (#822): once a real mode has been observed, no subsequent failure — including a later warm-up failure — ever changes it. If the Tandem server is not yet running, the startup warm-up uses the cold-start default and the reconnect loop begins immediately.
 
 ### Event Loop
 
@@ -374,18 +374,18 @@ The plugin monitor (`src/monitor/index.ts`) is the recommended modern alternativ
 2. Schema validation errors are logged separately and also skip `lastEventId`.
 3. Valid events are formatted via `formatEventContent()` and written to stdout as a single line.
 
-### Contract Asymmetry: Mode Check
+### Mode Check: Stale-Preserving Policy
 
-Two distinct failure modes require two distinct fallbacks:
+The mode cache (`getCachedMode()` warm-up + `getModeSync()` / `refreshMode()` hot path) is **stale-preserving** (#822). The user directive is that Solo/Tandem mode must NOT change unless the user explicitly changes it, so a transient `/api/mode` failure must never flip the mode:
 
 | Path | Function | On error |
 |------|----------|----------|
-| Startup warm-up | `getCachedMode()` | Fails closed to "solo" |
-| Hot path (per-event) | `getModeSync()` + fire-and-forget `refreshMode()` | Leaves `cachedMode` unchanged (stale-preferred) |
+| Startup warm-up | `getCachedMode()` | Returns the last successfully-fetched mode; falls back to the cold-start default `TANDEM_MODE_DEFAULT` (`"tandem"`) ONLY when no fetch has ever succeeded |
+| Hot path (per-event) | `getModeSync()` + fire-and-forget `refreshMode()` | Leaves `cachedMode` unchanged (stale-preserved) |
 
-**Rationale:** Flipping to "solo" mid-session would randomly suppress events the user has not asked to suppress. Honoring the last known good value on transient failure is better UX without weakening the initial privacy signal — solo is still the default on a cold or erroring server.
+**Rationale:** Flipping the mode on a hiccup — to either a "solo" or a "tandem" default — would change the user's collaboration mode without the user asking. The only legitimate mode change is the server reporting a new value (the user toggled Solo/Tandem). `cachedModeAt === 0` is the cold-start sentinel: it is the one and only state in which a failure may fall back to the hardcoded default; after the first success `cachedModeAt` is non-zero forever, so failures can never revert a known mode.
 
-**Default asymmetry:** `/api/mode` server-side defaults missing or malformed values to `"tandem"` (user's settings fall back to the global default). The monitor defaults to `"solo"` on a failed/unparseable response. This is intentional — the server has durable user state; the monitor does not, and failing closed preserves the stricter privacy signal under transient error. Tests in `tests/monitor/integration.test.ts` fence both sides of the asymmetry; `tests/monitor/mode-cache.test.ts` exhaustively covers the monitor-side fail-closed paths (non-JSON, unrecognized value, missing field, non-string).
+**Cold-start default convergence:** both the server-side `/api/mode` handler and the monitor/channel-side `getCachedMode()` now default to the same value, `TANDEM_MODE_DEFAULT` (`"tandem"`). The server applies it via `TandemModeSchema.catch(TANDEM_MODE_DEFAULT)` for missing/malformed durable state; the consumer applies it only on a genuine cold-start fetch failure. Tests in `tests/monitor/integration.test.ts` fence the shared default; `tests/monitor/mode-cache.test.ts` covers both the cold-start default paths (non-JSON, unrecognized value, missing field, non-string) and the stale-preserving guarantee (an observed mode survives a later failure).
 
 ### Retry Semantics
 
