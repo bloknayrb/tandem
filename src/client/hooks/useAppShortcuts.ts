@@ -18,12 +18,10 @@
  *    layout-variation use `e.key` (or the appropriate `e.code`).
  *
  * Context fields:
- *  - `findShift`/`findGShift` — whether Shift was held, so the dispatch can
- *    route to the right scope (find: "doc" vs "tabs") or direction (find-next
- *    vs find-prev) without re-reading the event.
+ *  - `shift` — whether Shift was held. Reused across find (scope: "doc" vs
+ *    "tabs"), find-nav (find-next vs find-prev), and accept-or-dismiss
+ *    (Ctrl+Enter accept vs dismiss), so the dispatch doesn't re-read the event.
  *  - `tabIndex` — 1-based digit so the dispatch can pick the right tab.
- *  - `acceptDismissShift` — whether Shift was held on Ctrl+Enter so dispatch
- *    can pick accept vs dismiss.
  *
  * The branches that depend on _other_ runtime state (outline visibility for
  * Ctrl+F, find query for Ctrl+G, selection / read-only / toolbar gate for
