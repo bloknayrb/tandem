@@ -48,6 +48,27 @@ export interface HeadingCollapseState {
   headings: HeadingEntry[];
   /** Decoration set: chevron widgets + hide decorations for collapsed sections. */
   decoSet: DecorationSet;
+  /**
+   * `true` once we've seen a transaction where `walkHeadings(state.doc)` returned
+   * a non-empty list — i.e. the YDoc has finished its initial Hocuspocus sync.
+   *
+   * Why this matters: the plugin's `init()` runs synchronously when the editor
+   * is created, but at that moment the YDoc is freshly attached and its content
+   * arrives asynchronously over the wire. If we prune the persisted collapsed
+   * set against an empty doc, we'd wipe the user's saved state before it has a
+   * chance to be restored. So:
+   *
+   * 1. `init()` loads localStorage into `collapsed` but does NOT persist or
+   *    prune. `hasSeenContent` starts `false`.
+   * 2. `view.props.update` watches for the first transaction where the doc
+   *    actually has headings, then dispatches `{ type: "rehydrate" }`.
+   * 3. The `rehydrate` apply() arm re-reads localStorage (in case the toggle
+   *    path wrote a stale empty set during the gap), prunes against real
+   *    headings, persists, and flips `hasSeenContent` true.
+   * 4. The on-edit prune codepath only runs once `hasSeenContent` is true, so
+   *    a transient empty-doc transaction during reload can't wipe state.
+   */
+  hasSeenContent: boolean;
 }
 
 type HeadingCollapseMeta = { type: "toggle"; hash: string } | { type: "rehydrate" };
@@ -286,24 +307,19 @@ export const HeadingCollapseExtension = Extension.create<HeadingCollapseOptions>
         key: headingCollapseKey,
         state: {
           init(_config, state) {
+            // Load persisted state but DO NOT prune or persist here. The doc is
+            // typically empty at this moment (Hocuspocus sync hasn't completed),
+            // so walking it would yield no headings and pruning would destroy
+            // the user's saved set. The `rehydrate` meta path runs after the
+            // first non-empty transaction (see view.update below) to do the
+            // real reconciliation.
             const collapsed = loadCollapsed(filePath);
             const headings = walkHeadings(state.doc);
-            // Drop any persisted hashes that no longer match a heading in the
-            // current doc. This keeps localStorage from accumulating stale
-            // entries across edits between sessions.
-            const validHashes = new Set(headings.map((h) => h.hash));
-            const pruned = new Set<string>();
-            for (const hash of collapsed) {
-              if (validHashes.has(hash)) pruned.add(hash);
-            }
-            // Persist the pruned set so next load is clean. No-op if unchanged.
-            if (pruned.size !== collapsed.size) {
-              saveCollapsed(filePath, pruned);
-            }
             return {
-              collapsed: pruned,
+              collapsed,
               headings,
-              decoSet: buildDecorations(state.doc, headings, pruned),
+              decoSet: buildDecorations(state.doc, headings, collapsed),
+              hasSeenContent: headings.length > 0,
             };
           },
           apply(tr, prev, _oldState, newState) {
@@ -322,34 +338,65 @@ export const HeadingCollapseExtension = Extension.create<HeadingCollapseOptions>
                 collapsed: next,
                 headings: prev.headings,
                 decoSet: buildDecorations(newState.doc, prev.headings, next),
+                hasSeenContent: prev.hasSeenContent,
               };
             }
 
-            // Doc didn't change AND no meta — just map the deco set forward.
-            // (Mapping a deco set through a no-op transaction is cheap.)
+            // Rehydrate: re-read localStorage now that the doc has content,
+            // validate persisted hashes against real headings, persist the
+            // pruned set, and flip `hasSeenContent` true so the on-edit prune
+            // path below becomes active.
+            if (meta?.type === "rehydrate") {
+              const headings = walkHeadings(newState.doc);
+              const persisted = loadCollapsed(filePath);
+              const validHashes = new Set(headings.map((h) => h.hash));
+              const pruned = new Set<string>();
+              for (const hash of persisted) {
+                if (validHashes.has(hash)) pruned.add(hash);
+              }
+              if (pruned.size !== persisted.size) {
+                saveCollapsed(filePath, pruned);
+              }
+              return {
+                collapsed: pruned,
+                headings,
+                decoSet: buildDecorations(newState.doc, headings, pruned),
+                hasSeenContent: true,
+              };
+            }
+
+            // Doc didn't change AND no meta — return previous state unchanged.
             if (!tr.docChanged) {
               return prev;
             }
 
-            // Doc changed: recompute headings (text may have changed → hash may
-            // have changed), reconcile collapsed set, rebuild decorations.
+            // Doc changed: recompute headings, rebuild decorations. We may also
+            // need to reconcile the collapsed set against vanished headings,
+            // but ONLY once we've seen real content — otherwise a transient
+            // empty-doc transaction during initial sync would wipe the
+            // persisted set before rehydrate fires.
             const headings = walkHeadings(newState.doc);
-            const validHashes = new Set(headings.map((h) => h.hash));
+            const hasSeenContent = prev.hasSeenContent || headings.length > 0;
+
             let collapsed = prev.collapsed;
-            let needsSave = false;
-            // Filter out hashes whose heading vanished (deleted or text changed).
-            const filtered = new Set<string>();
-            for (const hash of collapsed) {
-              if (validHashes.has(hash)) {
-                filtered.add(hash);
-              } else {
-                needsSave = true;
+            if (prev.hasSeenContent) {
+              // Filter out hashes whose heading vanished (deleted or text changed).
+              const validHashes = new Set(headings.map((h) => h.hash));
+              let needsSave = false;
+              const filtered = new Set<string>();
+              for (const hash of collapsed) {
+                if (validHashes.has(hash)) {
+                  filtered.add(hash);
+                } else {
+                  needsSave = true;
+                }
+              }
+              if (needsSave) {
+                collapsed = filtered;
+                saveCollapsed(filePath, collapsed);
               }
             }
-            if (needsSave) {
-              collapsed = filtered;
-              saveCollapsed(filePath, collapsed);
-            }
+
             return {
               collapsed,
               headings,
@@ -359,8 +406,37 @@ export const HeadingCollapseExtension = Extension.create<HeadingCollapseOptions>
               // mapping alone wouldn't update collapsed-section spans for an
               // edit that changes downstream sibling structure.
               decoSet: buildDecorations(newState.doc, headings, collapsed),
+              hasSeenContent,
             };
           },
+        },
+        view() {
+          // After the YDoc finishes its initial Hocuspocus sync, the doc gains
+          // content via a transaction we don't initiate. Watch for the first
+          // such transaction with real headings and dispatch `rehydrate` so the
+          // plugin can prune its persisted set against the now-populated doc.
+          //
+          // We also rehydrate whenever a previously-empty doc gains content
+          // (e.g. a force-reload clears then repopulates). Guarded by
+          // `hasSeenContent` so we only fire once per content arrival.
+          return {
+            update(editorView, prevState) {
+              const state = headingCollapseKey.getState(editorView.state);
+              if (!state || state.hasSeenContent) return;
+              if (state.headings.length === 0) return;
+              // Avoid re-dispatch if the previous transaction was our own
+              // rehydrate (defensive — the hasSeenContent guard above already
+              // covers this since rehydrate flips it true).
+              const prevPluginState = prevState
+                ? headingCollapseKey.getState(prevState)
+                : undefined;
+              if (prevPluginState?.hasSeenContent) return;
+              const tr = editorView.state.tr
+                .setMeta(headingCollapseKey, { type: "rehydrate" } satisfies HeadingCollapseMeta)
+                .setMeta("addToHistory", false);
+              editorView.dispatch(tr);
+            },
+          };
         },
         props: {
           decorations(state) {
